@@ -1,0 +1,10 @@
+{
+  // Code du jeu, exécuté dans le navigateur (fil principal et worker).
+  "extends": "./tsconfig.base.json",
+  "compilerOptions": {
+    "lib": ["ES2023", "DOM", "DOM.Iterable"],
+    "types": ["vite/client"]
+  },
+  "include": ["src"],
+  "exclude": ["src/**/*.test.ts", "src/**/*.bench.ts"]
+}

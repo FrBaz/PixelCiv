@@ -1,0 +1,25 @@
+{
+  // Options communes à tous les programmes TypeScript du projet.
+  "compilerOptions": {
+    "target": "ES2023",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "moduleDetection": "force",
+    "resolveJsonModule": true,
+    "verbatimModuleSyntax": true,
+    "isolatedModules": true,
+    "erasableSyntaxOnly": true,
+    "noEmit": true,
+    "skipLibCheck": true,
+
+    // Mode strict, complété de quelques contrôles. noUncheckedIndexedAccess reste
+    // désactivé : il typerait chaque lecture d'un tableau typé en
+    // « number | undefined », alors que la simulation y stocke ses individus.
+    "strict": true,
+    "noImplicitOverride": true,
+    "noImplicitReturns": true,
+    "noFallthroughCasesInSwitch": true,
+    "noUncheckedSideEffectImports": true,
+    "forceConsistentCasingInFileNames": true
+  }
+}

@@ -1,0 +1,9 @@
+{
+  // Code exécuté sous Node : configuration, outils de tools/, tests et bancs d'essai.
+  "extends": "./tsconfig.base.json",
+  "compilerOptions": {
+    "lib": ["ES2023"],
+    "types": ["node"]
+  },
+  "include": ["vite.config.ts", "tools", "src/**/*.test.ts", "src/**/*.bench.ts"]
+}

@@ -14,7 +14,7 @@ Objectif : un projet outillé, testé et déployé automatiquement, avec l'archi
 
 | # | Tâche | Exigences | Critère d'acceptation | État |
 |---|---|---|---|---|
-| 0.1 | Projet Vite et TypeScript strict, arborescence, ESLint, Prettier, Vitest ; scripts `dev`, `build`, `test`, `typecheck`, `lint` ; licences des dépendances vérifiées. | NF-11, AST-05 | `npm test` et `npm run build` passent. | en cours |
+| 0.1 | Projet Vite et TypeScript strict, arborescence, ESLint, Prettier, Vitest ; scripts `dev`, `build`, `test`, `typecheck`, `lint` ; licences des dépendances vérifiées. | NF-11, AST-05 | `npm test` et `npm run build` passent. | à relire |
 | 0.2 | Documentation : PRD et plan dans `docs/` ; premiers ADR (pile technique, monde cylindrique, déterminisme, communication avec le worker) ; relecture de `CLAUDE.md`. | — | ADR rédigés et cités dans le plan. | à faire |
 | 0.3 | Intégration continue GitHub Actions (lint, types, tests, build) et déploiement sur GitHub Pages à chaque fusion sur `main`. | — | Chaque PR affiche ses vérifications ; `main` est en ligne. | à faire |
 | 0.4 | Squelette d'application : page plein écran, canvas PixiJS, couche d'interface Preact, redimensionnement, orientation, zones de sécurité des téléphones. | IHM-06, IHM-07 | Affichage correct en paysage et en portrait. | à faire |
@@ -30,8 +30,18 @@ Objectif : un projet outillé, testé et déployé automatiquement, avec l'archi
 
 ### Notes
 
-- **0.2.** Le PRD et le plan sont déjà dans `docs/`.
-- **0.3.** Il faut une branche `main` et GitHub Pages activé, avec « GitHub Actions » comme source (PLAN, section 12, étape 2).
+- **0.2.** Le PRD et le plan sont déjà dans `docs/`. L'ADR sur la pile technique consigne aussi les choix d'outillage de la tâche 0.1 :
+  - TypeScript 6.0, car typescript-eslint n'accepte pas encore la version 7 ;
+  - deux programmes TypeScript, l'un pour le code du navigateur, l'autre pour le code exécuté sous Node (configuration, outils, tests) ;
+  - des règles ESLint de déterminisme et de frontières pour `src/core`, `src/sim`, `src/worldgen` et `src/gen` ;
+  - des dépendances installées dans des versions publiées depuis au moins deux semaines (`npm install --before=<date>`) ;
+  - la vérification des licences par un test (`tools/licenses.test.ts`).
+- **0.3.** Il faut une branche `main` et GitHub Pages activé, avec « GitHub Actions » comme source (PLAN, section 12, étape 2). Restent à régler :
+  - le chemin du site, `/PixelCiv/`, dans l'option `base` de `vite.config.ts` ;
+  - la version de Node de l'intégration continue, dans un fichier `.nvmrc` : de préférence la 24, car la 22 arrive en fin de vie en avril 2027.
+
+  `npm audit` signale par ailleurs une faille modérée dans minimatch 10, une dépendance d'ESLint : un déni de service par motif glob malveillant, sans conséquence pour un outil qui ne lit que nos propres motifs. Si l'intégration continue lance `npm audit`, ce sera avec `--audit-level=high`, en attendant qu'ESLint passe à minimatch 11.
+- **0.9.** Le titre de la page, dans `index.html`, est encore écrit en dur.
 - **0.10.** Les biomes du prototype sont décrits dans `testMap_filtre.ipynb`, qui doit d'abord être versé dans `prototypes/`.
 - **0.13.** Il faut les trois notebooks, le pack de sprites original avec sa licence, ainsi que le nom de son auteur et un lien (PRD, question 14).
 

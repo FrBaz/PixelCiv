@@ -1,0 +1,2 @@
+# Fins de ligne LF partout, y compris sous Windows ; git détecte lui-même les fichiers binaires.
+* text=auto eol=lf

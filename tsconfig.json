@@ -1,0 +1,6 @@
+{
+  // Point d'entrée des éditeurs et d'ESLint : chaque fichier relève de l'un des
+  // programmes ci-dessous. La vérification des types passe par `npm run typecheck`.
+  "files": [],
+  "references": [{ "path": "./tsconfig.app.json" }, { "path": "./tsconfig.node.json" }]
+}

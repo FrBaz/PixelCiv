@@ -1,0 +1,11 @@
+# Fichiers produits
+dist/
+coverage/
+package-lock.json
+
+# Documents rédigés dans la conversation de conception : Prettier réalignerait leurs tableaux.
+*.md
+
+# Références et sources externes
+prototypes/
+assets/source/
