@@ -2,17 +2,24 @@
  * Vérification des licences des dépendances (PRD, AST-05).
  *
  * Le fichier de verrouillage de npm donne la licence de chaque paquet installé.
- * Un paquet distribué avec le jeu doit être sous une licence permissive, compatible
- * avec une sortie commerciale. Un outil de développement, qui n'est pas distribué,
- * peut en plus relever de quelques licences admises à ce seul titre.
+ * Tout paquet doit être sous une licence permissive, compatible avec une sortie
+ * commerciale. Le drapeau `dev` n'y change rien : il dit seulement que le paquet
+ * n'est atteint que par les devDependencies, alors que Vite met dans le bundle tout
+ * ce que le code importe, quelle que soit sa section du package.json. Seuls quelques
+ * outils de build, nommés un à un et dont le code n'est pas distribué, peuvent
+ * relever d'autres licences.
  */
 
 /** Entrée d'un paquet dans le fichier de verrouillage (formats 2 et 3). */
 export interface LockfilePackage {
   readonly version?: string;
   readonly license?: string;
-  /** Vrai si le paquet ne sert qu'au développement. */
+  /** Vrai si le paquet n'est atteint que par les devDependencies. */
   readonly dev?: boolean;
+  /** Vrai si le paquet n'est atteint que par des dépendances optionnelles. */
+  readonly optional?: boolean;
+  /** Vrai si le paquet est à la fois de développement et optionnel pour un paquet qui ne l'est pas. */
+  readonly devOptional?: boolean;
   /** Vrai pour un lien vers un dossier local. */
   readonly link?: boolean;
 }
@@ -22,11 +29,20 @@ export interface Lockfile {
   readonly packages: Readonly<Record<string, LockfilePackage>>;
 }
 
+/** Outil de build dont le code n'est pas distribué, admis sous d'autres licences. */
+export interface ToolException {
+  /** Noms des paquets concernés, sans drapeau `g` ni `y`, qui rendraient `test` dépendant de l'état. */
+  readonly packages: RegExp;
+  readonly licenses: ReadonlySet<string>;
+}
+
 export interface LicensePolicy {
-  /** Identifiants SPDX admis pour tous les paquets, y compris ceux distribués avec le jeu. */
+  /** Identifiants SPDX admis pour tout paquet. */
   readonly allowed: ReadonlySet<string>;
-  /** Identifiants SPDX admis en plus pour les seuls outils de développement. */
-  readonly allowedForDevelopment: ReadonlySet<string>;
+  /** Exceptions SPDX admises après « WITH » ; toute autre est refusée. */
+  readonly allowedExceptions: ReadonlySet<string>;
+  /** Outils admis sous d'autres licences, à condition de n'être atteints que par les devDependencies. */
+  readonly toolExceptions: readonly ToolException[];
 }
 
 /** Licence absente, expression SPDX illisible, ou licence non admise. */
@@ -54,15 +70,21 @@ export const LICENSE_POLICY: LicensePolicy = {
     'Unlicense',
     'Zlib',
   ]),
-  allowedForDevelopment: new Set([
-    // lightningcss, qui transforme le CSS pour Vite : seul ce qu'il produit est distribué.
-    'MPL-2.0',
-  ]),
+  allowedExceptions: new Set(),
+  toolExceptions: [
+    {
+      // lightningcss transforme le CSS pour Vite : seul ce qu'il produit est distribué.
+      // Le motif s'en tient au paquet et à ses binaires natifs : lightningcss-wasm,
+      // qui peut s'exécuter dans un navigateur, en est exclu.
+      packages: /^lightningcss(-(android|darwin|freebsd|linux|win32)-[a-z0-9-]+)?$/,
+      licenses: new Set(['MPL-2.0']),
+    },
+  ],
 };
 
 /** Arbre d'une expression de licence SPDX. */
 export type LicenseExpression =
-  | { readonly kind: 'license'; readonly id: string }
+  | { readonly kind: 'license'; readonly id: string; readonly exception?: string }
   | {
       readonly kind: 'and' | 'or';
       readonly left: LicenseExpression;
@@ -74,11 +96,15 @@ const OPERATORS: ReadonlySet<string> = new Set(['AND', 'OR', 'WITH']);
 /** Identifiant SPDX, éventuellement suivi de « + » (« cette version ou une ultérieure »). */
 const LICENSE_ID = /^[A-Za-z0-9.-]+\+?$/;
 
+/** Identifiant d'une exception SPDX, qui n'admet pas de « + ». */
+const EXCEPTION_ID = /^[A-Za-z0-9.-]+$/;
+
 /**
  * Lit une expression de licence SPDX, par exemple « (MIT OR Apache-2.0) ».
  * Comme le veut la norme, AND l'emporte sur OR et les opérateurs s'écrivent en
- * majuscules. Une exception (« WITH ») ne fait qu'ajouter des droits : elle est
- * omise de l'arbre. Renvoie `undefined` si l'expression est invalide.
+ * majuscules. L'exception introduite par « WITH » reste dans l'arbre : c'est la
+ * politique qui dit si elle est admise. Renvoie `undefined` si l'expression est
+ * mal formée.
  */
 export function parseLicenseExpression(text: string): LicenseExpression | undefined {
   const tokens = text.match(/[()]|[^\s()]+/g) ?? [];
@@ -88,7 +114,8 @@ export function parseLicenseExpression(text: string): LicenseExpression | undefi
     throw new SyntaxError(text);
   };
   const next = (): string => tokens.at(position++) ?? fail();
-  const isLicenseId = (token: string): boolean => LICENSE_ID.test(token) && !OPERATORS.has(token);
+  const isOperand = (token: string, pattern: RegExp): boolean =>
+    pattern.test(token) && !OPERATORS.has(token);
 
   function parseOr(): LicenseExpression {
     let left = parseAnd();
@@ -115,12 +142,13 @@ export function parseLicenseExpression(text: string): LicenseExpression | undefi
       if (next() !== ')') fail();
       return inner;
     }
-    if (!isLicenseId(token)) fail();
-    if (tokens.at(position) === 'WITH') {
-      position++;
-      if (!isLicenseId(next())) fail();
-    }
-    return { kind: 'license', id: token.endsWith('+') ? token.slice(0, -1) : token };
+    if (!isOperand(token, LICENSE_ID)) fail();
+    const id = token.endsWith('+') ? token.slice(0, -1) : token;
+    if (tokens.at(position) !== 'WITH') return { kind: 'license', id };
+    position++;
+    const exception = next();
+    if (!isOperand(exception, EXCEPTION_ID)) fail();
+    return { kind: 'license', id, exception };
   }
 
   try {
@@ -132,14 +160,17 @@ export function parseLicenseExpression(text: string): LicenseExpression | undefi
   }
 }
 
-/** Indique si une expression est satisfaite par les licences que `isAllowed` admet. */
+/**
+ * Indique si une expression est satisfaite par les licences que `isAllowed` admet.
+ * `isAllowed` reçoit aussi l'exception qui accompagne la licence, s'il y en a une.
+ */
 export function isSatisfied(
   expression: LicenseExpression,
-  isAllowed: (id: string) => boolean,
+  isAllowed: (id: string, exception: string | undefined) => boolean,
 ): boolean {
   switch (expression.kind) {
     case 'license':
-      return isAllowed(expression.id);
+      return isAllowed(expression.id, expression.exception);
     case 'and':
       return isSatisfied(expression.left, isAllowed) && isSatisfied(expression.right, isAllowed);
     case 'or':
@@ -155,15 +186,19 @@ export function packageName(path: string): string {
 }
 
 function findProblem(
-  license: string | undefined,
-  development: boolean,
+  entry: LockfilePackage,
+  name: string,
   policy: LicensePolicy,
 ): LicenseProblem | undefined {
+  const { license } = entry;
   if (license === undefined || license.trim() === '') return 'missing';
   const expression = parseLicenseExpression(license);
   if (expression === undefined) return 'invalid';
-  const isAllowed = (id: string): boolean =>
-    policy.allowed.has(id) || (development && policy.allowedForDevelopment.has(id));
+  const tools =
+    entry.dev === true ? policy.toolExceptions.filter((tool) => tool.packages.test(name)) : [];
+  const isAllowed = (id: string, exception: string | undefined): boolean =>
+    (exception === undefined || policy.allowedExceptions.has(exception)) &&
+    (policy.allowed.has(id) || tools.some((tool) => tool.licenses.has(id)));
   return isSatisfied(expression, isAllowed) ? undefined : 'forbidden';
 }
 
@@ -173,14 +208,14 @@ export function auditLockfile(lockfile: Lockfile, policy: LicensePolicy): Licens
   for (const [path, entry] of Object.entries(lockfile.packages)) {
     // L'entrée vide décrit le projet lui-même.
     if (path === '' || entry.link === true) continue;
-    const development = entry.dev === true;
-    const problem = findProblem(entry.license, development, policy);
+    const name = packageName(path);
+    const problem = findProblem(entry, name, policy);
     if (problem !== undefined) {
       issues.push({
-        name: packageName(path),
+        name,
         version: entry.version ?? '?',
         license: entry.license,
-        development,
+        development: entry.dev === true,
         problem,
       });
     }

@@ -32,15 +32,18 @@ Objectif : un projet outillé, testé et déployé automatiquement, avec l'archi
 
 - **0.2.** Le PRD et le plan sont déjà dans `docs/`. L'ADR sur la pile technique consigne aussi les choix d'outillage de la tâche 0.1 :
   - TypeScript 6.0, car typescript-eslint n'accepte pas encore la version 7 ;
-  - deux programmes TypeScript, l'un pour le code du navigateur, l'autre pour le code exécuté sous Node (configuration, outils, tests) ;
-  - des règles ESLint de déterminisme et de frontières pour `src/core`, `src/sim`, `src/worldgen` et `src/gen` ;
-  - des dépendances installées dans des versions publiées depuis au moins deux semaines (`npm install --before=<date>`) ;
-  - la vérification des licences par un test (`tools/licenses.test.ts`).
-- **0.3.** Il faut une branche `main` et GitHub Pages activé, avec « GitHub Actions » comme source (PLAN, section 12, étape 2). Restent à régler :
-  - le chemin du site, `/PixelCiv/`, dans l'option `base` de `vite.config.ts` ;
-  - la version de Node de l'intégration continue, dans un fichier `.nvmrc` : de préférence la 24, car la 22 arrive en fin de vie en avril 2027.
+  - trois programmes TypeScript : le code du worker et le code partagé avec lui (`src/core`, `src/sim`, `src/worldgen`, `src/gen`), typés avec la bibliothèque WebWorker ; le reste de `src`, avec celle du DOM ; la configuration de Vite et `tools/`, avec les types de Node. Les tests sont typés avec le code qu'ils testent ;
+  - des règles ESLint de déterminisme et de frontières pour le code du worker, vérifiées par `tools/eslint-config.test.ts` ;
+  - des dépendances installées dans des versions publiées depuis au moins deux semaines (`npm install --before=<date>`), et `@types/node` aligné sur la version minimale de Node admise par `engines` ;
+  - la vérification des licences par un test (`tools/licenses.test.ts`) : une licence permissive pour tout paquet, distribué ou non, sauf quelques outils de build nommés un à un.
 
-  `npm audit` signale par ailleurs une faille modérée dans minimatch 10, une dépendance d'ESLint : un déni de service par motif glob malveillant, sans conséquence pour un outil qui ne lit que nos propres motifs. Si l'intégration continue lance `npm audit`, ce sera avec `--audit-level=high`, en attendant qu'ESLint passe à minimatch 11.
+  Reste à trancher, avec le premier outil lancé directement par Node : la convention d'import (extension `.ts` ou non) et le lanceur des outils (Node ou Vitest).
+- **0.3.** Il faut activer GitHub Pages, avec « GitHub Actions » comme source (PLAN, section 12, étape 2). Restent à régler :
+  - le chemin du site, `/PixelCiv/`, dans l'option `base` de `vite.config.ts` ;
+  - la version de Node de l'intégration continue, dans un fichier `.nvmrc` : de préférence la 26, LTS active depuis le 28 octobre 2026. La 24 est en maintenance jusqu'en avril 2028, et la 22 arrive en fin de vie le 30 avril 2027 ;
+  - un contrôle, après le build, des licences des paquets réellement mis dans le bundle (option `build.license` de Vite), contre la seule liste des licences admises.
+
+  `npm audit` signale par ailleurs une faille modérée de minimatch, corrigée en 11.0.1, alors qu'ESLint et typescript-eslint dépendent encore de minimatch 10. C'est un déni de service par motif glob malveillant, sans conséquence pour des outils qui ne lisent que nos propres motifs. Si l'intégration continue lance `npm audit`, ce sera avec `--audit-level=high`, en attendant que les deux passent à minimatch 11.0.1 ou plus.
 - **0.9.** Le titre de la page, dans `index.html`, est encore écrit en dur.
 - **0.10.** Les biomes du prototype sont décrits dans `testMap_filtre.ipynb`, qui doit d'abord être versé dans `prototypes/`.
 - **0.13.** Il faut les trois notebooks, le pack de sprites original avec sa licence, ainsi que le nom de son auteur et un lien (PRD, question 14).
