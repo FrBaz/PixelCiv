@@ -45,14 +45,17 @@ Objectif : un projet outillé, testé et déployé automatiquement, avec l'archi
 
   `npm audit` signale par ailleurs une faille modérée de minimatch, corrigée en 11.0.1, alors qu'ESLint et typescript-eslint dépendent encore de minimatch 10. C'est un déni de service par motif glob malveillant, sans conséquence pour des outils qui ne lisent que nos propres motifs. Si l'intégration continue lance `npm audit`, ce sera avec `--audit-level=high`, en attendant que les deux passent à minimatch 11.0.1 ou plus.
 - **0.9.** Le titre de la page, dans `index.html`, est encore écrit en dur.
-- **0.10.** Les biomes du prototype sont décrits dans `testMap_filtre.ipynb`, qui doit d'abord être versé dans `prototypes/`.
-- **0.13.** Il faut les trois notebooks, le pack de sprites original avec sa licence, ainsi que le nom de son auteur et un lien (PRD, question 14).
+- **0.10.** Le plan prévoit les biomes du prototype, décrits dans `testMap_filtre.ipynb`, que la tâche 1.5 remplacera par les 32 biomes de la séance C1 (D6 ; PRD, MON-08). À trancher en ouvrant 0.10 : partir du prototype, ou directement de la liste de C1.
+- **0.13.** Il faut les notebooks, les scripts de la séance C1, le pack de sprites original avec sa licence, ainsi que le nom de son auteur et un lien (PRD, question 14).
 
 ## À fournir par l'auteur
 
 | Quoi | Pour | Référence |
 |---|---|---|
-| Notebooks `testMap_filtre.ipynb`, `testArmoiries.ipynb` et `testVisages.ipynb` | 0.10 et 0.13, puis phases 1, 2 et 4 | PLAN, section 12, étape 1 |
+| Notebook `testMap_filtre.ipynb` | 0.10 et 0.13, puis phase 1 | PLAN, section 12, étape 1 |
+| Notebooks `testArmoiries.ipynb` et `testVisages.ipynb`, désormais simples illustrations : portraits et armoiries sont conçus à neuf | 0.13 | PLAN, version 0.3 |
+| Scripts de la séance C1, dans `prototypes/c1/` : `lacs_cotes_zones_humides.py` et `saisons.py` | 0.13, puis phase 1, dont ils sont l'implémentation de référence | PLAN, sections 6 et 12 (étape 4) |
+| Images de la séance C1, dans `docs/design/C1/` : `avant-apres-tropiques.png`, `avant-apres-nord.png`, `saisons-nord.png` et `saisons.gif` ; `C1-monde.md` y renvoie | phase 1 | PLAN, section 12, étape 4 |
 | Pack de sprites original et sa licence | 0.13 | AST-01, AST-02 |
 | Nom de l'auteur du pack et lien | 0.13 | PRD, question 14 |
 | Activation de GitHub Pages, avec « GitHub Actions » comme source | 0.3 | PLAN, section 12, étape 2 |

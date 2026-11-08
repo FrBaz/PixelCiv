@@ -1,19 +1,14 @@
 # PRD — Jeu de simulation de mondes et de vies
 
-Titre provisoire · version 0.2 · 8 novembre 2026
+Titre provisoire · version 0.4 · 8 novembre 2026
 
-Historique : 0.1, première version ; 0.2, corrections de relecture (civilisations et cultures, domaines des savoirs, type et mode d'accès des gouvernements, sprites, dépôt public).
+Historique : 0.1, première version ; 0.2, corrections de relecture (civilisations et cultures, domaines des savoirs, type et mode d'accès des gouvernements, sprites, dépôt public) ; 0.3, décisions de la séance C1 sur le monde (`docs/design/C1-monde.md`) ; 0.4, retrait de l'état des lieux des prototypes, portraits d'environ 64×64 px.
 
 ## 1. À propos de ce document
 
 Ce document décrit ce que le jeu doit faire. Il ne dit ni comment le construire en détail, ni dans quel ordre : l'architecture et le séquencement feront l'objet du plan de développement.
 
-Il consolide trois sources :
-- le brief initial (`brief.md`) ;
-- les prototypes Python (`testMap_filtre.ipynb`, `testArmoiries.ipynb`, `testVisages.ipynb`) ;
-- les réponses au questionnaire du 8 novembre 2026.
-
-Il devient la référence du projet ; le brief reste la trace de l'intention d'origine.
+Il consolide le brief initial (`brief.md`), les réponses au questionnaire du 8 novembre 2026 et les séances de conception (`docs/design/`). Il devient la référence du projet ; le brief reste la trace de l'intention d'origine.
 
 Chaque exigence porte un identifiant (un préfixe par domaine, par exemple `MON-03`) et une priorité :
 
@@ -23,7 +18,7 @@ Chaque exigence porte un identifiant (un préfixe par domaine, par exemple `MON-
 | P1 | Nécessaire à la version 1 complète : modes Saga et Libre, féodalité, économie, batailles. |
 | P2 | Enrichissement ultérieur. |
 
-Une exigence marquée « P0, puis P1 » doit exister sous une forme simple dès le premier jalon, puis être approfondie pour la version 1. Les propositions pas encore validées sont signalées « à valider » et reprises dans les questions ouvertes (section 28).
+Une exigence marquée « P0, puis P1 » doit exister sous une forme simple dès le premier jalon, puis être approfondie pour la version 1. Les propositions pas encore validées sont signalées « à valider » et reprises dans les questions ouvertes (section 27).
 
 ## 2. Vision
 
@@ -56,73 +51,22 @@ Le projet est personnel, mais il est mené avec l'exigence d'une sortie publique
 | Public | Adolescents et adultes. La violence et la mort sont présentes sans complaisance ; aucun contenu explicite. |
 | Ton | Sérieux, avec une pointe d'humour. |
 
-## 4. État des lieux
-
-Les prototypes Python servent de références fonctionnelles et visuelles. Ils seront portés dans la technologie du jeu (section 25), en corrigeant au passage les défauts relevés.
-
-### Génération de carte (`testMap_filtre.ipynb`)
-
-Le pipeline enchaîne les étapes suivantes :
-- **Relief** : bruit fractal OpenSimplex à trois échelles (continents, régions, détails).
-- **Température** : latitude, altitude, bruit climatique.
-- **Hydrologie** : remplissage des dépressions par priority flood, accumulation des écoulements, seuil de rivière proportionnel à la surface émergée, tracés lissés, largeur logarithmique selon le débit.
-- **Humidité, continentalité et biomes** : classification climatique.
-
-Le rendu dessine des tuiles de 4×4 px. Un débordement d'un pixel vers les cases plus basses donne le relief. Un shader ajoute la pente, une lumière venue du nord-est et une teinte thermique.
-
-Le tout fonctionne et met une vingtaine de secondes pour une carte de 256×256 en Python pur.
-
-Défauts relevés :
-- `river_map_render = river_map` crée un alias et non une copie ;
-- `create_biome_map` est appelé sans être défini ;
-- les plages sont très larges (environ 13 % de la carte sur un essai en 256×256).
-
-Un moteur de rendu 3D en perspective existe aussi, mais la vue 3D est abandonnée.
-
-### Armoiries (`testArmoiries.ipynb`)
-
-Le prototype contient :
-- des champs (uni, bandes) et des bordures ;
-- des meubles dessinés à la main en trois tons (lys, lion, macle, tour, croix, clefs) ;
-- une palette héraldique à trois nuances par couleur ;
-- la règle de contrariété des couleurs, dans la seconde version ;
-- une ébauche de blasonnement en texte.
-
-Plusieurs meubles sont déclarés mais vides : étoile, aigle, poisson, loup, dragon, triskell, rose, taureau, navire. La saisie des meubles par listes de coordonnées sera remplacée (HER-05).
-
-### Portraits (`testVisages.ipynb`)
-
-Ce sont des portraits de face de 32×48 px, paramétrés par :
-- le sexe et l'âge ;
-- la peau (6 teintes), les cheveux (8 couleurs) et les yeux (7 couleurs) ;
-- les formes des yeux, de la mâchoire et du nez ;
-- 10 coiffures et des barbes ;
-- l'humeur, des accessoires (couronnes, diadème) et des cicatrices.
-
-La dernière version plante : `rgb()` ajoute un canal alpha à des tuples déjà RGBA.
-
-### Sprites
-
-Le pack contient des corps de base vus de profil, en 5 teintes et 2 sexes, découpés en cases de 80×64 px. Le personnage fait environ 48 px de haut et dispose de 7 animations : repos (5 images), marche (8), course (8), saut (4), chute (4), attaque (6) et mort (10).
-
-Les originaux sont disponibles en PNG transparents, avec quelques vêtements, sous licence libre avec attribution en cas d'usage commercial. Les copies jointes au projet ont subi une compression avec perte et ne doivent pas être utilisées. L'usage des originaux n'est pas acquis : il dépendra du moteur de génération des écrans de ville et de bataille.
-
-## 5. Modes de jeu
+## 4. Modes de jeu
 
 Les trois modes partagent la même simulation. Une partie commence par la génération d'un monde, éventuellement suivie d'une préhistoire simulée en accéléré.
 
 | ID | Exigence | Prio |
 |---|---|---|
 | MOD-01 | Une seule simulation et un seul format de monde servent aux trois modes. | P0 |
-| MOD-02 | Mode Créateur : façonner le monde, faire apparaître des êtres, modifier n'importe quelle entité et observer (section 21). | P0, puis P1 |
-| MOD-03 | Mode Saga : incarner un individu, puis un héritier à sa mort (section 20). | P1 |
+| MOD-02 | Mode Créateur : façonner le monde, faire apparaître des êtres, modifier n'importe quelle entité et observer (section 20). | P0, puis P1 |
+| MOD-03 | Mode Saga : incarner un individu, puis un héritier à sa mort (section 19). | P1 |
 | MOD-04 | Mode Libre : passer à tout moment des pouvoirs du Créateur à l'incarnation de n'importe quel individu. | P1 |
 | MOD-05 | Préhistoire : avant une Saga, et sur demande en Créateur, le monde peut être simulé en accéléré sur une durée choisie (par exemple 100 à 1 000 ans), pour démarrer dans un monde déjà chargé d'histoire. | P1 |
 | MOD-06 | Temps : pause, ralenti et accéléré dans tous les modes. Par défaut, un pas de temps vaut un mois et une année dure environ 10 s en vitesse normale. Une partie peut couvrir plusieurs siècles. | P0 |
 
-## 6. Monde : géométrie, génération et biomes
+## 5. Monde : géométrie, génération et biomes
 
-Le monde est un cylindre : continu d'est en ouest, il est bordé de pôles au nord et au sud. Ce choix s'accorde avec le modèle de température par latitude du prototype.
+Le monde est un cylindre : continu d'est en ouest, il est bordé de pôles au nord et au sud. Ce choix s'accorde avec un climat organisé par latitude.
 
 Le monde infini a été écarté pour deux raisons :
 - l'hydrologie a besoin de connaître tout le relief ;
@@ -130,49 +74,63 @@ Le monde infini a été écarté pour deux raisons :
 
 Le cylindre permet tout de même de faire le tour du monde.
 
+La séance C1 (`docs/design/C1-monde.md`) fixe les règles détaillées du monde : eaux, côtes, zones humides, relief, climat, saisons et occupation du sol. Elle fait foi pour leurs paramètres.
+
 | ID | Exigence | Prio |
 |---|---|---|
 | MON-01 | Monde cylindrique : le bord est rejoint le bord ouest sans couture, ni dans le relief, ni dans les rivières, ni dans les déplacements et les distances. Les bords nord et sud sont polaires. | P0 |
 | MON-02 | Tailles prédéfinies au format 2:1 : Petit 512×256, Moyen 768×384, Grand 1024×512 (défaut sur PC), Immense 2048×1024 (PC, expérimental). Le défaut sur mobile reste à calibrer. | P0 |
 | MON-03 | Génération déterministe : une graine et des paramètres (niveau de la mer, part des terres, température moyenne, humidité, densité du réseau hydrographique…) donnent toujours le même monde. | P0 |
-| MON-04 | Pipeline repris du prototype et adapté au cylindre : relief par bruit fractal multi-échelle échantillonné sur un cylindre, température, hydrologie, humidité, continentalité, biomes. | P0 |
-| MON-05 | L'altitude est découpée en 20 niveaux : 5 profondeurs d'eau, 2 niveaux de rivage, 5 de plaine, 3 de colline, 2 de basse montagne, moyenne montagne, haute montagne et sommet. | P0 |
-| MON-06 | Les niveaux d'altitude ont des effets de jeu : coût de déplacement, fertilité, constructibilité et température dès le premier jalon ; défense, visibilité et navigabilité (selon le type de bateau) ensuite. | P0, puis P1 |
-| MON-07 | Rivières navigables selon leur largeur et les savoirs maritimes, franchissables à gué ou par un pont (savoir « rue et pont »). Elles sont sources d'humidité, de pêche et d'irrigation. | P1 |
-| MON-08 | Biomes naturels issus de la classification climatique du prototype (tableau ci-dessous). | P0 |
-| MON-09 | Biomes anthropiques créés par l'activité humaine (tableau ci-dessous), qui peuvent retourner à l'état naturel. | P0, puis P1 |
+| MON-04 | Pipeline de génération adapté au cylindre : relief par bruit fractal multi-échelle échantillonné sur un cylindre, et chaînes de montagnes (MON-14) ; climat (MON-15) ; hydrologie avec un seul niveau de la mer et des zones plates drainées sans tronçons rectilignes ; continentalité ; biomes. L'océan ne comprend que les eaux reliées à l'océan mondial ; les bassins fermés relèvent des lacs (MON-11). | P0 |
+| MON-05 | L'altitude est découpée en 20 niveaux : 5 profondeurs d'eau, 2 niveaux de rivage, 5 de plaine, 3 de colline, 2 de basse montagne, moyenne montagne, haute montagne et sommet. Ces niveaux sont définis en mètres, par une correspondance paramétrable entre la hauteur générée et l'altitude : jusqu'à 7 000 m sur terre et 5 500 m de profondeur. La température baisse de 6,5 °C par 1 000 m. Les bornes figurent dans C1 (D11). | P0 |
+| MON-06 | Les niveaux d'altitude ont des effets de jeu : coût de déplacement, fertilité, constructibilité et température dès le premier jalon ; défense, visibilité et navigabilité (selon le type de bateau) ensuite. Les coefficients, fixés par C1 (D11), multiplient ceux du biome ; la pente s'ajoute au coût de déplacement en version 1. | P0, puis P1 |
+| MON-07 | Rivières en trois classes selon leur débit : ruisseau, rivière, fleuve (C1, D3). La navigabilité dépend de la classe et des savoirs maritimes. On franchit une rivière à gué ou par un pont (savoir « rue et pont »), et un fleuve par un pont ou un bac. Les rivières sont sources d'humidité, de pêche et d'irrigation, et gèlent en hiver. | P0, puis P1 |
+| MON-08 | Biomes naturels : 32 biomes, fixés par la séance C1 (tableau ci-dessous). Ils sont classés selon les températures du mois le plus chaud et du mois le plus froid et selon les précipitations annuelles (MON-15). | P0 |
+| MON-09 | Occupation du sol : les « biomes anthropiques » forment une couche distincte du biome naturel. Chaque case porte un biome naturel et, éventuellement, une occupation assortie d'un âge (tableau ci-dessous). L'affichage montre l'occupation s'il y en a une. | P0, puis P1 |
 | MON-10 | Chaque biome est défini par des données : fertilité, ressources, flore (types d'arbres et de buissons), faune, coût de déplacement, palette et tuiles. | P0 |
+| MON-11 | Lacs par bilan hydrique : seuls les bassins assez grands et assez profonds forment des lacs. Selon l'apport du bassin versant et l'évaporation, un lac est d'eau douce (rempli jusqu'à son exutoire) ou salé (sans exutoire), ou devient un salar. Les lacs gèlent en hiver. | P0 |
+| MON-12 | Côtes typées sur la seule rangée de cases au contact de la mer : plage, côte rocheuse, falaise, mangrove, marais littoral, avec leurs effets (débarquement, défense, ressources). | P0 |
+| MON-13 | Zones humides : marais, tourbière et marécage, sur les terres plates, basses et humides proches de l'eau. Elles ralentissent les déplacements et favorisent les maladies. Le savoir « canaux » permet de les assécher ; elles reviennent si les canaux ne sont plus entretenus. | P0, puis P1 |
+| MON-14 | Relief : des chaînes de montagnes, formées par un bruit de crêtes et entrecoupées de cols. Cible : 3 à 6 % des terres au-dessus de la moyenne montagne. Un paramètre « relief », de plat à montagneux, s'ajoute à l'écran de création. | P0 |
+| MON-15 | Climat : températures recalibrées, avec environ 27 °C à l'équateur et −25 °C aux pôles en moyenne annuelle. Précipitations par bandes de latitude, vents dominants et ombre pluviométrique. | P0 |
 
-Biomes naturels, repris du prototype :
+Biomes naturels, fixés par la séance C1 :
 
 | Famille | Biomes |
 |---|---|
-| Eaux | océan profond, océan, océan côtier, rivière |
-| Côtes | plage |
-| Froids | neige, toundra, taïga, forêt froide, steppe froide |
+| Eaux | océan profond, océan, océan côtier, rivière, lac, lac salé |
+| Côtes | plage, côte rocheuse, falaise, mangrove, marais littoral |
+| Zones humides | marais, tourbière, marécage |
+| Froids | glacier, toundra, taïga, forêt froide, steppe froide |
 | Montagne | alpin, montagne, haute montagne |
 | Tempérés | prairie, steppe, forêt tempérée, forêt pluviale tempérée |
-| Arides | désert |
+| Arides | désert, salar |
 | Chauds et tropicaux | savane, prairie tropicale, forêt tropicale, forêt pluviale |
 
-Biomes anthropiques, liste proposée à valider :
+Le glacier est une glace permanente, là où le mois le plus chaud reste sous 0 °C. La neige saisonnière n'est pas un biome : c'est une couche calculée chaque mois (REN-10).
 
-| Biome | Origine | Retour à l'état naturel |
-|---|---|---|
-| Bocage | champs et pâtures bordés de haies | friche, puis forêt |
-| Grandes cultures | champs ouverts de culture intensive | friche |
-| Pâturages | élevage | prairie ou friche |
-| Vergers et vignes | cultures pérennes | friche |
-| Coupe | forêt abattue | forêt, en quelques décennies |
-| Friche | terre cultivée abandonnée | biome naturel d'origine |
-| Terre brûlée | incendie, tactique de la terre brûlée | biome d'origine, lentement |
-| Terre ravagée | champ de bataille | biome d'origine |
-| Carrière et mine | extraction | friche, lentement |
-| Zone bâtie | village, ville | ruines, puis friche |
+Occupation du sol, décidée en C1 :
 
-Routes et ponts forment une couche à part, superposée aux biomes.
+| Type | Créé par | Évolution sans entretien | Prio |
+|---|---|---|---|
+| Grandes cultures | défrichement et labour, en champs ouverts | friche | P0 |
+| Pâturages | élevage | prairie | P0 |
+| Coupe | abattage d'une forêt | jeune forêt | P0 |
+| Friche | abandon d'une terre cultivée | broussailles, jeune forêt, puis biome naturel | P0 |
+| Zone bâtie | village, ville | ruines | P0 |
+| Bocage | champs et pâtures bordés de haies, selon la culture | friche | P1 |
+| Cultures irriguées | canaux : rizières, oasis, vallées arides | friche, ou désert en zone aride | P1 |
+| Terrasses | cultures en terrasses sur les collines | friche | P1 |
+| Vergers et vignes | cultures pérennes | friche | P1 |
+| Terre brûlée | incendie, tactique de la terre brûlée | friche | P1 |
+| Terre ravagée | bataille | friche | P1 |
+| Carrière, mine | extraction | friche, lentement | P1 |
+| Salines | marais salants sur une plage ou un marais littoral | marais littoral | P1 |
+| Ruines | abandon d'une zone bâtie | ruines durables, découvrables en Saga, peu à peu recouvertes | P1 |
 
-## 7. Ressources, faune et évolution du terrain
+La succession d'un biome forestier passe par la friche (0 à 5 ans), les broussailles (5 à 20 ans), puis la jeune forêt (20 à 60 ans). Ailleurs, la friche rejoint le biome naturel en 5 à 10 ans. Le paysage agraire de la culture et le terrain départagent bocage et grandes cultures. Routes, ponts et canaux forment une couche linéaire à part.
+
+## 6. Ressources, faune, saisons et évolution du terrain
 
 | ID | Exigence | Prio |
 |---|---|---|
@@ -180,31 +138,38 @@ Routes et ponts forment une couche à part, superposée aux biomes.
 | RES-02 | Gisements épuisables, d'exploitation de plus en plus coûteuse. | P1 |
 | RES-03 | Le bois et la cueillette sont de vraies ressources, qui se régénèrent. | P0 |
 | RES-04 | Pêche en mer et en rivière. | P0 |
+| RES-05 | Ressources des milieux humides et salés : roseaux, tourbe et fer des marais ; sel des salars, des lacs salés et des salines. | P0, puis P1 |
 | FAU-01 | La faune apparaît selon le biome et ses populations varient ; le gibier est chassé. | P0 |
 | FAU-02 | Animaux dangereux (loups, ours…) et domestication débloquée par les savoirs (cheval pour la cavalerie, bétail). | P1 |
-| TER-01 | Le terrain évolue sous l'action humaine : déforestation, défrichement, champs, routes et ponts, extension des villes case par case, carrières et mines. | P0 |
+| SAI-01 | Calendrier : années de 12 mois, saisons de 3 mois, calendrier universel « an du monde » pour le joueur. | P0 |
+| SAI-02 | Température mensuelle de chaque case. Les saisons sont inversées entre les deux hémisphères, et leur amplitude croît avec la latitude et la continentalité. Sous les tropiques, une saison sèche alterne avec une saison des pluies. La formule figure dans C1 (D8). | P0 |
+| SAI-03 | Effets saisonniers dès le premier jalon : semailles et récoltes selon la latitude, réserves pour l'hiver, rendements saisonniers de la cueillette, de la chasse et de la pêche, mortalité hivernale accrue des plus fragiles, neige et glace. | P0 |
+| SAI-04 | Effets saisonniers ensuite : saison de campagne, attrition hivernale, boue au dégel, eaux gelées franchissables, tempêtes ; chantiers ralentis ; fêtes et rites saisonniers ; bonnes et mauvaises années. | P1 |
+| SAI-05 | Calendriers locaux : noms des mois dans chaque langue, ères propres aux civilisations. | P1 |
+| TER-01 | Le terrain évolue sous l'action humaine, à travers l'occupation du sol (MON-09) : déforestation, défrichement, champs, pâturages, routes et ponts, extension des villes case par case, carrières et mines. | P0 |
 | TER-02 | Les batailles ravagent les terres ; la terre brûlée est possible. | P1 |
-| TER-03 | Les terres délaissées retournent à l'état naturel : friches, forêts qui repoussent, ruines. | P1 |
+| TER-03 | Les terres délaissées retournent à l'état naturel par succession écologique : friche, broussailles, jeune forêt, puis biome naturel, en quelques décennies. Les zones bâties deviennent des ruines durables. | P0, puis P1 |
 | TER-04 | Érosion lente, optionnelle. | P2 |
 | TER-05 | Marées : les rivages se découvrent et se recouvrent, avec des effets possibles (pêche à pied, gué temporaire). | P2 |
 
-## 8. Rendu, vues et direction artistique
+## 7. Rendu, vues et direction artistique
 
-La carte reste en 2D vue de dessus, dans le style du prototype. Il n'y a pas de vue 3D. Des écrans de visualisation en pixel art montrent les paysages, les villes et les batailles.
+La carte est en 2D vue de dessus. Il n'y a pas de vue 3D. Des écrans de visualisation en pixel art montrent les paysages, les villes et les batailles.
 
 | ID | Exigence | Prio |
 |---|---|---|
-| REN-01 | Vue principale en 2D de dessus, tuiles de 4 px, avec le débordement de relief et le shader du prototype. Zoom continu ; défilement sans fin d'est en ouest. | P0 |
+| REN-01 | Vue principale en 2D de dessus, tuiles de 4 px. Le relief se lit grâce à un léger débordement des cases hautes sur les cases plus basses, et à un éclairage selon la pente. Zoom continu ; défilement sans fin d'est en ouest. | P0 |
 | REN-02 | Rendu par blocs : seules les zones modifiées sont redessinées, ce qui permet le terrain évolutif. | P0 |
 | REN-03 | Le détail affiché dépend du zoom. Vue lointaine : frontières, couleurs politiques, icônes de villes, bannières d'armées. Vue intermédiaire : bâtiments, routes, champs, formations militaires. Vue rapprochée : habitants animés, bétail, chantiers. | P0, puis P1 |
 | REN-04 | Mini-sprites à l'échelle de la carte, de l'ordre de 6 à 10 px de haut. Ils sont générés à partir de l'individu : teinte, vêtements selon la culture, le rang et le métier, équipement. | P0, puis P1 |
 | REN-05 | Les sprites de profil originaux (environ 48 px) peuvent servir aux écrans de visualisation et à la fiche du personnage, avec superposition de vêtements, de coiffures et d'équipements. Leur usage dépendra du moteur de génération de ces écrans ; des sprites générés peuvent les remplacer. | P1 |
 | REN-06 | Écrans de visualisation générés en pixel art. Paysage : selon le biome, le relief, le climat, la saison et l'heure. Ville : architecture selon la culture et les savoirs, taille et richesse. Bataille : armées, terrain, déroulé. | P1 |
-| REN-07 | Portraits de face de 32×48 px, dérivés du prototype et pilotés par : les gènes (teinte, couleurs, formes), l'âge (rides, cheveux gris, calvitie), le rang (couronne ou coiffe selon le titre), la culture et le métier (vêtements), l'état (cicatrices, maladies) et l'humeur. | P0, puis P1 |
+| REN-07 | Portraits de face d'environ 64×64 px (format à confirmer), pilotés par : les gènes (teinte, couleurs, formes), l'âge (rides, cheveux gris, calvitie), le rang (couronne ou coiffe selon le titre), la culture et le métier (vêtements), l'état (cicatrices, maladies) et l'humeur. | P0, puis P1 |
 | REN-08 | Tout est en pixel art. Une même vue n'affiche qu'une seule densité de pixels. Afficher les sprites de 48 px plus petits que les pixels de la carte produirait des « mixels » et casserait la cohérence, d'où les mini-sprites dédiés. | P0 |
 | REN-09 | Palettes organisées par rôles (contour, ombre, base, lumière) et recolorées à l'exécution : un même motif sert à toutes les teintes de peau, couleurs héraldiques et matériaux. | P0 |
+| REN-10 | Les saisons sont rendues par un shader qui lit une texture de données, une valeur par case, sans recuire les blocs de carte. Il recolore par palettes saisonnières propres à chaque biome : neige et glace dès le premier jalon, couleurs de la végétation ensuite. | P0, puis P1 |
 
-## 9. Individus, génétique, familles, maisons et ordres
+## 8. Individus, génétique, familles, maisons et ordres
 
 Le modèle est hybride : tout le monde existe vraiment, mais seuls les notables ont une vie intérieure détaillée. C'est ce qui permet de simuler des dizaines de milliers d'individus, y compris sur mobile.
 
@@ -223,7 +188,7 @@ Le modèle est hybride : tout le monde existe vraiment, mais seuls les notables 
 | FAM-02 | Ordres religieux rattachés à une religion, avec un chef, des armoiries et leurs propres règles d'entrée (vœux, recrutement, mérite) plutôt que la naissance. | P1 |
 | FAM-03 | Ordres militaires et de chevalerie sur le même modèle. | P2 |
 
-## 10. Espèces
+## 9. Espèces
 
 | ID | Exigence | Prio |
 |---|---|---|
@@ -234,7 +199,7 @@ Le modèle est hybride : tout le monde existe vraiment, mais seuls les notables 
 | ESP-05 | Nains (des collines, des montagnes), orques (des forêts, des collines) et elfes (des bois, hauts elfes, elfes noirs), avec de vraies différences de jeu ; hybrides demi-elfes et demi-orques. | P2 |
 | ESP-06 | Monstres (dragons…). | P2 |
 
-## 11. Civilisations et cultures
+## 10. Civilisations et cultures
 
 Civilisation et culture sont deux notions distinctes et indépendantes. Plusieurs cultures peuvent coexister au sein d'une civilisation, et une même culture peut exister dans plusieurs civilisations.
 
@@ -257,7 +222,7 @@ Un individu appartient à une civilisation et à une culture, parle une ou plusi
 | CUL-02 | Une culture se scinde avec la distance, l'isolement et le temps ; fusions et assimilations sont possibles. | P1 |
 | CUL-03 | La diffusion des cultures, des langues et des religions dépend de leur niveau (prestige, raffinement, savoirs) et de celui des individus en contact (éducation, charisme, rang, intensité et durée des échanges). Le modèle reste à concevoir. | P1 |
 
-## 12. Langues
+## 11. Langues
 
 | ID | Exigence | Prio |
 |---|---|---|
@@ -268,7 +233,7 @@ Un individu appartient à une civilisation et à une culture, parle une ou plusi
 
 Il n'y a ni grammaire complète, ni traduction de phrases.
 
-## 13. Religions
+## 12. Religions
 
 | ID | Exigence | Prio |
 |---|---|---|
@@ -279,7 +244,7 @@ Il n'y a ni grammaire complète, ni traduction de phrases.
 | REL-05 | Diffusion, conversion, syncrétisme, schismes et hérésies, selon le modèle de diffusion (CUL-03). | P1 |
 | REL-06 | La hiérarchie du clergé suit la nomenclature théocratique (paroisse, diocèse, archidiocèse, église, foi) ; les ordres religieux s'y rattachent (FAM-02). | P1 |
 
-## 14. Savoirs et technologies
+## 13. Savoirs et technologies
 
 | ID | Exigence | Prio |
 |---|---|---|
@@ -307,7 +272,7 @@ Chaînes initiales, reprises du brief et complétées :
 
 L'architecture n'est pas un domaine à part : ses techniques de construction relèvent de l'urbanisme et ses styles de l'art (proposition à valider). Les deux pilotent ensemble le rendu procédural des bâtiments (ARC-01).
 
-## 15. Arts et architecture
+## 14. Arts et architecture
 
 | ID | Exigence | Prio |
 |---|---|---|
@@ -318,19 +283,19 @@ L'architecture n'est pas un domaine à part : ses techniques de construction rel
 | ARC-01 | L'apparence des bâtiments résulte de la culture (style), des savoirs (techniques et matériaux), de la fonction et de la richesse. Elle est visible sur la carte et dans les écrans de ville et de bataille. | P0, puis P1 |
 | ARC-02 | Les bâtiments sont assemblés à partir d'éléments (fondations, murs, ouvertures, toitures, ornements) plutôt que dessinés un par un. | P1 |
 
-## 16. Héraldique
+## 15. Héraldique
 
 | ID | Exigence | Prio |
 |---|---|---|
 | HER-01 | Armoiries générées pour les gouvernements, les maisons et les ordres ; les villes en reçoivent à partir d'une certaine importance (proposition). | P0, puis P1 |
-| HER-02 | Règles héraldiques : métaux et couleurs (les « émaux » du prototype), règle de contrariété (jamais métal sur métal ni couleur sur couleur), champs et partitions, bordures, meubles et leurs dispositions. | P0 |
+| HER-02 | Règles héraldiques : métaux et couleurs, règle de contrariété (jamais métal sur métal ni couleur sur couleur), champs et partitions, bordures, meubles et leurs dispositions. | P0 |
 | HER-03 | Transmission : écartelé lors des unions, brisures pour les cadets. | P1 |
 | HER-04 | Blasonnement automatique en français, par exemple « D'azur à trois fleurs de lys d'or ». | P1 |
-| HER-05 | Meubles refaits avec une méthode de saisie plus pratique que les listes de coordonnées : des masques indexés par rôle de teinte, éditables dans un logiciel de pixel art ou sous forme de grille de texte. La collection est complétée (étoile, aigle, poisson, loup, dragon, triskell, rose, taureau, navire…). | P0, puis P1 |
+| HER-05 | Les meubles sont saisis sous forme de masques indexés par rôle de teinte, éditables dans un logiciel de pixel art ou sous forme de grille de texte. La collection comprend notamment lys, lion, macle, tour, croix, clefs, étoile, aigle, poisson, loup, dragon, triskell, rose, taureau et navire. | P0, puis P1 |
 | HER-06 | Le joueur peut modifier toutes les armoiries en Créateur, et celles de sa maison en Saga. | P1 |
 | HER-07 | Styles propres aux espèces, aux cultures et aux religions (formes d'écu, motifs, conventions). | P2 |
 
-## 17. Politique, gouvernements et féodalité
+## 16. Politique, gouvernements et féodalité
 
 Chaque village a son administration. Un gouvernement est toujours rattaché à une ville, sa capitale. Dès qu'il gère plus d'un village, il forme de fait un ensemble plus vaste, dont le niveau dépend de sa composition. Cela peut se produire par fondation de colonie, conquête, vassalisation ou achat.
 
@@ -371,7 +336,7 @@ Nomenclature : chaque case donne l'entité, puis le titre de son chef. Elle dép
 | 4 | Royaume, roi | République, consul | État, doge* | Tyrannie*, tyran | Association, sans chef | Église, cardinal |
 | 5 | Empire, empereur | Fédération, président* | Empire, empereur | Empire, empereur | Conglomérat, sans chef | Foi, pontife |
 
-## 18. Économie
+## 17. Économie
 
 | ID | Exigence | Prio |
 |---|---|---|
@@ -387,7 +352,7 @@ Nomenclature : chaque case donne l'entité, puis le titre de son chef. Elle dép
 | ECO-10 | Finances publiques : recettes fiscales (POL-12) et dépenses (armée, bâtiments, incitations). | P1 |
 | ECO-11 | Subsistance : la nourriture disponible, les disettes et les famines influencent la démographie. | P0 |
 
-## 19. Armée, guerre et diplomatie
+## 18. Armée, guerre et diplomatie
 
 Les batailles sont tactiques, visibles et commandables. Le système détaillé (moral, effectifs, mouvements, doctrines) fera l'objet d'une séance de conception dédiée ; les exigences ci-dessous en fixent le cadre.
 
@@ -432,7 +397,7 @@ Formes de bataille selon l'échelle :
 | Bataillons | bataille rangée avec mouvement des compagnies (lignes de bataille) |
 | Armées | bataille rangée avec mouvement des bataillons et des compagnies |
 
-## 20. Mode Saga
+## 19. Mode Saga
 
 | ID | Exigence | Prio |
 |---|---|---|
@@ -446,7 +411,7 @@ Formes de bataille selon l'échelle :
 | SAG-08 | Le personnage peut rédiger et modifier un testament, dans les limites des lois. | P1 |
 | SAG-09 | Objectifs : prestige dynastique et succès. Il n'y a pas de condition de victoire ; la partie continue tant qu'il reste un proche à incarner. | P1 |
 
-## 21. Modes Créateur et Libre
+## 20. Modes Créateur et Libre
 
 | ID | Exigence | Prio |
 |---|---|---|
@@ -459,7 +424,7 @@ Formes de bataille selon l'échelle :
 | CRE-07 | Catastrophes : séismes, épidémies, sécheresses, incendies, inondations… | P2 |
 | LIB-01 | Mode Libre : basculer à tout moment entre les pouvoirs du Créateur et l'incarnation de n'importe quel individu, sans perdre la partie. | P1 |
 
-## 22. Événements, choix et chronique
+## 21. Événements, choix et chronique
 
 | ID | Exigence | Prio |
 |---|---|---|
@@ -469,7 +434,7 @@ Formes de bataille selon l'échelle :
 | CHR-02 | La chronique se consulte par civilisation, ville, gouvernement, maison, religion et individu, avec des filtres et une frise chronologique. | P0, puis P1 |
 | CHR-03 | Statistiques historiques : population, richesse, frontières et puissance militaire au fil du temps. | P1 |
 
-## 23. Interface
+## 22. Interface
 
 | ID | Exigence | Prio |
 |---|---|---|
@@ -482,7 +447,7 @@ Formes de bataille selon l'échelle :
 | IHM-07 | Souris et clavier sur PC ; tactile sur mobile (pincer pour zoomer, appui long pour inspecter). | P0 |
 | IHM-08 | Écran de crédits mentionnant notamment l'auteur du pack de sprites. | P1 |
 
-## 24. Exigences non fonctionnelles
+## 23. Exigences non fonctionnelles
 
 | ID | Exigence | Prio |
 |---|---|---|
@@ -498,7 +463,7 @@ Formes de bataille selon l'échelle :
 | NF-10 | Un monde peut tourner pendant des siècles sans dégradation : mémoire bornée, archivage des morts et de l'historique. | P1 |
 | NF-11 | Tests automatisés sur le cœur de la simulation. | P0 |
 
-## 25. Choix techniques et organisation
+## 24. Choix techniques et organisation
 
 Le jeu est développé pour le web, en TypeScript :
 
@@ -510,9 +475,9 @@ Le jeu est développé pour le web, en TypeScript :
 
 Le jeu s'installe comme une application web sur PC et sur mobile. Il sera ensuite empaqueté pour Steam et les stores. Le choix des outils d'empaquetage se fera à ce moment-là : Tauri ou Electron sur PC, Capacitor sur mobile.
 
-Le code vit dans un dépôt git public sur GitHub. Sans fichier de licence, il reste sous droits réservés, ce qui préserve une sortie commerciale. Les assets tiers n'y sont versés que si leur licence autorise la redistribution. Les versions de test sont publiées automatiquement sur GitHub Pages. Claude écrit l'essentiel du code avec Claude Code, directement dans le dépôt ; l'auteur du jeu dirige, relit et teste. La conversation de conception sert au design, au plan et à des prototypes jouables publiés en lien. Les prototypes Python restent dans le dépôt comme références. L'architecture détaillée est décrite dans le plan de développement (`docs/PLAN.md`).
+Le code vit dans un dépôt git public sur GitHub. Sans fichier de licence, il reste sous droits réservés, ce qui préserve une sortie commerciale. Les assets tiers n'y sont versés que si leur licence autorise la redistribution. Les versions de test sont publiées automatiquement sur GitHub Pages. Claude écrit l'essentiel du code avec Claude Code, directement dans le dépôt ; l'auteur du jeu dirige, relit et teste. La conversation de conception sert au design, au plan et à des prototypes jouables publiés en lien. L'architecture détaillée est décrite dans le plan de développement (`docs/PLAN.md`).
 
-## 26. Assets, licences et crédits
+## 25. Assets, licences et crédits
 
 | ID | Exigence | Prio |
 |---|---|---|
@@ -523,11 +488,11 @@ Le code vit dans un dépôt git public sur GitHub. Sans fichier de licence, il r
 | AST-05 | Bibliothèques tierces sous licences compatibles avec une sortie commerciale (MIT, BSD, Apache…). | P0 |
 | AST-06 | Audio : musique et effets sonores. | P2 |
 
-## 27. Périmètre par version
+## 26. Périmètre par version
 
 ### P0 : premier jalon jouable, un mode Créateur minimal
 
-- On génère un monde cylindrique et on l'explore avec un zoom fluide.
+- On génère un monde cylindrique, avec ses montagnes, ses lacs, ses côtes et ses climats, et on l'explore avec un zoom fluide ; les saisons s'y succèdent.
 - On fait apparaître des humains des trois sous-espèces. Ils naissent, vivent, se reproduisent selon une génétique de base et meurent.
 - Ils fondent des civilisations dotées d'une langue et d'une culture simples, puis des villages qui grandissent et transforment le terrain.
 - Une économie de subsistance les fait vivre et les premiers savoirs s'inventent.
@@ -541,6 +506,7 @@ Le code vit dans un dépôt git public sur GitHub. Sans fichier de licence, il r
 - Féodalité complète : niveaux 1 à 5, lois, vassalité, succession, testament.
 - Économie de marché, banques, assurances, entreprises et immobilier.
 - Arbre des savoirs complet et architecture procédurale.
+- Saisons complètes : couleurs de la végétation, effets sur la guerre, fêtes, bonnes et mauvaises années.
 - Cultures, langues et religions qui se diffusent ; arts.
 - Batailles tactiques et doctrines ; diplomatie complète.
 - Écrans de visualisation, arbre généalogique, graphiques, modes de carte, habillage évolutif.
@@ -553,7 +519,7 @@ Le code vit dans un dépôt git public sur GitHub. Sans fichier de licence, il r
 - Styles héraldiques par espèce, culture et religion ; emprunts entre langues.
 - Ouverture aux mods, empaquetage pour les stores, audio.
 
-## 28. Questions ouvertes
+## 27. Questions ouvertes
 
 | # | Sujet | État |
 |---|---|---|
@@ -562,9 +528,9 @@ Le code vit dans un dépôt git public sur GitHub. Sans fichier de licence, il r
 | 3 | Règles d'appartenance d'un individu et d'un village à une civilisation et à une culture (CIV-04). | À concevoir |
 | 4 | Dictature et anarchie : descriptions ; mode d'accès « par désignation » (POL-03). | À concevoir |
 | 5 | Titres proposés : Tyrannie (dictature de niveau 4), doge (oligarchie de niveau 4), président (république de niveau 5) ; formes féminines des titres. | À valider |
-| 6 | Liste des biomes anthropiques (section 6). | À valider |
-| 7 | Lacs et marais : faut-il les ajouter aux biomes naturels ? Le remplissage des dépressions par l'hydrologie produit naturellement des lacs. | À valider |
-| 8 | Saisons : effets sur l'agriculture, la guerre et les visuels (proposées en P1). | À valider |
+| 6 | Liste des biomes anthropiques (section 5). | Tranchée en C1 : occupation du sol (MON-09) |
+| 7 | Lacs et marais : faut-il les ajouter aux biomes naturels ? Le remplissage des dépressions par l'hydrologie produit naturellement des lacs. | Tranchée en C1 : MON-11 et MON-13 |
+| 8 | Saisons : effets sur l'agriculture, la guerre et les visuels (proposées en P1). | Tranchée en C1 : SAI-01 à SAI-05, REN-10 |
 | 9 | Contrôle direct en mode Saga : sur la carte, dans les écrans de visualisation, dans les batailles ? | À préciser |
 | 10 | Écrans de visualisation : perspective, moteur de génération et degré d'interactivité ; l'usage des sprites originaux en dépend. | À concevoir |
 | 11 | Taille de monde par défaut et nombre d'individus sur mobile. | À calibrer par prototypage |
@@ -573,8 +539,9 @@ Le code vit dans un dépôt git public sur GitHub. Sans fichier de licence, il r
 | 14 | Nom de l'auteur et lien du pack de sprites, pour les crédits. | À fournir |
 | 15 | Titre du jeu. | À trouver |
 | 16 | Domaines des savoirs : faut-il en ajouter (agriculture et élevage, aujourd'hui dans l'artisanat et l'industrie ; sciences et médecine ; philosophie et théologie) ? L'architecture se répartit-elle bien entre urbanisme (techniques) et art (styles) ? | À valider avec l'arbre |
+| 17 | Format des portraits : environ 64×64 px. | À confirmer en phase 2 |
 
-## 29. Journal des décisions
+## 28. Journal des décisions
 
 Réponses au questionnaire du 8 novembre 2026. « Défaut » désigne la proposition par défaut du questionnaire, acceptée telle quelle.
 
@@ -592,7 +559,7 @@ Réponses au questionnaire du 8 novembre 2026. « Défaut » désigne la proposi
 | 10 | Affichage | Selon le zoom ; armées réellement simulées ; batailles stratégiques (moral, effectifs, mouvements, doctrines) à approfondir. |
 | 11 | Temps | Défaut : pas de temps mensuel, environ 10 s par an, préhistoire, pause aux choix. |
 | 12 | Vue | 2D en tuiles de 4 px ; pas de 3D ; rendu des paysages et des villes en pixel art. |
-| 13 | Biomes | Liste du prototype, enrichie de biomes anthropiques. |
+| 13 | Biomes | Classification climatique (taïga, savane, forêts tropicales…), enrichie de biomes anthropiques. |
 | 14 | Terrain | Altitudes avec effets ; marées secondaires ; terrain évolutif, surtout par l'action humaine ; continuité est-ouest. |
 | 15 | Ressources | Défaut. |
 | 16 | Univers | Défaut : pas de magie au départ, monstres plus tard, plafond au XIXe siècle. |
@@ -627,11 +594,30 @@ Corrections de la relecture (version 0.2) :
 | Gouvernements | Chaque gouvernement a un type et un mode d'accès au pouvoir. |
 | Dépôt | Public, sur GitHub. |
 
-## 30. Glossaire
+Séance C1 sur le monde (version 0.3), détaillée dans `docs/design/C1-monde.md` :
+
+| Sujet | Décision |
+|---|---|
+| Eaux | Un seul niveau de la mer ; lacs par bilan hydrique ; trois classes de rivières. |
+| Côtes et zones humides | Côtes typées ; marais, tourbières et marécages. |
+| Biomes naturels | 32 biomes ; la « neige » devient « glacier ». |
+| Occupation du sol | Couche distincte du biome naturel, avec succession écologique. |
+| Saisons | Calendrier de 12 mois, hémisphères inversés, rendu par shader. |
+| Relief et climat | Altitudes en mètres, chaînes de montagnes, climat recalibré, biomes classés par mois. |
+
+Corrections de la version 0.4 :
+
+| Sujet | Décision |
+|---|---|
+| Existant | Le PRD ne décrit plus les prototypes : ils ont servi à illustrer les idées et ne font pas foi. |
+| Portraits | Format visé : environ 64×64 px, à confirmer. |
+
+## 29. Glossaire
 
 | Terme | Définition |
 |---|---|
-| Biome anthropique | Biome créé par l'activité humaine (bocage, grandes cultures, terre brûlée…). |
+| Bilan hydrique | Comparaison entre l'eau qu'un bassin reçoit et celle qu'il perd par évaporation ; il décide de la nature d'un lac. |
+| Biome anthropique | Ancien nom de l'occupation du sol (MON-09). |
 | Blasonnement | Description d'armoiries en langage héraldique. |
 | Brisure | Modification des armoiries qui distingue une branche cadette. |
 | Chronique | Journal de tous les faits notables du monde. |
@@ -646,5 +632,8 @@ Corrections de la relecture (version 0.2) :
 | Mode d'accès au pouvoir | Façon dont le dirigeant d'un gouvernement est choisi (héréditaire, aristocratique, démocratique, ploutocratique, aléatoire), indépendante du type. |
 | Niveau de gouvernement | Rang de 1 à 5 d'un gouvernement, selon sa capitale et ses vassaux. |
 | Notable | Individu qui bénéficie d'une simulation détaillée. |
+| Occupation du sol | Usage humain d'une case (champ, pâturage, coupe, friche, zone bâtie…), distinct de son biome naturel. |
 | Pas de temps | Unité de temps de la simulation : un mois par défaut. |
+| Salar | Étendue de sel sèche, au fond d'un bassin fermé trop aride pour garder un lac. |
+| Succession écologique | Retour progressif d'une terre délaissée vers son biome naturel. |
 | Type de gouvernement | Monarchie, république, oligarchie, dictature, théocratie ou anarchie ; il détermine la nomenclature. |

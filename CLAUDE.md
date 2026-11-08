@@ -30,7 +30,8 @@ Jeu de simulation de mondes et de vies en pixel art, à la croisée de WorldBox,
 - **Textes.** N'écris en dur aucun texte affiché : passe par `t('clé')` et ajoute la clé dans `src/i18n/fr.json`. Les titres ont une forme masculine et une forme féminine.
 - **Performances.** Stocke les individus ordinaires en tableaux typés, une colonne par attribut, sans objet par individu. Seuls les notables ont des objets.
 - **Pixel art.** Rends en échantillonnage au plus proche, avec des positions entières à l'écran. Ne mélange jamais deux densités de pixels dans une même vue.
-- **Modèle.** Civilisation et culture sont distinctes, en relation libre (plusieurs à plusieurs). Un gouvernement a un type et un mode d'accès au pouvoir, deux attributs indépendants.
+- **Modèle.** Civilisation et culture sont distinctes, en relation libre (plusieurs à plusieurs). Un gouvernement a un type et un mode d'accès au pouvoir, deux attributs indépendants. Chaque case porte un biome naturel et, à part, une occupation du sol (champ, coupe, friche, zone bâtie…).
+- **Saisons.** Ne recuis jamais les blocs de carte pour une saison : elles passent par la texture de données et le shader.
 - **Qualité.**
   - TypeScript strict, sans `any`.
   - Identifiants en anglais, commentaires et documentation en français.
@@ -40,6 +41,7 @@ Jeu de simulation de mondes et de vies en pixel art, à la croisée de WorldBox,
 
 - Une tâche correspond à un ticket, une branche et une PR. Fais des PR petites, avec tests, types et lint au vert.
 - Consigne toute nouvelle décision d'architecture dans un ADR court, dans `docs/decisions/`.
-- `prototypes/` contient les prototypes Python de référence : porte leur logique, pas leurs défauts (PRD, section 4).
+- `prototypes/` contient des notebooks et scripts Python d'exploration, qui illustrent des idées.
 - Avant d'implémenter un système marqué « à concevoir » dans le PRD, vérifie qu'un document existe dans `docs/design/`. S'il n'existe pas, demande avant de coder.
+- Le PRD et les documents validés de `docs/design/` (comme `C1-monde.md`) font foi. En cas d'écart avec un prototype, ce sont eux qui l'emportent.
 - Ne verse jamais de secret dans le dépôt, qui est public. N'y verse aucun asset tiers sans licence autorisant sa redistribution.
