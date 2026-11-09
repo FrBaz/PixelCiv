@@ -112,10 +112,11 @@ async function main(): Promise<void> {
   };
   render(h(App, { actions }), element('ui'));
 
+  // La poignée de main d'abord : le worker refuse tout message qui la précède.
+  simulation.send({ type: 'hello', protocol: PROTOCOL_VERSION });
   // Débogage : ?stepCost=200 ajoute un coût factice de 200 ms à chaque pas.
   const stepCost = Number(new URLSearchParams(location.search).get('stepCost') ?? 0);
   if (stepCost > 0) simulation.send({ type: 'debugStepCost', milliseconds: stepCost });
-  simulation.send({ type: 'hello', protocol: PROTOCOL_VERSION });
 }
 
 void main();

@@ -30,6 +30,14 @@ export const SAVE_FORMAT_VERSION = 2;
  */
 export const MAX_SAVE_BYTES = 64 * 1024 * 1024;
 
+/**
+ * Taille maximale de l'en-tête JSON, en octets. JSON.parse le lit avant toute
+ * vérification de forme, et son analyse coûte bien plus de mémoire que ses octets :
+ * une borne propre l'empêche d'occuper tout MAX_SAVE_BYTES. Le journal des commandes
+ * d'une longue partie de la phase 0 tient largement dedans.
+ */
+export const MAX_HEADER_BYTES = 8 * 1024 * 1024;
+
 export type SavedArray =
   | Uint8Array<ArrayBuffer>
   | Uint16Array<ArrayBuffer>
@@ -162,6 +170,7 @@ export function decodeSave(bytes: Uint8Array, migrations: Migrations): SaveData 
   if (version === 0) throw new SaveError('corrupt', 'version 0');
   const headerLength = view.getUint32(6, true);
   if (PREFIX_BYTES + headerLength > bytes.length) throw new SaveError('corrupt', 'en-tête tronqué');
+  if (headerLength > MAX_HEADER_BYTES) throw new SaveError('size', 'en-tête trop grand');
   let header: Header;
   try {
     const text = new TextDecoder('utf-8', { fatal: true }).decode(

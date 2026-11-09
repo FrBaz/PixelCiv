@@ -25,6 +25,13 @@ describe('wrapX', () => {
     }
   });
 
+  it('donne NaN pour une coordonnée non finie, au lieu de la colonne 0', () => {
+    expect(wrapX(Number.NaN, 512)).toBeNaN();
+    expect(wrapX(Number.POSITIVE_INFINITY, 512)).toBeNaN();
+    expect(wrapX(Number.NEGATIVE_INFINITY, 512)).toBeNaN();
+    expect(deltaX(Number.NaN, 0, 512)).toBeNaN();
+  });
+
   it('reste sous la largeur pour un reste négatif infime', () => {
     expect(wrapX(-1e-14, 512)).toBe(0);
     expect(wrapX(-Number.MIN_VALUE, 512)).toBe(0);

@@ -116,16 +116,23 @@ export function restoreState(save: SaveData): SimState {
   within(walkerX, size.width, 'walkerX');
   within(walkerY, size.height, 'walkerY');
   const grid = chunkGrid(size);
+  const testLayer = savedArray(
+    save,
+    'testLayer',
+    Uint8Array<ArrayBuffer>,
+    size.width * size.height,
+  );
+  // Des copies : l'état ne partage rien avec la sauvegarde, qui peut resservir.
   return {
     seed: save.meta.seed,
     size,
     tick,
-    testLayer: savedArray(save, 'testLayer', Uint8Array<ArrayBuffer>, size.width * size.height),
+    testLayer: testLayer.slice(),
     commandLog: [...commandLog],
     pending: [...pending],
     rng: new Rng(save.meta.seed, rng),
-    walkerX,
-    walkerY,
+    walkerX: walkerX.slice(),
+    walkerY: walkerY.slice(),
     dirtyChunks: new Uint8Array(grid.columns * grid.rows),
   };
 }

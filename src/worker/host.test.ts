@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { PROTOCOL_VERSION, type WorkerMessage } from '../core/protocol';
 import { CHUNK_SIZE } from '../core/world';
 import { monthDuration, NORMAL_MONTH_MS } from '../core/time';
@@ -344,6 +344,27 @@ describe('file des opérations', () => {
     host.receive({ type: 'load', requestId: 2, data: saved.data });
     const again = await saveOf(env, host, 3);
     expect(again.meta.seed).toBe('chargée');
+  });
+
+  it("répond à une sauvegarde dont l'écriture échoue, avec son numéro de requête", async () => {
+    const { env, host } = await startedHost();
+    const quiet = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const original = globalThis.CompressionStream;
+    // Un constructeur qui lève : la compression est indisponible.
+    globalThis.CompressionStream = function () {
+      throw new TypeError('CompressionStream indisponible');
+    } as unknown as typeof CompressionStream;
+    try {
+      host.receive({ type: 'save', requestId: 42 });
+      await host.idle();
+    } finally {
+      globalThis.CompressionStream = original;
+      quiet.mockRestore();
+    }
+    expect(env.messages('saveFailed')).toEqual([
+      { type: 'saveFailed', requestId: 42, reason: 'failed' },
+    ]);
+    expect(env.messages('error').map((error) => error.code)).toEqual(['internal']);
   });
 
   it('répond à une sauvegarde demandée avant toute partie', async () => {

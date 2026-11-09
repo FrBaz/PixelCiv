@@ -183,7 +183,14 @@ export class SimulationHost {
       return;
     }
     const save = saveState(this.state);
-    const file = await writeSave(save);
+    let file: Uint8Array<ArrayBuffer>;
+    try {
+      file = await writeSave(save);
+    } catch (error) {
+      // La requête reçoit sa réponse ; le défaut est signalé à part.
+      this.send({ type: 'saveFailed', requestId, reason: 'failed' });
+      throw error;
+    }
     this.send({ type: 'saved', requestId, meta: save.meta, data: file.buffer });
   }
 

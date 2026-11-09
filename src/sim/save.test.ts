@@ -68,6 +68,16 @@ describe('sauvegarde de la simulation', () => {
     expect(fingerprint(restored)).toBe(fingerprint(played(6)));
   });
 
+  it('rend un état qui ne partage rien avec la sauvegarde', () => {
+    const save = saveState(played(5));
+    const first = restoreState(save);
+    const second = restoreState(save);
+    expect(first.walkerX).not.toBe(second.walkerX);
+    const before = fingerprint(second);
+    for (let tick = 0; tick < 3; tick++) step(first, []);
+    expect(fingerprint(second)).toBe(before);
+  });
+
   it('a une migration pour chaque version antérieure', () => {
     for (let version = 1; version < SAVE_FORMAT_VERSION; version++) {
       expect(MIGRATIONS[version], `version ${version}`).toBeTypeOf('function');

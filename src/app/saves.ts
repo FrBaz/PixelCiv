@@ -3,8 +3,9 @@
  * sauvegarde automatique, export et import de fichiers. Le worker produit et relit
  * les fichiers ; ce module les range et les échange avec l'utilisateur.
  *
- * Toute issue se traduit par un avis au joueur : une écriture ne compte qu'une fois
- * la transaction d'IndexedDB validée, et une erreur ne passe jamais sous silence.
+ * Chaque action du joueur se conclut par un avis, et une écriture ne compte qu'une
+ * fois la transaction d'IndexedDB validée. La sauvegarde automatique reste discrète :
+ * elle ne signale que le premier échec du stockage, et note les autres dans la console.
  */
 import type { WorkerMessage } from '../core/protocol';
 import { MAX_SAVE_BYTES, type SaveErrorCode, type SaveMeta } from '../core/save/format';
@@ -132,10 +133,23 @@ type SaveReply = Extract<WorkerMessage, { type: 'saved' | 'saveFailed' | 'loaded
 type Capture =
   | { readonly status: 'saved'; readonly meta: SaveMeta; readonly data: ArrayBuffer }
   | { readonly status: 'noGame' }
+  | { readonly status: 'failed' }
   | { readonly status: 'timeout' };
 
 /** Issue d'une sauvegarde dans un emplacement : l'avis à montrer. */
-type SaveOutcome = 'save.done' | 'save.error.noGame' | 'save.error.timeout' | 'save.error.storage';
+type SaveOutcome =
+  | 'save.done'
+  | 'save.error.noGame'
+  | 'save.error.failed'
+  | 'save.error.timeout'
+  | 'save.error.storage';
+
+/** Avis d'une capture manquée. */
+const CAPTURE_ERRORS = {
+  noGame: 'save.error.noGame',
+  failed: 'save.error.failed',
+  timeout: 'save.error.timeout',
+} as const satisfies Record<Exclude<Capture['status'], 'saved'>, MessageKey>;
 
 /** Issue d'un chargement : partie chargée, emplacement vide, ou avis d'erreur. */
 type LoadOutcome =
@@ -190,7 +204,8 @@ export class SaveManager {
       this.simulation.send({ type: 'save', requestId });
     });
     if (reply?.type === 'saved') return { status: 'saved', meta: reply.meta, data: reply.data };
-    return reply?.type === 'saveFailed' ? { status: 'noGame' } : { status: 'timeout' };
+    if (reply?.type === 'saveFailed') return { status: reply.reason };
+    return { status: 'timeout' };
   }
 
   /** Remplace la partie par celle d'un fichier ; le worker la vérifie. */
@@ -207,8 +222,7 @@ export class SaveManager {
     const store = this.store;
     if (store === undefined) return 'save.error.storage';
     const captured = await this.capture();
-    if (captured.status === 'noGame') return 'save.error.noGame';
-    if (captured.status === 'timeout') return 'save.error.timeout';
+    if (captured.status !== 'saved') return CAPTURE_ERRORS[captured.status];
     try {
       await store.put({
         slot,
@@ -238,7 +252,9 @@ export class SaveManager {
       return { status: 'failed', notice: 'save.error.storage' };
     }
     if (record === undefined) return { status: 'empty' };
-    const failure = await this.loadData(record.data);
+    // Le worker reçoit une copie : le tampon envoyé est transféré, donc détaché ici, et
+    // l'enregistrement doit rester intact pour être mis de côté s'il est illisible.
+    const failure = await this.loadData(record.data.slice(0));
     return failure === undefined
       ? { status: 'loaded' }
       : { status: 'failed', notice: failure, record };
@@ -257,12 +273,21 @@ export class SaveManager {
    * la sauvegarde automatique suivante ne l'écrase pas.
    */
   async resume(): Promise<boolean> {
+    // Sans stockage local, il n'y a rien à reprendre : le joueur l'apprend d'emblée.
+    if (this.store === undefined) {
+      showNotice('save.error.storage');
+      return false;
+    }
     const outcome = await this.loadFrom(AUTO_SLOT);
     if (outcome.status === 'loaded') return true;
     if (outcome.status === 'failed') {
       console.warn('reprise impossible', outcome.notice);
       if (outcome.record !== undefined) {
-        await this.store?.put({ ...outcome.record, slot: UNREADABLE_SLOT }).catch(() => undefined);
+        await this.store
+          .put({ ...outcome.record, slot: UNREADABLE_SLOT })
+          .catch((error: unknown) => {
+            console.warn('mise de côté impossible', error);
+          });
       }
       showNotice('save.error.resume');
     }
@@ -273,7 +298,7 @@ export class SaveManager {
   async exportFile(): Promise<void> {
     const captured = await this.capture();
     if (captured.status !== 'saved') {
-      showNotice(captured.status === 'noGame' ? 'save.error.noGame' : 'save.error.timeout');
+      showNotice(CAPTURE_ERRORS[captured.status]);
       return;
     }
     const { meta, data } = captured;
@@ -309,6 +334,8 @@ export class SaveManager {
     let warned = false;
     const autosave = () => {
       void this.saveTo(AUTO_SLOT).then((outcome) => {
+        if (outcome === 'save.done') return;
+        console.warn('sauvegarde automatique', outcome);
         // Un échec du stockage est signalé une fois ; le reste est passager.
         if (outcome === 'save.error.storage' && !warned) {
           warned = true;

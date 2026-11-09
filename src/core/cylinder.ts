@@ -5,12 +5,14 @@
 
 /**
  * Ramène x dans [0, width), y compris quand x est négatif ; ne renvoie jamais -0.
- * Le reste de `%` est exact : une valeur déjà dans [0, width) revient inchangée.
+ * Le reste de `%` est exact : une valeur déjà dans [0, width) revient inchangée. Une
+ * coordonnée non finie donne NaN, plutôt que de tomber en silence dans la colonne 0.
  */
 export function wrapX(x: number, width: number): number {
   const rest = x % width;
   // -0 >= 0 : `+ 0` en fait un zéro positif.
   if (rest >= 0) return rest + 0;
+  if (Number.isNaN(rest)) return rest;
   // Un reste négatif infime donne rest + width arrondi à width, qui vaut 0 sur le cercle.
   const wrapped = rest + width;
   return wrapped < width ? wrapped : 0;

@@ -75,13 +75,13 @@ function markDirty(state: SimState, x: number, y: number): void {
 
 /**
  * Case qui contient le point (x, y) : sa colonne boucle d'est en ouest, et une ligne
- * hors du monde, au nord ou au sud, n'en a pas. La partie entière est prise avant de
- * boucler : x = -0,1 tombe bien dans la dernière colonne.
+ * hors du monde, au nord ou au sud, n'en a pas, pas plus qu'un point non fini. La partie
+ * entière est prise avant de boucler : x = -0,1 tombe bien dans la dernière colonne.
  */
 function cellIndex(state: SimState, x: number, y: number): number | undefined {
   const { width, height } = state.size;
   const row = Math.floor(y);
-  if (!(row >= 0 && row < height)) return undefined;
+  if (!Number.isFinite(x) || !(row >= 0 && row < height)) return undefined;
   return row * width + wrapX(Math.floor(x), width);
 }
 

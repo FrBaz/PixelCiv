@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from 'vitest';
-import type { MainMessage, WorkerMessage } from '../core/protocol';
+import { transferablesOf, type MainMessage, type WorkerMessage } from '../core/protocol';
 import { MAX_SAVE_BYTES } from '../core/save/format';
 import { notice } from '../ui/store';
 import { AUTO_SLOT, MANUAL_SLOT, SaveManager, SaveStore, UNREADABLE_SLOT } from './saves';
@@ -39,6 +39,9 @@ class FakeTransaction extends EventTarget {
   objectStore() {
     return {
       put: (record: { slot: string }) => {
+        // Comme IndexedDB, la base copie l'enregistrement aussitôt : un tampon transféré
+        // ailleurs, donc détaché, lève une DataCloneError.
+        const copy = structuredClone(record);
         const request = new FakeRequest();
         if (database.put === 'fail') {
           request.settle(undefined, new DOMException('refus', 'UnknownError'));
@@ -53,7 +56,7 @@ class FakeTransaction extends EventTarget {
             });
           } else {
             later(() => {
-              database.records.set(record.slot, record);
+              database.records.set(copy.slot, copy);
               this.finish('complete');
             });
           }
@@ -101,7 +104,7 @@ Object.assign(globalThis, {
 
 /** Faux worker : il répond aux requêtes de sauvegarde et de chargement comme on le lui dit. */
 class FakeSimulation {
-  saveReply: 'saved' | 'saveFailed' | 'silent' = 'saved';
+  saveReply: 'saved' | 'noGame' | 'failed' | 'silent' = 'saved';
   loadReply: WorkerMessage | 'silent' = { type: 'loaded', requestId: 0 };
   readonly sent: MainMessage[] = [];
   private listener: ((message: WorkerMessage) => void) | undefined;
@@ -112,15 +115,17 @@ class FakeSimulation {
   }
 
   send(message: MainMessage): void {
-    this.sent.push(message);
+    // Comme postMessage, le message est copié et ses tampons transférés : détachés ici.
+    this.sent.push(structuredClone(message, { transfer: transferablesOf(message) }));
     const reply = (answer: WorkerMessage) => {
       later(() => this.listener?.(answer));
     };
-    if (message.type === 'save' && this.saveReply === 'saved') {
+    const answer = this.saveReply;
+    if (message.type === 'save' && answer === 'saved') {
       const data = new ArrayBuffer(8);
       reply({ type: 'saved', requestId: message.requestId, meta: { seed: 's', tick: 1 }, data });
-    } else if (message.type === 'save' && this.saveReply === 'saveFailed') {
-      reply({ type: 'saveFailed', requestId: message.requestId, reason: 'noGame' });
+    } else if (message.type === 'save' && (answer === 'noGame' || answer === 'failed')) {
+      reply({ type: 'saveFailed', requestId: message.requestId, reason: answer });
     } else if (message.type === 'load' && this.loadReply !== 'silent') {
       reply({ ...this.loadReply, requestId: message.requestId } as WorkerMessage);
     }
@@ -167,9 +172,16 @@ describe('sauvegarde manuelle', () => {
 
   it("dit qu'il n'y a pas de partie à sauvegarder", async () => {
     const { simulation, saves } = await manager();
-    simulation.saveReply = 'saveFailed';
+    simulation.saveReply = 'noGame';
     await saves.save();
     expect(shown()).toBe('save.error.noGame');
+  });
+
+  it('dit que la sauvegarde a échoué dans le worker', async () => {
+    const { simulation, saves } = await manager();
+    simulation.saveReply = 'failed';
+    await saves.save();
+    expect(shown()).toBe('save.error.failed');
   });
 });
 
@@ -219,6 +231,12 @@ describe('reprise au démarrage', () => {
     const { saves } = await manager();
     await expect(saves.resume()).resolves.toBe(false);
     expect(shown()).toBeUndefined();
+  });
+
+  it('signale, sans parler de reprise, un stockage local indisponible', async () => {
+    const saves = new SaveManager(new FakeSimulation() as unknown as SimulationClient, undefined);
+    await expect(saves.resume()).resolves.toBe(false);
+    expect(shown()).toBe('save.error.storage');
   });
 
   it('commence une partie, et le dit, quand la lecture échoue', async () => {

@@ -69,6 +69,7 @@
   "save.error.size": "Ce fichier est trop volumineux pour être une sauvegarde.",
   "save.error.read": "Ce fichier n'a pas pu être lu.",
   "save.error.noGame": "Aucune partie en cours à sauvegarder.",
+  "save.error.failed": "La sauvegarde a échoué.",
   "save.error.timeout": "La simulation n'a pas répondu à temps.",
   "save.error.resume": "La dernière partie n'a pas pu être reprise : une nouvelle partie commence.",
   "save.error.storage": "Le stockage local est indisponible.",

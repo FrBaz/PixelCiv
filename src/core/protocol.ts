@@ -93,8 +93,12 @@ export type WorkerMessage =
       readonly meta: SaveMeta;
       readonly data: ArrayBuffer;
     }
-  /** Sauvegarde impossible : aucune partie n'est en cours. */
-  | { readonly type: 'saveFailed'; readonly requestId: number; readonly reason: 'noGame' }
+  /** Sauvegarde impossible : aucune partie n'est en cours, ou l'écriture a échoué. */
+  | {
+      readonly type: 'saveFailed';
+      readonly requestId: number;
+      readonly reason: 'noGame' | 'failed';
+    }
   /** Partie chargée ; l'instantané de la nouvelle partie l'a précédé. */
   | { readonly type: 'loaded'; readonly requestId: number }
   | { readonly type: 'loadFailed'; readonly requestId: number; readonly reason: SaveErrorCode }

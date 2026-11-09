@@ -218,23 +218,56 @@ function isOddInteger(value: number): boolean {
   return Number.isInteger(value) && Math.abs(value % 2) === 1;
 }
 
-/** base^n par exponentiation rapide, pour n entier : plus précis que exp(n ln base). */
-function integerPower(base: number, n: number): number {
+/**
+ * Au-delà de cet exposant entier, les produits successifs cumulent plus d'erreur que
+ * exp(y ln x) : de l'ordre de n × 2^-55 contre (|y ln x| + 2) × 2^-53.
+ */
+const INTEGER_POWER_LIMIT = 64;
+
+/** base^n par exponentiation rapide, pour n entier positif : exact sur les petits entiers. */
+function positivePower(base: number, n: number): number {
   let result = 1;
   let factor = base;
-  for (let remaining = Math.abs(n); remaining > 0; remaining = Math.floor(remaining / 2)) {
+  for (let remaining = n; remaining > 0; remaining = Math.floor(remaining / 2)) {
     if (remaining % 2 === 1) result *= factor;
     factor *= factor;
   }
-  return n < 0 ? 1 / result : result;
+  return result;
+}
+
+/**
+ * base^n pour n entier, |n| ≤ INTEGER_POWER_LIMIT. Une puissance négative d'un nombre
+ * plus petit que 1 passe par son inverse : les produits croissent, au lieu de perdre
+ * leurs chiffres parmi les sous-normaux.
+ */
+function integerPower(base: number, n: number): number {
+  if (n >= 0) return positivePower(base, n);
+  return base < 1 ? positivePower(1 / base, -n) : 1 / positivePower(base, -n);
+}
+
+/** k si x vaut exactement 2^k, sous-normaux compris ; sinon undefined. */
+function powerOfTwoExponent(x: number): number | undefined {
+  view.setFloat64(0, x);
+  const high = view.getUint32(0);
+  const low = view.getUint32(4);
+  const field = (high >>> 20) & 0x7ff;
+  const mantissa = high & 0x000fffff;
+  if (field !== 0) return mantissa === 0 && low === 0 ? field - 1023 : undefined;
+  // Sous-normal : un seul bit de mantisse, dont la place donne l'exposant.
+  const single = (bits: number) => bits !== 0 && (bits & (bits - 1)) === 0;
+  if (low === 0 && single(mantissa)) return -1074 + 32 + (31 - Math.clz32(mantissa));
+  if (mantissa === 0 && single(low)) return -1074 + (31 - Math.clz32(low));
+  return undefined;
 }
 
 /**
  * Puissance x^y. Les cas particuliers suivent la norme ECMAScript
- * (Number::exponentiate) ; le cas général passe par exp(y ln x), ou par
- * l'exponentiation rapide quand y est un entier modéré. Par exp(y ln x), l'erreur
- * relative croît avec |y ln x| : de l'ordre de 10^-15 pour un résultat modéré, elle
- * atteint 2 × 10^-13 près des débordements, où |y ln x| approche 709.
+ * (Number::exponentiate). Une puissance entière de deux est exacte, débordement et
+ * sous-normaux compris ; une puissance entière modérée passe par les produits, exacts
+ * pour les petits entiers ; le reste passe par exp(y ln x), dont l'erreur relative croît
+ * avec |y ln x|. Mesurée face à Math : 10^-14 en relatif par les produits, 3 × 10^-14
+ * par exp(y ln x) pour un résultat entre 10^-30 et 10^30, 3 × 10^-13 près des
+ * débordements, où un résultat voisin de la limite peut passer du mauvais côté.
  */
 export function pow(x: number, y: number): number {
   if (Number.isNaN(y)) return NaN;
@@ -253,13 +286,16 @@ export function pow(x: number, y: number): number {
     return y > 0 ? 0 : Infinity;
   }
   if (x < 0 && !Number.isInteger(y)) return NaN;
+  const twoExponent = Number.isInteger(y) ? powerOfTwoExponent(magnitude) : undefined;
   let result: number;
-  if (Number.isInteger(y) && Math.abs(y) <= 1024) {
+  if (twoExponent !== undefined) {
+    // 2^(k y) : au-delà de ±1100, le résultat déborde ou s'annule sans calcul.
+    const k = twoExponent * y;
+    result = k > 1100 ? Infinity : k < -1100 ? 0 : scale(1, k);
+  } else if (Number.isInteger(y) && Math.abs(y) <= INTEGER_POWER_LIMIT) {
     result = integerPower(magnitude, y);
-    // Un résultat nul ou sous-normal a perdu sa précision dans les produits, alors qu'il
-    // peut rester représentable : exp(y ln x) fait mieux. Un débordement, lui, est réel,
-    // car les produits croissent avec le résultat.
-    if (result < SMALLEST_NORMAL) result = exp(y * log(magnitude));
+    // Un produit qui s'annule a pu perdre un résultat sous-normal encore représentable.
+    if (result === 0) result = exp(y * log(magnitude));
   } else {
     result = exp(y * log(magnitude));
   }

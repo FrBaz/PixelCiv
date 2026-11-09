@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   decodeSave,
   encodeSave,
+  MAX_HEADER_BYTES,
   MAX_SAVE_BYTES,
   readSave,
   SAVE_FORMAT_VERSION,
@@ -184,6 +185,14 @@ describe('taille', () => {
     const bomb = await gzip(huge);
     expect(bomb.length).toBeLessThan(MAX_SAVE_BYTES / 100);
     expect((await rejection(readSave(bomb, NONE))).code).toBe('size');
+  });
+
+  it("refuse un en-tête trop grand avant de l'analyser", () => {
+    const filler = '[],'.repeat(Math.ceil(MAX_HEADER_BYTES / 3));
+    const header = { meta: { seed: 'graine', tick: 1 }, json: `[${filler}[]]`, arrays: [] };
+    expect(() => decodeSave(forged(header, new Uint8Array(0)), NONE)).toThrow(
+      expect.objectContaining({ code: 'size' }) as Error,
+    );
   });
 
   it("s'arrête au début d'un fichier compressé qui n'est pas une sauvegarde", async () => {

@@ -28,6 +28,15 @@ describe('couche de test', () => {
     expect(testCell(state, 2, 6)).toBe(3);
   });
 
+  it("n'écrit rien pour un point non fini", () => {
+    const state = createState('graine', size);
+    for (const x of [Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY]) {
+      expect(setTestCell(state, x, 3, 7)).toBe(false);
+      expect(setTestCell(state, 3, x, 7)).toBe(false);
+    }
+    expect(testCell(state, 0, 3)).toBe(0);
+  });
+
   it('borne les valeurs et ne signale que les vrais changements', () => {
     const state = createState('graine', size);
     expect(setTestCell(state, 3, 3, 300)).toBe(true);

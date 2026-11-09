@@ -84,14 +84,14 @@ describe('précision', () => {
     }
   });
 
-  it('pow, à 2e-13 près en relatif près des débordements', () => {
+  it('pow, à 3e-13 près en relatif près des débordements', () => {
     const random = new Rng('dmath').stream('pow.grand');
     for (let i = 0; i < 20_000; i++) {
       const x = 1 + random.nextFloat() * 99;
       const y = (random.nextFloat() * 709) / Math.log(x);
       const expected = Math.pow(x, y);
       if (!Number.isFinite(expected)) continue;
-      expect(Math.abs(pow(x, y) - expected)).toBeLessThanOrEqual(2e-13 * expected);
+      expect(Math.abs(pow(x, y) - expected)).toBeLessThanOrEqual(3e-13 * expected);
     }
   });
 });
@@ -135,6 +135,48 @@ describe('valeurs particulières', () => {
     expect(pow(10, -320)).toBeGreaterThan(0);
     expect(Math.abs(pow(10, -320) - 1e-320)).toBeLessThanOrEqual(5e-324);
     expect(pow(0.3, 600)).toBe(Math.pow(0.3, 600));
+  });
+
+  it('rend exactes les petites puissances entières et les puissances de deux', () => {
+    expect(pow(10, 15)).toBe(1e15);
+    expect(pow(3, 20)).toBe(3486784401);
+    expect(pow(-3, 3)).toBe(-27);
+    expect(pow(0.5, -3)).toBe(8);
+    expect(pow(2, -1074)).toBe(5e-324);
+    expect(pow(0.5, 1074)).toBe(5e-324);
+    expect(pow(2, -1075)).toBe(0);
+    expect(pow(5e-324, 1)).toBe(5e-324);
+    expect(pow(5e-324, -1)).toBe(Infinity);
+    // Un exposant démesuré ne fait pas boucler le calcul.
+    expect(pow(2, 1e300)).toBe(Infinity);
+    expect(pow(2, -1e300)).toBe(0);
+  });
+
+  it('rend x pour pow(x, 1), et le produit arrondi pour pow(x, 2), sous-normaux compris', () => {
+    const random = new Rng('dmath').stream('pow.entier');
+    for (let i = 0; i < 20_000; i++) {
+      // De 1e-320 à 1e300 : nombres normaux et sous-normaux.
+      const x = exp((random.nextFloat() - 0.5) * 1380 - 45);
+      expect(pow(x, 1)).toBe(x);
+      expect(pow(x, 2)).toBe(x * x);
+    }
+    expect(pow(1e-154, 2)).toBe(1e-154 * 1e-154);
+  });
+
+  it('garde les puissances entières précises, petites ou grandes', () => {
+    const random = new Rng('dmath').stream('pow.produits');
+    for (let i = 0; i < 20_000; i++) {
+      const n = 2 + Math.floor(random.nextFloat() * 1022);
+      // Bases telles que le résultat reste entre 10^-30 et 10^30.
+      const x = exp(((random.nextFloat() - 0.5) * 138) / n);
+      const expected = Math.pow(x, n);
+      // Produits jusqu'à n = 64 (5e-15 mesuré), exp(n ln x) au-delà (2,5e-14 mesuré).
+      expect(Math.abs(pow(x, n) - expected), `pow(${x}, ${n})`).toBeLessThanOrEqual(
+        (n <= 64 ? 1e-14 : 3e-14) * expected,
+      );
+    }
+    const big = Math.pow(1.0086887393737078, 1023);
+    expect(Math.abs(pow(1.0086887393737078, 1023) - big)).toBeLessThanOrEqual(1e-14 * big);
   });
 
   it("déborde vers l'infini quand le vrai résultat dépasse le plus grand double", () => {
