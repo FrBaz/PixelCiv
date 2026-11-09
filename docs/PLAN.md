@@ -1,8 +1,8 @@
 # Plan de développement — Jeu de simulation de mondes et de vies
 
-Version 0.3 · 8 novembre 2026 · complète le PRD (`docs/PRD.md`, version 0.4)
+Version 0.4 · 9 novembre 2026 · complète le PRD (`docs/PRD.md`, version 0.4)
 
-Historique : 0.1, première version ; 0.2, intégration de la séance C1 sur le monde ; 0.3, générateurs de portraits et d'armoiries conçus à neuf, portraits d'environ 64×64 px.
+Historique : 0.1, première version ; 0.2, intégration de la séance C1 sur le monde ; 0.3, générateurs de portraits et d'armoiries conçus à neuf, portraits d'environ 64×64 px ; 0.4, ADR de la phase 0 et dossier `src/worker/` (tâche 0.2).
 
 ## 1. Principes
 
@@ -38,7 +38,7 @@ Le dépôt public apporte deux avantages : l'hébergement gratuit des versions d
 
 ```
 CLAUDE.md          consignes lues par Claude Code à chaque session
-docs/              PRD.md, PLAN.md, design/ (séances de conception), decisions/ (ADR)
+docs/              PRD.md, PLAN.md, BACKLOG.md, design/ (séances de conception), decisions/ (ADR)
 prototypes/        notebooks et scripts Python d'exploration
 assets/source/     pack de sprites original, licence et crédits (si redistribuable)
 assets/pixel/      sources pixel art éditables (meubles héraldiques, motifs, tuiles)
@@ -46,6 +46,7 @@ data/              contenu du jeu en JSON (biomes, espèces, savoirs, biens, tit
 src/core/          utilitaires partagés : PRNG, maths déterministes, protocole, types
 src/worldgen/      génération du monde
 src/sim/           simulation, exécutée dans un Web Worker
+src/worker/        hôte de la simulation dans le worker : messages, cadence des pas, mesures
 src/gen/           générateurs procéduraux : portraits, armoiries, noms, mini-sprites…
 src/render/        rendu PixiJS
 src/ui/            interface Preact
@@ -77,6 +78,8 @@ Une tâche est finie quand :
 - les documents concernés (PRD, plan, ADR, design) sont à jour.
 
 ## 3. Architecture
+
+Les décisions d'architecture sont consignées dans `docs/decisions/` : pile technique (ADR 0001), monde cylindrique (ADR 0002), déterminisme (ADR 0003) et communication avec le worker (ADR 0004). L'index de ce dossier recense les suivantes.
 
 ### Vue d'ensemble
 

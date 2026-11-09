@@ -15,7 +15,7 @@ Objectif : un projet outillé, testé et déployé automatiquement, avec l'archi
 | # | Tâche | Exigences | Critère d'acceptation | État |
 |---|---|---|---|---|
 | 0.1 | Projet Vite et TypeScript strict, arborescence, ESLint, Prettier, Vitest ; scripts `dev`, `build`, `test`, `typecheck`, `lint` ; licences des dépendances vérifiées. | NF-11, AST-05 | `npm test` et `npm run build` passent. | à relire |
-| 0.2 | Documentation : PRD et plan dans `docs/` ; premiers ADR (pile technique, monde cylindrique, déterminisme, communication avec le worker) ; relecture de `CLAUDE.md`. | — | ADR rédigés et cités dans le plan. | à faire |
+| 0.2 | Documentation : PRD et plan dans `docs/` ; premiers ADR (pile technique, monde cylindrique, déterminisme, communication avec le worker) ; relecture de `CLAUDE.md`. | — | ADR rédigés et cités dans le plan. | à relire |
 | 0.3 | Intégration continue GitHub Actions (lint, types, tests, build) et déploiement sur GitHub Pages à chaque fusion sur `main`. | — | Chaque PR affiche ses vérifications ; `main` est en ligne. | à faire |
 | 0.4 | Squelette d'application : page plein écran, canvas PixiJS, couche d'interface Preact, redimensionnement, orientation, zones de sécurité des téléphones. | IHM-06, IHM-07 | Affichage correct en paysage et en portrait. | à faire |
 | 0.5 | Worker de simulation et protocole de messages typé : commandes, instantanés, deltas, tampons transférés. Une seule simulation pour tous les modes. | NF-02, MOD-01 | Un pas factice de 200 ms ne fait pas chuter l'affichage. | à faire |
@@ -30,14 +30,7 @@ Objectif : un projet outillé, testé et déployé automatiquement, avec l'archi
 
 ### Notes
 
-- **0.2.** Le PRD et le plan sont déjà dans `docs/`. L'ADR sur la pile technique consigne aussi les choix d'outillage de la tâche 0.1 :
-  - TypeScript 6.0, car typescript-eslint n'accepte pas encore la version 7 ;
-  - trois programmes TypeScript : le code du worker et le code partagé avec lui (`src/core`, `src/sim`, `src/worldgen`, `src/gen`), typés avec la bibliothèque WebWorker ; le reste de `src`, avec celle du DOM ; la configuration de Vite et `tools/`, avec les types de Node. Les tests sont typés avec le code qu'ils testent ;
-  - des règles ESLint de déterminisme et de frontières pour le code du worker, vérifiées par `tools/eslint-config.test.ts` ;
-  - des dépendances installées dans des versions publiées depuis au moins deux semaines (`npm install --before=<date>`), et `@types/node` aligné sur la version minimale de Node admise par `engines` ;
-  - la vérification des licences par un test (`tools/licenses.test.ts`) : une licence permissive pour tout paquet, distribué ou non, sauf quelques outils de build nommés un à un.
-
-  Reste à trancher, avec le premier outil lancé directement par Node : la convention d'import (extension `.ts` ou non) et le lanceur des outils (Node ou Vitest).
+- **0.2.** ADR 0001 à 0004 rédigés dans `docs/decisions/` et cités dans le plan (section 3, version 0.4). `CLAUDE.md` relu : renvoi au backlog, commande `format`, dossier `src/worker/`, portée des règles ESLint, règle sur les dépendances. La convention d'import et le lanceur des outils restent à revoir avec le premier outil lancé directement par Node (ADR 0001).
 - **0.3.** Il faut activer GitHub Pages, avec « GitHub Actions » comme source (PLAN, section 12, étape 2). Restent à régler :
   - le chemin du site, `/PixelCiv/`, dans l'option `base` de `vite.config.ts` ;
   - la version de Node de l'intégration continue, dans un fichier `.nvmrc` : de préférence la 26, LTS active depuis le 28 octobre 2026. La 24 est en maintenance jusqu'en avril 2028, et la 22 arrive en fin de vie le 30 avril 2027 ;
