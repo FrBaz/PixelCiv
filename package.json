@@ -31,6 +31,7 @@
   "dependencies": {
     "@preact/signals": "^2.11.3",
     "pixi.js": "^8.22.0",
-    "preact": "^10.29.8"
+    "preact": "^10.29.8",
+    "zod": "^4.6.7"
   }
 }

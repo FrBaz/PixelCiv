@@ -1,13 +1,14 @@
 // Point d'entrée de l'application : crée le rendu de la carte, l'interface et le worker
 // de simulation, puis les relie.
 import { h, render } from 'preact';
+import { loadGameData } from '../core/data';
 import { PROTOCOL_VERSION } from '../core/protocol';
 import { t } from '../i18n';
 import { CameraControls } from '../render/controls';
 import { cellAt, MapView } from '../render/map';
 import { createRenderer } from '../render/renderer';
 import { App } from '../ui/App';
-import { stats, time } from '../ui/store';
+import { content, stats, time } from '../ui/store';
 import { SimulationClient } from './simulation';
 import './style.css';
 
@@ -19,6 +20,9 @@ function element(id: string): HTMLElement {
 
 async function main(): Promise<void> {
   document.title = t('app.title');
+  // Le contenu est validé au démarrage : une donnée invalide lève ici une DataError.
+  const data = loadGameData();
+  content.value = { biomes: data.biomes.entries.length };
   const mapElement = element('map');
   const app = await createRenderer(mapElement);
   const map = new MapView(app);
