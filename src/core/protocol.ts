@@ -4,6 +4,7 @@
  * Tous les messages sont des unions discriminées par `type`. Les gros volumes
  * voyagent en ArrayBuffer transférés : `transferablesOf` les rassemble.
  */
+import type { SaveErrorCode, SaveMeta } from './save/format';
 import type { SpeedId } from './time';
 import type { WorldSize, WorldSizeId } from './world';
 
@@ -36,6 +37,10 @@ export type MainMessage =
   | { readonly type: 'setPaused'; readonly paused: boolean }
   /** Avance d'un seul pas, en pause. */
   | { readonly type: 'stepOnce' }
+  /** Demande une sauvegarde ; la réponse porte le même numéro de requête. */
+  | { readonly type: 'save'; readonly requestId: number }
+  /** Remplace la partie par celle d'un fichier de sauvegarde. */
+  | { readonly type: 'load'; readonly requestId: number; readonly data: ArrayBuffer }
   /** Coût factice ajouté à chaque pas, en millisecondes (débogage). */
   | { readonly type: 'debugStepCost'; readonly milliseconds: number };
 
@@ -81,6 +86,16 @@ export type WorkerMessage =
   /** Changement de vitesse ou de pause, sans pas. */
   | { readonly type: 'time'; readonly time: TimeInfo }
   | { readonly type: 'stats'; readonly stats: StepStats }
+  /** Sauvegarde prête : un fichier compressé, transféré. */
+  | {
+      readonly type: 'saved';
+      readonly requestId: number;
+      readonly meta: SaveMeta;
+      readonly data: ArrayBuffer;
+    }
+  /** Partie chargée ; l'instantané de la nouvelle partie suit. */
+  | { readonly type: 'loaded'; readonly requestId: number }
+  | { readonly type: 'loadFailed'; readonly requestId: number; readonly reason: SaveErrorCode }
   /** Erreur : `code` désigne le message affiché, `detail` aide au débogage. */
   | { readonly type: 'error'; readonly code: ErrorCode; readonly detail: string };
 
@@ -95,16 +110,22 @@ export function transferablesOf(message: MainMessage | WorkerMessage): ArrayBuff
     case 'snapshot':
     case 'delta':
       return message.chunks.map((chunk) => chunk.cells.buffer);
+    case 'saved':
+    case 'load':
+      return [message.data];
     case 'hello':
     case 'newGame':
     case 'game':
     case 'setSpeed':
     case 'setPaused':
     case 'stepOnce':
+    case 'save':
     case 'debugStepCost':
     case 'ready':
     case 'time':
     case 'stats':
+    case 'loaded':
+    case 'loadFailed':
     case 'error':
       return [];
   }

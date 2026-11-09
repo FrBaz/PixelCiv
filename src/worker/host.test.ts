@@ -190,3 +190,45 @@ describe('commandes de jeu', () => {
     expect(paintedIn(-1)).toBe(9);
   });
 });
+
+/** Attend qu'une condition se vérifie, le temps que les opérations asynchrones aboutissent. */
+async function until(condition: () => boolean): Promise<void> {
+  for (let attempt = 0; attempt < 200 && !condition(); attempt++) {
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+  expect(condition()).toBe(true);
+}
+
+describe('sauvegarde', () => {
+  it('envoie un fichier compressé, transféré, puis le recharge dans un autre hôte', async () => {
+    const { env, host } = startedHost();
+    host.receive({ type: 'game', command: { type: 'paint', x: 3, y: 4, value: 9 } });
+    env.advance(NORMAL_MONTH_MS * 2);
+    host.receive({ type: 'save', requestId: 7 });
+    await until(() => env.messages('saved').length > 0);
+    const saved = env.messages('saved').at(0);
+    expect(saved?.requestId).toBe(7);
+    expect(saved?.meta).toEqual({ seed: 'graine', tick: 2 });
+    const entry = env.sent.find((sent) => sent.message.type === 'saved');
+    expect(entry?.transfer).toEqual([saved?.data]);
+
+    const other = new FakeEnvironment();
+    const loader = new SimulationHost(other);
+    loader.receive({ type: 'load', requestId: 8, data: saved?.data ?? new ArrayBuffer(0) });
+    await until(() => other.messages('loaded').length > 0);
+    expect(other.messages('loaded')).toEqual([{ type: 'loaded', requestId: 8 }]);
+    const snapshot = other.messages('snapshot').at(0);
+    expect(snapshot?.time.tick).toBe(2);
+    expect(snapshot?.chunks.at(0)?.cells[4 * CHUNK_SIZE + 3]).toBe(9);
+  });
+
+  it("refuse un fichier qui n'est pas une sauvegarde, sans toucher à la partie", async () => {
+    const { env, host } = startedHost();
+    host.receive({ type: 'load', requestId: 9, data: new TextEncoder().encode('bonjour').buffer });
+    await until(() => env.messages('loadFailed').length > 0);
+    expect(env.messages('loadFailed')).toEqual([
+      { type: 'loadFailed', requestId: 9, reason: 'format' },
+    ]);
+    expect(env.messages('snapshot')).toHaveLength(1);
+  });
+});

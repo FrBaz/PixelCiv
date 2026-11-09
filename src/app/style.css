@@ -133,3 +133,24 @@ button:disabled {
   opacity: 0.4;
   cursor: default;
 }
+
+.hud-bottom {
+  flex-direction: column;
+  align-items: flex-start;
+}
+
+.save-menu {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem;
+}
+
+.save-menu button {
+  padding: 0 0.75rem;
+}
+
+.notice {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}

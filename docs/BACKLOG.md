@@ -24,7 +24,7 @@ Objectif : un projet outillé, testé et déployé automatiquement, avec l'archi
 | 0.8 | Caméra : déplacement et zoom à la souris, au clavier et au doigt, sur une grille de test qui boucle d'est en ouest. | MON-01, IHM-07 | Défilement sans fin, sans saut à la couture. | à relire |
 | 0.9 | Traduction : clés, fichier français, pluriels et genre ; un test échoue si une clé manque. | NF-06, POL-04 | Aucun texte en dur dans le squelette. | à relire |
 | 0.10 | Données : chargement et validation par schémas ; premier fichier `data/biomes.json` (biomes du prototype) ; validation en intégration continue. | NF-07, MON-10 | Une donnée invalide fait échouer l'intégration continue. | à relire |
-| 0.11 | Sauvegarde minimale : IndexedDB, format versionné, export et import de fichier. | NF-05 | Une partie factice survit à un rechargement et passe d'un appareil à l'autre. | à faire |
+| 0.11 | Sauvegarde minimale : IndexedDB, format versionné, export et import de fichier. | NF-05 | Une partie factice survit à un rechargement et passe d'un appareil à l'autre. | à relire |
 | 0.12 | Panneau de débogage : images par seconde, durée des pas, mémoire. | NF-01 | Visible sur PC et téléphone. | à faire |
 | 0.13 | Prototypes dans `prototypes/`, pack de sprites dans `assets/source/` si sa licence le permet, fichier `CREDITS.md`. | AST-01, AST-02 | Crédits renseignés. | à faire |
 
@@ -41,6 +41,7 @@ Objectif : un projet outillé, testé et déployé automatiquement, avec l'archi
 - **0.8.** Vérifié dans Chromium, jeu en pause : après un glissement d'exactement une largeur de monde, l'image revient identique au pixel près ; une ligne qui traverse la couture ne compte aucun pixel de fond. La molette, le pincement à deux doigts (téléphone émulé) et l'appui bref, qui peint la case touchée par une commande de jeu, fonctionnent. Des promeneurs de test, tirés du générateur, animent la grille au fil des mois.
 - **0.9.** Traitée avant 0.5, puisque les tâches suivantes affichent du texte. Clés typées depuis `src/i18n/fr.json`, pluriels, genre ; le titre de la page passe par `t()`. Un test échoue si une clé manque ou ne sert plus, et ESLint refuse le texte en dur dans le JSX (ADR 0005).
 - **0.10.** Sur ta demande, `data/biomes.json` reprend directement les 32 biomes de C1 (D6), et non ceux du prototype ; un test le confronte à la liste de C1. Les valeurs (fertilité, coûts, densités de flore, palettes) sont une première proposition, à calibrer en phase 1. Les ressources sont des identifiants que `data/resources.json` définira en 1.6 (ADR 0006).
+- **0.11.** Vérifié dans Chromium : une case peinte survit au rechargement de la page, par la sauvegarde automatique ; un fichier exporté (922 octets) se réimporte dans un autre profil avec la même partie ; un fichier étranger est refusé avec un message clair. Une partie rechargée se poursuit à l'identique, ce que vérifie un test par empreinte (ADR 0007).
 - **0.13.** Il faut les notebooks, les scripts de la séance C1, le pack de sprites original avec sa licence, ainsi que le nom de son auteur et un lien (PRD, question 14).
 
 ## À fournir par l'auteur

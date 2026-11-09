@@ -10,3 +10,4 @@ Chaque décision d'architecture fait l'objet d'un ADR court (CLAUDE.md, section 
 | [0004](0004-communication-worker.md) | Communication avec le worker | accepté |
 | [0005](0005-traduction.md) | Traduction | accepté |
 | [0006](0006-donnees.md) | Contenu en données | accepté |
+| [0007](0007-sauvegardes.md) | Sauvegardes | accepté |

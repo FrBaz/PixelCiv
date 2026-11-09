@@ -52,5 +52,20 @@
   "biome.savanna": "savane",
   "biome.tropical-grassland": "prairie tropicale",
   "biome.tropical-forest": "forêt tropicale",
-  "biome.rainforest": "forêt pluviale"
+  "biome.rainforest": "forêt pluviale",
+  "save.menu": "Sauvegardes",
+  "save.save": "Sauvegarder",
+  "save.load": "Charger",
+  "save.export": "Exporter",
+  "save.import": "Importer",
+  "save.done": "Partie sauvegardée.",
+  "save.loaded": "Partie chargée.",
+  "save.exported": "Fichier exporté.",
+  "save.none": "Aucune sauvegarde à charger.",
+  "save.error.format": "Ce fichier n'est pas une sauvegarde.",
+  "save.error.version": "Cette sauvegarde vient d'une version plus récente du jeu.",
+  "save.error.corrupt": "Cette sauvegarde est abîmée.",
+  "save.error.storage": "Le stockage local est indisponible.",
+  "save.fileName": "pixelciv-an-{year}.pxcv",
+  "notice.close": "Fermer"
 }

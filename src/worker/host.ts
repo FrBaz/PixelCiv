@@ -14,8 +14,10 @@ import {
   type TimeInfo,
   type WorkerMessage,
 } from '../core/protocol';
+import { readSave, SaveError, writeSave } from '../core/save/format';
 import { monthDuration, type SpeedId } from '../core/time';
 import { WORLD_SIZES } from '../core/world';
+import { restoreState, saveState } from '../sim/save';
 import { allChunks, createState, takeDirtyChunks, type SimState } from '../sim/state';
 import { step } from '../sim/step';
 
@@ -82,10 +84,44 @@ export class SimulationHost {
       case 'stepOnce':
         if (this.paused) this.runStep();
         break;
+      case 'save':
+        void this.save(message.requestId);
+        break;
+      case 'load':
+        void this.load(message.requestId, message.data);
+        break;
       case 'debugStepCost':
         this.stepCost = Math.max(0, message.milliseconds);
         break;
     }
+  }
+
+  /** Copie l'état d'un coup, puis le compresse pendant que la partie continue. */
+  private async save(requestId: number): Promise<void> {
+    if (this.state === undefined) {
+      this.send({ type: 'error', code: 'noGame', detail: 'sauvegarde demandée avant la partie' });
+      return;
+    }
+    const save = saveState(this.state);
+    const file = await writeSave(save);
+    this.send({ type: 'saved', requestId, meta: save.meta, data: file.buffer });
+  }
+
+  private async load(requestId: number, data: ArrayBuffer): Promise<void> {
+    let state: SimState;
+    try {
+      state = restoreState(await readSave(new Uint8Array(data)));
+    } catch (error) {
+      this.send({
+        type: 'loadFailed',
+        requestId,
+        reason: error instanceof SaveError ? error.code : 'corrupt',
+      });
+      if (!(error instanceof SaveError)) throw error;
+      return;
+    }
+    this.start(state);
+    this.send({ type: 'loaded', requestId });
   }
 
   private time(state: SimState): TimeInfo {

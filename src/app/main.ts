@@ -9,6 +9,7 @@ import { cellAt, MapView } from '../render/map';
 import { createRenderer } from '../render/renderer';
 import { App } from '../ui/App';
 import { content, stats, time } from '../ui/store';
+import { AUTO_SLOT, SaveManager, SaveStore } from './saves';
 import { SimulationClient } from './simulation';
 import './style.css';
 
@@ -27,6 +28,9 @@ async function main(): Promise<void> {
   const app = await createRenderer(mapElement);
   const map = new MapView(app);
   const simulation = new SimulationClient();
+  // Sans IndexedDB (navigation privée, stockage refusé), le jeu tourne sans sauvegarde locale.
+  const store = await SaveStore.open().catch(() => undefined);
+  const saves = new SaveManager(simulation, store);
   const controls = new CameraControls({
     element: mapElement,
     viewport: () => map.viewport,
@@ -44,7 +48,11 @@ async function main(): Promise<void> {
   simulation.subscribe((message) => {
     switch (message.type) {
       case 'ready':
-        simulation.send({ type: 'newGame', seed: 'pixelciv', size: 'small' });
+        // Reprend la dernière partie si elle a été sauvegardée, sinon en commence une.
+        void saves.loadFrom(AUTO_SLOT).then((loaded) => {
+          if (!loaded) simulation.send({ type: 'newGame', seed: 'pixelciv', size: 'small' });
+          saves.startAutosave();
+        });
         break;
       case 'snapshot': {
         map.setWorld(message.world, message.chunks);
@@ -66,9 +74,23 @@ async function main(): Promise<void> {
       case 'error':
         console.error(`worker : ${message.code} (${message.detail})`);
         break;
+      case 'saved':
+      case 'loaded':
+      case 'loadFailed':
+        // Réponses aux requêtes de SaveManager, qui les attend.
+        break;
     }
   });
-  render(h(App, { actions: simulation }), element('ui'));
+  const actions = {
+    send: (message: Parameters<SimulationClient['send']>[0]) => {
+      simulation.send(message);
+    },
+    save: () => saves.save(),
+    load: () => saves.load(),
+    exportFile: () => saves.exportFile(),
+    importFile: (file: File) => saves.importFile(file),
+  };
+  render(h(App, { actions }), element('ui'));
 
   // Débogage : ?stepCost=200 ajoute un coût factice de 200 ms à chaque pas.
   const stepCost = Number(new URLSearchParams(location.search).get('stepCost') ?? 0);
