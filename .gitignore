@@ -1,0 +1,17 @@
+# Dépendances et fichiers produits
+node_modules
+dist/
+coverage/
+*.tsbuildinfo
+
+# Secrets et réglages locaux : le dépôt est public, rien de tout cela n'y entre.
+.env
+.env.*
+*.local
+
+# Assets tiers dont la licence interdit la redistribution (assets/source/README.md).
+assets/local/
+
+# Fichiers des systèmes d'exploitation
+.DS_Store
+Thumbs.db

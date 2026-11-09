@@ -1,0 +1,583 @@
+[
+  {
+    "id": "deep-ocean",
+    "family": "water",
+    "name": "biome.deep-ocean",
+    "fertility": 0,
+    "movementCost": null,
+    "disease": false,
+    "resources": [],
+    "flora": {
+      "trees": 0,
+      "shrubs": 0
+    },
+    "palette": {
+      "shadow": "#0e1f3d",
+      "base": "#15305a",
+      "light": "#1d3f73"
+    }
+  },
+  {
+    "id": "ocean",
+    "family": "water",
+    "name": "biome.ocean",
+    "fertility": 0,
+    "movementCost": null,
+    "disease": false,
+    "resources": ["fish"],
+    "flora": {
+      "trees": 0,
+      "shrubs": 0
+    },
+    "palette": {
+      "shadow": "#163a66",
+      "base": "#1d4a80",
+      "light": "#275a94"
+    }
+  },
+  {
+    "id": "coastal-ocean",
+    "family": "water",
+    "name": "biome.coastal-ocean",
+    "fertility": 0,
+    "movementCost": null,
+    "disease": false,
+    "resources": ["fish"],
+    "flora": {
+      "trees": 0,
+      "shrubs": 0
+    },
+    "palette": {
+      "shadow": "#1f5a8c",
+      "base": "#2a6ea3",
+      "light": "#3a82b6"
+    }
+  },
+  {
+    "id": "river",
+    "family": "water",
+    "name": "biome.river",
+    "fertility": 0,
+    "movementCost": 3,
+    "disease": false,
+    "resources": ["fish"],
+    "flora": {
+      "trees": 0,
+      "shrubs": 0
+    },
+    "palette": {
+      "shadow": "#2a6aa0",
+      "base": "#3480b8",
+      "light": "#4a96cc"
+    }
+  },
+  {
+    "id": "lake",
+    "family": "water",
+    "name": "biome.lake",
+    "fertility": 0,
+    "movementCost": null,
+    "disease": false,
+    "resources": ["fish"],
+    "flora": {
+      "trees": 0,
+      "shrubs": 0
+    },
+    "palette": {
+      "shadow": "#24618f",
+      "base": "#2f76a8",
+      "light": "#4189bb"
+    }
+  },
+  {
+    "id": "salt-lake",
+    "family": "water",
+    "name": "biome.salt-lake",
+    "fertility": 0,
+    "movementCost": null,
+    "disease": false,
+    "resources": ["salt"],
+    "flora": {
+      "trees": 0,
+      "shrubs": 0
+    },
+    "palette": {
+      "shadow": "#3d7d96",
+      "base": "#4f93aa",
+      "light": "#6aa8bb"
+    }
+  },
+  {
+    "id": "beach",
+    "family": "coast",
+    "name": "biome.beach",
+    "fertility": 0.2,
+    "movementCost": 1,
+    "landing": "easy",
+    "disease": false,
+    "resources": ["fish"],
+    "flora": {
+      "trees": 0,
+      "shrubs": 0.05
+    },
+    "palette": {
+      "shadow": "#b89a62",
+      "base": "#d8c08a",
+      "light": "#ecd8a8"
+    }
+  },
+  {
+    "id": "rocky-coast",
+    "family": "coast",
+    "name": "biome.rocky-coast",
+    "fertility": 0.1,
+    "movementCost": 1.5,
+    "landing": "difficult",
+    "disease": false,
+    "resources": ["stone"],
+    "flora": {
+      "trees": 0.02,
+      "shrubs": 0.1
+    },
+    "palette": {
+      "shadow": "#5d5a55",
+      "base": "#7a766f",
+      "light": "#97928a"
+    }
+  },
+  {
+    "id": "cliff",
+    "family": "coast",
+    "name": "biome.cliff",
+    "fertility": 0,
+    "movementCost": 3,
+    "landing": "impossible",
+    "disease": false,
+    "resources": ["stone"],
+    "flora": {
+      "trees": 0,
+      "shrubs": 0.05
+    },
+    "palette": {
+      "shadow": "#4a4540",
+      "base": "#645d55",
+      "light": "#807870"
+    }
+  },
+  {
+    "id": "mangrove",
+    "family": "coast",
+    "name": "biome.mangrove",
+    "fertility": 0.3,
+    "movementCost": 2.5,
+    "landing": "difficult",
+    "disease": true,
+    "resources": ["wood", "fish"],
+    "flora": {
+      "trees": 0.7,
+      "shrubs": 0.3
+    },
+    "palette": {
+      "shadow": "#23402a",
+      "base": "#2f5636",
+      "light": "#3e6c44"
+    }
+  },
+  {
+    "id": "coastal-marsh",
+    "family": "coast",
+    "name": "biome.coastal-marsh",
+    "fertility": 0.4,
+    "movementCost": 2,
+    "landing": "difficult",
+    "disease": true,
+    "resources": ["salt"],
+    "flora": {
+      "trees": 0.05,
+      "shrubs": 0.3
+    },
+    "palette": {
+      "shadow": "#4a5e3c",
+      "base": "#5e744c",
+      "light": "#74895e"
+    }
+  },
+  {
+    "id": "marsh",
+    "family": "wetland",
+    "name": "biome.marsh",
+    "fertility": 0.5,
+    "movementCost": 2,
+    "disease": true,
+    "resources": ["reeds", "fish", "waterfowl"],
+    "flora": {
+      "trees": 0.1,
+      "shrubs": 0.4
+    },
+    "palette": {
+      "shadow": "#3e5236",
+      "base": "#526845",
+      "light": "#677e56"
+    }
+  },
+  {
+    "id": "bog",
+    "family": "wetland",
+    "name": "biome.bog",
+    "fertility": 0.15,
+    "movementCost": 2,
+    "disease": false,
+    "resources": ["peat", "bog-iron"],
+    "flora": {
+      "trees": 0.05,
+      "shrubs": 0.3
+    },
+    "palette": {
+      "shadow": "#4a4636",
+      "base": "#5f5a45",
+      "light": "#757056"
+    }
+  },
+  {
+    "id": "swamp",
+    "family": "wetland",
+    "name": "biome.swamp",
+    "fertility": 0.3,
+    "movementCost": 3,
+    "disease": true,
+    "resources": ["wood", "game"],
+    "flora": {
+      "trees": 0.6,
+      "shrubs": 0.4
+    },
+    "palette": {
+      "shadow": "#24382a",
+      "base": "#304a36",
+      "light": "#3e5c44"
+    }
+  },
+  {
+    "id": "glacier",
+    "family": "cold",
+    "name": "biome.glacier",
+    "fertility": 0,
+    "movementCost": 3,
+    "disease": false,
+    "resources": [],
+    "flora": {
+      "trees": 0,
+      "shrubs": 0
+    },
+    "palette": {
+      "shadow": "#c8d4dc",
+      "base": "#dde7ee",
+      "light": "#f0f6fa"
+    }
+  },
+  {
+    "id": "tundra",
+    "family": "cold",
+    "name": "biome.tundra",
+    "fertility": 0.1,
+    "movementCost": 1.5,
+    "disease": false,
+    "resources": ["game"],
+    "flora": {
+      "trees": 0,
+      "shrubs": 0.2
+    },
+    "palette": {
+      "shadow": "#7d806a",
+      "base": "#959880",
+      "light": "#adb098"
+    }
+  },
+  {
+    "id": "taiga",
+    "family": "cold",
+    "name": "biome.taiga",
+    "fertility": 0.25,
+    "movementCost": 1.5,
+    "disease": false,
+    "resources": ["wood", "game"],
+    "flora": {
+      "trees": 0.7,
+      "shrubs": 0.2
+    },
+    "palette": {
+      "shadow": "#1f3a2c",
+      "base": "#2b4c39",
+      "light": "#395f48"
+    }
+  },
+  {
+    "id": "cold-forest",
+    "family": "cold",
+    "name": "biome.cold-forest",
+    "fertility": 0.35,
+    "movementCost": 1.5,
+    "disease": false,
+    "resources": ["wood", "game"],
+    "flora": {
+      "trees": 0.6,
+      "shrubs": 0.25
+    },
+    "palette": {
+      "shadow": "#26402c",
+      "base": "#33543a",
+      "light": "#42684a"
+    }
+  },
+  {
+    "id": "cold-steppe",
+    "family": "cold",
+    "name": "biome.cold-steppe",
+    "fertility": 0.3,
+    "movementCost": 1,
+    "disease": false,
+    "resources": ["game"],
+    "flora": {
+      "trees": 0,
+      "shrubs": 0.15
+    },
+    "palette": {
+      "shadow": "#847a58",
+      "base": "#9c926c",
+      "light": "#b3aa84"
+    }
+  },
+  {
+    "id": "alpine",
+    "family": "mountain",
+    "name": "biome.alpine",
+    "fertility": 0.15,
+    "movementCost": 2,
+    "disease": false,
+    "resources": ["game"],
+    "flora": {
+      "trees": 0,
+      "shrubs": 0.2
+    },
+    "palette": {
+      "shadow": "#6f7560",
+      "base": "#868c76",
+      "light": "#9ea48e"
+    }
+  },
+  {
+    "id": "mountain",
+    "family": "mountain",
+    "name": "biome.mountain",
+    "fertility": 0.05,
+    "movementCost": 3,
+    "disease": false,
+    "resources": ["stone"],
+    "flora": {
+      "trees": 0.1,
+      "shrubs": 0.1
+    },
+    "palette": {
+      "shadow": "#6a625a",
+      "base": "#827970",
+      "light": "#9a9188"
+    }
+  },
+  {
+    "id": "high-mountain",
+    "family": "mountain",
+    "name": "biome.high-mountain",
+    "fertility": 0,
+    "movementCost": 4,
+    "disease": false,
+    "resources": ["stone"],
+    "flora": {
+      "trees": 0,
+      "shrubs": 0
+    },
+    "palette": {
+      "shadow": "#8a8680",
+      "base": "#a5a19b",
+      "light": "#c2beb8"
+    }
+  },
+  {
+    "id": "grassland",
+    "family": "temperate",
+    "name": "biome.grassland",
+    "fertility": 0.8,
+    "movementCost": 1,
+    "disease": false,
+    "resources": ["game", "gathering"],
+    "flora": {
+      "trees": 0.05,
+      "shrubs": 0.15
+    },
+    "palette": {
+      "shadow": "#5f7a3a",
+      "base": "#748f48",
+      "light": "#8aa55a"
+    }
+  },
+  {
+    "id": "steppe",
+    "family": "temperate",
+    "name": "biome.steppe",
+    "fertility": 0.5,
+    "movementCost": 1,
+    "disease": false,
+    "resources": ["game"],
+    "flora": {
+      "trees": 0,
+      "shrubs": 0.1
+    },
+    "palette": {
+      "shadow": "#8a8448",
+      "base": "#a09a5a",
+      "light": "#b6b06e"
+    }
+  },
+  {
+    "id": "temperate-forest",
+    "family": "temperate",
+    "name": "biome.temperate-forest",
+    "fertility": 0.6,
+    "movementCost": 1.5,
+    "disease": false,
+    "resources": ["wood", "game", "gathering"],
+    "flora": {
+      "trees": 0.75,
+      "shrubs": 0.3
+    },
+    "palette": {
+      "shadow": "#2f4a26",
+      "base": "#3d5e31",
+      "light": "#4d733e"
+    }
+  },
+  {
+    "id": "temperate-rainforest",
+    "family": "temperate",
+    "name": "biome.temperate-rainforest",
+    "fertility": 0.6,
+    "movementCost": 2,
+    "disease": false,
+    "resources": ["wood", "game", "gathering"],
+    "flora": {
+      "trees": 0.9,
+      "shrubs": 0.4
+    },
+    "palette": {
+      "shadow": "#1f3d26",
+      "base": "#2a5032",
+      "light": "#376440"
+    }
+  },
+  {
+    "id": "desert",
+    "family": "arid",
+    "name": "biome.desert",
+    "fertility": 0.02,
+    "movementCost": 1.5,
+    "disease": false,
+    "resources": [],
+    "flora": {
+      "trees": 0,
+      "shrubs": 0.02
+    },
+    "palette": {
+      "shadow": "#b49a62",
+      "base": "#c9b078",
+      "light": "#dcc690"
+    }
+  },
+  {
+    "id": "salar",
+    "family": "arid",
+    "name": "biome.salar",
+    "fertility": 0,
+    "movementCost": 1,
+    "disease": false,
+    "resources": ["salt"],
+    "flora": {
+      "trees": 0,
+      "shrubs": 0
+    },
+    "palette": {
+      "shadow": "#d8d4cc",
+      "base": "#e8e4dc",
+      "light": "#f6f3ee"
+    }
+  },
+  {
+    "id": "savanna",
+    "family": "tropical",
+    "name": "biome.savanna",
+    "fertility": 0.45,
+    "movementCost": 1,
+    "disease": false,
+    "resources": ["game", "gathering"],
+    "flora": {
+      "trees": 0.1,
+      "shrubs": 0.25
+    },
+    "palette": {
+      "shadow": "#8f8a3e",
+      "base": "#a6a04e",
+      "light": "#bdb662"
+    }
+  },
+  {
+    "id": "tropical-grassland",
+    "family": "tropical",
+    "name": "biome.tropical-grassland",
+    "fertility": 0.6,
+    "movementCost": 1,
+    "disease": false,
+    "resources": ["game", "gathering"],
+    "flora": {
+      "trees": 0.05,
+      "shrubs": 0.2
+    },
+    "palette": {
+      "shadow": "#6c8a36",
+      "base": "#829f44",
+      "light": "#98b556"
+    }
+  },
+  {
+    "id": "tropical-forest",
+    "family": "tropical",
+    "name": "biome.tropical-forest",
+    "fertility": 0.55,
+    "movementCost": 2,
+    "disease": true,
+    "resources": ["wood", "game", "gathering"],
+    "flora": {
+      "trees": 0.8,
+      "shrubs": 0.4
+    },
+    "palette": {
+      "shadow": "#23502a",
+      "base": "#2f6636",
+      "light": "#3d7c44"
+    }
+  },
+  {
+    "id": "rainforest",
+    "family": "tropical",
+    "name": "biome.rainforest",
+    "fertility": 0.5,
+    "movementCost": 2.5,
+    "disease": true,
+    "resources": ["wood", "game", "gathering"],
+    "flora": {
+      "trees": 0.95,
+      "shrubs": 0.5
+    },
+    "palette": {
+      "shadow": "#1b4424",
+      "base": "#255830",
+      "light": "#316c3c"
+    }
+  }
+]

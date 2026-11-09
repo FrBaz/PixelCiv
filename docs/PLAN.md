@@ -1,6 +1,8 @@
 # Plan de développement — Jeu de simulation de mondes et de vies
 
-Version 0.1 · 8 novembre 2026 · complète le PRD (`docs/PRD.md`, version 0.2)
+Version 0.4 · 9 novembre 2026 · complète le PRD (`docs/PRD.md`, version 0.4)
+
+Historique : 0.1, première version ; 0.2, intégration de la séance C1 sur le monde ; 0.3, générateurs de portraits et d'armoiries conçus à neuf, portraits d'environ 64×64 px ; 0.4, ADR de la phase 0 et dossier `src/worker/` (tâche 0.2).
 
 ## 1. Principes
 
@@ -36,14 +38,15 @@ Le dépôt public apporte deux avantages : l'hébergement gratuit des versions d
 
 ```
 CLAUDE.md          consignes lues par Claude Code à chaque session
-docs/              PRD.md, PLAN.md, design/ (séances de conception), decisions/ (ADR)
-prototypes/        notebooks Python de référence
+docs/              PRD.md, PLAN.md, BACKLOG.md, design/ (séances de conception), decisions/ (ADR)
+prototypes/        notebooks et scripts Python d'exploration
 assets/source/     pack de sprites original, licence et crédits (si redistribuable)
 assets/pixel/      sources pixel art éditables (meubles héraldiques, motifs, tuiles)
 data/              contenu du jeu en JSON (biomes, espèces, savoirs, biens, titres, événements…)
 src/core/          utilitaires partagés : PRNG, maths déterministes, protocole, types
 src/worldgen/      génération du monde
 src/sim/           simulation, exécutée dans un Web Worker
+src/worker/        hôte de la simulation dans le worker : messages, cadence des pas, mesures
 src/gen/           générateurs procéduraux : portraits, armoiries, noms, mini-sprites…
 src/render/        rendu PixiJS
 src/ui/            interface Preact
@@ -75,6 +78,8 @@ Une tâche est finie quand :
 - les documents concernés (PRD, plan, ADR, design) sont à jour.
 
 ## 3. Architecture
+
+Les décisions d'architecture sont consignées dans `docs/decisions/` : pile technique (ADR 0001), monde cylindrique (ADR 0002), déterminisme (ADR 0003) et communication avec le worker (ADR 0004). L'index de ce dossier recense les suivantes.
 
 ### Vue d'ensemble
 
@@ -135,7 +140,7 @@ La traduction repose sur un petit système maison : des clés, des pluriels, et 
 
 **Sauvegardes.** Une sauvegarde réunit les tableaux typés en binaire et les tables des notables en JSON, compressés. Elle est stockée dans IndexedDB et peut être exportée ou importée sous forme de fichier. Le format est versionné et accompagné de migrations.
 
-**Générateurs.** Ce sont des fonctions pures : une graine et des paramètres donnent toujours le même résultat, mis en cache. Il y en a d'abord pour les portraits (portage de `testVisages`), les armoiries (portage de `testArmoiries` avec la nouvelle saisie des meubles), les noms et les langues, et les mini-sprites. Viendront ensuite l'architecture, les œuvres et les écrans de visualisation.
+**Générateurs.** Ce sont des fonctions pures : une graine et des paramètres donnent toujours le même résultat, mis en cache. Il y en a d'abord pour les portraits, les armoiries (avec la nouvelle saisie des meubles), les noms et les langues, et les mini-sprites. Viendront ensuite l'architecture, les œuvres et les écrans de visualisation.
 
 **Pipeline d'assets.** Les sources éditables de `assets/pixel/` sont des images indexées par rôle de teinte ou des grilles de texte. Un script de `tools/` en tire des atlas et leurs descriptions JSON, et la recoloration se fait à l'exécution.
 
@@ -198,24 +203,24 @@ Objectif : un projet outillé, testé et déployé automatiquement, avec l'archi
 
 ## 6. Phase 1 — Génération du monde
 
-Objectif : porter le pipeline du prototype en TypeScript, sur un monde cylindrique, avec un rendu fidèle et fluide.
+Objectif : porter le pipeline du prototype en TypeScript, sur un monde cylindrique, avec un rendu fidèle et fluide, en y intégrant les corrections de la séance C1 (relief, climat, eaux, côtes, saisons).
 
-Séance préalable : C1, courte, sur les lacs et marais, les saisons et les biomes anthropiques (section 10).
+Séance préalable : C1, tenue le 8 novembre 2026. Ses décisions D1 à D13 font foi pour cette phase (`docs/design/C1-monde.md`), et `prototypes/c1/` en donne une implémentation de référence.
 
 | # | Tâche | Exigences | Critère d'acceptation |
 |---|---|---|---|
 | 1.1 | Bruit simplex 3D déterministe et échantillonnage sur un cylindre : la longitude devient un angle, et la carte se referme d'est en ouest. | MON-01, MON-04 | Valeurs continues à la couture ; même graine, même bruit. |
-| 1.2 | Relief : bruit fractal à trois échelles, comme dans le prototype ; paramètres (niveau de la mer, part des terres) ; découpage en 20 niveaux d'altitude. | MON-03, MON-05 | Répartition des niveaux conforme aux paramètres. |
-| 1.3 | Température (latitude, altitude, bruit), humidité et continentalité. | MON-04 | Cartes visibles en mode débogage. |
-| 1.4 | Hydrologie continue d'est en ouest : remplissage des dépressions, accumulation, rivières et largeurs ; lacs selon la séance C1. L'alias du prototype est corrigé. | MON-04 | Toute rivière rejoint la mer ou un lac ; aucune n'est coupée à la couture. |
-| 1.5 | Biomes naturels décrits dans `data/biomes.json` ; réglage de la largeur des plages. | MON-08, MON-10 | Les plages restent une bande côtière étroite (cible à fixer). |
-| 1.6 | Ressources et flore : gisements selon l'altitude et le biome, densités d'arbres et de buissons. | RES-01, RES-03 | Répartition lisible en mode de carte « ressources ». |
-| 1.7 | Cuisson des blocs dans un worker : tuiles de 4 px avec variations, débordement du relief, shader (pente, lumière du nord-est, teinte thermique). | REN-01, REN-02, REN-09 | Rendu fidèle au prototype, sans couture visible. |
-| 1.8 | Affichage : zoom net, niveaux de détail de base, modes de carte « relief », « biomes » et « ressources » avec légende. | REN-03, REN-08, IHM-01 | 60 images/s sur PC et 30 sur téléphone, sur une carte Grand. |
+| 1.2 | Relief : bruit fractal à trois échelles, comme dans le prototype, plus des chaînes de montagnes par bruit de crêtes (D12). Paramètres : niveau de la mer, part des terres, relief. Correspondance en mètres et 20 niveaux d'altitude (D11). | MON-03, MON-05, MON-14 | 3 à 6 % des terres au-dessus de la moyenne montagne ; crêtes continues, avec des cols. |
+| 1.3 | Climat : températures recalibrées, gradient de 6,5 °C par 1 000 m ; précipitations par bandes de latitude, vents dominants et ombre pluviométrique ; continentalité ; températures mensuelles (D8, D13). | MON-04, MON-15, SAI-01, SAI-02 | Environ 27 °C à l'équateur et −25 °C aux pôles ; présence de déserts subtropicaux et de déserts d'abri. |
+| 1.4 | Hydrologie continue d'est en ouest. Un seul niveau de la mer, et un océan limité aux eaux reliées à l'océan mondial (D1). Remplissage avec pente minimale sur les plats, puis accumulation. Lacs par bilan hydrique (D2) et trois classes de rivières (D3). L'alias du prototype est corrigé. | MON-04, MON-07, MON-11 | Toute rivière rejoint la mer ou un lac ; aucune n'est coupée à la couture, ni rectiligne. |
+| 1.5 | Les 32 biomes naturels (D6), décrits dans `data/biomes.json` et classés selon le mois le plus chaud et le plus froid (D13). Côtes typées (D4) et zones humides (D5). | MON-08, MON-10, MON-12, MON-13 | Plages sur une seule rangée côtière ; glaciers seulement là où le mois le plus chaud reste sous 0 °C. |
+| 1.6 | Ressources et flore : gisements selon l'altitude et le biome, ressources des milieux humides et salés, densités d'arbres et de buissons. | RES-01, RES-03, RES-05 | Répartition lisible en mode de carte « ressources ». |
+| 1.7 | Cuisson des blocs dans un worker : tuiles de 4 px avec variations, débordement du relief, shader (pente, lumière du nord-est, teinte thermique). Texture de données des saisons, une valeur par case (D10). | REN-01, REN-02, REN-09, REN-10 | Rendu fidèle au prototype, sans couture visible. |
+| 1.8 | Affichage : zoom net, niveaux de détail de base, modes de carte « relief », « biomes » et « ressources » avec légende. Neige et glace saisonnières, par shader et palettes saisonnières (D10). | REN-03, REN-08, REN-10, IHM-01 | 60 images/s sur PC et 30 sur téléphone, sur une carte Grand, saisons comprises. |
 | 1.9 | Écran de création : graine, taille, paramètres, aperçu, régénération. | CRE-01, MON-02 | Utilisable au doigt sur téléphone. |
 | 1.10 | Tests et bancs d'essai : empreinte des cartes par graine, continuité de la couture, durée de génération par taille. | NF-03, NF-09 | Un monde Grand se génère en moins de 10 s sur PC ; la mesure sur téléphone est consignée. |
 
-**Jalon 1.** On génère un monde cylindrique à partir d'une graine, et on l'explore sur PC et sur téléphone.
+**Jalon 1.** On génère un monde cylindrique à partir d'une graine, avec ses montagnes, ses lacs, ses côtes et ses climats. On l'explore sur PC et sur téléphone pendant que les saisons passent.
 
 ## 7. Phases 2 à 4 : jusqu'au MVP
 
@@ -228,9 +233,9 @@ Objectif : une population qui vit, se reproduit, transmet ses gènes et meurt, e
 | Population | Stockage en tableaux typés, identifiants recyclés, archivage des morts. | IND-01, IND-03 |
 | Génétique | Génome compact, allèles dominants et récessifs, traits polygéniques, mutations. | IND-05, IND-06 |
 | Cycle de vie | Âges, mortalité et fertilité par espèce, couples, naissances ; adaptations des sous-espèces humaines ; métissage. | IND-04, ESP-01 à ESP-04 |
-| Survie | Faim, cueillette, chasse, pêche ; faune chassable. | ECO-11, RES-03, RES-04, FAU-01 |
+| Survie | Faim, cueillette, chasse, pêche, avec des rendements saisonniers et une mortalité hivernale (D9) ; faune chassable. | ECO-11, RES-03, RES-04, FAU-01, SAI-03 |
 | Noms | Phonologie générée, prénoms et noms de famille. | LAN-01, IND-08 |
-| Visuels | Pipeline d'assets (sources éditables, atlas, recoloration) ; portage du générateur de portraits, piloté par les gènes et l'âge ; mini-sprites, première version. | AST-03, AST-04, REN-07, REN-04 |
+| Visuels | Pipeline d'assets (sources éditables, atlas, recoloration) ; générateur de portraits d'environ 64×64 px, piloté par les gènes et l'âge ; mini-sprites, première version. | AST-03, AST-04, REN-07, REN-04 |
 | Outils | Apparition d'individus, panneau d'inspection, liens familiaux, chronique de base. | CRE-03, CRE-05, IHM-02, CHR-01 |
 | Mesures | Bancs d'essai à 10 000 et 50 000 individus, sur PC et sur téléphone ; calibrage mobile. | IND-03, NF-01 |
 
@@ -246,8 +251,8 @@ Séance préalable : C2, sur l'appartenance aux civilisations et aux cultures, e
 |---|---|---|
 | Peuples | Fondation des civilisations ; relation libre entre civilisations et cultures ; appartenance des individus et des villages ; cultures simples. | CIV-01, CIV-03, CIV-04, CUL-01 |
 | Villages | Emplacement, administration, bâtiments de base, croissance, extension case par case. | POL-01, TER-01 |
-| Terrain | Champs, coupes, routes ; premiers biomes anthropiques. | TER-01, MON-09 |
-| Travail | Métiers et compétences, production de subsistance, stocks, patrimoine individuel. | IND-07, ECO-01, ECO-02, ECO-09 |
+| Terrain | Occupation du sol en couche distincte (D7) : grandes cultures, pâturages, coupes, friches et zones bâties, avec la succession écologique ; routes. | TER-01, TER-03, MON-09 |
+| Travail | Métiers et compétences ; production de subsistance, avec semailles et récoltes saisonnières (D9) ; stocks ; patrimoine individuel. | IND-07, ECO-01, ECO-02, ECO-09, SAI-03 |
 | Premiers savoirs | Graphe des savoirs en données ; invention par un spécialiste. | SAV-01, SAV-02, SAV-05 |
 | Architecture | Bâtiments selon les savoirs et la culture ; niveaux de détail intermédiaire et rapproché. | ARC-01, REN-03 |
 | Langues | Noms de lieux. | LAN-01 |
@@ -264,13 +269,13 @@ Séance préalable : C3, sur les gouvernements (type et mode d'accès, dictature
 | Lot | Contenu | Exigences |
 |---|---|---|
 | Gouvernements | Type et mode d'accès ; niveaux 1 et 2 ; nomenclature en données ; monarchie et hérédité ; territoires et frontières ; vassalité de base. | POL-01 à POL-05 |
-| Maisons et armoiries | Maisons notables ; portage du générateur ; nouvelle saisie des meubles ; règles héraldiques. | FAM-01, HER-01, HER-02, HER-05 |
+| Maisons et armoiries | Maisons notables ; générateur d'armoiries, avec la nouvelle saisie des meubles ; règles héraldiques. | FAM-01, HER-01, HER-02, HER-05 |
 | Guerre | Déclaration, levée de vrais soldats, organisation simplifiée, déplacement des armées, résolution automatique, occupation, paix. | DIP-01, MIL-01, MIL-03, MIL-04, MIL-08 |
 | Créateur | Pinceaux de terrain, modification des entités. | MOD-02, CRE-02, CRE-04 |
 | Finitions | Chronique filtrable ; sauvegardes complètes ; application installable et hors ligne ; ergonomie mobile. | CHR-02, NF-04, NF-05, IHM-06, IHM-07 |
 | Robustesse | Test de longue durée : 300 ans sans plantage, sans valeur aberrante, avec des invariants démographiques respectés. | NF-10 |
 
-**Jalon 4, le MVP.** Toutes les exigences P0 du PRD sont satisfaites (PRD, section 27).
+**Jalon 4, le MVP.** Toutes les exigences P0 du PRD sont satisfaites (PRD, section 26).
 
 ## 8. Phases 5 à 12 : vers la version 1
 
@@ -296,6 +301,7 @@ Séance préalable : C5, sur l'arbre des savoirs.
 Contenu :
 - arbre complet par domaines, diffusion entre voisins, maîtrise et âges sombres, régimes débloqués, plafond technologique (SAV-01, SAV-03, SAV-04, SAV-06, SAV-07) ;
 - manufactures (ECO-02) et domestication (FAU-02) ;
+- assèchement des marais (MON-13), et occupations du sol liées aux savoirs : bocage, cultures irriguées, terrasses, vergers et vignes, carrières et mines (MON-09) ;
 - architecture assemblée par éléments (ARC-02) et habillage évolutif de l'interface (IHM-05) ;
 - onglet Saga « Recherche ».
 
@@ -309,7 +315,7 @@ Contenu :
 - marchés et prix, commerce par route, rivière et mer (ECO-03, ECO-04, MON-07) ;
 - monnaie et banques, assurances, entreprises, immobilier (ECO-05 à ECO-08) ;
 - finances publiques, fiscalité et politiques publiques (ECO-10, POL-12, POL-13) ;
-- gisements épuisables et retour des terres à l'état naturel (RES-02, TER-03) ;
+- gisements épuisables et salines (RES-02, RES-05), ruines (TER-03), bonnes et mauvaises années (SAI-04) ;
 - mode de carte « économie » ;
 - onglets Saga « Entreprise » et « Immobilier ».
 
@@ -338,6 +344,7 @@ Contenu :
 - lexique de racines et familles de langues (LAN-02, LAN-03) ;
 - religions, dont la foi en Le Créateur, et ordres religieux (REL-01 à REL-06, CRE-06, FAM-02) ;
 - œuvres et arts du spectacle (ART-01, ART-03, ART-04) et blasonnement automatique (HER-04) ;
+- fêtes et rites saisonniers, calendriers locaux (SAI-04, SAI-05) ;
 - modes de carte « religion » et « langue » ;
 - onglets Saga « Religion » et « Œuvres ».
 
@@ -352,6 +359,7 @@ Contenu :
 - couche stratégique et doctrines (MIL-04, MIL-05) ;
 - batailles tactiques et commandement par grade (MIL-06, MIL-07) ;
 - terrains ravagés et rapports de bataille (MIL-09, TER-02) ;
+- effets des saisons sur la guerre : saison de campagne, attrition hivernale, boue, eaux gelées, tempêtes (SAI-04) ;
 - effets défensifs du relief (MON-06) ;
 - onglet Saga « Armée ».
 
@@ -364,6 +372,7 @@ Séance préalable : C9, sur les écrans de visualisation.
 Contenu :
 - écrans de paysage, de ville et de bataille (REN-05, REN-06) ;
 - tableaux et enluminures générés (ART-02) ;
+- couleurs saisonnières de la végétation (REN-10) ;
 - secondes versions des mini-sprites et des portraits, avec vêtements selon la culture et le rang (REN-04, REN-07).
 
 **Jalon 11.** Voir le monde de près.
@@ -393,9 +402,9 @@ Ce sont les exigences P2 du PRD :
 
 Chaque séance a lieu dans la conversation de conception, avant la phase concernée. Elle produit un document dans `docs/design/` et met à jour le PRD.
 
-| Séance | Avant | Sujets | Questions du PRD (section 28) |
+| Séance | Avant | Sujets | Questions du PRD (section 27) |
 |---|---|---|---|
-| C1 Monde | phase 1 | lacs et marais, saisons, biomes anthropiques | 6, 7, 8 |
+| C1 Monde | phase 1 | tenue le 8 novembre 2026 : eaux, côtes, zones humides, occupation du sol, saisons, relief, climat (`docs/design/C1-monde.md`) | 6, 7, 8 (closes) |
 | C2 Peuples | phase 3 | appartenance aux civilisations et aux cultures, fondation | 3 |
 | C3 Gouvernements | phase 4, compléments avant la phase 8 | dictature, anarchie, désignation, titres | 4, 5 |
 | C4 Saga | phase 5 | contrôle direct, carrières, format des événements | 9 |
@@ -443,4 +452,4 @@ Traite ensuite les tâches dans l'ordre, une branche et une PR par tâche, et
 arrête-toi après chaque PR pour que je relise.
 ```
 
-4. **Préparer la suite.** Pendant la phase 0, on mène ici la séance C1, pour que la phase 1 démarre avec ses décisions.
+4. **Préparer la suite.** La séance C1 est faite : son document va dans `docs/design/`, ses images dans `docs/design/C1/` et ses scripts dans `prototypes/c1/`. La prochaine séance, C2, précède la phase 3.

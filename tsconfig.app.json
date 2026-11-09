@@ -1,0 +1,13 @@
+{
+  // Code du fil principal, exécuté dans le navigateur, tests compris : tout src, sauf
+  // le code du worker, qui relève de tsconfig.worker.json.
+  "extends": "./tsconfig.base.json",
+  "compilerOptions": {
+    "lib": ["ES2023", "DOM"],
+    "types": ["vite/client"],
+    "jsx": "react-jsx",
+    "jsxImportSource": "preact"
+  },
+  "include": ["src"],
+  "exclude": ["src/core", "src/sim", "src/worldgen", "src/gen", "src/worker"]
+}
