@@ -38,6 +38,7 @@ async function main(): Promise<void> {
   const controls = new CameraControls({
     element: mapElement,
     viewport: () => map.viewport,
+    resolution: () => app.renderer.resolution,
     world: () => map.world,
     onTap: (mapX, mapY) => {
       // Pinceau de test : peint la case touchée, par une commande de jeu.
@@ -47,11 +48,12 @@ async function main(): Promise<void> {
   });
   const sampler = new DebugSampler();
   app.ticker.add((ticker) => {
-    sampler.frame(ticker.deltaMS);
+    // La durée réelle de l'image : deltaMS est plafonné à 100 ms, et cacherait les à-coups.
+    sampler.frame(ticker.elapsedMS);
     map.draw(controls.update(ticker.deltaMS));
   });
-  const renderer = { name: app.renderer.name, resolution: app.renderer.resolution };
   setInterval(() => {
+    const renderer = { name: app.renderer.name, resolution: app.renderer.resolution };
     debugInfo.value = { ...sampler.sample(), memoryMb: usedMemoryMb(), renderer };
   }, 250);
 

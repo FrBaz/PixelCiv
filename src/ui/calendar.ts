@@ -20,5 +20,6 @@ export const MONTH_KEYS = [
 
 export function formatDate(tick: number): string {
   const { year, month } = dateOfTick(tick);
-  return t('calendar.date', { month: t(MONTH_KEYS[month] ?? MONTH_KEYS[0]), year });
+  // Une année s'écrit sans séparateur de milliers : l'an 2000, et non l'an 2 000.
+  return t('calendar.date', { month: t(MONTH_KEYS[month] ?? MONTH_KEYS[0]), year: String(year) });
 }

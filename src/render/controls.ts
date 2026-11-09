@@ -1,7 +1,7 @@
 /**
  * Commandes de la caméra (IHM-07) : glisser et pincer, au doigt comme à la souris
- * (événements de pointeur), molette, flèches ou ZQSD et touches + et −. Un appui bref,
- * sans glissement, désigne un point de la carte.
+ * (événements de pointeur, bouton principal seulement), molette, flèches ou ZQSD et
+ * touches + et −. Un appui bref, sans glissement, désigne un point de la carte.
  */
 import {
   constrain,
@@ -18,6 +18,8 @@ export interface ControlsOptions {
   readonly element: HTMLElement;
   /** Taille de l'écran, en pixels physiques. */
   readonly viewport: () => Extent;
+  /** Pixels physiques par pixel CSS, ceux du rendu : ils suivent le zoom du navigateur. */
+  readonly resolution: () => number;
   /** Taille du monde, en pixels de carte, ou undefined avant la partie. */
   readonly world: () => Extent | undefined;
   /** Appui bref sur la carte, au point (mapX, mapY) en pixels de carte. */
@@ -62,7 +64,12 @@ export class CameraControls {
     element.addEventListener('pointerdown', this.onPointerDown);
     element.addEventListener('pointermove', this.onPointerMove);
     element.addEventListener('pointerup', this.onPointerUp);
-    element.addEventListener('pointercancel', this.onPointerUp);
+    // Un geste annulé (geste du système, paume) ou une capture perdue ne vaut pas un appui.
+    element.addEventListener('pointercancel', this.onPointerCancel);
+    element.addEventListener('lostpointercapture', this.onPointerCancel);
+    element.addEventListener('contextmenu', (event) => {
+      event.preventDefault();
+    });
     element.addEventListener('wheel', this.onWheel, { passive: false });
     window.addEventListener('keydown', this.onKeyDown);
     window.addEventListener('keyup', this.onKeyUp);
@@ -76,7 +83,7 @@ export class CameraControls {
     this.camera = {
       x: world.width / 2,
       y: world.height / 2,
-      zoom: Math.max(1, Math.round(devicePixelRatio)),
+      zoom: Math.max(1, Math.round(this.options.resolution())),
     };
   }
 
@@ -103,13 +110,16 @@ export class CameraControls {
   /** Position d'un événement dans l'élément, en pixels physiques. */
   private point(event: PointerEvent | WheelEvent): Point {
     const rect = this.options.element.getBoundingClientRect();
+    const resolution = this.options.resolution();
     return {
-      x: (event.clientX - rect.left) * devicePixelRatio,
-      y: (event.clientY - rect.top) * devicePixelRatio,
+      x: (event.clientX - rect.left) * resolution,
+      y: (event.clientY - rect.top) * resolution,
     };
   }
 
   private readonly onPointerDown = (event: PointerEvent): void => {
+    // Les autres boutons de la souris restent libres pour d'autres usages.
+    if (event.pointerType === 'mouse' && event.button !== 0) return;
     this.options.element.setPointerCapture(event.pointerId);
     const point = this.point(event);
     this.pointers.set(event.pointerId, point);
@@ -125,7 +135,7 @@ export class CameraControls {
     const point = this.point(event);
     if (this.tap !== undefined) {
       const moved = Math.hypot(point.x - this.tap.start.x, point.y - this.tap.start.y);
-      if (moved > TAP_DISTANCE * devicePixelRatio) this.tap = undefined;
+      if (moved > TAP_DISTANCE * this.options.resolution()) this.tap = undefined;
     }
     if (this.pointers.size === 1) {
       this.camera = pan(this.camera, point.x - previous.x, point.y - previous.y);
@@ -158,19 +168,37 @@ export class CameraControls {
     this.tap = undefined;
   };
 
+  private readonly onPointerCancel = (event: PointerEvent): void => {
+    this.pointers.delete(event.pointerId);
+    if (this.tap?.id === event.pointerId) this.tap = undefined;
+  };
+
   private readonly onWheel = (event: WheelEvent): void => {
     event.preventDefault();
-    // Molette en lignes ou en pages : on ramène l'écart à des pixels.
-    const lines = event.deltaMode === WheelEvent.DOM_DELTA_PIXEL ? 1 : 16;
-    const factor = Math.exp(-event.deltaY * lines * 0.002);
+    // Molette en lignes ou en pages : on ramène l'écart à des pixels CSS.
+    const unit =
+      event.deltaMode === WheelEvent.DOM_DELTA_PIXEL
+        ? 1
+        : event.deltaMode === WheelEvent.DOM_DELTA_LINE
+          ? 16
+          : this.options.element.clientHeight;
+    const factor = Math.exp(-event.deltaY * unit * 0.002);
     const point = this.point(event);
     this.camera = zoomAt(this.camera, factor, this.options.viewport(), point.x, point.y);
   };
 
   private readonly onKeyDown = (event: KeyboardEvent): void => {
     if (event.target instanceof HTMLInputElement) return;
+    // Ctrl, Cmd ou Alt : un raccourci du navigateur ou du système (Ctrl + zoome la page).
+    // Sous macOS, les touches relâchées pendant Cmd ne préviennent pas : on les oublie.
+    if (event.ctrlKey || event.metaKey || event.altKey) {
+      this.keys.clear();
+      return;
+    }
     const { width, height } = this.options.viewport();
-    if (event.code === 'Equal' || event.code === 'NumpadAdd') {
+    // Le zoom suit le caractère tapé, quelle que soit la disposition du clavier : sur un
+    // clavier français, « − » est sur la touche 6.
+    if (event.key === '+' || event.key === '=') {
       this.camera = zoomAt(
         this.camera,
         this.zoomStep(1),
@@ -178,7 +206,7 @@ export class CameraControls {
         width / 2,
         height / 2,
       );
-    } else if (event.code === 'Minus' || event.code === 'NumpadSubtract') {
+    } else if (event.key === '-') {
       this.camera = zoomAt(
         this.camera,
         this.zoomStep(-1),

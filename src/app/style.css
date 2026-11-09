@@ -31,6 +31,9 @@ body {
   position: fixed;
   inset: 0;
   overscroll-behavior: none;
+  /* Ni défilement ni zoom de la page au doigt : la carte a les siens, et un zoom de la
+     page l'étirerait d'un facteur quelconque. */
+  touch-action: none;
   -webkit-user-select: none;
   user-select: none;
   -webkit-tap-highlight-color: transparent;
