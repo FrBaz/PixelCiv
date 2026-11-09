@@ -163,3 +163,59 @@ export function components(
   }
   return { labels, sizes };
 }
+
+/** Poids entiers des pas, côté et diagonale : leur rapport approche √2 à 1 % près. */
+const STEP_SIDE = 5;
+const STEP_DIAGONAL = 7;
+
+/**
+ * Distance de chaque case à la plus proche des cases `sources`, en cases, par le plus
+ * court chemin sur le cylindre (8-connexité, diagonales comptées √2 à 1 % près).
+ * Algorithme de Dial : une file par distance entière, en temps linéaire. Les cases
+ * hors d'atteinte (aucune source) restent à +∞.
+ */
+export function distanceField(
+  sources: ArrayLike<number | boolean>,
+  size: WorldSize,
+  neighbors: Int32Array = neighborTable(size),
+): Float32Array {
+  const count = size.width * size.height;
+  const distance = new Int32Array(count).fill(-1);
+  // Files circulaires par distance : un pas coûte au plus STEP_DIAGONAL.
+  const buckets: number[][] = Array.from({ length: STEP_DIAGONAL + 1 }, () => []);
+  let pending = 0;
+  for (let index = 0; index < count; index++) {
+    if (sources[index]) {
+      distance[index] = 0;
+      buckets[0]?.push(index);
+      pending++;
+    }
+  }
+  const settled = new Uint8Array(count);
+  for (let current = 0; pending > 0; current++) {
+    const bucket = buckets[current % buckets.length] ?? [];
+    while (bucket.length > 0) {
+      const index = bucket.pop() ?? 0;
+      pending--;
+      if (settled[index] || distance[index] !== current) continue;
+      settled[index] = 1;
+      for (let direction = 0; direction < 8; direction++) {
+        const other = neighbors[index * 8 + direction] ?? -1;
+        if (other < 0 || settled[other]) continue;
+        const next = current + (direction % 2 === 0 ? STEP_SIDE : STEP_DIAGONAL);
+        const known = distance[other] ?? -1;
+        if (known < 0 || next < known) {
+          distance[other] = next;
+          buckets[next % buckets.length]?.push(other);
+          pending++;
+        }
+      }
+    }
+  }
+  const result = new Float32Array(count);
+  for (let index = 0; index < count; index++) {
+    const value = distance[index] ?? -1;
+    result[index] = value < 0 ? Number.POSITIVE_INFINITY : value / STEP_SIDE;
+  }
+  return result;
+}
