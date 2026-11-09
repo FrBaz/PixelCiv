@@ -49,7 +49,7 @@ export function placeResources(
   const count = sampler.width * sampler.height;
   const { biomes, altitudeLevels, resources } = data;
   const levels = altitudeLevels.entries;
-  const water = (cell: number) => biomes.entries[biome[cell] ?? 0]?.family === 'water';
+  const water = (cell: number) => biomes.entries.at(biome[cell] ?? 0)?.family === 'water';
 
   // Famille d'altitude de chaque case, une fois pour toutes.
   const family = new Uint8Array(count);
@@ -58,14 +58,13 @@ export function placeResources(
     family[cell] = level === undefined ? 0 : ALTITUDE_FAMILIES.indexOf(level.family);
   }
 
-  // Provinces de chaque minerai : les cases où son bruit dépasse le quantile voulu.
+  // Provinces de chaque minerai : parmi les cases qui l'admettent, celles où son bruit
+  // dépasse le quantile voulu. Le bruit ne se calcule que sur ces cases ; il vaut NaN
+  // ailleurs, où toute comparaison échoue.
+  const { width } = sampler;
   const minerals = resources.entries.flatMap((resource, index) => {
     const deposit = resource.deposit;
     if (deposit === undefined) return [];
-    const noise = sampler.fractal(new NoiseLayer(rng.stream(`worldgen.deposits.${resource.id}`)), {
-      frequency: deposit.provinceFrequency,
-      octaves: 3,
-    });
     const families = new Uint8Array(ALTITUDE_FAMILIES.length);
     for (const name of deposit.altitudes) families[ALTITUDE_FAMILIES.indexOf(name)] = 1;
     const inBiomes = new Uint8Array(biomes.entries.length);
@@ -73,15 +72,19 @@ export function placeResources(
       const found = biomes.indexOf(id);
       if (found !== undefined) inBiomes[found] = 1;
     }
+    const layer = new NoiseLayer(rng.stream(`worldgen.deposits.${resource.id}`));
+    const province = { frequency: deposit.provinceFrequency, octaves: 3 };
+    const noise = new Float32Array(count).fill(Number.NaN);
+    for (let cell = 0; cell < count; cell++) {
+      if (water(cell)) continue;
+      if (families[family[cell] ?? 0] !== 1 && inBiomes[biome[cell] ?? 0] !== 1) continue;
+      const x = cell % width;
+      noise[cell] = sampler.fractalAt(layer, province, x, (cell - x) / width);
+    }
+    const admitted = (cell: number) => !Number.isNaN(noise[cell] ?? Number.NaN);
+    const threshold = quantile(noise, 1 - deposit.provinceShare, admitted);
     return [
-      {
-        code: index + 1,
-        probability: deposit.abundance / deposit.provinceShare,
-        noise,
-        threshold: quantile(noise, 1 - deposit.provinceShare),
-        families,
-        inBiomes,
-      },
+      { code: index + 1, probability: deposit.abundance / deposit.provinceShare, noise, threshold },
     ];
   });
 
@@ -92,14 +95,11 @@ export function placeResources(
   for (let cell = 0; cell < count; cell++) {
     if (water(cell)) continue;
     let total = 0;
-    const cellFamily = family[cell] ?? 0;
-    const cellBiome = biome[cell] ?? 0;
     for (let slot = 0; slot < minerals.length; slot++) {
       const mineral = minerals.at(slot);
       if (mineral === undefined) continue;
-      const admitted = mineral.families[cellFamily] === 1 || mineral.inBiomes[cellBiome] === 1;
       const weight =
-        admitted && (mineral.noise[cell] ?? 0) > mineral.threshold ? mineral.probability : 0;
+        (mineral.noise[cell] ?? Number.NaN) > mineral.threshold ? mineral.probability : 0;
       weights[slot] = weight;
       total += weight;
     }
@@ -111,30 +111,28 @@ export function placeResources(
     for (let slot = 0; slot < minerals.length; slot++) {
       target -= weights[slot] ?? 0;
       if (target < 0) {
-        deposit[cell] = minerals[slot]?.code ?? 0;
+        deposit[cell] = minerals.at(slot)?.code ?? 0;
         break;
       }
     }
   }
 
-  // Flore : densités du biome, modulées.
-  const treeNoise = sampler.fractal(
-    new NoiseLayer(rng.stream('worldgen.flora.trees')),
-    FLORA_NOISE,
-  );
-  const shrubNoise = sampler.fractal(
-    new NoiseLayer(rng.stream('worldgen.flora.shrubs')),
-    FLORA_NOISE,
-  );
+  // Flore : densités du biome, modulées par un bruit, calculé là où le biome en a.
+  const treeLayer = new NoiseLayer(rng.stream('worldgen.flora.trees'));
+  const shrubLayer = new NoiseLayer(rng.stream('worldgen.flora.shrubs'));
   const trees = new Uint8Array(count);
   const shrubs = new Uint8Array(count);
-  const density = (base: number, noise: number) =>
-    Math.round(255 * Math.min(1, Math.max(0, base * (1 + FLORA_VARIATION * noise))));
+  const density = (base: number, layer: NoiseLayer, cell: number) => {
+    if (base <= 0) return 0;
+    const x = cell % width;
+    const noise = sampler.fractalAt(layer, FLORA_NOISE, x, (cell - x) / width);
+    return Math.round(255 * Math.min(1, Math.max(0, base * (1 + FLORA_VARIATION * noise))));
+  };
   for (let cell = 0; cell < count; cell++) {
     const flora = biomes.entries.at(biome[cell] ?? 0)?.flora;
     if (flora === undefined) continue;
-    trees[cell] = density(flora.trees, treeNoise[cell] ?? 0);
-    shrubs[cell] = density(flora.shrubs, shrubNoise[cell] ?? 0);
+    trees[cell] = density(flora.trees, treeLayer, cell);
+    shrubs[cell] = density(flora.shrubs, shrubLayer, cell);
   }
   return { deposit, trees, shrubs };
 }

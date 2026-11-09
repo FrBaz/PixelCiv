@@ -94,33 +94,38 @@ export function rawHeight(sampler: CylinderSampler, rng: Rng, relief: number): F
   const continents = sampler.fractal(layer('continents'), CONTINENTS);
   const regions = sampler.fractal(layer('regions'), REGIONS);
   const detail = sampler.fractal(layer('detail'), DETAIL);
-  const chains = sampler.fractal(layer('chains'), CHAINS);
   const ranges = sampler.fractal(layer('ranges'), RANGES);
-  const spurs = sampler.ridged(layer('spurs'), SPURS);
-  const passes = sampler.fractal(layer('passes'), PASSES);
+  // Les bruits des chaînes ne se lisent que là où une chaîne peut se dresser.
+  const chainLayer = layer('chains');
+  const spurLayer = layer('spurs');
+  const passLayer = layer('passes');
   const ridgeHeight = RIDGE_HEIGHT * (0.2 + 1.6 * relief);
   const height = new Float32Array(continents.length);
   const { width } = sampler;
   for (let index = 0; index < height.length; index++) {
+    const x = index % width;
+    const y = (index - x) / width;
     // Vers les pôles, le fond s'abaisse un peu : des mers polaires plutôt que des calottes
     // sans fin, et des rivières qui gagnent la mer au lieu de longer le bord de la carte.
-    const polar = smoothstep(
-      POLAR_SINK_FROM,
-      1,
-      latitude(Math.floor(index / width), sampler.height),
-    );
+    const polar = smoothstep(POLAR_SINK_FROM, 1, latitude(y, sampler.height));
     const continent = continents[index] ?? 0;
-    // Profil en travers d'une chaîne : une crête étroite sur un socle de piémonts deux
-    // fois et demie plus large, nuls à CHAIN_WIDTH de la ligne de crête.
-    const distance = Math.abs(chains[index] ?? 0);
-    const sharp = Math.max(0, 1 - distance / (0.4 * CHAIN_WIDTH));
-    const broad = Math.max(0, 1 - distance / CHAIN_WIDTH);
-    const crest =
-      (0.55 * sharp * sharp + 0.45 * broad * Math.sqrt(broad)) * (0.6 + 0.4 * (spurs[index] ?? 0));
     const active = smoothstep(-0.1, 0.3, ranges[index] ?? 0);
     const land = smoothstep(-0.25, 0.1, continent);
-    const pass = 0.3 + 0.7 * smoothstep(-0.5, -0.15, passes[index] ?? 0);
-    const mountain = crest * active * land * pass;
+    let mountain = 0;
+    if (active > 0 && land > 0) {
+      // Profil en travers d'une chaîne : une crête étroite sur un socle de piémonts deux
+      // fois et demie plus large, nuls à CHAIN_WIDTH de la ligne de crête.
+      const distance = Math.abs(sampler.fractalAt(chainLayer, CHAINS, x, y));
+      if (distance < CHAIN_WIDTH) {
+        const sharp = Math.max(0, 1 - distance / (0.4 * CHAIN_WIDTH));
+        const broad = 1 - distance / CHAIN_WIDTH;
+        const spur = sampler.ridgedAt(spurLayer, SPURS, x, y);
+        const crest = (0.55 * sharp * sharp + 0.45 * broad * Math.sqrt(broad)) * (0.6 + 0.4 * spur);
+        const pass =
+          0.3 + 0.7 * smoothstep(-0.5, -0.15, sampler.fractalAt(passLayer, PASSES, x, y));
+        mountain = crest * active * land * pass;
+      }
+    }
     // Le détail s'accentue en montagne et sur les hautes terres, et s'efface en plaine.
     const rugged = Math.max(mountain * 2, smoothstep(0, 0.45, regions[index] ?? 0));
     height[index] =

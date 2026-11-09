@@ -104,6 +104,56 @@ export class CylinderSampler {
     });
   }
 
+  /**
+   * Bruit fractal d'une seule case, normalisé comme `fractal` : la même valeur, pour qui
+   * n'a besoin que de quelques cases.
+   */
+  fractalAt(layer: NoiseLayer, fractal: Fractal, x: number, y: number): number {
+    return this.at(layer, fractal, x, y, (value) => value);
+  }
+
+  /** Bruit de crêtes d'une seule case, comme `ridged`. */
+  ridgedAt(layer: NoiseLayer, fractal: Fractal, x: number, y: number): number {
+    return this.at(layer, fractal, x, y, (value) => {
+      const ridge = 1 - Math.abs(value);
+      return ridge * ridge;
+    });
+  }
+
+  private at(
+    layer: NoiseLayer,
+    fractal: Fractal,
+    x: number,
+    y: number,
+    shape: (value: number) => number,
+  ): number {
+    const lacunarity = fractal.lacunarity ?? 2;
+    const gain = fractal.gain ?? 0.5;
+    const octaves = this.octavesFor(fractal);
+    const cosine = this.cosines[x] ?? 0;
+    const sine = this.sines[x] ?? 0;
+    const z = this.z(y);
+    let amplitude = 1;
+    let total = 0;
+    let sum = 0;
+    let frequency = fractal.frequency;
+    for (let octave = 0; octave < octaves; octave++) {
+      sum +=
+        amplitude *
+        shape(
+          layer.simplex.noise(
+            cosine * frequency + layer.offsetX + octave * 31.416,
+            sine * frequency + layer.offsetY + octave * 17.711,
+            z * frequency + layer.offsetZ + octave * 23.025,
+          ),
+        );
+      total += amplitude;
+      amplitude *= gain;
+      frequency *= lacunarity;
+    }
+    return sum / total;
+  }
+
   private fill(
     layer: NoiseLayer,
     fractal: Fractal,
