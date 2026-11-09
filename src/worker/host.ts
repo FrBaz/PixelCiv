@@ -192,7 +192,14 @@ export class SimulationHost {
       return;
     }
     const size = { width, height: width / 2 };
-    const world = this.generate({ ...valid, size }, () => undefined);
+    let world: WorldLayers;
+    try {
+      world = this.generate({ ...valid, size }, () => undefined);
+    } catch (error) {
+      console.error(error);
+      this.send({ type: 'error', code: 'internal', detail: String(error) });
+      return;
+    }
     this.send({
       type: 'previewReady',
       requestId,

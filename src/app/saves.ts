@@ -336,7 +336,8 @@ export class SaveManager {
     let warned = false;
     const autosave = () => {
       void this.saveTo(AUTO_SLOT).then((outcome) => {
-        if (outcome === 'save.done') return;
+        // Sans partie (écran de création au démarrage), il n'y a rien à sauvegarder.
+        if (outcome === 'save.done' || outcome === 'save.error.noGame') return;
         console.warn('sauvegarde automatique', outcome);
         // Un échec du stockage est signalé une fois ; le reste est passager.
         if (outcome === 'save.error.storage' && !warned) {

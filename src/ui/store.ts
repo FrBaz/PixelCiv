@@ -3,8 +3,10 @@
  * worker lui envoie, et les composants se mettent à jour d'eux-mêmes.
  */
 import { signal } from '@preact/signals';
+import type { Worldgen } from '../core/data';
 import type { MainMessage, TimeInfo, WorldInfo } from '../core/protocol';
-import type { GenerationStage } from '../core/world';
+import type { GenerationStage, WorldSizeId } from '../core/world';
+import type { WorldParams } from '../core/worldParams';
 import type { MessageKey } from '../i18n';
 
 /** Temps de la partie, inconnu avant le premier instantané. */
@@ -69,6 +71,43 @@ export interface UiActions {
   load(): Promise<void>;
   exportFile(): Promise<void>;
   importFile(file: File): Promise<void>;
+  /** Écran de création : l'ouvrir, le fermer, demander un aperçu, créer le monde. */
+  openCreation(): void;
+  closeCreation(): void;
+  preview(params: WorldParams): void;
+  create(params: WorldParams): void;
+}
+
+/** Ce que l'écran de création propose : bornes des paramètres, tailles, taille par défaut. */
+export interface CreationSetup {
+  readonly parameters: Worldgen['parameters'];
+  readonly sizes: readonly WorldSizeId[];
+  readonly defaultSize: WorldSizeId;
+}
+
+/** Largeur de l'aperçu de l'écran de création, en cases (paire, de 32 à 512). */
+export const PREVIEW_COLUMNS = 256;
+
+/** Écran de création ouvert. */
+export const creationOpen = signal(false);
+
+/** Monde demandé à l'écran de création, en cours de génération. */
+export const creationPending = signal(false);
+
+/** Aperçu de l'écran de création : ses pixels, et la clé des paramètres qui l'ont donné. */
+export interface PreviewImage {
+  readonly width: number;
+  readonly height: number;
+  readonly pixels: Uint8ClampedArray<ArrayBuffer>;
+  readonly key: string;
+}
+
+export const previewImage = signal<PreviewImage | undefined>(undefined);
+
+/** Clé des paramètres d'un aperçu : tous sauf la taille, qui ne change pas les continents. */
+export function previewKey(params: WorldParams): string {
+  const { size: _size, ...rest } = params;
+  return JSON.stringify(rest);
 }
 
 /** Modes de carte (IHM-01) : naturel, relief, biomes, ressources. */

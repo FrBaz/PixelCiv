@@ -7,13 +7,17 @@ import { WORLD_SIZES, type WorldLayers, type WorldSizeId } from '../core/world';
 import { defaultWorldParams, type WorldParams } from '../core/worldParams';
 import { determinismSelfTest } from '../core/selftest';
 import { t } from '../i18n';
+import { parseColor } from '../render/bake';
 import { CameraControls } from '../render/controls';
 import { cellAt, MapView } from '../render/map';
 import { legend, overlayTexels } from '../render/mapModes';
+import { previewPixels } from '../render/preview';
 import { createRenderer } from '../render/renderer';
 import { App } from '../ui/App';
 import {
   content,
+  creationOpen,
+  creationPending,
   debugInfo,
   determinismOk,
   generation,
@@ -21,13 +25,19 @@ import {
   inspected,
   legendEntries,
   mapMode,
+  PREVIEW_COLUMNS,
+  previewImage,
+  previewKey,
+  showNotice,
   time,
   worldInfo,
+  type CreationSetup,
   type MapModeId,
 } from '../ui/store';
 import { DebugSampler, usedMemoryMb } from './debug';
 import { SaveManager, SaveStore } from './saves';
 import { describeCell } from './inspect';
+import { PreviewScheduler } from './preview';
 import { SeasonClock } from './seasonClock';
 import { SimulationClient } from './simulation';
 import './style.css';
@@ -39,8 +49,8 @@ function element(id: string): HTMLElement {
 }
 
 /**
- * Paramètres de la première partie, sans sauvegarde à reprendre : ceux par défaut, ou
- * ceux de l'adresse, pour le débogage (?seed=abc&size=large).
+ * Débogage : l'adresse peut nommer le monde de la première partie (?seed=abc&size=large),
+ * qui commence alors sans passer par l'écran de création.
  */
 function startingParams(data: GameData, query: URLSearchParams): WorldParams {
   const size = query.get('size') ?? 'small';
@@ -67,7 +77,35 @@ async function main(): Promise<void> {
     altitudeLevels: data.altitudeLevels.entries,
     resources: data.resources.entries,
   };
+  // Au doigt seul (téléphone, tablette) : un monde Moyen par défaut, en attendant la
+  // mesure sur téléphone, et pas d'Immense, réservé au PC (MON-02).
+  const touchOnly = !matchMedia('(any-pointer: fine)').matches;
+  const setup: CreationSetup = {
+    parameters: data.worldgen.parameters,
+    sizes: touchOnly ? ['small', 'medium', 'large'] : ['small', 'medium', 'large', 'huge'],
+    defaultSize: touchOnly ? 'medium' : 'large',
+  };
   const simulation = new SimulationClient();
+  const biomeColors = data.biomes.entries.map((biome) => parseColor(biome.palette.base));
+  const previews = new PreviewScheduler(
+    (requestId, params) => {
+      simulation.send({ type: 'preview', requestId, params, width: PREVIEW_COLUMNS });
+    },
+    (preview, params) => {
+      previewImage.value = {
+        width: preview.size.width,
+        height: preview.size.height,
+        pixels: previewPixels(preview.size, preview.biome, preview.elevation, biomeColors),
+        key: previewKey(params),
+      };
+    },
+    {
+      setTimer: (callback, delay) => window.setTimeout(callback, delay),
+      clearTimer: (handle) => {
+        window.clearTimeout(handle);
+      },
+    },
+  );
   // Sans IndexedDB (navigation privée, stockage refusé), le jeu tourne sans sauvegarde locale.
   const store = await SaveStore.open().catch(() => undefined);
   const saves = new SaveManager(simulation, store);
@@ -76,6 +114,11 @@ async function main(): Promise<void> {
     viewport: () => map.viewport,
     resolution: () => app.renderer.resolution,
     world: () => map.world,
+    // Appui long au doigt, clic ou appui bref : la case désignée s'inspecte (IHM-07).
+    onLongPress: (mapX, mapY) => {
+      const cell = cellAt(mapX, mapY);
+      inspect(cell.x, cell.y);
+    },
     onTap: (mapX, mapY) => {
       const cell = cellAt(mapX, mapY);
       // Débogage : ?brush=desert peint la case touchée de ce biome, par une commande de jeu.
@@ -138,11 +181,21 @@ async function main(): Promise<void> {
             return false;
           })
           .then((resumed) => {
-            if (!resumed) simulation.send({ type: 'newGame', params: startingParams(data, query) });
+            if (!resumed) {
+              if (query.has('seed') || query.has('size')) {
+                simulation.send({ type: 'newGame', params: startingParams(data, query) });
+              } else {
+                creationOpen.value = true;
+              }
+            }
             saves.startAutosave();
           });
         break;
       case 'snapshot': {
+        // Une partie commence (nouveau monde, chargement) : l'écran de création se ferme.
+        creationOpen.value = false;
+        creationPending.value = false;
+        previews.cancel();
         worldInfo.value = message.world;
         const layers = message.layers;
         worldLayers = layers;
@@ -175,10 +228,19 @@ async function main(): Promise<void> {
         generationMs.value = message.milliseconds;
         break;
       case 'previewReady':
-        // Réponse aux aperçus de l'écran de création (tâche 1.9).
+        previews.ready(message);
         break;
       case 'error':
         console.error(`worker : ${message.code} (${message.detail})`);
+        if (message.code === 'params' || message.code === 'internal') {
+          // Un aperçu ou un monde demandé ne viendra pas.
+          previews.failed();
+          if (creationPending.value) {
+            creationPending.value = false;
+            generation.value = undefined;
+            showNotice('create.error');
+          }
+        }
         break;
       case 'saved':
       case 'saveFailed':
@@ -202,8 +264,23 @@ async function main(): Promise<void> {
     load: () => saves.load(),
     exportFile: () => saves.exportFile(),
     importFile: (file: File) => saves.importFile(file),
+    openCreation: () => {
+      creationOpen.value = true;
+    },
+    closeCreation: () => {
+      creationOpen.value = false;
+      previews.cancel();
+    },
+    preview: (params: WorldParams) => {
+      previews.request(params);
+    },
+    create: (params: WorldParams) => {
+      creationPending.value = true;
+      generation.value = undefined;
+      simulation.send({ type: 'newGame', params });
+    },
   };
-  render(h(App, { actions }), element('ui'));
+  render(h(App, { actions, setup }), element('ui'));
 
   // La poignée de main d'abord : le worker refuse tout message qui la précède.
   simulation.send({ type: 'hello', protocol: PROTOCOL_VERSION });
