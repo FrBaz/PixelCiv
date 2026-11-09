@@ -104,14 +104,15 @@ describe('partie', () => {
 
   it("avance d'un pas par mois, et envoie les blocs modifiés", () => {
     const { env, host } = startedHost();
-    host.receive({ type: 'game', command: { type: 'paint', x: 70, y: 3, value: 5 } });
+    host.receive({ type: 'game', command: { type: 'paint', x: 70, y: 3, value: 9 } });
     env.advance(NORMAL_MONTH_MS);
     const delta = env.messages('delta').at(0);
     expect(delta?.time.tick).toBe(1);
-    expect(delta?.chunks.map((chunk) => [chunk.column, chunk.row])).toEqual([[1, 0]]);
-    expect(delta?.chunks.at(0)?.cells[3 * CHUNK_SIZE + 6]).toBe(5);
+    const painted = delta?.chunks.find((chunk) => chunk.column === 1 && chunk.row === 0);
+    expect(painted?.cells[3 * CHUNK_SIZE + 6]).toBe(9);
+    // Les promeneurs de test peignent chaque mois : leurs blocs suivent dans les deltas.
     env.advance(NORMAL_MONTH_MS);
-    expect(env.messages('delta').at(1)?.chunks).toEqual([]);
+    expect(env.messages('delta').at(1)?.chunks.length).toBeGreaterThan(0);
   });
 
   it('fait durer une année environ 10 s', () => {
@@ -177,11 +178,15 @@ describe('commandes de jeu', () => {
   it("s'appliquent au début du pas suivant", () => {
     const { env, host } = startedHost();
     env.advance(NORMAL_MONTH_MS * 3);
-    host.receive({ type: 'game', command: { type: 'paint', x: 1, y: 7, value: 3 } });
-    expect(env.messages('delta').every((delta) => delta.chunks.length === 0)).toBe(true);
+    host.receive({ type: 'game', command: { type: 'paint', x: 1, y: 7, value: 9 } });
+    const paintedIn = (index: number) =>
+      env
+        .messages('delta')
+        .at(index)
+        ?.chunks.find((chunk) => chunk.column === 0 && chunk.row === 0)?.cells[7 * CHUNK_SIZE + 1];
+    expect(paintedIn(-1)).not.toBe(9);
     env.advance(NORMAL_MONTH_MS);
-    const delta = env.messages('delta').at(-1);
-    expect(delta?.time.tick).toBe(4);
-    expect(delta?.chunks.at(0)?.cells[7 * CHUNK_SIZE + 1]).toBe(3);
+    expect(env.messages('delta').at(-1)?.time.tick).toBe(4);
+    expect(paintedIn(-1)).toBe(9);
   });
 });

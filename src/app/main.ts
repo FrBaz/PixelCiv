@@ -3,6 +3,8 @@
 import { h, render } from 'preact';
 import { PROTOCOL_VERSION } from '../core/protocol';
 import { t } from '../i18n';
+import { CameraControls } from '../render/controls';
+import { cellAt, MapView } from '../render/map';
 import { createRenderer } from '../render/renderer';
 import { App } from '../ui/App';
 import { stats, time } from '../ui/store';
@@ -17,16 +19,40 @@ function element(id: string): HTMLElement {
 
 async function main(): Promise<void> {
   document.title = t('app.title');
-  await createRenderer(element('map'));
-
+  const mapElement = element('map');
+  const app = await createRenderer(mapElement);
+  const map = new MapView(app);
   const simulation = new SimulationClient();
+  const controls = new CameraControls({
+    element: mapElement,
+    viewport: () => map.viewport,
+    world: () => map.world,
+    onTap: (mapX, mapY) => {
+      // Pinceau de test : peint la case touchée, par une commande de jeu.
+      const cell = cellAt(mapX, mapY);
+      simulation.send({ type: 'game', command: { type: 'paint', x: cell.x, y: cell.y, value: 8 } });
+    },
+  });
+  app.ticker.add((ticker) => {
+    map.draw(controls.update(ticker.deltaMS));
+  });
+
   simulation.subscribe((message) => {
     switch (message.type) {
       case 'ready':
         simulation.send({ type: 'newGame', seed: 'pixelciv', size: 'small' });
         break;
-      case 'snapshot':
+      case 'snapshot': {
+        map.setWorld(message.world, message.chunks);
+        const world = map.world;
+        if (world !== undefined) controls.center(world);
+        time.value = message.time;
+        break;
+      }
       case 'delta':
+        map.updateChunks(message.chunks);
+        time.value = message.time;
+        break;
       case 'time':
         time.value = message.time;
         break;

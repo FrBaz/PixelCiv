@@ -1,10 +1,18 @@
 /**
  * État de la simulation : une couche par attribut, en tableaux typés (CLAUDE.md,
- * « Performances »). La phase 0 n'a qu'une couche de test.
+ * « Performances »). La phase 0 n'a qu'une couche de test, que parcourent quelques
+ * promeneurs de test.
  */
 import { wrapX } from '../core/cylinder';
 import type { ChunkLayer, LoggedCommand } from '../core/protocol';
+import { Rng } from '../core/rng';
 import { CHUNK_SIZE, chunkGrid, type WorldSize } from '../core/world';
+
+/** Nombre de promeneurs de test. */
+export const WALKER_COUNT = 12;
+
+/** Flux du générateur réservé aux promeneurs de test. */
+export const WALKER_STREAM = 'test.walkers';
 
 export interface SimState {
   readonly seed: string;
@@ -15,6 +23,11 @@ export interface SimState {
   readonly testLayer: Uint8Array<ArrayBuffer>;
   /** Commandes de jeu appliquées, dans l'ordre : rejouées depuis la graine, elles redonnent l'état. */
   readonly commandLog: LoggedCommand[];
+  /** Générateur de la partie, découpé en flux nommés (ADR 0003). */
+  readonly rng: Rng;
+  /** Positions des promeneurs de test, une colonne par coordonnée. */
+  readonly walkerX: Uint16Array<ArrayBuffer>;
+  readonly walkerY: Uint16Array<ArrayBuffer>;
   /**
    * Blocs modifiés depuis le dernier envoi, un drapeau par bloc. Ce n'est pas l'état
    * du monde : ni la sauvegarde ni l'empreinte n'en tiennent compte.
@@ -24,12 +37,23 @@ export interface SimState {
 
 export function createState(seed: string, size: WorldSize): SimState {
   const grid = chunkGrid(size);
+  const rng = new Rng(seed);
+  const random = rng.stream(WALKER_STREAM);
+  const walkerX = new Uint16Array(WALKER_COUNT);
+  const walkerY = new Uint16Array(WALKER_COUNT);
+  for (let walker = 0; walker < WALKER_COUNT; walker++) {
+    walkerX[walker] = random.nextInt(size.width);
+    walkerY[walker] = random.nextInt(size.height);
+  }
   return {
     seed,
     size,
     tick: 0,
     testLayer: new Uint8Array(size.width * size.height),
     commandLog: [],
+    rng,
+    walkerX,
+    walkerY,
     dirtyChunks: new Uint8Array(grid.columns * grid.rows),
   };
 }

@@ -74,7 +74,7 @@ describe('pas', () => {
 
   it('donnent toujours la même empreinte (déterminisme)', () => {
     expect(fingerprint(run())).toBe(fingerprint(run()));
-    // Valeur recalculée indépendamment (FNV-1a en Python sur les mêmes octets).
-    expect(fingerprint(run())).toBe('2ed12715');
+    // Valeur recalculée indépendamment, en Python : couche, promeneurs et flux du générateur.
+    expect(fingerprint(run())).toBe('4cb949b2');
   });
 });
