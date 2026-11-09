@@ -1,0 +1,208 @@
+[
+  {
+    "id": "abyss",
+    "family": "water",
+    "name": "altitude.abyss",
+    "min": null,
+    "max": -4000,
+    "movement": null,
+    "navigation": "open-sea",
+    "fertility": null,
+    "construction": []
+  },
+  {
+    "id": "ocean",
+    "family": "water",
+    "name": "altitude.ocean",
+    "min": -4000,
+    "max": -1000,
+    "movement": null,
+    "navigation": "open-sea",
+    "fertility": null,
+    "construction": []
+  },
+  {
+    "id": "slope",
+    "family": "water",
+    "name": "altitude.slope",
+    "min": -1000,
+    "max": -200,
+    "movement": null,
+    "navigation": "offshore",
+    "fertility": null,
+    "construction": []
+  },
+  {
+    "id": "shelf",
+    "family": "water",
+    "name": "altitude.shelf",
+    "min": -200,
+    "max": -50,
+    "movement": null,
+    "navigation": "near-coast",
+    "fertility": null,
+    "construction": []
+  },
+  {
+    "id": "coastal-water",
+    "family": "water",
+    "name": "altitude.coastal-water",
+    "min": -50,
+    "max": -5,
+    "movement": null,
+    "navigation": "coasting",
+    "fertility": null,
+    "construction": []
+  },
+  {
+    "id": "foreshore",
+    "family": "shore",
+    "name": "altitude.foreshore",
+    "min": -5,
+    "max": 0,
+    "movement": null,
+    "navigation": "coasting",
+    "fertility": null,
+    "construction": []
+  },
+  {
+    "id": "backshore",
+    "family": "shore",
+    "name": "altitude.backshore",
+    "min": 0,
+    "max": 5,
+    "movement": 1,
+    "fertility": 0.7,
+    "construction": ["port", "saltworks"]
+  },
+  {
+    "id": "plain-one",
+    "family": "plain",
+    "name": "altitude.plain-one",
+    "min": 5,
+    "max": 50,
+    "movement": 1,
+    "fertility": 1,
+    "construction": ["any"]
+  },
+  {
+    "id": "plain-two",
+    "family": "plain",
+    "name": "altitude.plain-two",
+    "min": 50,
+    "max": 100,
+    "movement": 1,
+    "fertility": 1,
+    "construction": ["any"]
+  },
+  {
+    "id": "plain-three",
+    "family": "plain",
+    "name": "altitude.plain-three",
+    "min": 100,
+    "max": 200,
+    "movement": 1,
+    "fertility": 1,
+    "construction": ["any"]
+  },
+  {
+    "id": "plain-four",
+    "family": "plain",
+    "name": "altitude.plain-four",
+    "min": 200,
+    "max": 300,
+    "movement": 1,
+    "fertility": 1,
+    "construction": ["any"]
+  },
+  {
+    "id": "plain-five",
+    "family": "plain",
+    "name": "altitude.plain-five",
+    "min": 300,
+    "max": 400,
+    "movement": 1,
+    "fertility": 1,
+    "construction": ["any"]
+  },
+  {
+    "id": "hill-one",
+    "family": "hill",
+    "name": "altitude.hill-one",
+    "min": 400,
+    "max": 600,
+    "movement": 1.5,
+    "fertility": 0.8,
+    "construction": ["any", "castle"]
+  },
+  {
+    "id": "hill-two",
+    "family": "hill",
+    "name": "altitude.hill-two",
+    "min": 600,
+    "max": 800,
+    "movement": 1.5,
+    "fertility": 0.8,
+    "construction": ["any", "castle"]
+  },
+  {
+    "id": "hill-three",
+    "family": "hill",
+    "name": "altitude.hill-three",
+    "min": 800,
+    "max": 1000,
+    "movement": 1.5,
+    "fertility": 0.8,
+    "construction": ["any", "castle"]
+  },
+  {
+    "id": "low-mountain-one",
+    "family": "low-mountain",
+    "name": "altitude.low-mountain-one",
+    "min": 1000,
+    "max": 1400,
+    "movement": 2.5,
+    "fertility": 0.5,
+    "construction": ["village", "mine", "fort"]
+  },
+  {
+    "id": "low-mountain-two",
+    "family": "low-mountain",
+    "name": "altitude.low-mountain-two",
+    "min": 1400,
+    "max": 1800,
+    "movement": 2.5,
+    "fertility": 0.5,
+    "construction": ["village", "mine", "fort"]
+  },
+  {
+    "id": "mid-mountain",
+    "family": "mid-mountain",
+    "name": "altitude.mid-mountain",
+    "min": 1800,
+    "max": 2600,
+    "movement": 4,
+    "fertility": 0.25,
+    "construction": ["hamlet", "mine", "fort"]
+  },
+  {
+    "id": "high-mountain",
+    "family": "high-mountain",
+    "name": "altitude.high-mountain",
+    "min": 2600,
+    "max": 3800,
+    "movement": 6,
+    "fertility": 0,
+    "construction": ["mine", "pass-fort"]
+  },
+  {
+    "id": "summit",
+    "family": "summit",
+    "name": "altitude.summit",
+    "min": 3800,
+    "max": null,
+    "movement": null,
+    "fertility": 0,
+    "construction": ["sacred-site"]
+  }
+]

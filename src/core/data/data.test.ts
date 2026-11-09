@@ -1,9 +1,10 @@
 import { describe, expect, it } from 'vitest';
+import altitudeLevelsJson from '../../../data/altitude-levels.json';
 import biomesJson from '../../../data/biomes.json';
 import fr from '../../i18n/fr.json';
 import { DataError, loadCatalog } from './catalog';
 import { loadGameData } from './index';
-import { BiomesSchema } from './schemas';
+import { AltitudeLevelsSchema, BiomesSchema } from './schemas';
 
 /** Les 32 biomes naturels de la séance C1 (D6), par famille, tels que la séance les nomme. */
 const C1_BIOMES: Readonly<Record<string, readonly string[]>> = {
@@ -76,5 +77,29 @@ describe('validation', () => {
     expect(cost('river')).toBeGreaterThanOrEqual(1);
     expect(cost('deep-ocean')).toBeNull();
     expect(cost('lake')).toBeNull();
+  });
+});
+
+describe('data/altitude-levels.json', () => {
+  const { altitudeLevels } = loadGameData();
+  const load = (raw: unknown) => () => loadCatalog('essai.json', AltitudeLevelsSchema, raw);
+
+  it('a un nom traduit pour chaque niveau', () => {
+    expect(
+      altitudeLevels.entries.filter((level) => typeof messages[level.name] !== 'string'),
+    ).toEqual([]);
+  });
+
+  it('refuse des niveaux qui ne se suivent pas', () => {
+    const levels = altitudeLevelsJson;
+    expect(load(levels)).not.toThrow();
+    expect(load(levels.slice(1))).toThrow(/se suivre/);
+    expect(load(levels.filter((level) => level.id !== 'plain-three'))).toThrow(/se suivre/);
+    expect(load(levels.slice(0, -1))).toThrow(/dernier niveau/);
+    expect(
+      load(
+        levels.map((level) => (level.id === 'shelf' ? { ...level, navigation: undefined } : level)),
+      ),
+    ).toThrow(/naviguent/);
   });
 });
