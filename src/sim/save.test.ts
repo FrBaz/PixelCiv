@@ -80,6 +80,25 @@ describe('sauvegarde de la simulation', () => {
     expect(performance.now() - start).toBeLessThan(3000);
   });
 
+  it('refuse vite des flux forgés, trop nombreux ou illisibles', () => {
+    const save = saveState(played(3));
+    const json = save.json as Record<string, unknown>;
+    const invalid = Object.fromEntries(
+      Array.from({ length: 300_000 }, (_, i) => [`K${String(i)}`, [{}, {}, {}, {}]]),
+    );
+    const many = {
+      ...Object.fromEntries(
+        Array.from({ length: 1025 }, (_, i) => [`flux${String(i)}`, [1, 2, 3, 4]]),
+      ),
+      [WALKER_STREAM]: [1, 2, 3, 4],
+    };
+    for (const rng of [invalid, many]) {
+      const start = performance.now();
+      expect(() => restoreState({ ...save, json: { ...json, rng } })).toThrow(SaveError);
+      expect(performance.now() - start).toBeLessThan(3000);
+    }
+  });
+
   it('rend un état qui ne partage rien avec la sauvegarde', () => {
     const save = saveState(played(5));
     const first = restoreState(save);

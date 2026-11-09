@@ -187,6 +187,18 @@ describe('taille', () => {
     expect((await rejection(readSave(bomb, NONE))).code).toBe('size');
   });
 
+  it("refuse vite une liste de tableaux forgée de millions d'entrées", () => {
+    const header = {
+      meta: { seed: 'graine', tick: 1 },
+      json: 0,
+      arrays: new Array(2_000_000).fill({}),
+    };
+    const start = performance.now();
+    expect(() => decodeSave(forged(header, new Uint8Array(0)), NONE)).toThrow(SaveError);
+    // Zod vérifie la longueur avant les éléments : ni millions d'erreurs, ni secondes.
+    expect(performance.now() - start).toBeLessThan(3000);
+  });
+
   it("refuse d'écrire un en-tête que la lecture refuserait", () => {
     const big = { ...sample, json: { log: 'x'.repeat(MAX_HEADER_BYTES) } };
     expect(() => encodeSave(big)).toThrow(expect.objectContaining({ code: 'size' }) as Error);

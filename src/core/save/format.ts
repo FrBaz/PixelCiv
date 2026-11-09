@@ -94,21 +94,30 @@ function arrayType(array: SavedArray): ArrayType {
   return 'f64';
 }
 
+/**
+ * Nombre maximal de tableaux d'une sauvegarde. La borne protège aussi la mémoire : Zod
+ * vérifie la longueur d'une liste avant ses éléments, au lieu de relever chaque champ
+ * invalide de millions d'éléments forgés.
+ */
+export const MAX_SAVED_ARRAYS = 256;
+
 const HeaderSchema = z
   .object({
     meta: z.object({ seed: z.string(), tick: z.number().int().nonnegative() }).strict(),
     json: z.unknown(),
-    arrays: z.array(
-      z
-        .object({
-          // Un identifiant simple : ni « __proto__ », ni rien qui ne soit un nom de tableau.
-          name: z.string().regex(/^[A-Za-z][A-Za-z0-9]*$/),
-          type: z.enum(['u8', 'u16', 'u32', 'i32', 'f32', 'f64']),
-          offset: z.number().int().nonnegative(),
-          length: z.number().int().nonnegative(),
-        })
-        .strict(),
-    ),
+    arrays: z
+      .array(
+        z
+          .object({
+            // Un identifiant simple : ni « __proto__ », ni rien qui ne soit un nom de tableau.
+            name: z.string().regex(/^[A-Za-z][A-Za-z0-9]*$/),
+            type: z.enum(['u8', 'u16', 'u32', 'i32', 'f32', 'f64']),
+            offset: z.number().int().nonnegative(),
+            length: z.number().int().nonnegative(),
+          })
+          .strict(),
+      )
+      .max(MAX_SAVED_ARRAYS),
   })
   .strict();
 

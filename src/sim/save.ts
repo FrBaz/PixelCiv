@@ -28,17 +28,39 @@ const WorldSizeSchema = z
     'taille de monde inconnue',
   );
 
+/** Nombre maximal de flux du générateur dans une sauvegarde : bien plus qu'il n'en faut. */
+export const MAX_STREAMS = 1024;
+
+/** Nom d'un flux du générateur. */
+const StreamNameSchema = z.string().regex(/^[a-z][a-z0-9.]*$/);
+
+/** L'objet a-t-il au plus `limit` clés ? Le compte s'arrête dès la limite franchie. */
+function fewKeys(value: object, limit: number): boolean {
+  let count = 0;
+  for (const key in value) {
+    if (Object.hasOwn(value, key) && ++count > limit) return false;
+  }
+  return true;
+}
+
 /**
- * Forme de l'état sauvegardé. Les listes de commandes ne sont pas vérifiées ici, mais
- * une à une, ensuite : sur une liste entière, Zod relèverait chaque champ invalide de
- * chaque élément, et des millions d'éléments forgés épuiseraient la mémoire.
+ * Forme de l'état sauvegardé. Les listes de commandes et les flux ne sont pas vérifiés
+ * ici, mais un à un, ensuite, jusqu'à la première erreur : sur une collection entière,
+ * Zod relèverait chaque champ invalide de chaque élément, et des millions d'éléments
+ * forgés épuiseraient la mémoire. Les flux sont comptés avant tout.
  */
 const SimJsonSchema = z
   .object({
     size: WorldSizeSchema,
     commandLog: z.array(z.unknown()),
     pending: z.array(z.unknown()),
-    rng: z.record(z.string().regex(/^[a-z][a-z0-9.]*$/), StreamStateSchema),
+    rng: z.custom<Readonly<Record<string, unknown>>>(
+      (value) =>
+        typeof value === 'object' &&
+        value !== null &&
+        !Array.isArray(value) &&
+        fewKeys(value, MAX_STREAMS),
+    ),
   })
   .strict();
 
@@ -111,7 +133,15 @@ function within(array: Uint16Array, limit: number, name: string): void {
 export function restoreState(save: SaveData): SimState {
   const parsed = SimJsonSchema.safeParse(save.json);
   if (!parsed.success) throw new SaveError('corrupt', 'état illisible');
-  const { size, rng } = parsed.data;
+  const { size } = parsed.data;
+  const rng: Record<string, [number, number, number, number]> = {};
+  for (const [name, words] of Object.entries(parsed.data.rng)) {
+    const state = StreamStateSchema.safeParse(words);
+    if (!StreamNameSchema.safeParse(name).success || !state.success) {
+      throw new SaveError('corrupt', 'flux du générateur illisible');
+    }
+    rng[name] = state.data;
+  }
   const commandLog = each(parsed.data.commandLog, LoggedCommandSchema, 'journal');
   const pending = each(parsed.data.pending, GameCommandSchema, 'commandes en attente');
   const { tick } = save.meta;

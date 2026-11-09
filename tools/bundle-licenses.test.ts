@@ -286,8 +286,9 @@ describe('feuilles de style', () => {
     expect(names("@import 'local';")).toEqual(['@scope/deep', 'fake-lib']);
     expect(names("@import 'fake-lib/reset';")).toEqual(['@scope/deep', 'fake-lib']);
     expect(names('@import url(https://example.org/a.css); .b { mask: url(#m); }')).toEqual([]);
-    // Un dossier du projet homonyme d'un paquet ne cache pas le paquet.
+    // Un dossier du projet homonyme d'un paquet ne cache pas le paquet, même nommé seul.
     expect(names("@import 'fake-lib/reset.css';")).toEqual(['@scope/deep', 'fake-lib']);
+    expect(names("@import 'fake-lib';")).toEqual(['fake-lib']);
   });
 });
 

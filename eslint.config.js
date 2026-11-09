@@ -466,14 +466,15 @@ const workerBoundaries = {
             const key = property.key;
             const named = key.type === 'Identifier' ? key.name : key.value;
             if (named !== 'base') continue;
-            const base = property.value;
-            if (base.type !== 'Literal' || typeof base.value !== 'string') {
-              context.report({ node: base, messageId: 'opaque' });
+            // Écrit en clair : une chaîne, ou un gabarit sans expression.
+            const base = specifierOf(property.value, false);
+            if (base === undefined || base.open) {
+              context.report({ node: property.value, messageId: 'opaque' });
               return;
             }
-            from = base.value.startsWith('/')
-              ? path.join(ROOT, base.value)
-              : path.resolve(directory, base.value);
+            from = base.text.startsWith('/')
+              ? path.join(ROOT, base.text)
+              : path.resolve(directory, base.text);
           }
         } else if (options !== undefined) {
           context.report({ node: options, messageId: 'opaque' });

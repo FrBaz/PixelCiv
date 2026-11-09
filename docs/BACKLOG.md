@@ -57,7 +57,9 @@ La phase terminée, des relecteurs indépendants l'ont relue en quatre domaines 
 - **Deuxième relecture, des corrections elles-mêmes : 23 défauts**, corrigés dans « relecture 2 : … ». Chaque remarque y a été soumise à un vérificateur chargé de la réfuter. Entre autres : une sauvegarde automatique illisible qui n'était pas mise de côté, faute de copie du tampon transféré au worker ; le zoom du navigateur qui étirait la carte ; un pincement au pavé tactile qui zoomait la page ; `?stepCost` refusé par la poignée de main ; des fichiers du projet pris pour des paquets par le contrôle des feuilles de style.
 - **Troisième relecture, des corrections de la deuxième : 7 défauts**, corrigés dans « relecture 3 : … ». Le zoom du navigateur laissait `app.screen` à l'ancienne taille, et un fichier forgé de 8 Ko faisait encore allouer 1,7 Go, Zod relevant chaque champ invalide de millions de commandes.
 
-Le nombre de défauts décroît d'une relecture à l'autre, sans être nul : une quatrième pourrait en trouver d'autres, plus petits.
+- **Quatrième relecture, des corrections de la troisième : 3 défauts**, corrigés dans « relecture 4 : … ». Le principal : la liste des tableaux de l'en-tête et les flux du générateur étaient encore validés d'un bloc par Zod, et un fichier forgé de 8 Ko coûtait encore des gigaoctets. Toutes les collections d'une sauvegarde sont désormais bornées ou vérifiées une à une.
+
+Le nombre de défauts décroît d'une relecture à l'autre (40, 23, 7, puis 3), sans garantie d'être nul.
 
 Restent ouverts, et notés dans les ADR :
 - le journal des commandes grossit sans fin, et la sauvegarde échoue vers 130 000 commandes : il faudra le compacter (ADR 0007) ;

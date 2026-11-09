@@ -153,6 +153,7 @@ describe('frontières du worker', () => {
     // Les motifs relatifs partent de base : en sortir peut mener au fil principal.
     "export const p = import.meta.glob('../../../ui/*.ts', { base: './a/b', eager: true });",
     "export const p = import.meta.glob('../../ui/*.ts', { base: '../core/defs' });",
+    "export const p = import.meta.glob('./*.ts', { base: `../ui` });",
     "export const p = (base: string) => import.meta.glob('./*.ts', { base });",
     'export const p = import.meta.glob();',
   ])('signale %s', async (code) => {
@@ -180,6 +181,7 @@ describe('frontières du worker', () => {
     'export const p = import.meta.glob([`./local/*.ts`, `!./local/skip.ts`]);',
     "export const p = import.meta.glob('./*.ts', { base: './local', eager: true });",
     "export const p = import.meta.glob('../ui/*.ts', { base: './local' });",
+    "export const p = import.meta.glob('./*.ts', { base: `./local` });",
     'export const p = (name: string) => import(`./local/${name}.ts`);',
     "export const p = (name: string) => import('../core/' + name);",
     "export { value } from './local';",
