@@ -150,6 +150,10 @@ describe('frontières du worker', () => {
     // L'option base enracine les motifs ailleurs ; un glob sans motif ne dit rien.
     "export const p = import.meta.glob('./*.ts', { base: '../ui', eager: true });",
     "export const p = import.meta.glob('./*.ts', { base: '/src/render' });",
+    // Les motifs relatifs partent de base : en sortir peut mener au fil principal.
+    "export const p = import.meta.glob('../../../ui/*.ts', { base: './a/b', eager: true });",
+    "export const p = import.meta.glob('../../ui/*.ts', { base: '../core/defs' });",
+    "export const p = (base: string) => import.meta.glob('./*.ts', { base });",
     'export const p = import.meta.glob();',
   ])('signale %s', async (code) => {
     for (const filePath of [...workerFiles, 'src/worker/probe.ts', 'src/sim/probe.test.ts']) {
@@ -175,6 +179,7 @@ describe('frontières du worker', () => {
     "export const p = import.meta.glob(['../core/*.ts', '!../ui/*.ts']);",
     'export const p = import.meta.glob([`./local/*.ts`, `!./local/skip.ts`]);',
     "export const p = import.meta.glob('./*.ts', { base: './local', eager: true });",
+    "export const p = import.meta.glob('../ui/*.ts', { base: './local' });",
     'export const p = (name: string) => import(`./local/${name}.ts`);',
     "export const p = (name: string) => import('../core/' + name);",
     "export { value } from './local';",

@@ -68,6 +68,18 @@ describe('sauvegarde de la simulation', () => {
     expect(fingerprint(restored)).toBe(fingerprint(played(6)));
   });
 
+  it('refuse vite, sans épuiser la mémoire, un journal forgé de millions de commandes', () => {
+    const save = saveState(played(3));
+    const forged = {
+      ...save,
+      json: { ...(save.json as object), commandLog: new Array(2_000_000).fill({}) },
+    };
+    const start = performance.now();
+    expect(() => restoreState(forged)).toThrow(SaveError);
+    // Une validation de la liste entière relèverait 4 millions d'erreurs : plusieurs secondes.
+    expect(performance.now() - start).toBeLessThan(3000);
+  });
+
   it('rend un état qui ne partage rien avec la sauvegarde', () => {
     const save = saveState(played(5));
     const first = restoreState(save);

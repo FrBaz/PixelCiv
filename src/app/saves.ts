@@ -331,6 +331,8 @@ export class SaveManager {
 
   /** Sauvegarde automatique : à intervalle régulier, et quand la page passe en arrière-plan. */
   startAutosave(): void {
+    // Sans stockage local, il n'y a rien où sauvegarder : le démarrage l'a déjà dit.
+    if (this.store === undefined) return;
     let warned = false;
     const autosave = () => {
       void this.saveTo(AUTO_SLOT).then((outcome) => {

@@ -245,6 +245,7 @@ describe('feuilles de style', () => {
       'src/style.css': '',
       'src/local.css': "@import 'fake-lib/reset.css';",
       'src/img/a.png': '',
+      'src/fake-lib/notes.txt': '',
       'node_modules/fake-lib/package.json': JSON.stringify({
         name: 'fake-lib',
         version: '1.0.0',
@@ -281,7 +282,12 @@ describe('feuilles de style', () => {
     expect(names(".a { background: image-set('fake-lib/a.png' 1x); }")).toEqual(['fake-lib']);
     // Un paquet nommé comme une feuille de style est un dossier : il est relevé, pas lu.
     expect(names("@import 'normalize.css';")).toEqual(['normalize.css']);
+    // Sans extension, comme Vite : « local » désigne local.css, « fake-lib/reset » reset.css.
+    expect(names("@import 'local';")).toEqual(['@scope/deep', 'fake-lib']);
+    expect(names("@import 'fake-lib/reset';")).toEqual(['@scope/deep', 'fake-lib']);
     expect(names('@import url(https://example.org/a.css); .b { mask: url(#m); }')).toEqual([]);
+    // Un dossier du projet homonyme d'un paquet ne cache pas le paquet.
+    expect(names("@import 'fake-lib/reset.css';")).toEqual(['@scope/deep', 'fake-lib']);
   });
 });
 

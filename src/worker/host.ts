@@ -187,9 +187,10 @@ export class SimulationHost {
     try {
       file = await writeSave(save);
     } catch (error) {
-      // La requête reçoit sa réponse ; le défaut est signalé à part.
+      // La requête reçoit sa réponse ; un défaut imprévu est signalé à part.
       this.send({ type: 'saveFailed', requestId, reason: 'failed' });
-      throw error;
+      if (!(error instanceof SaveError)) throw error;
+      return;
     }
     this.send({ type: 'saved', requestId, meta: save.meta, data: file.buffer });
   }

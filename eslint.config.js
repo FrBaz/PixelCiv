@@ -420,9 +420,9 @@ const workerBoundaries = {
     /**
      * @param {any} node chemin à vérifier
      * @param {boolean} [glob] motif de glob
-     * @param {boolean} [prefix] seul le début du chemin compte : option `base` d'un glob
+     * @param {string} [from] dossier d'où partent les chemins relatifs : `base` d'un glob
      */
-    function check(node, glob = false, prefix = false) {
+    function check(node, glob = false, from = directory) {
       // Un motif négatif de glob retire des fichiers, il n'en ajoute pas.
       const head =
         node?.type === 'Literal' ? String(node.value) : (node?.quasis?.[0]?.value.cooked ?? '');
@@ -432,10 +432,9 @@ const workerBoundaries = {
         context.report({ node, messageId: 'opaque' });
         return;
       }
-      const { text } = specifier;
-      const open = specifier.open || prefix;
+      const { text, open } = specifier;
       if (text.startsWith('/') || text.startsWith('.')) {
-        const target = text.startsWith('/') ? path.join(ROOT, text) : path.resolve(directory, text);
+        const target = text.startsWith('/') ? path.join(ROOT, text) : path.resolve(from, text);
         if (reachesMainThread(target, open)) context.report({ node, messageId: 'directory' });
       } else if (isMainThreadPackage(text, open)) {
         context.report({ node, messageId: 'package' });
@@ -455,19 +454,34 @@ const workerBoundaries = {
           context.report({ node, messageId: 'opaque' });
           return;
         }
-        const list = patterns.type === 'ArrayExpression' ? patterns.elements : [patterns];
-        // Un trou dans la liste ([, './a/*.ts']) ne désigne rien.
-        for (const pattern of list) if (pattern != null) check(pattern, true);
-        // L'option base enracine les motifs relatifs ailleurs : tout ce qui est dessous compte.
+        // L'option base est le dossier d'où partent les motifs relatifs, comme sous Vite.
+        let from = directory;
         if (options?.type === 'ObjectExpression') {
           for (const property of options.properties) {
-            const key = property.type === 'Property' ? property.key : undefined;
-            const named = key?.type === 'Identifier' ? key.name : key?.value;
-            if (named === 'base') check(property.value, false, true);
+            // Des options étalées (`...options`) pourraient cacher un base.
+            if (property.type !== 'Property') {
+              context.report({ node: property, messageId: 'opaque' });
+              return;
+            }
+            const key = property.key;
+            const named = key.type === 'Identifier' ? key.name : key.value;
+            if (named !== 'base') continue;
+            const base = property.value;
+            if (base.type !== 'Literal' || typeof base.value !== 'string') {
+              context.report({ node: base, messageId: 'opaque' });
+              return;
+            }
+            from = base.value.startsWith('/')
+              ? path.join(ROOT, base.value)
+              : path.resolve(directory, base.value);
           }
         } else if (options !== undefined) {
           context.report({ node: options, messageId: 'opaque' });
+          return;
         }
+        const list = patterns.type === 'ArrayExpression' ? patterns.elements : [patterns];
+        // Un trou dans la liste ([, './a/*.ts']) ne désigne rien.
+        for (const pattern of list) if (pattern != null) check(pattern, true, from);
       },
     };
   },

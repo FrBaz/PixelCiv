@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { transferablesOf, type MainMessage, type WorkerMessage } from '../core/protocol';
 import { MAX_SAVE_BYTES } from '../core/save/format';
 import { notice } from '../ui/store';
@@ -231,6 +231,17 @@ describe('reprise au démarrage', () => {
     const { saves } = await manager();
     await expect(saves.resume()).resolves.toBe(false);
     expect(shown()).toBeUndefined();
+  });
+
+  it('ne lance pas de sauvegarde automatique sans stockage local', () => {
+    const saves = new SaveManager(new FakeSimulation() as unknown as SimulationClient, undefined);
+    const timers = vi.spyOn(globalThis, 'setInterval');
+    try {
+      saves.startAutosave();
+      expect(timers).not.toHaveBeenCalled();
+    } finally {
+      timers.mockRestore();
+    }
   });
 
   it('signale, sans parler de reprise, un stockage local indisponible', async () => {

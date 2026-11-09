@@ -241,6 +241,15 @@ function isFile(file: string): boolean {
   }
 }
 
+/** Le fichier tel quel, ou avec l'extension .css que Vite essaie aussi ; sinon undefined. */
+function asExistingFile(file: string): string | undefined {
+  if (isFile(file)) return file;
+  return isFile(`${file}.css`) ? `${file}.css` : undefined;
+}
+
+/** Le fichier qu'un chemin désigne, extension .css comprise, ou le chemin tel quel. */
+const asStylesheet = (file: string) => asExistingFile(file) ?? file;
+
 /** Dossier du paquet `name`, cherché dans les node_modules, du dossier `from` vers la racine. */
 function packageDirectory(from: string, name: string): string | undefined {
   for (let directory = from; ; directory = path.dirname(directory)) {
@@ -269,10 +278,12 @@ export function stylesheetPackages(
     const bare = (reference.split(/[?#]/)[0] ?? '').replace(/^~/, '');
     if (bare === '') continue;
     let target: string | undefined;
-    if (bare.startsWith('/')) target = path.join(root, bare);
-    else if (bare.startsWith('.') || existsSync(path.resolve(path.dirname(importer), bare))) {
-      target = path.resolve(path.dirname(importer), bare);
-    } else {
+    const relative = path.resolve(path.dirname(importer), bare);
+    if (bare.startsWith('/')) target = asStylesheet(path.join(root, bare));
+    else if (bare.startsWith('.')) target = asStylesheet(relative);
+    // Un chemin nu désigne d'abord un fichier du projet, s'il existe ; un dossier, non.
+    else if (asExistingFile(relative) !== undefined) target = asExistingFile(relative);
+    else {
       const segments = bare.split('/');
       const depth = segments[0]?.startsWith('@') ? 2 : 1;
       const directory = packageDirectory(
@@ -281,7 +292,9 @@ export function stylesheetPackages(
       );
       if (directory !== undefined) {
         target =
-          segments.length > depth ? path.join(directory, ...segments.slice(depth)) : directory;
+          segments.length > depth
+            ? asStylesheet(path.join(directory, ...segments.slice(depth)))
+            : directory;
         const info = packageOfModule(path.join(directory, 'package.json'), read);
         if (info !== undefined) found.push(info);
       }

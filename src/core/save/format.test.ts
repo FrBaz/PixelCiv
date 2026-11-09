@@ -187,6 +187,11 @@ describe('taille', () => {
     expect((await rejection(readSave(bomb, NONE))).code).toBe('size');
   });
 
+  it("refuse d'écrire un en-tête que la lecture refuserait", () => {
+    const big = { ...sample, json: { log: 'x'.repeat(MAX_HEADER_BYTES) } };
+    expect(() => encodeSave(big)).toThrow(expect.objectContaining({ code: 'size' }) as Error);
+  });
+
   it("refuse un en-tête trop grand avant de l'analyser", () => {
     const filler = '[],'.repeat(Math.ceil(MAX_HEADER_BYTES / 3));
     const header = { meta: { seed: 'graine', tick: 1 }, json: `[${filler}[]]`, arrays: [] };

@@ -152,6 +152,19 @@ describe('valeurs particulières', () => {
     expect(pow(2, -1e300)).toBe(0);
   });
 
+  it('garde les puissances entières négatives à 1e-14 près', () => {
+    const random = new Rng('dmath').stream('pow.negatif');
+    for (let i = 0; i < 20_000; i++) {
+      const n = -(2 + Math.floor(random.nextFloat() * 63));
+      // Bases plus petites ou plus grandes que 1, résultat entre 10^-30 et 10^30.
+      const x = exp(((random.nextFloat() - 0.5) * 138) / n);
+      const expected = Math.pow(x, n);
+      expect(Math.abs(pow(x, n) - expected), `pow(${x}, ${n})`).toBeLessThanOrEqual(
+        1e-14 * expected,
+      );
+    }
+  });
+
   it('rend x pour pow(x, 1), et le produit arrondi pour pow(x, 2), sous-normaux compris', () => {
     const random = new Rng('dmath').stream('pow.entier');
     for (let i = 0; i < 20_000; i++) {

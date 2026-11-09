@@ -236,13 +236,16 @@ function positivePower(base: number, n: number): number {
 }
 
 /**
- * base^n pour n entier, |n| ≤ INTEGER_POWER_LIMIT. Une puissance négative d'un nombre
- * plus petit que 1 passe par son inverse : les produits croissent, au lieu de perdre
- * leurs chiffres parmi les sous-normaux.
+ * base^n pour n entier, |n| ≤ INTEGER_POWER_LIMIT. Une puissance négative est l'inverse
+ * de la puissance positive, à un seul arrondi près ; sauf si celle-ci est sous-normale,
+ * donc privée de chiffres : on passe alors par l'inverse de la base, dont les produits
+ * croissent.
  */
 function integerPower(base: number, n: number): number {
   if (n >= 0) return positivePower(base, n);
-  return base < 1 ? positivePower(1 / base, -n) : 1 / positivePower(base, -n);
+  const power = positivePower(base, -n);
+  if (power > 0 && power < SMALLEST_NORMAL) return positivePower(1 / base, -n);
+  return 1 / power;
 }
 
 /** k si x vaut exactement 2^k, sous-normaux compris ; sinon undefined. */
@@ -265,7 +268,7 @@ function powerOfTwoExponent(x: number): number | undefined {
  * (Number::exponentiate). Une puissance entière de deux est exacte, débordement et
  * sous-normaux compris ; une puissance entière modérée passe par les produits, exacts
  * pour les petits entiers ; le reste passe par exp(y ln x), dont l'erreur relative croît
- * avec |y ln x|. Mesurée face à Math : 10^-14 en relatif par les produits, 3 × 10^-14
+ * avec |y ln x|. Mesurée face à Math : 10^-14 en relatif par les produits, 4 × 10^-14
  * par exp(y ln x) pour un résultat entre 10^-30 et 10^30, 3 × 10^-13 près des
  * débordements, où un résultat voisin de la limite peut passer du mauvais côté.
  */

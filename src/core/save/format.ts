@@ -134,6 +134,8 @@ export function encodeSave(save: SaveData, version = SAVE_FORMAT_VERSION): Uint8
   });
   const header: Header = { meta: save.meta, json: save.json, arrays: layout };
   const headerBytes = new TextEncoder().encode(JSON.stringify(header));
+  // Ce que la lecture refuserait ne s'écrit pas : la sauvegarde échoue tout de suite.
+  if (headerBytes.length > MAX_HEADER_BYTES) throw new SaveError('size', 'en-tête trop grand');
   const dataStart = align(PREFIX_BYTES + headerBytes.length);
   const bytes = new Uint8Array(dataStart + offset);
   const view = new DataView(bytes.buffer);

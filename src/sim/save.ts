@@ -28,14 +28,28 @@ const WorldSizeSchema = z
     'taille de monde inconnue',
   );
 
+/**
+ * Forme de l'état sauvegardé. Les listes de commandes ne sont pas vérifiées ici, mais
+ * une à une, ensuite : sur une liste entière, Zod relèverait chaque champ invalide de
+ * chaque élément, et des millions d'éléments forgés épuiseraient la mémoire.
+ */
 const SimJsonSchema = z
   .object({
     size: WorldSizeSchema,
-    commandLog: z.array(LoggedCommandSchema),
-    pending: z.array(GameCommandSchema),
+    commandLog: z.array(z.unknown()),
+    pending: z.array(z.unknown()),
     rng: z.record(z.string().regex(/^[a-z][a-z0-9.]*$/), StreamStateSchema),
   })
   .strict();
+
+/** Vérifie chaque élément d'une liste, et s'arrête au premier qui ne convient pas. */
+function each<T>(items: readonly unknown[], schema: z.ZodType<T>, name: string): T[] {
+  return items.map((item) => {
+    const parsed = schema.safeParse(item);
+    if (!parsed.success) throw new SaveError('corrupt', `${name} illisible`);
+    return parsed.data;
+  });
+}
 
 /**
  * Migrations des sauvegardes (ADR 0007) : celle de la clé v mène de la version v à
@@ -97,7 +111,9 @@ function within(array: Uint16Array, limit: number, name: string): void {
 export function restoreState(save: SaveData): SimState {
   const parsed = SimJsonSchema.safeParse(save.json);
   if (!parsed.success) throw new SaveError('corrupt', 'état illisible');
-  const { size, commandLog, pending, rng } = parsed.data;
+  const { size, rng } = parsed.data;
+  const commandLog = each(parsed.data.commandLog, LoggedCommandSchema, 'journal');
+  const pending = each(parsed.data.pending, GameCommandSchema, 'commandes en attente');
   const { tick } = save.meta;
   // Une commande journalisée au pas t s'est appliquée avant que le temps ne passe à t + 1.
   let previous = 0;

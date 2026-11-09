@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { PROTOCOL_VERSION, type WorkerMessage } from '../core/protocol';
+import { SaveError } from '../core/save/format';
 import { CHUNK_SIZE } from '../core/world';
 import { monthDuration, NORMAL_MONTH_MS } from '../core/time';
 import { SimulationHost, type HostEnvironment } from './host';
@@ -365,6 +366,25 @@ describe('file des opérations', () => {
       { type: 'saveFailed', requestId: 42, reason: 'failed' },
     ]);
     expect(env.messages('error').map((error) => error.code)).toEqual(['internal']);
+  });
+
+  it('répond sans signaler de défaut à une sauvegarde que le format refuse', async () => {
+    const { env, host } = await startedHost();
+    const original = globalThis.CompressionStream;
+    // Un refus du format, comme un en-tête trop grand.
+    globalThis.CompressionStream = function () {
+      throw new SaveError('size', 'en-tête trop grand');
+    } as unknown as typeof CompressionStream;
+    try {
+      host.receive({ type: 'save', requestId: 43 });
+      await host.idle();
+    } finally {
+      globalThis.CompressionStream = original;
+    }
+    expect(env.messages('saveFailed')).toEqual([
+      { type: 'saveFailed', requestId: 43, reason: 'failed' },
+    ]);
+    expect(env.messages('error')).toEqual([]);
   });
 
   it('répond à une sauvegarde demandée avant toute partie', async () => {

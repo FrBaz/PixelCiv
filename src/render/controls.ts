@@ -192,10 +192,11 @@ export class CameraControls {
           ? 16
           : this.options.element.clientHeight;
     const delta = event.deltaY * unit;
-    // Pincement au pavé tactile : Chromium l'envoie en petits écarts avec Ctrl, dont la
-    // somme vaut -100 ln(facteur des doigts) ; la carte suit alors les doigts. Un cran
-    // de molette, lui, vaut une centaine de pixels.
-    const pinch = event.ctrlKey && Math.abs(delta) < 50;
+    // Pincement au pavé tactile : Chromium l'envoie en petits écarts de pixels avec Ctrl,
+    // dont la somme vaut -100 ln(facteur des doigts) ; la carte suit alors les doigts. Un
+    // cran de molette vaut une centaine de pixels, ou se compte en lignes (Firefox).
+    const pinch =
+      event.ctrlKey && event.deltaMode === WheelEvent.DOM_DELTA_PIXEL && Math.abs(delta) < 50;
     const factor = Math.exp(-delta * (pinch ? 0.01 : 0.002));
     const point = this.point(event);
     this.camera = zoomAt(this.camera, factor, this.options.viewport(), point.x, point.y);

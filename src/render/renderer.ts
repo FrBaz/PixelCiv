@@ -46,6 +46,10 @@ function followContainer(app: Application, container: HTMLElement): void {
     }
     applied = { width, height, density };
     app.renderer.resize(width, height, density);
+    // À taille physique inchangée, PixiJS ne recalcule pas non plus le cadre de la texture
+    // du canvas, dont il tire app.screen : on le recalcule, puis l'écran avec lui.
+    app.renderer.view.texture.update();
+    app.renderer.resize(width, height, density);
     app.canvas.style.width = `${String(width)}px`;
     app.canvas.style.height = `${String(height)}px`;
   };
