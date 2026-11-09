@@ -66,6 +66,7 @@ const DOM = 'Absent du worker : ce code ne touche pas au DOM.';
 const DEVICE =
   "Dépend de l'appareil, de la page ou de l'affichage : le code déterministe n'y touche pas.";
 const GLOBAL_OBJECT = 'Écris Math directement, pour que les règles de déterminisme le voient.';
+const TEXT = "Texte affiché en dur : passe par t('clé') et ajoute la clé dans src/i18n/fr.json.";
 
 /** Globales interdites au code déterministe, avec la raison de chaque interdiction. */
 const restrictedGlobals = [
@@ -217,6 +218,23 @@ export default defineConfig(
         { selector: "AssignmentExpression[operator='**=']", message: DMATH },
       ],
       'no-restricted-globals': ['error', ...restrictedGlobals],
+    },
+  },
+  {
+    // Aucun texte affiché en dur dans l'interface (CLAUDE.md, « Textes ») : ni texte
+    // dans le JSX, ni attribut lu par l'utilisateur.
+    name: 'pixelciv/texts',
+    files: ['src/**/*.tsx'],
+    rules: {
+      'no-restricted-syntax': [
+        'error',
+        { selector: 'JSXText[value=/\\p{L}/u]', message: TEXT },
+        { selector: 'JSXExpressionContainer > Literal[value=/\\p{L}/u]', message: TEXT },
+        {
+          selector: 'JSXAttribute[name.name=/^(alt|aria-label|placeholder|title)$/] > Literal',
+          message: TEXT,
+        },
+      ],
     },
   },
   {

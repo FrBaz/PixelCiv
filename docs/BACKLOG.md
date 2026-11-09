@@ -22,7 +22,7 @@ Objectif : un projet outillé, testé et déployé automatiquement, avec l'archi
 | 0.6 | Boucle de temps : pas mensuel, calendrier, pause, plusieurs vitesses, horodatage des commandes. | MOD-06 | Une année dure environ 10 s en vitesse normale. | à faire |
 | 0.7 | PRNG à flux nommés et maths déterministes (`src/core/rng.ts`, `src/core/dmath.ts`). | NF-09 | Même graine, même suite, sous Node comme dans les navigateurs. | à faire |
 | 0.8 | Caméra : déplacement et zoom à la souris, au clavier et au doigt, sur une grille de test qui boucle d'est en ouest. | MON-01, IHM-07 | Défilement sans fin, sans saut à la couture. | à faire |
-| 0.9 | Traduction : clés, fichier français, pluriels et genre ; un test échoue si une clé manque. | NF-06, POL-04 | Aucun texte en dur dans le squelette. | à faire |
+| 0.9 | Traduction : clés, fichier français, pluriels et genre ; un test échoue si une clé manque. | NF-06, POL-04 | Aucun texte en dur dans le squelette. | à relire |
 | 0.10 | Données : chargement et validation par schémas ; premier fichier `data/biomes.json` (biomes du prototype) ; validation en intégration continue. | NF-07, MON-10 | Une donnée invalide fait échouer l'intégration continue. | à faire |
 | 0.11 | Sauvegarde minimale : IndexedDB, format versionné, export et import de fichier. | NF-05 | Une partie factice survit à un rechargement et passe d'un appareil à l'autre. | à faire |
 | 0.12 | Panneau de débogage : images par seconde, durée des pas, mémoire. | NF-01 | Visible sur PC et téléphone. | à faire |
@@ -35,7 +35,7 @@ Objectif : un projet outillé, testé et déployé automatiquement, avec l'archi
 
   `npm audit` signale une faille modérée de minimatch, corrigée en 11.0.1, alors qu'ESLint et typescript-eslint dépendent encore de minimatch 10. C'est un déni de service par motif glob malveillant, sans conséquence pour des outils qui ne lisent que nos propres motifs : l'intégration continue ne s'arrête qu'aux failles de niveau élevé ou critique, en attendant que les deux passent à minimatch 11.0.1 ou plus.
 - **0.4.** Vérifié dans Chromium, en paysage et en portrait, sur PC et sur téléphone émulé : le canvas couvre l'écran à sa densité de pixels, l'interface respecte les zones de sécurité. Preact 10 plutôt que 11, trop récent (ADR 0001).
-- **0.9.** Le titre de la page, dans `index.html`, est encore écrit en dur.
+- **0.9.** Traitée avant 0.5, puisque les tâches suivantes affichent du texte. Clés typées depuis `src/i18n/fr.json`, pluriels, genre ; le titre de la page passe par `t()`. Un test échoue si une clé manque ou ne sert plus, et ESLint refuse le texte en dur dans le JSX (ADR 0005).
 - **0.10.** Le plan prévoit les biomes du prototype, décrits dans `testMap_filtre.ipynb`, que la tâche 1.5 remplacera par les 32 biomes de la séance C1 (D6 ; PRD, MON-08). À trancher en ouvrant 0.10 : partir du prototype, ou directement de la liste de C1.
 - **0.13.** Il faut les notebooks, les scripts de la séance C1, le pack de sprites original avec sa licence, ainsi que le nom de son auteur et un lien (PRD, question 14).
 

@@ -109,6 +109,31 @@ describe('frontières du worker', () => {
   });
 });
 
+describe('textes affichés', () => {
+  const component = (jsx: string) => `export const View = () => ${jsx};`;
+
+  it.each([
+    '<p>Bonjour</p>',
+    "<p>{'Bonjour'}</p>",
+    '<button title="Fermer" />',
+    '<button aria-label="Fermer" />',
+    '<img alt="Carte" />',
+    '<input placeholder="Nom" />',
+  ])('signale %s', async (jsx) => {
+    expect(await ruleIds(component(jsx), 'src/ui/Probe.tsx')).toEqual(['no-restricted-syntax']);
+  });
+
+  it.each([
+    '<p>{label}</p>',
+    '<p> – 3 · </p>',
+    '<button title={label} />',
+    '<div class="panel" />',
+  ])('admet %s', async (jsx) => {
+    const code = `export const label = String(1);\n${component(jsx)}`;
+    expect(await ruleIds(code, 'src/ui/Probe.tsx')).toEqual([]);
+  });
+});
+
 it("ne restreint ni l'interface ni le rendu", async () => {
   const code = "import 'pixi.js'; Math.random(); export const a = 2 ** 10;";
   expect(await ruleIds(code, 'src/ui/probe.ts')).toEqual([]);

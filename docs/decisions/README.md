@@ -8,3 +8,4 @@ Chaque décision d'architecture fait l'objet d'un ADR court (CLAUDE.md, section 
 | [0002](0002-monde-cylindrique.md) | Monde cylindrique | accepté |
 | [0003](0003-determinisme.md) | Déterminisme | accepté |
 | [0004](0004-communication-worker.md) | Communication avec le worker | accepté |
+| [0005](0005-traduction.md) | Traduction | accepté |
