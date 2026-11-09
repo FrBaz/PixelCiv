@@ -5,6 +5,8 @@ import { bundleLicenses } from './tools/bundle-licenses';
 export default defineConfig({
   // Chemins relatifs : le même build sert en local et sur GitHub Pages, sous /PixelCiv/.
   base: './',
+  // JSX de l'interface, compilé pour Preact.
+  oxc: { jsx: { runtime: 'automatic', importSource: 'preact' } },
   plugins: [bundleLicenses()],
   worker: {
     format: 'es',
