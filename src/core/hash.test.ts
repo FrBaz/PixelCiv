@@ -26,7 +26,7 @@ describe('Fingerprint', () => {
       new Fingerprint().typedArray(array).value();
     expect(canonical(negative)).toBe(canonical(Float64Array.of(Number.NaN)));
     expect(canonical(payload)).toBe(canonical(Float32Array.of(Number.NaN)));
-    expect(new Fingerprint().float64(negative[0] ?? 0).value()).toBe(
+    expect(new Fingerprint().float64(negative[0]).value()).toBe(
       new Fingerprint().float64(Number.NaN).value(),
     );
   });
