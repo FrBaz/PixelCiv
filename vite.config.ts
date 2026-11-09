@@ -1,16 +1,19 @@
 import { defineConfig } from 'vitest/config';
 import { bundleLicenses } from './tools/bundle-licenses.ts';
 
+// Licences et crédits des paquets distribués, contrôlés au build (ADR 0008).
+const licenses = bundleLicenses();
+
 // Configuration de Vite (serveur de développement et build) et de Vitest (tests).
 export default defineConfig({
   // Chemins relatifs : le même build sert en local et sur GitHub Pages, sous /PixelCiv/.
   base: './',
   // JSX de l'interface, compilé pour Preact.
   oxc: { jsx: { runtime: 'automatic', importSource: 'preact' } },
-  plugins: [bundleLicenses()],
+  plugins: [licenses.main],
   worker: {
     format: 'es',
-    plugins: () => [bundleLicenses()],
+    plugins: () => [licenses.worker()],
   },
   test: {
     include: ['src/**/*.test.ts', 'tools/**/*.test.ts'],

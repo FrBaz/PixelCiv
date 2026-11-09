@@ -49,3 +49,4 @@ Jeu de simulation de mondes et de vies en pixel art, à la croisée de WorldBox,
 - Le PRD et les documents validés de `docs/design/` (comme `C1-monde.md`) font foi. En cas d'écart avec un prototype, ce sont eux qui l'emportent.
 - N'installe que des dépendances publiées depuis au moins deux semaines (`npm install --before=<date>`) et sous licence permissive : les tests et le build le vérifient (ADR 0001).
 - Ne verse jamais de secret dans le dépôt, qui est public. N'y verse aucun asset tiers sans licence autorisant sa redistribution.
+- Crédite dans `CREDITS.md`, dès son intégration, toute bibliothèque distribuée avec le jeu et tout asset tiers. Le build échoue si une bibliothèque distribuée y manque (ADR 0008).

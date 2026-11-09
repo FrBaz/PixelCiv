@@ -26,7 +26,7 @@ Objectif : un projet outillé, testé et déployé automatiquement, avec l'archi
 | 0.10 | Données : chargement et validation par schémas ; premier fichier `data/biomes.json` (biomes du prototype) ; validation en intégration continue. | NF-07, MON-10 | Une donnée invalide fait échouer l'intégration continue. | à relire |
 | 0.11 | Sauvegarde minimale : IndexedDB, format versionné, export et import de fichier. | NF-05 | Une partie factice survit à un rechargement et passe d'un appareil à l'autre. | à relire |
 | 0.12 | Panneau de débogage : images par seconde, durée des pas, mémoire. | NF-01 | Visible sur PC et téléphone. | à relire |
-| 0.13 | Prototypes dans `prototypes/`, pack de sprites dans `assets/source/` si sa licence le permet, fichier `CREDITS.md`. | AST-01, AST-02 | Crédits renseignés. | à faire |
+| 0.13 | Prototypes dans `prototypes/`, pack de sprites dans `assets/source/` si sa licence le permet, fichier `CREDITS.md`. | AST-01, AST-02 | Crédits renseignés. | à relire |
 
 ### Notes
 
@@ -45,7 +45,9 @@ Objectif : un projet outillé, testé et déployé automatiquement, avec l'archi
 - **0.12.** Le panneau s'ouvre par son bouton, par F3 ou par la touche ², sous Échap. Il affiche les images par seconde et l'image la plus longue de la dernière seconde, la durée moyenne et maximale des 30 derniers pas, la mémoire du tas JavaScript (Chromium seulement), le moteur de rendu et la densité de pixels, la taille du monde, le contenu chargé et le résultat de l'auto-test du déterminisme. Vérifié dans Chromium, sur PC (1280 × 720) et sur téléphone émulé (Pixel 7) : le panneau tient dans l'écran, et la cadence est la même qu'il soit ouvert ou fermé.
 
   Sans carte graphique, Chromium dessine en logiciel, vers 25 millions de pixels par seconde. La carte plein écran y tourne donc à 25 images/s en 1280 × 720, mais à 60 images/s en 640 × 360. À cette taille, `?stepCost=200` porte bien la durée des pas à 200 ms, sans faire chuter l'affichage (60 images/s, 17 ms au plus entre deux images) : le critère de 0.5 tient toujours.
-- **0.13.** Il faut les notebooks, les scripts de la séance C1, le pack de sprites original avec sa licence, ainsi que le nom de son auteur et un lien (PRD, question 14).
+- **0.13.** `CREDITS.md` crédite les bibliothèques distribuées avec le jeu (auteurs, rôle, licence, lien), les algorithmes repris et les outils de développement ; la place du pack de sprites y est prête. Le build échoue si une bibliothèque distribuée, du fil principal comme du worker, manque aux crédits. Il joint aussi au jeu `licenses.txt`, qui reprend leurs textes de licence, absents du code minifié (ADR 0008). `prototypes/README.md` liste les notebooks et scripts attendus. `assets/source/README.md` décrit la marche à suivre pour le pack, et git ignore `assets/local/`, où irait un pack non redistribuable.
+
+  Restent à verser les fichiers eux-mêmes, que seul l'auteur peut fournir : notebooks, scripts de C1, pack de sprites avec sa licence, nom de son auteur et lien (PRD, question 14). Le tableau ci-dessous les recense.
 
 ## À fournir par l'auteur
 
