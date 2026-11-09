@@ -1,12 +1,12 @@
 {
-  // Code du worker et code partagé avec lui (src/core, src/sim, src/worldgen, src/gen),
-  // tests compris : la bibliothèque WebWorker y remplace celle du DOM. La clé « files »
-  // vide évite l'erreur TS18003 tant que ces dossiers ne contiennent aucun fichier.
+  // Code du worker et code partagé avec lui (src/core, src/sim, src/worldgen, src/gen,
+  // src/worker), tests compris : la bibliothèque WebWorker y remplace celle du DOM. La
+  // clé « files » vide évite l'erreur TS18003 si ces dossiers ne contiennent aucun fichier.
   "extends": "./tsconfig.base.json",
   "compilerOptions": {
     "lib": ["ES2023", "WebWorker"],
     "types": ["vite/client"]
   },
   "files": [],
-  "include": ["src/core", "src/sim", "src/worldgen", "src/gen"]
+  "include": ["src/core", "src/sim", "src/worldgen", "src/gen", "src/worker"]
 }

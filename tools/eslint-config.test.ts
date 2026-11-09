@@ -58,6 +58,11 @@ describe('déterminisme', () => {
     expect(await ruleIds(code, 'src/sim/probe.ts')).toEqual([]);
   });
 
+  it("laisse l'hôte du worker lire l'horloge", async () => {
+    const code = 'export const start = performance.now();';
+    expect(await ruleIds(code, 'src/worker/probe.ts')).toEqual([]);
+  });
+
   it('exempte les tests', async () => {
     const code = 'Math.random(); export const a = 2 ** 10;';
     expect(await ruleIds(code, 'src/sim/probe.test.ts')).toEqual([]);
@@ -85,7 +90,7 @@ describe('frontières du worker', () => {
     "export const p = import.meta.glob('../ui/*.ts');",
     "export const p = import.meta.glob(['./local/*.ts', '../render/*.ts']);",
   ])('signale %s', async (code) => {
-    for (const filePath of [...workerFiles, 'src/sim/probe.test.ts']) {
+    for (const filePath of [...workerFiles, 'src/worker/probe.ts', 'src/sim/probe.test.ts']) {
       expect(await ruleIds(code, filePath), filePath).toEqual(['pixelciv/worker-boundaries']);
     }
   });

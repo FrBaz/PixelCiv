@@ -9,5 +9,5 @@
     "jsxImportSource": "preact"
   },
   "include": ["src"],
-  "exclude": ["src/core", "src/sim", "src/worldgen", "src/gen"]
+  "exclude": ["src/core", "src/sim", "src/worldgen", "src/gen", "src/worker"]
 }

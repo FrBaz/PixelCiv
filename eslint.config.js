@@ -13,14 +13,20 @@ import tseslint from 'typescript-eslint';
 
 /**
  * Code partagé, simulation, génération du monde et générateurs : il doit être
- * déterministe et pouvoir s'exécuter dans le worker.
+ * déterministe (ADR 0003) et pouvoir s'exécuter dans le worker.
  */
-const workerSafeFiles = [
+const deterministicFiles = [
   'src/core/**/*.ts',
   'src/sim/**/*.ts',
   'src/worldgen/**/*.ts',
   'src/gen/**/*.ts',
 ];
+
+/**
+ * Tout le code exécuté dans le worker : le code déterministe, plus l'hôte de la
+ * simulation (src/worker), qui lit l'horloge pour cadencer les pas (ADR 0004).
+ */
+const workerFiles = [...deterministicFiles, 'src/worker/**/*.ts'];
 
 /** Fonctions de Math que la norme laisse approcher par chaque moteur. */
 const approximatedMath = [
@@ -201,7 +207,7 @@ export default defineConfig(
   },
   {
     name: 'pixelciv/determinism',
-    files: workerSafeFiles,
+    files: deterministicFiles,
     // Les tests peuvent comparer les maths déterministes à celles du moteur.
     ignores: ['**/*.test.ts', '**/*.bench.ts'],
     rules: {
@@ -239,7 +245,7 @@ export default defineConfig(
   },
   {
     name: 'pixelciv/boundaries',
-    files: workerSafeFiles,
+    files: workerFiles,
     plugins: { pixelciv: { rules: { 'worker-boundaries': workerBoundaries } } },
     rules: { 'pixelciv/worker-boundaries': 'error' },
   },

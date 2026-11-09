@@ -1,0 +1,98 @@
+/**
+ * État de la simulation : une couche par attribut, en tableaux typés (CLAUDE.md,
+ * « Performances »). La phase 0 n'a qu'une couche de test.
+ */
+import { wrapX } from '../core/cylinder';
+import type { ChunkLayer } from '../core/protocol';
+import { CHUNK_SIZE, chunkGrid, type WorldSize } from '../core/world';
+
+export interface SimState {
+  readonly seed: string;
+  readonly size: WorldSize;
+  /** Pas écoulés depuis le début de la partie, un par mois. */
+  tick: number;
+  /** Couche de test : une valeur par case, ligne par ligne, 0 pour une case vide. */
+  readonly testLayer: Uint8Array<ArrayBuffer>;
+  /**
+   * Blocs modifiés depuis le dernier envoi, un drapeau par bloc. Ce n'est pas l'état
+   * du monde : ni la sauvegarde ni l'empreinte n'en tiennent compte.
+   */
+  readonly dirtyChunks: Uint8Array;
+}
+
+export function createState(seed: string, size: WorldSize): SimState {
+  const grid = chunkGrid(size);
+  return {
+    seed,
+    size,
+    tick: 0,
+    testLayer: new Uint8Array(size.width * size.height),
+    dirtyChunks: new Uint8Array(grid.columns * grid.rows),
+  };
+}
+
+/** Marque le bloc de la case (x, y), déjà normalisée, comme modifié. */
+function markDirty(state: SimState, x: number, y: number): void {
+  const { columns } = chunkGrid(state.size);
+  const column = Math.floor(x / CHUNK_SIZE);
+  const row = Math.floor(y / CHUNK_SIZE);
+  state.dirtyChunks[row * columns + column] = 1;
+}
+
+/** Valeur de la couche de test en (x, y) ; x boucle, y hors du monde vaut 0. */
+export function testCell(state: SimState, x: number, y: number): number {
+  const { width, height } = state.size;
+  if (y < 0 || y >= height) return 0;
+  return state.testLayer[y * width + wrapX(x, width)] ?? 0;
+}
+
+/**
+ * Écrit dans la couche de test. x boucle d'est en ouest ; une case hors du monde au
+ * nord ou au sud est ignorée. Renvoie vrai si la case a changé.
+ */
+export function setTestCell(state: SimState, x: number, y: number, value: number): boolean {
+  const { width, height } = state.size;
+  const row = Math.floor(y);
+  if (row < 0 || row >= height) return false;
+  const column = Math.floor(wrapX(x, width));
+  const index = row * width + column;
+  const clamped = Math.max(0, Math.min(255, Math.floor(value)));
+  if (state.testLayer[index] === clamped) return false;
+  state.testLayer[index] = clamped;
+  markDirty(state, column, row);
+  return true;
+}
+
+/** Copie la couche de test d'un bloc, dans un tampon neuf, transférable. */
+export function chunkLayer(state: SimState, column: number, row: number): ChunkLayer {
+  const { width } = state.size;
+  const cells = new Uint8Array(CHUNK_SIZE * CHUNK_SIZE);
+  for (let line = 0; line < CHUNK_SIZE; line++) {
+    const start = (row * CHUNK_SIZE + line) * width + column * CHUNK_SIZE;
+    cells.set(state.testLayer.subarray(start, start + CHUNK_SIZE), line * CHUNK_SIZE);
+  }
+  return { column, row, cells };
+}
+
+/** Tous les blocs, pour un instantané. */
+export function allChunks(state: SimState): ChunkLayer[] {
+  const { columns, rows } = chunkGrid(state.size);
+  const chunks: ChunkLayer[] = [];
+  for (let row = 0; row < rows; row++) {
+    for (let column = 0; column < columns; column++) {
+      chunks.push(chunkLayer(state, column, row));
+    }
+  }
+  return chunks;
+}
+
+/** Blocs modifiés depuis le dernier appel, dont les drapeaux sont alors effacés. */
+export function takeDirtyChunks(state: SimState): ChunkLayer[] {
+  const { columns } = chunkGrid(state.size);
+  const chunks: ChunkLayer[] = [];
+  state.dirtyChunks.forEach((dirty, index) => {
+    if (dirty !== 0) chunks.push(chunkLayer(state, index % columns, Math.floor(index / columns)));
+  });
+  state.dirtyChunks.fill(0);
+  return chunks;
+}
