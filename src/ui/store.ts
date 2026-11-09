@@ -34,8 +34,20 @@ export const determinismOk = signal<boolean | undefined>(undefined);
 /** Panneau de débogage ouvert ou fermé. */
 export const debugOpen = signal(false);
 
-/** Avis passager à montrer au joueur, comme « Partie sauvegardée. ». */
-export const notice = signal<MessageKey | undefined>(undefined);
+/**
+ * Avis passager à montrer au joueur, comme « Partie sauvegardée. ». Chaque avis a son
+ * numéro : le même texte, montré deux fois, relance son minuteur.
+ */
+export const notice = signal<{ readonly key: MessageKey; readonly serial: number } | undefined>(
+  undefined,
+);
+
+let noticeSerial = 0;
+
+/** Montre un avis passager au joueur. */
+export function showNotice(key: MessageKey): void {
+  notice.value = { key, serial: ++noticeSerial };
+}
 
 /** Ce que l'interface peut demander au jeu. */
 export interface UiActions {

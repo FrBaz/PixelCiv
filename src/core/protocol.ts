@@ -93,13 +93,19 @@ export type WorkerMessage =
       readonly meta: SaveMeta;
       readonly data: ArrayBuffer;
     }
-  /** Partie chargée ; l'instantané de la nouvelle partie suit. */
+  /** Sauvegarde impossible : aucune partie n'est en cours. */
+  | { readonly type: 'saveFailed'; readonly requestId: number; readonly reason: 'noGame' }
+  /** Partie chargée ; l'instantané de la nouvelle partie l'a précédé. */
   | { readonly type: 'loaded'; readonly requestId: number }
   | { readonly type: 'loadFailed'; readonly requestId: number; readonly reason: SaveErrorCode }
   /** Erreur : `code` désigne le message affiché, `detail` aide au débogage. */
   | { readonly type: 'error'; readonly code: ErrorCode; readonly detail: string };
 
-export type ErrorCode = 'protocol' | 'noGame';
+/**
+ * Erreurs : poignée de main absente ou refusée, commande sans partie, commande
+ * invalide, ou défaut du worker lui-même.
+ */
+export type ErrorCode = 'protocol' | 'noGame' | 'command' | 'internal';
 
 /**
  * Tampons à transférer avec un message, sans copie. Chaque type de message figure ici :
@@ -124,6 +130,7 @@ export function transferablesOf(message: MainMessage | WorkerMessage): ArrayBuff
     case 'ready':
     case 'time':
     case 'stats':
+    case 'saveFailed':
     case 'loaded':
     case 'loadFailed':
     case 'error':

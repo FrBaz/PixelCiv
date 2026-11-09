@@ -3,13 +3,17 @@
  * les pas selon la vitesse, les mesure et envoie les résultats. Il est le seul, côté
  * worker, à lire l'horloge ; il ne la transmet jamais à l'état.
  *
+ * Les opérations sur la partie entière (nouvelle partie, sauvegarde, chargement)
+ * passent dans une file, chacune après la fin de la précédente : une sauvegarde
+ * demandée pendant un chargement porte sur la partie chargée, et la dernière partie
+ * demandée est celle qui reste.
+ *
  * L'environnement (messagerie, horloge, minuteries) est injecté : le worker fournit
  * le vrai, les tests une imitation.
  */
 import {
   PROTOCOL_VERSION,
   transferablesOf,
-  type GameCommand,
   type MainMessage,
   type TimeInfo,
   type WorkerMessage,
@@ -17,7 +21,8 @@ import {
 import { readSave, SaveError, writeSave } from '../core/save/format';
 import { monthDuration, type SpeedId } from '../core/time';
 import { WORLD_SIZES } from '../core/world';
-import { restoreState, saveState } from '../sim/save';
+import { GameCommandSchema } from '../sim/commands';
+import { MIGRATIONS, restoreState, saveState } from '../sim/save';
 import { allChunks, createState, takeDirtyChunks, type SimState } from '../sim/state';
 import { step } from '../sim/step';
 
@@ -32,74 +37,149 @@ export interface HostEnvironment {
 export class SimulationHost {
   private readonly env: HostEnvironment;
   private state: SimState | undefined;
-  private pending: GameCommand[] = [];
+  /** Poignée de main : rien d'autre n'est traité avant qu'elle ait réussi. */
+  private greeted = false;
   private paused = false;
   private speed: SpeedId = 'normal';
-  /** Instant prévu du prochain pas, sur l'horloge de l'environnement. */
+  /** Instant prévu du prochain pas, sur l'horloge de l'environnement, hors pause. */
   private nextStepAt = 0;
+  /** En pause : temps qui restait avant le prochain pas, en millisecondes. */
+  private remaining = 0;
   private timer: number | undefined;
   /** Coût factice ajouté à chaque pas (débogage), en millisecondes. */
   private stepCost = 0;
+  /** File des opérations sur la partie entière. */
+  private operations: Promise<void> = Promise.resolve();
 
   constructor(env: HostEnvironment) {
     this.env = env;
   }
 
   receive(message: MainMessage): void {
+    if (message.type === 'hello') {
+      this.greet(message.protocol);
+      return;
+    }
+    if (!this.greeted) {
+      this.send({ type: 'error', code: 'protocol', detail: 'message reçu sans poignée de main' });
+      return;
+    }
     switch (message.type) {
-      case 'hello':
-        if (message.protocol !== PROTOCOL_VERSION) {
-          this.send({
-            type: 'error',
-            code: 'protocol',
-            detail: `protocole ${message.protocol} reçu, ${PROTOCOL_VERSION} attendu`,
-          });
-          return;
-        }
-        this.send({ type: 'ready', protocol: PROTOCOL_VERSION });
+      case 'newGame': {
+        const { seed, size } = message;
+        this.enqueue(() => {
+          this.start(createState(seed, WORLD_SIZES[size]));
+        });
         break;
-      case 'newGame':
-        this.start(createState(message.seed, WORLD_SIZES[message.size]));
-        break;
+      }
       case 'game':
-        if (this.state === undefined) {
-          this.send({ type: 'error', code: 'noGame', detail: 'commande reçue avant la partie' });
-          return;
-        }
-        // La commande s'appliquera au début du prochain pas, qui l'horodatera.
-        this.pending.push(message.command);
+        this.command(message.command);
         break;
       case 'setSpeed':
-        this.speed = message.speed;
-        this.nextStepAt = this.env.now() + monthDuration(this.speed);
-        this.reschedule();
-        this.sendTime();
+        this.setSpeed(message.speed);
         break;
       case 'setPaused':
-        this.paused = message.paused;
-        this.nextStepAt = this.env.now() + monthDuration(this.speed);
-        this.reschedule();
-        this.sendTime();
+        this.setPaused(message.paused);
         break;
       case 'stepOnce':
-        if (this.paused) this.runStep();
+        if (this.paused && this.state !== undefined) {
+          this.runStep();
+          // Le mois suivant commence : il durera un mois entier à la reprise.
+          this.remaining = monthDuration(this.speed);
+        }
         break;
-      case 'save':
-        void this.save(message.requestId);
+      case 'save': {
+        const { requestId } = message;
+        this.enqueue(() => this.save(requestId));
         break;
-      case 'load':
-        void this.load(message.requestId, message.data);
+      }
+      case 'load': {
+        const { requestId, data } = message;
+        this.enqueue(() => this.load(requestId, data));
         break;
+      }
       case 'debugStepCost':
         this.stepCost = Math.max(0, message.milliseconds);
         break;
     }
   }
 
+  /** Promesse tenue quand la file des opérations est vide (pour les tests). */
+  idle(): Promise<void> {
+    return this.operations;
+  }
+
+  private greet(protocol: number): void {
+    this.greeted = protocol === PROTOCOL_VERSION;
+    if (this.greeted) {
+      this.send({ type: 'ready', protocol: PROTOCOL_VERSION });
+    } else {
+      this.send({
+        type: 'error',
+        code: 'protocol',
+        detail: `protocole ${protocol} reçu, ${PROTOCOL_VERSION} attendu`,
+      });
+    }
+  }
+
+  /** Ajoute une opération à la file ; un défaut est signalé sans bloquer les suivantes. */
+  private enqueue(operation: () => Promise<void> | void): void {
+    this.operations = this.operations.then(operation).catch((error: unknown) => {
+      console.error(error);
+      this.send({ type: 'error', code: 'internal', detail: String(error) });
+    });
+  }
+
+  /** Vérifie une commande de jeu ; elle s'appliquera au début du prochain pas. */
+  private command(command: unknown): void {
+    if (this.state === undefined) {
+      this.send({ type: 'error', code: 'noGame', detail: 'commande reçue avant la partie' });
+      return;
+    }
+    const parsed = GameCommandSchema.safeParse(command);
+    if (!parsed.success) {
+      this.send({ type: 'error', code: 'command', detail: 'commande invalide' });
+      return;
+    }
+    this.state.pending.push(parsed.data);
+  }
+
+  /**
+   * Change de vitesse sans perdre l'avancée du mois en cours : le temps qui reste
+   * jusqu'au prochain pas suit la nouvelle vitesse. Redemander la vitesse courante ne
+   * change rien.
+   */
+  private setSpeed(speed: SpeedId): void {
+    if (speed !== this.speed) {
+      const ratio = monthDuration(speed) / monthDuration(this.speed);
+      this.speed = speed;
+      if (this.paused) {
+        this.remaining *= ratio;
+      } else {
+        const now = this.env.now();
+        this.nextStepAt = now + Math.max(0, this.nextStepAt - now) * ratio;
+        this.reschedule();
+      }
+    }
+    this.sendTime();
+  }
+
+  /** Met en pause ou reprend, là où le mois en était. */
+  private setPaused(paused: boolean): void {
+    if (paused !== this.paused) {
+      const now = this.env.now();
+      if (paused) this.remaining = Math.max(0, this.nextStepAt - now);
+      else this.nextStepAt = now + this.remaining;
+      this.paused = paused;
+      this.reschedule();
+    }
+    this.sendTime();
+  }
+
   /** Copie l'état d'un coup, puis le compresse pendant que la partie continue. */
   private async save(requestId: number): Promise<void> {
     if (this.state === undefined) {
-      this.send({ type: 'error', code: 'noGame', detail: 'sauvegarde demandée avant la partie' });
+      this.send({ type: 'saveFailed', requestId, reason: 'noGame' });
       return;
     }
     const save = saveState(this.state);
@@ -110,7 +190,7 @@ export class SimulationHost {
   private async load(requestId: number, data: ArrayBuffer): Promise<void> {
     let state: SimState;
     try {
-      state = restoreState(await readSave(new Uint8Array(data)));
+      state = restoreState(await readSave(new Uint8Array(data), MIGRATIONS));
     } catch (error) {
       this.send({
         type: 'loadFailed',
@@ -130,14 +210,15 @@ export class SimulationHost {
 
   private start(state: SimState): void {
     this.state = state;
-    this.pending = [];
     this.send({
       type: 'snapshot',
       world: { seed: state.seed, size: state.size },
       time: this.time(state),
       chunks: allChunks(state),
     });
-    this.nextStepAt = this.env.now() + monthDuration(this.speed);
+    const duration = monthDuration(this.speed);
+    this.nextStepAt = this.env.now() + duration;
+    this.remaining = duration;
     this.reschedule();
   }
 
@@ -171,9 +252,8 @@ export class SimulationHost {
     const state = this.state;
     if (state === undefined) return;
     const start = this.env.now();
-    const commands = this.pending;
-    this.pending = [];
-    step(state, commands);
+    // Les commandes en attente s'appliquent au début du pas, qui les horodate.
+    step(state, state.pending.splice(0));
     if (this.stepCost > 0) {
       const end = start + this.stepCost;
       while (this.env.now() < end) {

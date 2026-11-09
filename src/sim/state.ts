@@ -4,7 +4,7 @@
  * promeneurs de test.
  */
 import { wrapX } from '../core/cylinder';
-import type { ChunkLayer, LoggedCommand } from '../core/protocol';
+import type { ChunkLayer, GameCommand, LoggedCommand } from '../core/protocol';
 import { Rng } from '../core/rng';
 import { CHUNK_SIZE, chunkGrid, type WorldSize } from '../core/world';
 
@@ -23,6 +23,12 @@ export interface SimState {
   readonly testLayer: Uint8Array<ArrayBuffer>;
   /** Commandes de jeu appliquées, dans l'ordre : rejouées depuis la graine, elles redonnent l'état. */
   readonly commandLog: LoggedCommand[];
+  /**
+   * Commandes reçues et vérifiées, qui s'appliqueront au début du prochain pas. Elles
+   * font partie de la sauvegarde : une partie rechargée les applique comme l'aurait
+   * fait l'originale.
+   */
+  readonly pending: GameCommand[];
   /** Générateur de la partie, découpé en flux nommés (ADR 0003). */
   readonly rng: Rng;
   /** Positions des promeneurs de test, une colonne par coordonnée. */
@@ -51,6 +57,7 @@ export function createState(seed: string, size: WorldSize): SimState {
     tick: 0,
     testLayer: new Uint8Array(size.width * size.height),
     commandLog: [],
+    pending: [],
     rng,
     walkerX,
     walkerY,
@@ -66,11 +73,22 @@ function markDirty(state: SimState, x: number, y: number): void {
   state.dirtyChunks[row * columns + column] = 1;
 }
 
+/**
+ * Case qui contient le point (x, y) : sa colonne boucle d'est en ouest, et une ligne
+ * hors du monde, au nord ou au sud, n'en a pas. La partie entière est prise avant de
+ * boucler : x = -0,1 tombe bien dans la dernière colonne.
+ */
+function cellIndex(state: SimState, x: number, y: number): number | undefined {
+  const { width, height } = state.size;
+  const row = Math.floor(y);
+  if (!(row >= 0 && row < height)) return undefined;
+  return row * width + wrapX(Math.floor(x), width);
+}
+
 /** Valeur de la couche de test en (x, y) ; x boucle, y hors du monde vaut 0. */
 export function testCell(state: SimState, x: number, y: number): number {
-  const { width, height } = state.size;
-  if (y < 0 || y >= height) return 0;
-  return state.testLayer[y * width + wrapX(x, width)] ?? 0;
+  const index = cellIndex(state, x, y);
+  return index === undefined ? 0 : (state.testLayer[index] ?? 0);
 }
 
 /**
@@ -78,11 +96,11 @@ export function testCell(state: SimState, x: number, y: number): number {
  * nord ou au sud est ignorée. Renvoie vrai si la case a changé.
  */
 export function setTestCell(state: SimState, x: number, y: number, value: number): boolean {
-  const { width, height } = state.size;
-  const row = Math.floor(y);
-  if (row < 0 || row >= height) return false;
-  const column = Math.floor(wrapX(x, width));
-  const index = row * width + column;
+  const index = cellIndex(state, x, y);
+  if (index === undefined) return false;
+  const { width } = state.size;
+  const column = index % width;
+  const row = (index - column) / width;
   const clamped = Math.max(0, Math.min(255, Math.floor(value)));
   if (state.testLayer[index] === clamped) return false;
   state.testLayer[index] = clamped;

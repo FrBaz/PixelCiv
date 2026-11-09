@@ -17,6 +17,19 @@ describe('wrapX', () => {
     expect(Object.is(wrapX(-0, 512), 0)).toBe(true);
     expect(Object.is(wrapX(-512, 512), 0)).toBe(true);
   });
+
+  it('rend inchangée une valeur déjà dans le monde, et reste idempotente', () => {
+    for (const x of [0.1, 6.5, 511.75, 1e-300]) {
+      expect(wrapX(x, 512)).toBe(x);
+      expect(wrapX(wrapX(-x, 512), 512)).toBe(wrapX(-x, 512));
+    }
+  });
+
+  it('reste sous la largeur pour un reste négatif infime', () => {
+    expect(wrapX(-1e-14, 512)).toBe(0);
+    expect(wrapX(-Number.MIN_VALUE, 512)).toBe(0);
+    expect(wrapX(-1e-14, 512)).toBeLessThan(512);
+  });
 });
 
 describe('deltaX', () => {

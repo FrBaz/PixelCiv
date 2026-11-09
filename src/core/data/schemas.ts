@@ -39,7 +39,10 @@ export const BiomeSchema = z
     name: MessageKeySchema,
     /** Fertilité, de 0 (stérile) à 1. */
     fertility: ShareSchema,
-    /** Multiplicateur du coût de déplacement à pied ; null pour l'eau, qu'on ne franchit pas à pied. */
+    /**
+     * Multiplicateur du coût de déplacement à pied ; null pour les eaux qu'on ne franchit
+     * pas à pied (océans, lacs). Une rivière se franchit, selon sa classe (C1, D3).
+     */
     movementCost: z.number().min(1).nullable(),
     /** Côtes (D4) : facilité de débarquement. */
     landing: z.enum(['easy', 'difficult', 'impossible']).optional(),
@@ -54,10 +57,10 @@ export const BiomeSchema = z
   })
   .strict()
   .superRefine((biome, context) => {
-    if ((biome.family === 'water') !== (biome.movementCost === null)) {
+    if (biome.movementCost === null && biome.family !== 'water') {
       context.addIssue({
         code: 'custom',
-        message: "seule l'eau a un coût de déplacement nul",
+        message: "seule l'eau peut être infranchissable à pied",
         path: ['movementCost'],
       });
     }

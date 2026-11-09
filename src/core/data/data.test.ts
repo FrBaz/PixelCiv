@@ -65,9 +65,16 @@ describe('validation', () => {
   });
 
   it('vérifie la cohérence entre la famille et les effets', () => {
-    expect(load([{ ...valid, movementCost: 1 }])).toThrow(/movementCost/);
     expect(load([{ ...valid, landing: 'easy' }])).toThrow(/landing/);
     const beach = biomesJson.find((biome) => biome.id === 'beach');
     expect(load([{ ...beach, landing: undefined }])).toThrow(/landing/);
+    expect(load([{ ...beach, movementCost: null }])).toThrow(/movementCost/);
+  });
+
+  it('laisse franchir les rivières à pied, mais pas la haute mer (C1, D3)', () => {
+    const cost = (id: string) => biomesJson.find((biome) => biome.id === id)?.movementCost;
+    expect(cost('river')).toBeGreaterThanOrEqual(1);
+    expect(cost('deep-ocean')).toBeNull();
+    expect(cost('lake')).toBeNull();
   });
 });

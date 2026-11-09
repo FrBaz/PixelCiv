@@ -17,6 +17,17 @@ describe('couche de test', () => {
     expect(testCell(state, 5, size.height)).toBe(0);
   });
 
+  it("prend la partie entière avant de boucler : un x infime et négatif est à l'ouest de la couture", () => {
+    const state = createState('graine', size);
+    expect(setTestCell(state, -1e-14, 4, 5)).toBe(true);
+    expect(testCell(state, size.width - 1, 4)).toBe(5);
+    expect(testCell(state, 0, 4)).toBe(0);
+    expect(setTestCell(state, -0.5, 6, 5)).toBe(true);
+    expect(testCell(state, size.width - 1, 6)).toBe(5);
+    expect(setTestCell(state, 2.75, 6.5, 3)).toBe(true);
+    expect(testCell(state, 2, 6)).toBe(3);
+  });
+
   it('borne les valeurs et ne signale que les vrais changements', () => {
     const state = createState('graine', size);
     expect(setTestCell(state, 3, 3, 300)).toBe(true);

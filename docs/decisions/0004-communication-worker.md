@@ -9,10 +9,12 @@ La simulation tourne dans un fil séparé et ne bloque jamais l'interface (NF-02
 ## Décision
 
 - **Un worker.** Un seul Web Worker, de type module, possède l'état du monde. Le fil principal n'en garde que ce qu'il affiche.
-- **Protocole typé.** `src/core/protocol.ts` décrit tous les messages, en unions discriminées par leur champ `type`. La version du protocole est vérifiée dès la poignée de main.
+- **Protocole typé.** `src/core/protocol.ts` décrit tous les messages, en unions discriminées par leur champ `type`. La version du protocole est vérifiée dès la poignée de main, et le worker ne traite rien d'autre tant qu'elle n'a pas réussi.
 - **Vers le worker.** Deux sortes de commandes :
   - les commandes de contrôle (vitesse, pause, sauvegarde, chargement, débogage), sans effet sur l'état ;
-  - les commandes de jeu, qui modifient l'état : elles sont mises en file, horodatées du pas où elles s'appliquent et journalisées (ADR 0003).
+  - les commandes de jeu, qui modifient l'état : vérifiées à leur réception, elles attendent dans l'état le prochain pas, qui les horodate et les journalise (ADR 0003).
+
+  Les opérations sur la partie entière (nouvelle partie, sauvegarde, chargement) passent dans une file, chacune après la fin de la précédente : la dernière partie demandée est celle qui reste. Toute requête de sauvegarde ou de chargement reçoit une réponse, même sans partie en cours. Changer de vitesse ou faire une pause garde l'avancée du mois en cours.
 - **Vers le fil principal.** Un instantané complet au démarrage et après un chargement ; puis des deltas, qui portent les blocs de carte modifiés et le temps de la partie ; enfin des mesures, comme la durée des pas.
 - **Transferts.** Les gros volumes, couches de carte par bloc et sauvegardes, voyagent en `ArrayBuffer` transférés, sans copie.
 - **Hôte et simulation.** `src/worker/` héberge la simulation : il reçoit les messages, cadence les pas selon la vitesse et l'horloge, mesure leur durée et envoie les résultats. `src/sim/` ne connaît ni l'horloge ni les messages : il fait avancer l'état d'un pas.

@@ -11,7 +11,7 @@ import { createRenderer } from '../render/renderer';
 import { App } from '../ui/App';
 import { content, debugInfo, determinismOk, time, worldInfo } from '../ui/store';
 import { DebugSampler, usedMemoryMb } from './debug';
-import { AUTO_SLOT, SaveManager, SaveStore } from './saves';
+import { SaveManager, SaveStore } from './saves';
 import { SimulationClient } from './simulation';
 import './style.css';
 
@@ -59,10 +59,16 @@ async function main(): Promise<void> {
     switch (message.type) {
       case 'ready':
         // Reprend la dernière partie si elle a été sauvegardée, sinon en commence une.
-        void saves.loadFrom(AUTO_SLOT).then((loaded) => {
-          if (!loaded) simulation.send({ type: 'newGame', seed: 'pixelciv', size: 'small' });
-          saves.startAutosave();
-        });
+        void saves
+          .resume()
+          .catch((error: unknown) => {
+            console.error(error);
+            return false;
+          })
+          .then((resumed) => {
+            if (!resumed) simulation.send({ type: 'newGame', seed: 'pixelciv', size: 'small' });
+            saves.startAutosave();
+          });
         break;
       case 'snapshot': {
         worldInfo.value = message.world;
@@ -86,6 +92,7 @@ async function main(): Promise<void> {
         console.error(`worker : ${message.code} (${message.detail})`);
         break;
       case 'saved':
+      case 'saveFailed':
       case 'loaded':
       case 'loadFailed':
         // Réponses aux requêtes de SaveManager, qui les attend.

@@ -58,11 +58,17 @@ class FakeEnvironment implements HostEnvironment {
   }
 }
 
-function startedHost() {
+function greetedHost() {
   const env = new FakeEnvironment();
   const host = new SimulationHost(env);
   host.receive({ type: 'hello', protocol: PROTOCOL_VERSION });
-  host.receive({ type: 'newGame', seed: 'graine', size: 'small' });
+  return { env, host };
+}
+
+async function startedHost(seed = 'graine') {
+  const { env, host } = greetedHost();
+  host.receive({ type: 'newGame', seed, size: 'small' });
+  await host.idle();
   return { env, host };
 }
 
@@ -81,18 +87,27 @@ describe('poignée de main', () => {
   });
 
   it('refuse une commande de jeu avant la partie', () => {
-    const env = new FakeEnvironment();
-    new SimulationHost(env).receive({
-      type: 'game',
-      command: { type: 'paint', x: 0, y: 0, value: 1 },
-    });
+    const { env, host } = greetedHost();
+    host.receive({ type: 'game', command: { type: 'paint', x: 0, y: 0, value: 1 } });
     expect(env.messages('error').at(0)?.code).toBe('noGame');
+  });
+
+  it('ne traite rien sans poignée de main réussie', async () => {
+    for (const hello of [[], [{ type: 'hello', protocol: PROTOCOL_VERSION + 1 }]] as const) {
+      const env = new FakeEnvironment();
+      const host = new SimulationHost(env);
+      for (const message of hello) host.receive(message);
+      host.receive({ type: 'newGame', seed: 'graine', size: 'small' });
+      await host.idle();
+      expect(env.messages('snapshot')).toEqual([]);
+      expect(env.messages('error').map((error) => error.code)).toContain('protocol');
+    }
   });
 });
 
 describe('partie', () => {
-  it('envoie un instantané complet, avec ses tampons transférés', () => {
-    const { env } = startedHost();
+  it('envoie un instantané complet, avec ses tampons transférés', async () => {
+    const { env } = await startedHost();
     const snapshot = env.messages('snapshot').at(0);
     expect(snapshot?.world).toEqual({ seed: 'graine', size: { width: 512, height: 256 } });
     expect(snapshot?.chunks).toHaveLength(32);
@@ -102,8 +117,8 @@ describe('partie', () => {
     expect(snapshot?.chunks.at(0)?.cells.byteLength).toBe(CHUNK_SIZE * CHUNK_SIZE);
   });
 
-  it("avance d'un pas par mois, et envoie les blocs modifiés", () => {
-    const { env, host } = startedHost();
+  it("avance d'un pas par mois, et envoie les blocs modifiés", async () => {
+    const { env, host } = await startedHost();
     host.receive({ type: 'game', command: { type: 'paint', x: 70, y: 3, value: 9 } });
     env.advance(NORMAL_MONTH_MS);
     const delta = env.messages('delta').at(0);
@@ -115,14 +130,14 @@ describe('partie', () => {
     expect(env.messages('delta').at(1)?.chunks.length).toBeGreaterThan(0);
   });
 
-  it('fait durer une année environ 10 s', () => {
-    const { env } = startedHost();
+  it('fait durer une année environ 10 s', async () => {
+    const { env } = await startedHost();
     env.advance(10_000);
     expect(env.messages('delta').at(-1)?.time.tick).toBe(12);
   });
 
-  it('mesure la durée des pas, coût factice compris', () => {
-    const { env, host } = startedHost();
+  it('mesure la durée des pas, coût factice compris', async () => {
+    const { env, host } = await startedHost();
     host.receive({ type: 'debugStepCost', milliseconds: 200 });
     env.advancePerRead = 1;
     env.advance(NORMAL_MONTH_MS);
@@ -133,8 +148,8 @@ describe('partie', () => {
 });
 
 describe('temps', () => {
-  it('se met en pause, puis reprend', () => {
-    const { env, host } = startedHost();
+  it('se met en pause, puis reprend', async () => {
+    const { env, host } = await startedHost();
     host.receive({ type: 'setPaused', paused: true });
     expect(env.messages('time').at(-1)?.time).toEqual({ tick: 0, paused: true, speed: 'normal' });
     env.advance(5_000);
@@ -144,15 +159,15 @@ describe('temps', () => {
     expect(env.messages('delta').map((delta) => delta.time.tick)).toEqual([1]);
   });
 
-  it('avance plus vite en vitesse rapide', () => {
-    const { env, host } = startedHost();
+  it('avance plus vite en vitesse rapide', async () => {
+    const { env, host } = await startedHost();
     host.receive({ type: 'setSpeed', speed: 'fast' });
     env.advance(10_000 / 4);
     expect(env.messages('delta').at(-1)?.time).toEqual({ tick: 12, paused: false, speed: 'fast' });
   });
 
-  it("n'avance que d'un pas à la demande, et seulement en pause", () => {
-    const { env, host } = startedHost();
+  it("n'avance que d'un pas à la demande, et seulement en pause", async () => {
+    const { env, host } = await startedHost();
     host.receive({ type: 'stepOnce' });
     expect(env.messages('delta')).toEqual([]);
     host.receive({ type: 'setPaused', paused: true });
@@ -160,8 +175,8 @@ describe('temps', () => {
     expect(env.messages('delta').map((delta) => delta.time.tick)).toEqual([1]);
   });
 
-  it('ne rattrape pas son retard par rafales', () => {
-    const { env, host } = startedHost();
+  it('ne rattrape pas son retard par rafales', async () => {
+    const { env, host } = await startedHost();
     host.receive({ type: 'setSpeed', speed: 'faster' });
     host.receive({ type: 'debugStepCost', milliseconds: 200 });
     env.advancePerRead = 1;
@@ -175,8 +190,8 @@ describe('temps', () => {
 });
 
 describe('commandes de jeu', () => {
-  it("s'appliquent au début du pas suivant", () => {
-    const { env, host } = startedHost();
+  it("s'appliquent au début du pas suivant", async () => {
+    const { env, host } = await startedHost();
     env.advance(NORMAL_MONTH_MS * 3);
     host.receive({ type: 'game', command: { type: 'paint', x: 1, y: 7, value: 9 } });
     const paintedIn = (index: number) =>
@@ -201,7 +216,7 @@ async function until(condition: () => boolean): Promise<void> {
 
 describe('sauvegarde', () => {
   it('envoie un fichier compressé, transféré, puis le recharge dans un autre hôte', async () => {
-    const { env, host } = startedHost();
+    const { env, host } = await startedHost();
     host.receive({ type: 'game', command: { type: 'paint', x: 3, y: 4, value: 9 } });
     env.advance(NORMAL_MONTH_MS * 2);
     host.receive({ type: 'save', requestId: 7 });
@@ -212,8 +227,7 @@ describe('sauvegarde', () => {
     const entry = env.sent.find((sent) => sent.message.type === 'saved');
     expect(entry?.transfer).toEqual([saved?.data]);
 
-    const other = new FakeEnvironment();
-    const loader = new SimulationHost(other);
+    const { env: other, host: loader } = greetedHost();
     loader.receive({ type: 'load', requestId: 8, data: saved?.data ?? new ArrayBuffer(0) });
     await until(() => other.messages('loaded').length > 0);
     expect(other.messages('loaded')).toEqual([{ type: 'loaded', requestId: 8 }]);
@@ -223,12 +237,155 @@ describe('sauvegarde', () => {
   });
 
   it("refuse un fichier qui n'est pas une sauvegarde, sans toucher à la partie", async () => {
-    const { env, host } = startedHost();
+    const { env, host } = await startedHost();
     host.receive({ type: 'load', requestId: 9, data: new TextEncoder().encode('bonjour').buffer });
     await until(() => env.messages('loadFailed').length > 0);
     expect(env.messages('loadFailed')).toEqual([
       { type: 'loadFailed', requestId: 9, reason: 'format' },
     ]);
     expect(env.messages('snapshot')).toHaveLength(1);
+  });
+});
+
+/** Sauvegarde la partie d'un hôte et renvoie le fichier. */
+async function saveOf(env: FakeEnvironment, host: SimulationHost, requestId: number) {
+  host.receive({ type: 'save', requestId });
+  await until(() => env.messages('saved').some((saved) => saved.requestId === requestId));
+  const saved = env.messages('saved').find((message) => message.requestId === requestId);
+  if (saved === undefined) throw new Error('pas de sauvegarde');
+  return saved;
+}
+
+/** Valeur d'une case dans le dernier envoi qui contient son bloc. */
+function cellSent(env: FakeEnvironment, x: number, y: number): number | undefined {
+  const column = Math.floor(x / CHUNK_SIZE);
+  const row = Math.floor(y / CHUNK_SIZE);
+  const sent = env.sent
+    .map((entry) => entry.message)
+    .flatMap((message) =>
+      message.type === 'snapshot' || message.type === 'delta' ? message.chunks : [],
+    )
+    .filter((chunk) => chunk.column === column && chunk.row === row)
+    .at(-1);
+  return sent?.cells[(y % CHUNK_SIZE) * CHUNK_SIZE + (x % CHUNK_SIZE)];
+}
+
+describe('commandes en attente', () => {
+  it('sont sauvegardées, et appliquées après rechargement', async () => {
+    const { env, host } = await startedHost();
+    host.receive({ type: 'setPaused', paused: true });
+    host.receive({ type: 'game', command: { type: 'paint', x: 10, y: 10, value: 9 } });
+    const saved = await saveOf(env, host, 1);
+
+    const { env: other, host: loader } = greetedHost();
+    loader.receive({ type: 'setPaused', paused: true });
+    loader.receive({ type: 'load', requestId: 2, data: saved.data });
+    await until(() => other.messages('loaded').length > 0);
+    loader.receive({ type: 'stepOnce' });
+    expect(cellSent(other, 10, 10)).toBe(9);
+  });
+
+  it('sont vérifiées à la réception', async () => {
+    const { env, host } = await startedHost();
+    host.receive({ type: 'setPaused', paused: true });
+    const invalid: unknown[] = [
+      { type: 'paint', x: Number.NaN, y: 1, value: 9 },
+      { type: 'paint', x: 1, y: Number.POSITIVE_INFINITY, value: 9 },
+      { type: 'paint', x: 1.5, y: 1, value: 9 },
+      { type: 'paint', x: 1, y: 1, value: 300 },
+      { type: 'paint', x: 1, y: 1, value: 9, extra: true },
+      { type: 'feu' },
+    ];
+    for (const command of invalid) {
+      host.receive({ type: 'game', command } as never);
+    }
+    expect(env.messages('error').map((error) => error.code)).toEqual(invalid.map(() => 'command'));
+    // La partie reste sauvegardable et relisible.
+    const saved = await saveOf(env, host, 3);
+    const { env: other, host: loader } = greetedHost();
+    loader.receive({ type: 'load', requestId: 4, data: saved.data });
+    await until(() => other.messages('loaded').length > 0);
+  });
+});
+
+describe('file des opérations', () => {
+  it("garde la dernière partie demandée, quel que soit l'ordre de fin des chargements", async () => {
+    const { env: envA, host: hostA } = await startedHost('A');
+    const { env: envB, host: hostB } = await startedHost('B');
+    envA.advance(NORMAL_MONTH_MS * 5);
+    const big = await saveOf(envA, hostA, 1);
+    const small = await saveOf(envB, hostB, 2);
+
+    const { env, host } = greetedHost();
+    host.receive({ type: 'load', requestId: 3, data: big.data });
+    host.receive({ type: 'load', requestId: 4, data: small.data });
+    await host.idle();
+    expect(env.messages('loaded').map((loaded) => loaded.requestId)).toEqual([3, 4]);
+    expect(env.messages('snapshot').map((snapshot) => snapshot.world.seed)).toEqual(['A', 'B']);
+  });
+
+  it('ne laisse pas un chargement écraser la partie demandée ensuite', async () => {
+    const { env: source, host: sourceHost } = await startedHost('ancienne');
+    const saved = await saveOf(source, sourceHost, 1);
+    const { env, host } = greetedHost();
+    host.receive({ type: 'load', requestId: 2, data: saved.data });
+    host.receive({ type: 'newGame', seed: 'nouvelle', size: 'small' });
+    await host.idle();
+    expect(env.messages('snapshot').map((snapshot) => snapshot.world.seed)).toEqual([
+      'ancienne',
+      'nouvelle',
+    ]);
+  });
+
+  it('sauvegarde la partie chargée, et non celle qui la précédait', async () => {
+    const { env: source, host: sourceHost } = await startedHost('chargée');
+    const saved = await saveOf(source, sourceHost, 1);
+    const { env, host } = await startedHost('précédente');
+    host.receive({ type: 'load', requestId: 2, data: saved.data });
+    const again = await saveOf(env, host, 3);
+    expect(again.meta.seed).toBe('chargée');
+  });
+
+  it('répond à une sauvegarde demandée avant toute partie', async () => {
+    const { env, host } = greetedHost();
+    host.receive({ type: 'save', requestId: 5 });
+    await host.idle();
+    expect(env.messages('saveFailed')).toEqual([
+      { type: 'saveFailed', requestId: 5, reason: 'noGame' },
+    ]);
+  });
+});
+
+describe('cadence', () => {
+  it('ne retarde pas le pas quand la vitesse ou la reprise ne changent rien', async () => {
+    const { env, host } = await startedHost();
+    for (let month = 0; month < 18; month++) {
+      env.advance(NORMAL_MONTH_MS * 0.9);
+      host.receive({ type: 'setSpeed', speed: 'normal' });
+      host.receive({ type: 'setPaused', paused: false });
+    }
+    // 18 × 0,9 mois de temps réel : 16 pas.
+    expect(env.messages('delta')).toHaveLength(16);
+  });
+
+  it("garde l'avancée du mois à travers une pause", async () => {
+    const { env, host } = await startedHost();
+    env.advance(NORMAL_MONTH_MS * 0.75);
+    host.receive({ type: 'setPaused', paused: true });
+    env.advance(NORMAL_MONTH_MS * 10);
+    host.receive({ type: 'setPaused', paused: false });
+    env.advance(NORMAL_MONTH_MS * 0.3);
+    expect(env.messages('delta').map((delta) => delta.time.tick)).toEqual([1]);
+  });
+
+  it('change de vitesse au prorata du mois restant', async () => {
+    const { env, host } = await startedHost();
+    env.advance(NORMAL_MONTH_MS / 2);
+    host.receive({ type: 'setSpeed', speed: 'fast' });
+    // Il restait un demi-mois en vitesse normale, soit un huitième de mois à ×4.
+    env.advance(NORMAL_MONTH_MS / 8 - 1);
+    expect(env.messages('delta')).toEqual([]);
+    env.advance(2);
+    expect(env.messages('delta')).toHaveLength(1);
   });
 });

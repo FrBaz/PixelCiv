@@ -6,20 +6,20 @@ import { notice } from './store';
 const NOTICE_MS = 4000;
 
 export function Notice() {
-  const key = notice.value;
+  const current = notice.value;
   useEffect(() => {
-    if (key === undefined) return;
+    if (current === undefined) return;
     const timer = setTimeout(() => {
       notice.value = undefined;
     }, NOTICE_MS);
     return () => {
       clearTimeout(timer);
     };
-  }, [key]);
-  if (key === undefined) return null;
+  }, [current]);
+  if (current === undefined) return null;
   return (
     <div class="panel notice" role="status">
-      <span>{t(key)}</span>
+      <span>{t(current.key)}</span>
       <button
         type="button"
         aria-label={t('notice.close')}
