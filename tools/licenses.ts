@@ -185,21 +185,33 @@ export function packageName(path: string): string {
   return index === -1 ? path : path.slice(index + marker.length);
 }
 
+/**
+ * Problème posé par la licence d'un paquet, ou `undefined` si elle est admise.
+ * `tools` donne les exceptions d'outil applicables à ce paquet ; il n'y en a aucune
+ * pour du code distribué avec le jeu.
+ */
+export function licenseProblem(
+  license: string | undefined,
+  policy: LicensePolicy,
+  tools: readonly ToolException[] = [],
+): LicenseProblem | undefined {
+  if (license === undefined || license.trim() === '') return 'missing';
+  const expression = parseLicenseExpression(license);
+  if (expression === undefined) return 'invalid';
+  const isAllowed = (id: string, exception: string | undefined): boolean =>
+    (exception === undefined || policy.allowedExceptions.has(exception)) &&
+    (policy.allowed.has(id) || tools.some((tool) => tool.licenses.has(id)));
+  return isSatisfied(expression, isAllowed) ? undefined : 'forbidden';
+}
+
 function findProblem(
   entry: LockfilePackage,
   name: string,
   policy: LicensePolicy,
 ): LicenseProblem | undefined {
-  const { license } = entry;
-  if (license === undefined || license.trim() === '') return 'missing';
-  const expression = parseLicenseExpression(license);
-  if (expression === undefined) return 'invalid';
   const tools =
     entry.dev === true ? policy.toolExceptions.filter((tool) => tool.packages.test(name)) : [];
-  const isAllowed = (id: string, exception: string | undefined): boolean =>
-    (exception === undefined || policy.allowedExceptions.has(exception)) &&
-    (policy.allowed.has(id) || tools.some((tool) => tool.licenses.has(id)));
-  return isSatisfied(expression, isAllowed) ? undefined : 'forbidden';
+  return licenseProblem(entry.license, policy, tools);
 }
 
 /** Contrôle la licence de chaque paquet du fichier de verrouillage et renvoie les écarts. */

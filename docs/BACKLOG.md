@@ -16,7 +16,7 @@ Objectif : un projet outillé, testé et déployé automatiquement, avec l'archi
 |---|---|---|---|---|
 | 0.1 | Projet Vite et TypeScript strict, arborescence, ESLint, Prettier, Vitest ; scripts `dev`, `build`, `test`, `typecheck`, `lint` ; licences des dépendances vérifiées. | NF-11, AST-05 | `npm test` et `npm run build` passent. | à relire |
 | 0.2 | Documentation : PRD et plan dans `docs/` ; premiers ADR (pile technique, monde cylindrique, déterminisme, communication avec le worker) ; relecture de `CLAUDE.md`. | — | ADR rédigés et cités dans le plan. | à relire |
-| 0.3 | Intégration continue GitHub Actions (lint, types, tests, build) et déploiement sur GitHub Pages à chaque fusion sur `main`. | — | Chaque PR affiche ses vérifications ; `main` est en ligne. | à faire |
+| 0.3 | Intégration continue GitHub Actions (lint, types, tests, build) et déploiement sur GitHub Pages à chaque fusion sur `main`. | — | Chaque PR affiche ses vérifications ; `main` est en ligne. | à relire |
 | 0.4 | Squelette d'application : page plein écran, canvas PixiJS, couche d'interface Preact, redimensionnement, orientation, zones de sécurité des téléphones. | IHM-06, IHM-07 | Affichage correct en paysage et en portrait. | à faire |
 | 0.5 | Worker de simulation et protocole de messages typé : commandes, instantanés, deltas, tampons transférés. Une seule simulation pour tous les modes. | NF-02, MOD-01 | Un pas factice de 200 ms ne fait pas chuter l'affichage. | à faire |
 | 0.6 | Boucle de temps : pas mensuel, calendrier, pause, plusieurs vitesses, horodatage des commandes. | MOD-06 | Une année dure environ 10 s en vitesse normale. | à faire |
@@ -31,12 +31,9 @@ Objectif : un projet outillé, testé et déployé automatiquement, avec l'archi
 ### Notes
 
 - **0.2.** ADR 0001 à 0004 rédigés dans `docs/decisions/` et cités dans le plan (section 3, version 0.4). `CLAUDE.md` relu : renvoi au backlog, commande `format`, dossier `src/worker/`, portée des règles ESLint, règle sur les dépendances. La convention d'import et le lanceur des outils restent à revoir avec le premier outil lancé directement par Node (ADR 0001).
-- **0.3.** Il faut activer GitHub Pages, avec « GitHub Actions » comme source (PLAN, section 12, étape 2). Restent à régler :
-  - le chemin du site, `/PixelCiv/`, dans l'option `base` de `vite.config.ts` ;
-  - la version de Node de l'intégration continue, dans un fichier `.nvmrc` : de préférence la 26, LTS active depuis le 28 octobre 2026. La 24 est en maintenance jusqu'en avril 2028, et la 22 arrive en fin de vie le 30 avril 2027 ;
-  - un contrôle, après le build, des licences des paquets réellement mis dans le bundle (option `build.license` de Vite), contre la seule liste des licences admises.
+- **0.3.** Fait : `.github/workflows/ci.yml` (lint, types, tests, build, audit, puis déploiement sur GitHub Pages à chaque fusion sur `main`), Node 26 dans `.nvmrc`, chemins relatifs (`base: './'`) et contrôle au build des licences du bundle (`tools/bundle-licenses.ts`). Pour que `main` soit en ligne, il faut activer GitHub Pages avec « GitHub Actions » comme source (PLAN, section 12, étape 2).
 
-  `npm audit` signale par ailleurs une faille modérée de minimatch, corrigée en 11.0.1, alors qu'ESLint et typescript-eslint dépendent encore de minimatch 10. C'est un déni de service par motif glob malveillant, sans conséquence pour des outils qui ne lisent que nos propres motifs. Si l'intégration continue lance `npm audit`, ce sera avec `--audit-level=high`, en attendant que les deux passent à minimatch 11.0.1 ou plus.
+  `npm audit` signale une faille modérée de minimatch, corrigée en 11.0.1, alors qu'ESLint et typescript-eslint dépendent encore de minimatch 10. C'est un déni de service par motif glob malveillant, sans conséquence pour des outils qui ne lisent que nos propres motifs : l'intégration continue ne s'arrête qu'aux failles de niveau élevé ou critique, en attendant que les deux passent à minimatch 11.0.1 ou plus.
 - **0.9.** Le titre de la page, dans `index.html`, est encore écrit en dur.
 - **0.10.** Le plan prévoit les biomes du prototype, décrits dans `testMap_filtre.ipynb`, que la tâche 1.5 remplacera par les 32 biomes de la séance C1 (D6 ; PRD, MON-08). À trancher en ouvrant 0.10 : partir du prototype, ou directement de la liste de C1.
 - **0.13.** Il faut les notebooks, les scripts de la séance C1, le pack de sprites original avec sa licence, ainsi que le nom de son auteur et un lien (PRD, question 14).
