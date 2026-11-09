@@ -1,0 +1,39 @@
+# ADR 0009 — Génération du monde
+
+Statut : accepté · 9 novembre 2026 · tâches 1.1 à 1.6
+
+## Contexte
+
+La phase 1 porte en TypeScript le pipeline du prototype, sur un monde cylindrique, en y intégrant les décisions D1 à D13 de la séance C1 (`docs/design/C1-monde.md`). Le notebook du prototype n'est pas parvenu au dépôt : la génération est conçue à neuf, d'après C1, ses deux scripts (`prototypes/c1/`) et ses images (`docs/design/C1/`). La génération doit être déterministe (NF-09) et rapide : moins de 10 s pour un monde Grand (NF-03).
+
+## Décision
+
+**Organisation.** `src/worldgen/` enchaîne cinq étapes, chacune testée seule : relief, climat, hydrologie, biomes, ressources et flore (`generate.ts`). Tout aléa vient de flux nommés du générateur (`worldgen.relief.continents`, `worldgen.hydrology`…), dérivés de la graine seule ; les fonctions mathématiques passent par `dmath`. Les réglages et les règles de classement sont dans `data/worldgen.json`, validés par leur schéma, et recoupés avec les autres fichiers de `data/` au chargement.
+
+**Bruit (1.1).** Simplex 3D de Gustavson (`src/core/noise.ts`), au noyau de rayon √0,5 pour éviter les discontinuités du texte d'origine. Ses valeurs sont recoupées au bit près par une implémentation indépendante, en Python. La carte se lit sur un cylindre de circonférence unité : la longitude devient un angle, et la colonne x + largeur est la colonne x. Les fréquences se comptent par tour du monde, et non par case : **une même graine donne les mêmes continents à toutes les tailles**, plus ou moins détaillés, ce qui rend fidèle l'aperçu réduit de l'écran de création. Une octave plus fine que trois cases n'est pas lue, pour éviter le repliement.
+
+**Relief (1.2).** Bruit fractal à trois échelles (continents, régions, détail), plus des chaînes de montagnes (D12) : leurs crêtes suivent les lignes où s'annule un bruit de basse fréquence, avec des piémonts ; un champ de très basse fréquence choisit les chaînes qui se dressent, un bruit de crêtes y ajoute contreforts et vallées, un autre bruit les abaisse par endroits, ce qui ouvre des cols. Le détail s'accentue en montagne. Le fond s'abaisse un peu vers les pôles, pour des mers polaires plutôt que des calottes sans fin. Le niveau de la mer est le quantile qui laisse émergée la part des terres demandée, relevée ou abaissée par le paramètre « niveau de la mer ». La correspondance de D11 donne l'altitude ; l'échelle des terres est choisie pour que la part des terres au-dessus de 1 800 m suive le paramètre « relief » (4,5 % par défaut, dans la cible de 3 à 6 %).
+
+**Climat (1.3).** Température annuelle de 27 °C à l'équateur à −25 °C aux pôles au niveau de la mer, moins 6,5 °C par 1 000 m ; demi-amplitude de D8, selon la latitude et la continentalité, mesurée à vol d'oiseau et face au vent. Les pluies combinent des bandes de latitude et l'advection de l'humidité par les vents dominants (alizés, vents d'ouest, vents d'est polaires) : l'air se charge au-dessus de la mer, pleut au-dessus des terres, davantage en montée, et perd son excédent en se refroidissant ; redescendu, loin de la saturation, il ne pleut presque plus. Les deux sens de vent se mêlent sans cassure à 30° et 60°. Une part des pluies vient de la mer voisine par tous les vents. Les processus se mesurent en fraction du tour du monde, et non par case.
+
+**Hydrologie (1.4).**
+- **Océan (D1).** La plus grande masse d'eau, et toute autre qui couvre au moins 0,5 % de la carte. C1 propose « par exemple 2 % » : à ce seuil, trop de mers intérieures devenaient des lacs.
+- **Remplissage (D3).** Priority flood depuis l'océan seul, variante epsilon : une pente minimale de 10^-5 m par case, augmentée en proportion de la montée du relief d'origine, et des égalités départagées par un tirage propre à chaque case. Le remplissage avance ainsi le long des vallées enfouies.
+- **Comblement.** Les sédiments comblent 85 % de chaque dépression avant la formation des lacs. Le bruit creuse des cuvettes partout, alors qu'un relief réel est drainé par l'érosion : sans ce comblement, les lacs couvraient 8 à 13 % des terres.
+- **Écoulement.** Hors des dépressions, l'eau suit la plus forte pente, chaque pente vers un voisin étant multipliée par un tirage entre 0,5 et 1,5 : sur un versant régulier, elle ne file pas tout droit. Dans une dépression drainée, elle descend le relief enfoui jusqu'à un fond, puis gagne l'exutoire par un chenal. Aucune boucle n'est possible.
+- **Ruissellement.** Pluie moins évapotranspiration, par la formule de Turc et Pike ; l'évapotranspiration potentielle croît avec la température. Un désert ne ruisselle presque plus.
+- **Lacs (D2).** Un bassin assez vaste (150 cases d'une carte Grand) et assez profond (60 m après comblement) devient un lac d'eau douce, un lac salé ou un salar, selon le rapport de son apport à son évaporation. Le calcul recommence tant que les lacs d'amont changent. Un lac salé ou un salar occupe le fond du bassin, d'un seul tenant, et l'eau du bassin y descend.
+- **Rivières (D3).** Le débit se compte en millimètres par an et par case d'une carte Grand : ruisseau au-delà du seuil, rivière à 4 fois, fleuve à 16 fois. Le paramètre « rivières » divise le seuil.
+- **Alias du prototype.** Faute du notebook, on ne sait pas lequel corriger. Trois lectures sont couvertes : le repliement du bruit (octaves bornées par la résolution), celui du tracé des rivières (dessinées au pixel par la cuisson, tâche 1.7), et la modification d'une couche partagée, comme `river_map_render` dans les scripts de C1 (chaque étape produit des couches neuves).
+
+**Biomes (1.5).** Ordre de priorité : mer selon sa profondeur, lac selon son bilan, glacier là où le mois le plus chaud reste sous 0 °C, fleuve, côte, zone humide, terres. Chaque étape suit une liste de règles en données, essayée dans l'ordre ; une règle compare des grandeurs de la case à des intervalles : températures annuelle, du mois le plus chaud et du plus froid, pluies, aridité à la Köppen, altitude, rang du relief côtier et de la pente. Les côtes sont la seule rangée de terres qui touche la mer (D4). Les zones humides (D5) se forment sur les terres plates, basses et humides, près d'une eau ou dans une petite cuvette drainée, découpées en taches par un bruit, sans case isolée. Le biome « rivière » est le lit d'un fleuve, infranchissable à pied ; ruisseaux et rivières coulent sur les autres biomes. Une calotte glaciaire n'a pas de rivière en surface.
+
+**Ressources et flore (1.6).** Chaque minerai se trouve sur certains étages d'altitude ou certains biomes, et se regroupe en provinces, que dessine un bruit propre à ce minerai. Une case porte au plus un gisement. Les ressources du milieu (poisson, bois, gibier, roseaux, tourbe, fer des marais, sel des salars) viennent du biome. Les densités d'arbres et de buissons sont celles du biome, modulées de ±35 % par un bruit. Les espèces de la flore sont décrites dans `data/flora.json`.
+
+**Résultat.** Le monde tient en dix couches compactes, une valeur par case (`WorldLayers`, `src/core/world.ts`) : altitude, profondeur de l'eau, biome, écoulement et classe de rivière, température, amplitude, précipitations, gisement, arbres, buissons. Une version du générateur (`GENERATOR_VERSION`) change quand un même monde ne se génère plus pareil.
+
+## Conséquences
+
+- Les tailles de carte changent la finesse du monde, non ses continents : un monde Petit est un monde Grand vu de plus loin.
+- Les seuils de C1 calés sur la carte de test ont été recalibrés sur des mondes cylindriques ; les valeurs retenues et les mesures figurent dans le backlog (phase 1). Les lacs couvrent 3 à 5 % des terres, les glaciers 12 à 17 %.
+- Changer la génération change les empreintes de référence des tests (tâche 1.10) et `GENERATOR_VERSION`. Les sauvegardes gardent les couches elles-mêmes, et non la seule graine : elles restent lisibles quand le générateur change.

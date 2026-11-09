@@ -9,7 +9,8 @@
     "resources": [],
     "flora": {
       "trees": 0,
-      "shrubs": 0
+      "shrubs": 0,
+      "species": []
     },
     "palette": {
       "shadow": "#0e1f3d",
@@ -27,7 +28,8 @@
     "resources": ["fish"],
     "flora": {
       "trees": 0,
-      "shrubs": 0
+      "shrubs": 0,
+      "species": []
     },
     "palette": {
       "shadow": "#163a66",
@@ -45,7 +47,8 @@
     "resources": ["fish"],
     "flora": {
       "trees": 0,
-      "shrubs": 0
+      "shrubs": 0,
+      "species": []
     },
     "palette": {
       "shadow": "#1f5a8c",
@@ -63,7 +66,8 @@
     "resources": ["fish"],
     "flora": {
       "trees": 0,
-      "shrubs": 0
+      "shrubs": 0,
+      "species": []
     },
     "palette": {
       "shadow": "#2a6aa0",
@@ -81,7 +85,8 @@
     "resources": ["fish"],
     "flora": {
       "trees": 0,
-      "shrubs": 0
+      "shrubs": 0,
+      "species": []
     },
     "palette": {
       "shadow": "#24618f",
@@ -99,7 +104,8 @@
     "resources": ["salt"],
     "flora": {
       "trees": 0,
-      "shrubs": 0
+      "shrubs": 0,
+      "species": []
     },
     "palette": {
       "shadow": "#3d7d96",
@@ -118,7 +124,8 @@
     "resources": ["fish"],
     "flora": {
       "trees": 0,
-      "shrubs": 0.05
+      "shrubs": 0.05,
+      "species": ["palm", "scrub"]
     },
     "palette": {
       "shadow": "#b89a62",
@@ -137,7 +144,8 @@
     "resources": ["stone"],
     "flora": {
       "trees": 0.02,
-      "shrubs": 0.1
+      "shrubs": 0.1,
+      "species": ["heather"]
     },
     "palette": {
       "shadow": "#5d5a55",
@@ -156,7 +164,8 @@
     "resources": ["stone"],
     "flora": {
       "trees": 0,
-      "shrubs": 0.05
+      "shrubs": 0.05,
+      "species": ["heather"]
     },
     "palette": {
       "shadow": "#4a4540",
@@ -175,7 +184,8 @@
     "resources": ["wood", "fish"],
     "flora": {
       "trees": 0.7,
-      "shrubs": 0.3
+      "shrubs": 0.3,
+      "species": ["mangrove-tree", "reed"]
     },
     "palette": {
       "shadow": "#23402a",
@@ -194,7 +204,8 @@
     "resources": ["salt"],
     "flora": {
       "trees": 0.05,
-      "shrubs": 0.3
+      "shrubs": 0.3,
+      "species": ["reed"]
     },
     "palette": {
       "shadow": "#4a5e3c",
@@ -212,7 +223,8 @@
     "resources": ["reeds", "fish", "waterfowl"],
     "flora": {
       "trees": 0.1,
-      "shrubs": 0.4
+      "shrubs": 0.4,
+      "species": ["reed", "birch"]
     },
     "palette": {
       "shadow": "#3e5236",
@@ -230,7 +242,8 @@
     "resources": ["peat", "bog-iron"],
     "flora": {
       "trees": 0.05,
-      "shrubs": 0.3
+      "shrubs": 0.3,
+      "species": ["heather", "birch", "dwarf-willow"]
     },
     "palette": {
       "shadow": "#4a4636",
@@ -248,7 +261,8 @@
     "resources": ["wood", "game"],
     "flora": {
       "trees": 0.6,
-      "shrubs": 0.4
+      "shrubs": 0.4,
+      "species": ["tropical-hardwood", "reed"]
     },
     "palette": {
       "shadow": "#24382a",
@@ -266,7 +280,8 @@
     "resources": [],
     "flora": {
       "trees": 0,
-      "shrubs": 0
+      "shrubs": 0,
+      "species": []
     },
     "palette": {
       "shadow": "#c8d4dc",
@@ -284,7 +299,8 @@
     "resources": ["game"],
     "flora": {
       "trees": 0,
-      "shrubs": 0.2
+      "shrubs": 0.2,
+      "species": ["dwarf-willow", "heather"]
     },
     "palette": {
       "shadow": "#7d806a",
@@ -302,7 +318,8 @@
     "resources": ["wood", "game"],
     "flora": {
       "trees": 0.7,
-      "shrubs": 0.2
+      "shrubs": 0.2,
+      "species": ["conifer", "larch", "berry-bush"]
     },
     "palette": {
       "shadow": "#1f3a2c",
@@ -320,7 +337,8 @@
     "resources": ["wood", "game"],
     "flora": {
       "trees": 0.6,
-      "shrubs": 0.25
+      "shrubs": 0.25,
+      "species": ["larch", "birch", "conifer", "berry-bush"]
     },
     "palette": {
       "shadow": "#26402c",
@@ -338,7 +356,8 @@
     "resources": ["game"],
     "flora": {
       "trees": 0,
-      "shrubs": 0.15
+      "shrubs": 0.15,
+      "species": ["scrub"]
     },
     "palette": {
       "shadow": "#847a58",
@@ -356,7 +375,8 @@
     "resources": ["game"],
     "flora": {
       "trees": 0,
-      "shrubs": 0.2
+      "shrubs": 0.2,
+      "species": ["dwarf-willow", "heather"]
     },
     "palette": {
       "shadow": "#6f7560",
@@ -374,7 +394,8 @@
     "resources": ["stone"],
     "flora": {
       "trees": 0.1,
-      "shrubs": 0.1
+      "shrubs": 0.1,
+      "species": ["conifer", "heather"]
     },
     "palette": {
       "shadow": "#6a625a",
@@ -392,7 +413,8 @@
     "resources": ["stone"],
     "flora": {
       "trees": 0,
-      "shrubs": 0
+      "shrubs": 0,
+      "species": []
     },
     "palette": {
       "shadow": "#8a8680",
@@ -410,7 +432,8 @@
     "resources": ["game", "gathering"],
     "flora": {
       "trees": 0.05,
-      "shrubs": 0.15
+      "shrubs": 0.15,
+      "species": ["broadleaf", "berry-bush"]
     },
     "palette": {
       "shadow": "#5f7a3a",
@@ -428,7 +451,8 @@
     "resources": ["game"],
     "flora": {
       "trees": 0,
-      "shrubs": 0.1
+      "shrubs": 0.1,
+      "species": ["scrub"]
     },
     "palette": {
       "shadow": "#8a8448",
@@ -446,7 +470,8 @@
     "resources": ["wood", "game", "gathering"],
     "flora": {
       "trees": 0.75,
-      "shrubs": 0.3
+      "shrubs": 0.3,
+      "species": ["broadleaf", "birch", "berry-bush"]
     },
     "palette": {
       "shadow": "#2f4a26",
@@ -464,7 +489,8 @@
     "resources": ["wood", "game", "gathering"],
     "flora": {
       "trees": 0.9,
-      "shrubs": 0.4
+      "shrubs": 0.4,
+      "species": ["conifer", "broadleaf", "berry-bush"]
     },
     "palette": {
       "shadow": "#1f3d26",
@@ -482,7 +508,8 @@
     "resources": [],
     "flora": {
       "trees": 0,
-      "shrubs": 0.02
+      "shrubs": 0.02,
+      "species": ["cactus", "scrub"]
     },
     "palette": {
       "shadow": "#b49a62",
@@ -500,7 +527,8 @@
     "resources": ["salt"],
     "flora": {
       "trees": 0,
-      "shrubs": 0
+      "shrubs": 0,
+      "species": []
     },
     "palette": {
       "shadow": "#d8d4cc",
@@ -518,7 +546,8 @@
     "resources": ["game", "gathering"],
     "flora": {
       "trees": 0.1,
-      "shrubs": 0.25
+      "shrubs": 0.25,
+      "species": ["acacia", "scrub"]
     },
     "palette": {
       "shadow": "#8f8a3e",
@@ -536,7 +565,8 @@
     "resources": ["game", "gathering"],
     "flora": {
       "trees": 0.05,
-      "shrubs": 0.2
+      "shrubs": 0.2,
+      "species": ["acacia", "palm", "scrub"]
     },
     "palette": {
       "shadow": "#6c8a36",
@@ -554,7 +584,8 @@
     "resources": ["wood", "game", "gathering"],
     "flora": {
       "trees": 0.8,
-      "shrubs": 0.4
+      "shrubs": 0.4,
+      "species": ["tropical-hardwood", "palm", "scrub"]
     },
     "palette": {
       "shadow": "#23502a",
@@ -572,7 +603,8 @@
     "resources": ["wood", "game", "gathering"],
     "flora": {
       "trees": 0.95,
-      "shrubs": 0.5
+      "shrubs": 0.5,
+      "species": ["tropical-hardwood", "palm"]
     },
     "palette": {
       "shadow": "#1b4424",

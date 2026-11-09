@@ -18,5 +18,7 @@ export default defineConfig({
   test: {
     // Composants compris : leurs tests s'écrivent en .test.tsx.
     include: ['{src,tools}/**/*.test.{ts,tsx}'],
+    // Les tests de la génération du monde produisent des cartes entières.
+    testTimeout: 30_000,
   },
 });

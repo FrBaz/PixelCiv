@@ -1,0 +1,160 @@
+[
+  {
+    "id": "stone",
+    "kind": "mineral",
+    "name": "resource.stone",
+    "color": "#a39e93",
+    "deposit": {
+      "abundance": 0.05,
+      "altitudes": ["hill", "low-mountain", "mid-mountain", "high-mountain"],
+      "biomes": ["cliff", "rocky-coast"],
+      "provinceFrequency": 8,
+      "provinceShare": 0.6
+    }
+  },
+  {
+    "id": "copper",
+    "kind": "mineral",
+    "name": "resource.copper",
+    "color": "#c8743c",
+    "deposit": {
+      "abundance": 0.012,
+      "altitudes": ["hill", "low-mountain", "mid-mountain"],
+      "provinceFrequency": 6,
+      "provinceShare": 0.3
+    }
+  },
+  {
+    "id": "tin",
+    "kind": "mineral",
+    "name": "resource.tin",
+    "color": "#c9cfd6",
+    "deposit": {
+      "abundance": 0.005,
+      "altitudes": ["hill", "low-mountain"],
+      "provinceFrequency": 6,
+      "provinceShare": 0.2
+    }
+  },
+  {
+    "id": "iron",
+    "kind": "mineral",
+    "name": "resource.iron",
+    "color": "#8e4a3a",
+    "deposit": {
+      "abundance": 0.012,
+      "altitudes": ["plain", "hill", "low-mountain", "mid-mountain"],
+      "provinceFrequency": 5,
+      "provinceShare": 0.35
+    }
+  },
+  {
+    "id": "coal",
+    "kind": "mineral",
+    "name": "resource.coal",
+    "color": "#2e2a2a",
+    "deposit": {
+      "abundance": 0.01,
+      "altitudes": ["plain", "hill"],
+      "provinceFrequency": 4,
+      "provinceShare": 0.25
+    }
+  },
+  {
+    "id": "gold",
+    "kind": "mineral",
+    "name": "resource.gold",
+    "color": "#f1c232",
+    "deposit": {
+      "abundance": 0.003,
+      "altitudes": ["low-mountain", "mid-mountain", "high-mountain"],
+      "provinceFrequency": 7,
+      "provinceShare": 0.2
+    }
+  },
+  {
+    "id": "silver",
+    "kind": "mineral",
+    "name": "resource.silver",
+    "color": "#dfe6ee",
+    "deposit": {
+      "abundance": 0.003,
+      "altitudes": ["low-mountain", "mid-mountain", "high-mountain"],
+      "provinceFrequency": 7,
+      "provinceShare": 0.2
+    }
+  },
+  {
+    "id": "salt",
+    "kind": "mineral",
+    "name": "resource.salt",
+    "color": "#f4f1e4",
+    "deposit": {
+      "abundance": 0.08,
+      "altitudes": [],
+      "biomes": ["salar", "coastal-marsh", "desert"],
+      "provinceFrequency": 6,
+      "provinceShare": 0.5
+    }
+  },
+  {
+    "id": "gems",
+    "kind": "mineral",
+    "name": "resource.gems",
+    "color": "#b04fd6",
+    "deposit": {
+      "abundance": 0.002,
+      "altitudes": ["mid-mountain", "high-mountain"],
+      "provinceFrequency": 9,
+      "provinceShare": 0.15
+    }
+  },
+  {
+    "id": "fish",
+    "kind": "living",
+    "name": "resource.fish",
+    "color": "#4fa3d9"
+  },
+  {
+    "id": "wood",
+    "kind": "living",
+    "name": "resource.wood",
+    "color": "#3f7a3a"
+  },
+  {
+    "id": "game",
+    "kind": "living",
+    "name": "resource.game",
+    "color": "#a0784a"
+  },
+  {
+    "id": "gathering",
+    "kind": "living",
+    "name": "resource.gathering",
+    "color": "#c25b8f"
+  },
+  {
+    "id": "reeds",
+    "kind": "living",
+    "name": "resource.reeds",
+    "color": "#b5b867"
+  },
+  {
+    "id": "peat",
+    "kind": "living",
+    "name": "resource.peat",
+    "color": "#5a4632"
+  },
+  {
+    "id": "bog-iron",
+    "kind": "living",
+    "name": "resource.bog-iron",
+    "color": "#8a6a4a"
+  },
+  {
+    "id": "waterfowl",
+    "kind": "living",
+    "name": "resource.waterfowl",
+    "color": "#e8e2c8"
+  }
+]

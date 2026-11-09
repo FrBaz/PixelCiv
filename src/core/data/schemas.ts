@@ -49,10 +49,12 @@ export const BiomeSchema = z
     landing: z.enum(['easy', 'difficult', 'impossible']).optional(),
     /** Milieu propice aux maladies (D4, D5). */
     disease: z.boolean(),
-    /** Ressources du milieu ; data/resources.json les définira (tâche 1.6). */
+    /** Ressources du milieu (data/resources.json). */
     resources: z.array(IdSchema),
-    /** Densités de la flore, de 0 à 1 ; ses types viendront avec la tâche 1.6. */
-    flora: z.object({ trees: ShareSchema, shrubs: ShareSchema }).strict(),
+    /** Flore : densités d'arbres et de buissons, de 0 à 1, et espèces (data/flora.json). */
+    flora: z
+      .object({ trees: ShareSchema, shrubs: ShareSchema, species: z.array(IdSchema) })
+      .strict(),
     /** Palette par rôles (REN-09) : ombre, base, lumière. */
     palette: z.object({ shadow: ColorSchema, base: ColorSchema, light: ColorSchema }).strict(),
   })
@@ -186,3 +188,65 @@ export const AltitudeLevelsSchema = z
       }
     });
   });
+
+/** Liste d'entrées aux identifiants uniques. */
+function uniqueIds<T extends { readonly id: string }>(entry: z.ZodType<T>) {
+  return z.array(entry).superRefine((entries, context) => {
+    const seen = new Set<string>();
+    entries.forEach((item, index) => {
+      if (seen.has(item.id)) {
+        context.addIssue({
+          code: 'custom',
+          message: `identifiant en double : ${item.id}`,
+          path: [index, 'id'],
+        });
+      }
+      seen.add(item.id);
+    });
+  });
+}
+
+/**
+ * Gisement d'un minerai (RES-01) : sa fréquence sur les cases qui l'admettent, selon
+ * l'étage d'altitude ou le biome, et les provinces où il se regroupe.
+ */
+export const DepositSchema = z
+  .object({
+    /** Part des cases admises qui portent un gisement, en moyenne. */
+    abundance: ShareSchema,
+    /** Familles de niveaux d'altitude où il se trouve (data/altitude-levels.json). */
+    altitudes: z.array(z.enum(ALTITUDE_FAMILIES)),
+    /** Biomes où il se trouve, à toute altitude. */
+    biomes: z.array(IdSchema).optional(),
+    /** Fréquence du bruit qui dessine les provinces, et part des terres qu'elles couvrent. */
+    provinceFrequency: z.number().positive(),
+    provinceShare: z.number().gt(0).max(1),
+  })
+  .strict();
+
+/** Ressource (RES-01, RES-03 à RES-05) : minerai à gisements, ou ressource vivante du milieu. */
+export const ResourceSchema = z
+  .object({
+    id: IdSchema,
+    kind: z.enum(['mineral', 'living']),
+    name: MessageKeySchema,
+    /** Couleur du mode de carte « ressources ». */
+    color: ColorSchema,
+    deposit: DepositSchema.optional(),
+  })
+  .strict()
+  .refine((resource) => (resource.kind === 'mineral') === (resource.deposit !== undefined), {
+    message: 'seuls les minerais, et tous, ont des gisements',
+    path: ['deposit'],
+  });
+
+export type Resource = z.infer<typeof ResourceSchema>;
+export const ResourcesSchema = uniqueIds(ResourceSchema);
+
+/** Espèce de la flore : arbre ou buisson (MON-10). */
+export const FloraSchema = z
+  .object({ id: IdSchema, kind: z.enum(['tree', 'shrub']), name: MessageKeySchema })
+  .strict();
+
+export type Flora = z.infer<typeof FloraSchema>;
+export const FlorasSchema = uniqueIds(FloraSchema);
