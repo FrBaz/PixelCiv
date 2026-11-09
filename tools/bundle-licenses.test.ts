@@ -6,12 +6,14 @@ import { afterAll, describe, expect, it } from 'vitest';
 import {
   auditBundle,
   bundleLicenses,
+  isPackageReference,
   licenseNotice,
   licenseText,
   missingCredits,
   packageOfModule,
   readPackage,
   repositoryLink,
+  stylesheetReferences,
   type PackageInfo,
 } from './bundle-licenses';
 
@@ -206,6 +208,38 @@ describe('licenseText et licenseNotice', () => {
   });
 });
 
+describe('feuilles de style', () => {
+  it('relève les @import et les url(), hors commentaires', () => {
+    const css = [
+      "@import 'reset.css';",
+      '@import url("./base.css") screen;',
+      "/* @import 'commente.css'; */",
+      ".a { background: url(./img/a.png); font: url( '@fontsource/x/a.woff2' ); }",
+      '.b { mask: url(data:image/svg+xml;utf8,<svg/>); }',
+    ].join('\n');
+    expect(stylesheetReferences(css)).toEqual([
+      'reset.css',
+      './base.css',
+      './img/a.png',
+      '@fontsource/x/a.woff2',
+      'data:image/svg+xml;utf8,<svg/>',
+    ]);
+  });
+
+  it('distingue les paquets des fichiers du projet', () => {
+    const importer = '/repo/src/app/style.css';
+    expect(isPackageReference('css-reset/reset.css', importer, '/repo')).toBe(true);
+    expect(isPackageReference('~pkg/a.css', importer, '/repo')).toBe(true);
+    expect(isPackageReference('../../node_modules/pkg/a.css', importer, '/repo')).toBe(true);
+    expect(isPackageReference('/node_modules/pkg/a.css', importer, '/repo')).toBe(true);
+    expect(isPackageReference('./base.css', importer, '/repo')).toBe(false);
+    expect(isPackageReference('/assets/a.png', importer, '/repo')).toBe(false);
+    expect(isPackageReference('data:image/png;base64,AAAA', importer, '/repo')).toBe(false);
+    expect(isPackageReference('https://example.org/a.css', importer, '/repo')).toBe(false);
+    expect(isPackageReference('#filtre', importer, '/repo')).toBe(false);
+  });
+});
+
 describe('bundleLicenses', () => {
   const MIT_TEXT = 'MIT License\n\nCopyright (c) 2026 Fake Author';
 
@@ -289,6 +323,28 @@ describe('bundleLicenses', () => {
     await expect(buildProject(project({ credits: '| `fake-lib` |\n' }))).rejects.toThrow(
       /absents de CREDITS\.md \(AST-02\) : worker-lib\./,
     );
+  });
+
+  it("refuse une feuille de style du projet qui tire celle d'un paquet", async () => {
+    const dir = project({});
+    writeFileSync(
+      path.join(dir, 'style.css'),
+      "@import 'fake-lib/reset.css';\nbody { margin: 0; }\n",
+    );
+    writeFileSync(path.join(dir, 'node_modules/fake-lib/reset.css'), 'html { color: red; }\n');
+    writeFileSync(path.join(dir, 'main.js'), "import './style.css';\n");
+    await expect(buildProject(dir)).rejects.toThrow(
+      /style\.css tire fake-lib\/reset\.css d'un paquet/,
+    );
+  });
+
+  it("voit la feuille de style d'un paquet importée depuis le JS", async () => {
+    const dir = project({ credits: '| `fake-lib` |\n' });
+    writeFileSync(path.join(dir, 'node_modules/fake-lib/reset.css'), 'html { color: red; }\n');
+    writeFileSync(path.join(dir, 'main.js'), "import 'fake-lib/reset.css';\n");
+    const notice = (await buildProject(dir)).get('licenses.txt');
+    expect(notice).toContain('fake-lib 1.2.3 (MIT)');
+    expect(notice).not.toContain('worker-lib');
   });
 
   it('fait échouer le build sans fichier des crédits', async () => {

@@ -196,6 +196,32 @@ export interface BundleLicensesOptions {
   readonly notice?: string;
 }
 
+/** Feuilles de style du projet : seuls les CSS sont employés, sans préprocesseur. */
+const STYLESHEET = /\.(css|pcss|postcss)$/;
+
+/** Chemins qu'une feuille de style va chercher : `@import` et `url()`, hors commentaires. */
+export function stylesheetReferences(code: string): string[] {
+  const text = code.replace(/\/\*[\s\S]*?\*\//g, '');
+  const references = new Set<string>();
+  for (const match of text.matchAll(/@import\s+(?:url\(\s*)?(['"]?)([^'"\s;)]+)\1/g)) {
+    references.add(match[2]);
+  }
+  for (const match of text.matchAll(/url\(\s*(['"]?)([^'")\s]+)\1\s*\)/g)) {
+    references.add(match[2]);
+  }
+  return [...references].filter((reference) => reference !== '');
+}
+
+/** Le chemin mène-t-il à un paquet : nom nu, `~paquet`, ou chemin qui passe par node_modules ? */
+export function isPackageReference(reference: string, importer: string, root: string): boolean {
+  if (/^(data:|[a-z]+:\/\/|\/\/|#)/i.test(reference)) return false;
+  if (!reference.startsWith('.') && !reference.startsWith('/')) return true;
+  const target = reference.startsWith('/')
+    ? path.join(root, reference)
+    : path.resolve(path.dirname(importer), reference);
+  return target.split(path.sep).includes('node_modules');
+}
+
 const moduleIdsOf = (bundle: Rolldown.OutputBundle): string[] =>
   Object.values(bundle).flatMap((output) => (output.type === 'chunk' ? output.moduleIds : []));
 
@@ -235,6 +261,26 @@ export function bundleLicenses(options: BundleLicensesOptions = {}): {
     apply: 'build',
     configResolved(config) {
       root = config.root;
+    },
+    // Une feuille de style du projet qui en tire une d'un paquet, par `@import` ou
+    // `url()`, l'insère sans en faire un module : le contrôle ne la verrait pas.
+    transform: {
+      order: 'pre',
+      handler(code, id) {
+        const file = id.split('?')[0] ?? id;
+        if (!STYLESHEET.test(file) || file.split('/').includes('node_modules')) return null;
+        const references = stylesheetReferences(code).filter((reference) =>
+          isPackageReference(reference, file, root),
+        );
+        if (references.length > 0) {
+          this.error(
+            `${path.relative(root, file)} tire ${references.join(', ')} d'un paquet. ` +
+              'Importe cette feuille de style depuis le JS, où le contrôle des licences et des ' +
+              'crédits la voit (ADR 0008).',
+          );
+        }
+        return null;
+      },
     },
     generateBundle(_options, bundle) {
       const error = record(bundle);

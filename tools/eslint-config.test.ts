@@ -33,7 +33,11 @@ describe('déterminisme', () => {
     ['globalThis.Math.random();', 'no-restricted-properties'],
     ['globalThis.Date.now();', 'no-restricted-properties'],
     ['self.performance.now();', 'no-restricted-properties'],
-    ['const { crypto: c } = self; c.randomUUID();', 'no-restricted-properties'],
+    [
+      'const { crypto: c } = self; c.randomUUID();',
+      'no-restricted-properties',
+      'pixelciv/direct-globals',
+    ],
     ['export const a = 2 ** 10;', 'no-restricted-syntax'],
     ['let a = 2; a **= 2; export { a };', 'no-restricted-syntax'],
     ['Date.now();', 'no-restricted-globals'],
@@ -43,10 +47,31 @@ describe('déterminisme', () => {
     ['export const f = new Intl.NumberFormat();', 'no-restricted-globals'],
     ['export const t = document.title;', 'no-restricted-globals'],
     ['export const l = navigator.language;', 'no-restricted-globals'],
-  ])('signale %s', async (code, ruleId) => {
+    // Alias et détours, que les interdictions de propriétés ne voient pas.
+    ['const M = Math; M.sin(1);', 'pixelciv/direct-globals'],
+    ['const g = globalThis; g.Date.now();', 'pixelciv/direct-globals'],
+    ['globalThis.self.Date.now();', 'pixelciv/direct-globals'],
+    ['self.globalThis.performance.now();', 'pixelciv/direct-globals'],
+    ['export function f(m = Math) { return m.random(); }', 'pixelciv/direct-globals'],
+    ['const { ...m } = Math; m.random();', 'pixelciv/direct-globals'],
+    ['const { random } = Math; random();', 'no-restricted-properties', 'pixelciv/direct-globals'],
+    ['export const pick = (f: (m: Math) => number) => f(Math);', 'pixelciv/direct-globals'],
+  ])('signale %s', async (code, ...expected) => {
     for (const filePath of workerFiles) {
-      expect(await ruleIds(code, filePath), filePath).toEqual([ruleId]);
+      expect(await ruleIds(code, filePath), filePath).toEqual(expected);
     }
+  });
+
+  it.each([
+    'src/gen/probe.tsx',
+    'src/sim/probe.mts',
+    'src/core/probe.cts',
+    'src/worldgen/probe.js',
+  ])('couvre aussi %s', async (filePath) => {
+    expect(await ruleIds('Math.random(); Date.now();', filePath)).toEqual([
+      'no-restricted-properties',
+      'no-restricted-globals',
+    ]);
   });
 
   it('admet les opérations exactes de Math et les échanges du worker', async () => {
@@ -89,11 +114,29 @@ describe('frontières du worker', () => {
     'export const p = (name: string) => import(`../ui/${name}`);',
     "export const p = import.meta.glob('../ui/*.ts');",
     "export const p = import.meta.glob(['./local/*.ts', '../render/*.ts']);",
+    // Chemins dont seul le début est connu : tout ce qu'ils peuvent désigner compte.
+    "export const p = import.meta.glob('/src/**/*.tsx', { eager: true });",
+    "export const p = import.meta.glob('../**/*.ts');",
+    "export const p = import.meta.glob('../{ui,core}/*.ts');",
+    "export const p = (name: string) => import('../ui/' + name);",
+    'export const p = (name: string) => import(`../${name}`);',
+    'export const p = (name: string) => import(`../u${name}`);',
+    'export const p = (name: string) => import(`pix${name}`);',
+    'export const p = (name: string) => import(name);',
+    "export const p = import('/node_modules/pixi.js/lib/index.mjs');",
+    "export const p = import.meta.glob('../../node_modules/@pixi/*/lib/*.mjs');",
   ])('signale %s', async (code) => {
     for (const filePath of [...workerFiles, 'src/worker/probe.ts', 'src/sim/probe.test.ts']) {
       expect(await ruleIds(code, filePath), filePath).toEqual(['pixelciv/worker-boundaries']);
     }
   });
+
+  it.each(['src/gen/probe.tsx', 'src/sim/probe.mts', 'src/worker/probe.js'])(
+    'couvre aussi %s',
+    async (filePath) => {
+      expect(await ruleIds("import 'preact';", filePath)).toEqual(['pixelciv/worker-boundaries']);
+    },
+  );
 
   it.each([
     "import './ui/panel';",
@@ -102,6 +145,12 @@ describe('frontières du worker', () => {
     "import '../gen/portrait/render';",
     "import 'pixi-sans-rapport';",
     "export const p = import('./local');",
+    "export const p = import.meta.glob('./local/*.ts');",
+    "export const p = import.meta.glob(['../core/*.ts', '!../ui/*.ts']);",
+    'export const p = (name: string) => import(`./local/${name}.ts`);',
+    "export const p = (name: string) => import('../core/' + name);",
+    "export { value } from './local';",
+    'const value = 1; export { value };',
   ])('admet %s', async (code) => {
     expect(await ruleIds(code, 'src/sim/probe.ts')).toEqual([]);
   });
@@ -115,7 +164,9 @@ describe('frontières du worker', () => {
 });
 
 describe('textes affichés', () => {
-  const component = (jsx: string) => `export const View = () => ${jsx};`;
+  const component = (jsx: string) =>
+    `export const label = String(1);\nexport const on = label === '1';\n` +
+    `export const t = (key: string) => key;\nexport const View = () => ${jsx};`;
 
   it.each([
     '<p>Bonjour</p>',
@@ -124,8 +175,21 @@ describe('textes affichés', () => {
     '<button aria-label="Fermer" />',
     '<img alt="Carte" />',
     '<input placeholder="Nom" />',
+    '<option label="Choix" />',
+    // Chaînes rendues par une condition, un repli ou un gabarit.
+    "<p>{on ? 'Reprendre' : 'Pause'}</p>",
+    "<p>{label || 'Inconnu'}</p>",
+    "<p>{label ?? 'Inconnu'}</p>",
+    '<p>{`Bonjour`}</p>',
+    '<p>{`${label} cases`}</p>',
+    '<button title={`Fermer`} />',
+    "<button title={on ? 'Ouvrir' : 'Fermer'} />",
+    "<>{'Bonjour' as string}</>",
   ])('signale %s', async (jsx) => {
-    expect(await ruleIds(component(jsx), 'src/ui/Probe.tsx')).toEqual(['no-restricted-syntax']);
+    // Une condition entre deux textes en compte deux.
+    const ids = await ruleIds(component(jsx), 'src/ui/Probe.tsx');
+    expect(ids.length).toBeGreaterThan(0);
+    expect(new Set(ids)).toEqual(new Set(['pixelciv/no-hardcoded-text']));
   });
 
   it.each([
@@ -133,9 +197,18 @@ describe('textes affichés', () => {
     '<p> – 3 · </p>',
     '<button title={label} />',
     '<div class="panel" />',
+    // Image décorative et attributs techniques.
+    '<img alt="" />',
+    "<div class={'panel'} />",
+    "<button type={'button'} />",
+    "<div class={on ? 'panel open' : 'panel'} />",
+    '<div class={`panel ${label}`} />',
+    // Clés de traduction, même choisies par une condition.
+    "<p>{t(on ? 'time.resume' : 'time.pause')}</p>",
+    "<button title={t('notice.close')} />",
+    "<p>{on ? t('a.b') : label}</p>",
   ])('admet %s', async (jsx) => {
-    const code = `export const label = String(1);\n${component(jsx)}`;
-    expect(await ruleIds(code, 'src/ui/Probe.tsx')).toEqual([]);
+    expect(await ruleIds(component(jsx), 'src/ui/Probe.tsx')).toEqual([]);
   });
 });
 

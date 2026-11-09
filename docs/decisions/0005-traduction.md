@@ -18,7 +18,7 @@ Aucun texte affiché n'est écrit en dur : tout passe par la traduction (NF-06),
 - **Appels.** `t(clé, paramètres)` n'accepte que les clés du catalogue : une clé inconnue est une erreur de compilation. `tKey` sert aux clés qui viennent des données (`data/`), vérifiées par les tests.
 - **Contrôles.**
   - Un test vérifie que le catalogue est bien formé, que toutes les clés passées à `t()` existent et qu'aucune clé ne reste inutilisée.
-  - ESLint refuse le texte écrit en dur dans le JSX, ainsi que dans les attributs `title`, `aria-label`, `alt` et `placeholder`.
+  - ESLint refuse le texte écrit en dur dans le JSX : entre les balises, en chaîne ou en gabarit, directement ou par une condition (`{a ? 'Oui' : 'Non'}`), ainsi que dans les attributs lus par l'utilisateur (`title`, `aria-label`, `alt`, `placeholder`…). Il ne suit pas les variables : un texte rangé dans une constante lui échappe.
 - **Repli.** À l'exécution, une clé absente s'affiche telle quelle plutôt que de faire planter l'interface.
 
 ## Conséquences

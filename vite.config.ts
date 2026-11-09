@@ -16,6 +16,7 @@ export default defineConfig({
     plugins: () => [licenses.worker()],
   },
   test: {
-    include: ['src/**/*.test.ts', 'tools/**/*.test.ts'],
+    // Composants compris : leurs tests s'écrivent en .test.tsx.
+    include: ['{src,tools}/**/*.test.{ts,tsx}'],
   },
 });
