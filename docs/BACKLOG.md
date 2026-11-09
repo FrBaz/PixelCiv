@@ -49,6 +49,22 @@ Objectif : un projet outillé, testé et déployé automatiquement, avec l'archi
 
   Restent à verser les fichiers eux-mêmes, que seul l'auteur peut fournir : notebooks, scripts de C1, pack de sprites avec sa licence, nom de son auteur et lien (PRD, question 14). Le tableau ci-dessous les recense.
 
+### Relecture de la phase 0
+
+La phase terminée, des relecteurs indépendants l'ont relue en quatre domaines : cœur et worker, sauvegardes et données, interface et rendu, outillage et documentation. Chaque remarque a été reproduite par du code, puis corrigée avec un test qui l'aurait détectée, ou vérifiée dans Chromium quand elle touchait au navigateur.
+
+- **Première relecture : 40 défauts**, corrigés dans les commits « relecture : … ». Les plus sérieux : des commandes perdues par la sauvegarde, des chargements concurrents qui s'écrasaient, des écritures d'IndexedDB comptées avant d'être validées, une décompression sans limite, des fichiers forgés acceptés (taille de monde, disposition des tableaux), des règles ESLint contournables (alias de `Math`, globs, texte dans une condition), la densité de pixels de l'écran figée au démarrage.
+- **Deuxième relecture, des corrections elles-mêmes : 23 défauts**, corrigés dans « relecture 2 : … ». Chaque remarque y a été soumise à un vérificateur chargé de la réfuter. Entre autres : une sauvegarde automatique illisible qui n'était pas mise de côté, faute de copie du tampon transféré au worker ; le zoom du navigateur qui étirait la carte ; un pincement au pavé tactile qui zoomait la page ; `?stepCost` refusé par la poignée de main ; des fichiers du projet pris pour des paquets par le contrôle des feuilles de style.
+- **Troisième relecture, des corrections de la deuxième : 7 défauts**, corrigés dans « relecture 3 : … ». Le zoom du navigateur laissait `app.screen` à l'ancienne taille, et un fichier forgé de 8 Ko faisait encore allouer 1,7 Go, Zod relevant chaque champ invalide de millions de commandes.
+
+Le nombre de défauts décroît d'une relecture à l'autre, sans être nul : une quatrième pourrait en trouver d'autres, plus petits.
+
+Restent ouverts, et notés dans les ADR :
+- le journal des commandes grossit sans fin, et la sauvegarde échoue vers 130 000 commandes : il faudra le compacter (ADR 0007) ;
+- la règle des textes ne suit ni les variables ni les tableaux (ADR 0005) ;
+- un paquet de CSS désigné par son seul nom est contrôlé, mais pas les feuilles qu'il importe à son tour (ADR 0008) ;
+- dans `pow`, un résultat voisin du plus grand double peut passer du mauvais côté de la limite (ADR 0003).
+
 ## À fournir par l'auteur
 
 | Quoi | Pour | Référence |
