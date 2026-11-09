@@ -9,7 +9,7 @@ Une même graine et les mêmes paramètres doivent donner le même monde sur tou
 ## Décision
 
 - **Aléatoire.** Un seul générateur, xoshiro128** : 128 bits d'état et des opérations entières exactes sur 32 bits. Il est découpé en flux nommés (`src/core/rng.ts`), un par système. Chaque flux dérive de la graine du monde et de son nom, et non de l'ordre de création des flux. L'état des flux est sauvegardé.
-- **Fonctions mathématiques.** `src/core/dmath.ts` fournit `sin`, `cos`, `exp`, `log` et `pow`, écrites avec les seules opérations qu'IEEE 754 définit exactement : addition, soustraction, multiplication, division, racine carrée et arrondis.
+- **Fonctions mathématiques.** `src/core/dmath.ts` fournit `sin`, `cos`, `exp`, `log` et `pow`, écrites avec les seules opérations qu'IEEE 754 définit exactement : addition, soustraction, multiplication, division, racine carrée et arrondis. Réduction de l'argument puis série de Taylor (ou d'atanh pour `log`) ; les constantes découpées de π/2 et de ln 2 ont été recalculées en rationnels exacts. Précision mesurée : 1 à 2 ulp, et 10^-13 en relatif pour `pow`.
 - **Interdits.** Dans `src/core`, `src/sim`, `src/worldgen` et `src/gen`, ESLint refuse `Math.random`, `crypto`, `Date`, `performance`, les fonctions de Math approchées, l'opérateur `**`, `Intl` et les méthodes qui dépendent de la langue de l'appareil, y compris par `globalThis` ou `self`.
 - **Temps.** La simulation compte ses pas et ne lit jamais l'horloge. Seul l'hôte du worker (`src/worker`, ADR 0004) la lit, pour cadencer les pas.
 - **Commandes.** Une commande qui modifie l'état est horodatée du pas où elle s'applique, appliquée au début de ce pas, puis journalisée. Rejouer une partie revient à rejouer son journal à partir de la même graine.
