@@ -6,11 +6,11 @@ Le code et le contenu propres au jeu restent sous droits réservés : le dépôt
 
 ## Pack de sprites
 
-Pas encore intégré. On consignera ici, à son arrivée, son auteur, le lien vers le pack et sa licence (AST-01, AST-02 ; PRD, question 14).
+Pas intégré. Le pack retenu par l'auteur est la version gratuite de « 2D Pixel Art Male and Female Character », de GandalfHardcore : <https://gandalfhardcore.itch.io/2d-pixel-art-male-and-female-character> (PRD, question 14). Sa licence reste à vérifier avant tout versement (AST-01, AST-02), et les mini-sprites de la carte, de 6 à 10 px de haut, seront de toute façon générés (REN-04, phase 2). On consignera ici sa licence s'il est intégré.
 
 | Auteur | Lien | Licence | Emplacement |
 |---|---|---|---|
-| à fournir | à fournir | à vérifier | `assets/source/` si la licence permet de redistribuer les fichiers, sinon `assets/local/`, hors du dépôt |
+| GandalfHardcore | [itch.io](https://gandalfhardcore.itch.io/2d-pixel-art-male-and-female-character) | à vérifier | non versé : `assets/source/` si la licence permet de redistribuer les fichiers, sinon `assets/local/`, hors du dépôt |
 
 `assets/source/README.md` décrit la marche à suivre.
 

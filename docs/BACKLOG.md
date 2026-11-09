@@ -14,19 +14,19 @@ Objectif : un projet outillé, testé et déployé automatiquement, avec l'archi
 
 | # | Tâche | Exigences | Critère d'acceptation | État |
 |---|---|---|---|---|
-| 0.1 | Projet Vite et TypeScript strict, arborescence, ESLint, Prettier, Vitest ; scripts `dev`, `build`, `test`, `typecheck`, `lint` ; licences des dépendances vérifiées. | NF-11, AST-05 | `npm test` et `npm run build` passent. | à relire |
-| 0.2 | Documentation : PRD et plan dans `docs/` ; premiers ADR (pile technique, monde cylindrique, déterminisme, communication avec le worker) ; relecture de `CLAUDE.md`. | — | ADR rédigés et cités dans le plan. | à relire |
-| 0.3 | Intégration continue GitHub Actions (lint, types, tests, build) et déploiement sur GitHub Pages à chaque fusion sur `main`. | — | Chaque PR affiche ses vérifications ; `main` est en ligne. | à relire |
-| 0.4 | Squelette d'application : page plein écran, canvas PixiJS, couche d'interface Preact, redimensionnement, orientation, zones de sécurité des téléphones. | IHM-06, IHM-07 | Affichage correct en paysage et en portrait. | à relire |
-| 0.5 | Worker de simulation et protocole de messages typé : commandes, instantanés, deltas, tampons transférés. Une seule simulation pour tous les modes. | NF-02, MOD-01 | Un pas factice de 200 ms ne fait pas chuter l'affichage. | à relire |
-| 0.6 | Boucle de temps : pas mensuel, calendrier, pause, plusieurs vitesses, horodatage des commandes. | MOD-06 | Une année dure environ 10 s en vitesse normale. | à relire |
-| 0.7 | PRNG à flux nommés et maths déterministes (`src/core/rng.ts`, `src/core/dmath.ts`). | NF-09 | Même graine, même suite, sous Node comme dans les navigateurs. | à relire |
-| 0.8 | Caméra : déplacement et zoom à la souris, au clavier et au doigt, sur une grille de test qui boucle d'est en ouest. | MON-01, IHM-07 | Défilement sans fin, sans saut à la couture. | à relire |
-| 0.9 | Traduction : clés, fichier français, pluriels et genre ; un test échoue si une clé manque. | NF-06, POL-04 | Aucun texte en dur dans le squelette. | à relire |
-| 0.10 | Données : chargement et validation par schémas ; premier fichier `data/biomes.json` (biomes du prototype) ; validation en intégration continue. | NF-07, MON-10 | Une donnée invalide fait échouer l'intégration continue. | à relire |
-| 0.11 | Sauvegarde minimale : IndexedDB, format versionné, export et import de fichier. | NF-05 | Une partie factice survit à un rechargement et passe d'un appareil à l'autre. | à relire |
-| 0.12 | Panneau de débogage : images par seconde, durée des pas, mémoire. | NF-01 | Visible sur PC et téléphone. | à relire |
-| 0.13 | Prototypes dans `prototypes/`, pack de sprites dans `assets/source/` si sa licence le permet, fichier `CREDITS.md`. | AST-01, AST-02 | Crédits renseignés. | à relire |
+| 0.1 | Projet Vite et TypeScript strict, arborescence, ESLint, Prettier, Vitest ; scripts `dev`, `build`, `test`, `typecheck`, `lint` ; licences des dépendances vérifiées. | NF-11, AST-05 | `npm test` et `npm run build` passent. | fait |
+| 0.2 | Documentation : PRD et plan dans `docs/` ; premiers ADR (pile technique, monde cylindrique, déterminisme, communication avec le worker) ; relecture de `CLAUDE.md`. | — | ADR rédigés et cités dans le plan. | fait |
+| 0.3 | Intégration continue GitHub Actions (lint, types, tests, build) et déploiement sur GitHub Pages à chaque fusion sur `main`. | — | Chaque PR affiche ses vérifications ; `main` est en ligne. | fait |
+| 0.4 | Squelette d'application : page plein écran, canvas PixiJS, couche d'interface Preact, redimensionnement, orientation, zones de sécurité des téléphones. | IHM-06, IHM-07 | Affichage correct en paysage et en portrait. | fait |
+| 0.5 | Worker de simulation et protocole de messages typé : commandes, instantanés, deltas, tampons transférés. Une seule simulation pour tous les modes. | NF-02, MOD-01 | Un pas factice de 200 ms ne fait pas chuter l'affichage. | fait |
+| 0.6 | Boucle de temps : pas mensuel, calendrier, pause, plusieurs vitesses, horodatage des commandes. | MOD-06 | Une année dure environ 10 s en vitesse normale. | fait |
+| 0.7 | PRNG à flux nommés et maths déterministes (`src/core/rng.ts`, `src/core/dmath.ts`). | NF-09 | Même graine, même suite, sous Node comme dans les navigateurs. | fait |
+| 0.8 | Caméra : déplacement et zoom à la souris, au clavier et au doigt, sur une grille de test qui boucle d'est en ouest. | MON-01, IHM-07 | Défilement sans fin, sans saut à la couture. | fait |
+| 0.9 | Traduction : clés, fichier français, pluriels et genre ; un test échoue si une clé manque. | NF-06, POL-04 | Aucun texte en dur dans le squelette. | fait |
+| 0.10 | Données : chargement et validation par schémas ; premier fichier `data/biomes.json` (biomes du prototype) ; validation en intégration continue. | NF-07, MON-10 | Une donnée invalide fait échouer l'intégration continue. | fait |
+| 0.11 | Sauvegarde minimale : IndexedDB, format versionné, export et import de fichier. | NF-05 | Une partie factice survit à un rechargement et passe d'un appareil à l'autre. | fait |
+| 0.12 | Panneau de débogage : images par seconde, durée des pas, mémoire. | NF-01 | Visible sur PC et téléphone. | fait |
+| 0.13 | Prototypes dans `prototypes/`, pack de sprites dans `assets/source/` si sa licence le permet, fichier `CREDITS.md`. | AST-01, AST-02 | Crédits renseignés. | fait |
 
 ### Notes
 
@@ -67,14 +67,35 @@ Restent ouverts, et notés dans les ADR :
 - un paquet de CSS désigné par son seul nom est contrôlé, mais pas les feuilles qu'il importe à son tour (ADR 0008) ;
 - dans `pow`, un résultat voisin du plus grand double peut passer du mauvais côté de la limite (ADR 0003).
 
+## Phase 1 — Génération du monde
+
+Objectif : porter le pipeline du prototype en TypeScript, sur un monde cylindrique, avec un rendu fidèle et fluide, en y intégrant les corrections de la séance C1 (relief, climat, eaux, côtes, saisons). Les décisions D1 à D13 de `docs/design/C1-monde.md` font foi ; `prototypes/c1/` en donne une implémentation de référence.
+
+**Jalon 1.** On génère un monde cylindrique à partir d'une graine, avec ses montagnes, ses lacs, ses côtes et ses climats. On l'explore sur PC et sur téléphone pendant que les saisons passent.
+
+| # | Tâche | Exigences | Critère d'acceptation | État |
+|---|---|---|---|---|
+| 1.1 | Bruit simplex 3D déterministe et échantillonnage sur un cylindre : la longitude devient un angle, et la carte se referme d'est en ouest. | MON-01, MON-04 | Valeurs continues à la couture ; même graine, même bruit. | à faire |
+| 1.2 | Relief : bruit fractal à trois échelles, plus des chaînes de montagnes par bruit de crêtes (D12). Paramètres : niveau de la mer, part des terres, relief. Correspondance en mètres et 20 niveaux d'altitude (D11). | MON-03, MON-05, MON-14 | 3 à 6 % des terres au-dessus de la moyenne montagne ; crêtes continues, avec des cols. | à faire |
+| 1.3 | Climat : températures recalibrées, gradient de 6,5 °C par 1 000 m ; précipitations par bandes de latitude, vents dominants et ombre pluviométrique ; continentalité ; températures mensuelles (D8, D13). | MON-04, MON-15, SAI-01, SAI-02 | Environ 27 °C à l'équateur et −25 °C aux pôles ; présence de déserts subtropicaux et de déserts d'abri. | à faire |
+| 1.4 | Hydrologie continue d'est en ouest. Un seul niveau de la mer, et un océan limité aux eaux reliées à l'océan mondial (D1). Remplissage avec pente minimale sur les plats, puis accumulation. Lacs par bilan hydrique (D2) et trois classes de rivières (D3). L'alias du prototype est corrigé. | MON-04, MON-07, MON-11 | Toute rivière rejoint la mer ou un lac ; aucune n'est coupée à la couture, ni rectiligne. | à faire |
+| 1.5 | Les 32 biomes naturels (D6), décrits dans `data/biomes.json` et classés selon le mois le plus chaud et le plus froid (D13). Côtes typées (D4) et zones humides (D5). | MON-08, MON-10, MON-12, MON-13 | Plages sur une seule rangée côtière ; glaciers seulement là où le mois le plus chaud reste sous 0 °C. | à faire |
+| 1.6 | Ressources et flore : gisements selon l'altitude et le biome, ressources des milieux humides et salés, densités d'arbres et de buissons. | RES-01, RES-03, RES-05 | Répartition lisible en mode de carte « ressources ». | à faire |
+| 1.7 | Cuisson des blocs dans un worker : tuiles de 4 px avec variations, débordement du relief, shader (pente, lumière du nord-est, teinte thermique). Texture de données des saisons, une valeur par case (D10). | REN-01, REN-02, REN-09, REN-10 | Rendu fidèle au prototype, sans couture visible. | à faire |
+| 1.8 | Affichage : zoom net, niveaux de détail de base, modes de carte « relief », « biomes » et « ressources » avec légende. Neige et glace saisonnières, par shader et palettes saisonnières (D10). | REN-03, REN-08, REN-10, IHM-01 | 60 images/s sur PC et 30 sur téléphone, sur une carte Grand, saisons comprises. | à faire |
+| 1.9 | Écran de création : graine, taille, paramètres, aperçu, régénération. | CRE-01, MON-02 | Utilisable au doigt sur téléphone. | à faire |
+| 1.10 | Tests et bancs d'essai : empreinte des cartes par graine, continuité de la couture, durée de génération par taille. | NF-03, NF-09 | Un monde Grand se génère en moins de 10 s sur PC ; la mesure sur téléphone est consignée. | à faire |
+
+### Notes
+
 ## À fournir par l'auteur
 
-| Quoi | Pour | Référence |
-|---|---|---|
-| Notebook `testMap_filtre.ipynb` | 0.10 et 0.13, puis phase 1 | PLAN, section 12, étape 1 |
-| Notebooks `testArmoiries.ipynb` et `testVisages.ipynb`, désormais simples illustrations : portraits et armoiries sont conçus à neuf | 0.13 | PLAN, version 0.3 |
-| Scripts de la séance C1, dans `prototypes/c1/` : `lacs_cotes_zones_humides.py` et `saisons.py` | 0.13, puis phase 1, dont ils sont l'implémentation de référence | PLAN, sections 6 et 12 (étape 4) |
-| Images de la séance C1, dans `docs/design/C1/` : `avant-apres-tropiques.png`, `avant-apres-nord.png`, `saisons-nord.png` et `saisons.gif` ; `C1-monde.md` y renvoie | phase 1 | PLAN, section 12, étape 4 |
-| Pack de sprites original et sa licence | 0.13 | AST-01, AST-02 |
-| Nom de l'auteur du pack et lien | 0.13 | PRD, question 14 |
-| Activation de GitHub Pages, avec « GitHub Actions » comme source | 0.3 | PLAN, section 12, étape 2 |
+| Quoi | Pour | Référence | État |
+|---|---|---|---|
+| Notebook `testMap_filtre.ipynb` | simple illustration pour la phase 1, qui s'appuie sur C1 et ses images | PLAN, section 12, étape 1 | non reçu |
+| Notebooks `testArmoiries.ipynb` et `testVisages.ipynb`, simples illustrations : portraits et armoiries sont conçus à neuf | phases 2 et 4 | PLAN, version 0.3 | non reçus |
+| Scripts de la séance C1, dans `prototypes/c1/` | phase 1, dont ils sont l'implémentation de référence | PLAN, sections 6 et 12 (étape 4) | versés |
+| Images de la séance C1, dans `docs/design/C1/` : `avant-apres-tropiques.png`, `avant-apres-nord.png`, `saisons-nord.png` | phase 1 | PLAN, section 12, étape 4 | versées, converties depuis les pièces jointes (256 couleurs) |
+| Animation `docs/design/C1/saisons.gif`, à laquelle renvoie `C1-monde.md` | phase 1 | PLAN, section 12, étape 4 | seule sa première image est arrivée, versée sous `saisons-janvier.png` |
+| Pack de sprites : « 2D Pixel Art Male and Female Character », de GandalfHardcore, version gratuite | phase 2 et suivantes | AST-01, AST-02 ; PRD, question 14 | auteur et lien reçus ; licence à vérifier, `itch.io` étant hors de portée de la session ; non versé |
+| Activation de GitHub Pages, avec « GitHub Actions » comme source | 0.3 | PLAN, section 12, étape 2 | faite : le déploiement de `main` a réussi |
