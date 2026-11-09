@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { loadGameData } from '../core/data';
 import { Rng } from '../core/rng';
 import { WORLD_SIZES, type WorldSize } from '../core/world';
 import {
@@ -16,13 +17,8 @@ import { findOcean } from './hydrology';
 import { generateRelief } from './relief';
 import { CylinderSampler } from './sampler';
 
-const CONFIG: ClimateConfig = {
-  equatorTemperature: 27,
-  poleTemperature: -25,
-  latitudeExponent: 1.8,
-  lapseRate: 6.5,
-  precipitationScale: 1300,
-};
+const { worldgen } = loadGameData();
+const CONFIG: ClimateConfig = worldgen.climate;
 const PARAMS = { temperature: 0, humidity: 1 };
 
 interface World {
@@ -36,7 +32,7 @@ function world(seed: string, size: WorldSize = WORLD_SIZES.small): World {
   const sampler = new CylinderSampler(size);
   const rng = new Rng(seed);
   const elevation = generateRelief(sampler, rng, { landShare: 0.35, seaLevel: 0, relief: 0.5 });
-  const ocean = findOcean(elevation, size, 0.02);
+  const ocean = findOcean(elevation, size, worldgen.ocean.minShare);
   return {
     size,
     elevation,
@@ -55,7 +51,7 @@ function synthetic(size: WorldSize, land: (x: number, y: number) => number | und
       if (altitude !== undefined) elevation[y * width + x] = altitude;
     }
   }
-  const ocean = findOcean(elevation, size, 0.02);
+  const ocean = findOcean(elevation, size, worldgen.ocean.minShare);
   const sampler = new CylinderSampler(size);
   return {
     size,

@@ -47,6 +47,10 @@ const SPURS: Fractal = { frequency: 14, octaves: 3, gain: 0.5 };
 const PASSES: Fractal = { frequency: 18, octaves: 2 };
 /** Demi-largeur d'une chaîne, piémonts compris, en valeur du bruit des chaînes. */
 const CHAIN_WIDTH = 0.22;
+/** Part du détail gardée en plaine : de quoi infléchir les rivières sans heurter le relief. */
+const LOWLAND_DETAIL = 0.9;
+/** Détail supplémentaire en montagne : ravins et contreforts, à l'échelle des cases. */
+const MOUNTAIN_DETAIL = 3;
 /** Hauteur des crêtes, au relief par défaut, en unités de hauteur brute. */
 const RIDGE_HEIGHT = 0.55;
 
@@ -109,7 +113,9 @@ export function rawHeight(sampler: CylinderSampler, rng: Rng, relief: number): F
     height[index] =
       WEIGHTS.continents * continent +
       WEIGHTS.regions * (regions[index] ?? 0) +
-      WEIGHTS.detail * (0.35 + 0.65 * Math.min(1, rugged)) * (detail[index] ?? 0) +
+      WEIGHTS.detail *
+        (LOWLAND_DETAIL + (1 - LOWLAND_DETAIL) * Math.min(1, rugged) + MOUNTAIN_DETAIL * mountain) *
+        (detail[index] ?? 0) +
       ridgeHeight * mountain;
   }
   return height;
@@ -159,5 +165,6 @@ export function generateRelief(
   params: ReliefParams,
 ): Float32Array {
   const height = rawHeight(sampler, rng, params.relief);
-  return toElevation(height, seaThreshold(height, params), params.relief);
+  const sea = seaThreshold(height, params);
+  return toElevation(height, sea, params.relief);
 }
