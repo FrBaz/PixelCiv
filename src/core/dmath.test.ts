@@ -38,11 +38,27 @@ describe('précision', () => {
     expect(worst(sin, Math.sin, (r) => [(r.nextFloat() - 0.5) * 200])).toBeLessThanOrEqual(3);
     expect(worst(cos, Math.cos, (r) => [(r.nextFloat() - 0.5) * 200])).toBeLessThanOrEqual(3);
     expect(worst(sin, Math.sin, (r) => [(r.nextFloat() - 0.5) * 2e5])).toBeLessThanOrEqual(3);
+    // Jusqu'à la limite de la réduction exacte, 2^20 × π/2.
+    expect(worst(cos, Math.cos, (r) => [(r.nextFloat() - 0.5) * 3.2e6])).toBeLessThanOrEqual(3);
   });
 
-  it('sin près de ses zéros', () => {
-    for (let k = -30; k <= 30; k++) {
-      expect(Math.abs(sin(k * Math.PI) - Math.sin(k * Math.PI))).toBeLessThan(1e-29);
+  it('sin et cos, à 3 ulp près de leurs zéros', () => {
+    // Près d'un zéro, le résultat est minuscule : seule une réduction complète, reste de
+    // π/2 compris, le garde exact à l'ulp.
+    let max = 0;
+    for (let k = -100_000; k <= 100_000; k += 97) {
+      max = Math.max(max, ulps(sin(k * Math.PI), Math.sin(k * Math.PI)));
+      const half = (k + 0.5) * Math.PI;
+      max = Math.max(max, ulps(cos(half), Math.cos(half)));
+    }
+    expect(max).toBeLessThanOrEqual(3);
+  });
+
+  it('restent dans [-1, 1] au-delà du domaine précis', () => {
+    for (const x of [1e7, 1e18, 1e100, 1e300, Number.MAX_VALUE, -1e300]) {
+      for (const value of [sin(x), cos(x)]) {
+        expect(Math.abs(value), String(x)).toBeLessThanOrEqual(1);
+      }
     }
   });
 
@@ -58,13 +74,24 @@ describe('précision', () => {
     expect(worst(log, Math.log, (r) => [r.nextFloat() * 2.2e-308])).toBeLessThanOrEqual(3);
   });
 
-  it('pow, à 1e-13 près en relatif', () => {
+  it('pow, à 1e-14 près en relatif pour un résultat modéré', () => {
     const random = new Rng('dmath').stream('pow');
     for (let i = 0; i < 20_000; i++) {
       const x = random.nextFloat() * 100;
       const y = (random.nextFloat() - 0.5) * 20;
       const expected = Math.pow(x, y);
-      expect(Math.abs(pow(x, y) - expected)).toBeLessThanOrEqual(1e-13 * expected);
+      expect(Math.abs(pow(x, y) - expected)).toBeLessThanOrEqual(1e-14 * expected);
+    }
+  });
+
+  it('pow, à 2e-13 près en relatif près des débordements', () => {
+    const random = new Rng('dmath').stream('pow.grand');
+    for (let i = 0; i < 20_000; i++) {
+      const x = 1 + random.nextFloat() * 99;
+      const y = (random.nextFloat() * 709) / Math.log(x);
+      const expected = Math.pow(x, y);
+      if (!Number.isFinite(expected)) continue;
+      expect(Math.abs(pow(x, y) - expected)).toBeLessThanOrEqual(2e-13 * expected);
     }
   });
 });
@@ -107,5 +134,15 @@ describe('valeurs particulières', () => {
   it('garde un résultat représentable malgré un débordement intermédiaire', () => {
     expect(pow(10, -320)).toBeGreaterThan(0);
     expect(Math.abs(pow(10, -320) - 1e-320)).toBeLessThanOrEqual(5e-324);
+    expect(pow(0.3, 600)).toBe(Math.pow(0.3, 600));
+  });
+
+  it("déborde vers l'infini quand le vrai résultat dépasse le plus grand double", () => {
+    expect(pow(2, 1024)).toBe(Infinity);
+    expect(pow(4, 512)).toBe(Infinity);
+    expect(pow(16, 256)).toBe(Infinity);
+    expect(pow(0.5, -1024)).toBe(Infinity);
+    expect(pow(-2, 1025)).toBe(-Infinity);
+    expect(pow(2, 1023)).toBe(2 ** 1023);
   });
 });

@@ -18,6 +18,26 @@ describe('Fingerprint', () => {
     );
   });
 
+  it('donne la même empreinte à tous les NaN, quels que soient leurs bits', () => {
+    // NaN de signe négatif, comme en produisent certains processeurs.
+    const negative = new Float64Array(Uint32Array.of(0, 0xfff80000).buffer);
+    const payload = new Float32Array(Uint32Array.of(0x7fc00001).buffer);
+    const canonical = (array: Float64Array | Float32Array) =>
+      new Fingerprint().typedArray(array).value();
+    expect(canonical(negative)).toBe(canonical(Float64Array.of(Number.NaN)));
+    expect(canonical(payload)).toBe(canonical(Float32Array.of(Number.NaN)));
+    expect(new Fingerprint().float64(negative[0] ?? 0).value()).toBe(
+      new Fingerprint().float64(Number.NaN).value(),
+    );
+  });
+
+  it('lit les autres nombres à virgule par leurs octets', () => {
+    const array = Float64Array.of(1.5, -0, Math.PI);
+    expect(new Fingerprint().typedArray(array).value()).toBe(
+      new Fingerprint().bytes(new Uint8Array(array.buffer)).value(),
+    );
+  });
+
   it('lit un tableau typé par ses octets', () => {
     const array = Uint16Array.of(1, 2, 3);
     const viaArray = new Fingerprint().typedArray(array).value();

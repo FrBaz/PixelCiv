@@ -13,12 +13,18 @@
 export const PI = Math.PI;
 export const TAU = 2 * Math.PI;
 
-/** π/2 en trois morceaux de 33 bits : n × morceau reste exact pour |n| < 2^20. */
+/**
+ * π/2 en trois morceaux de 33 bits, plus le reste : n × morceau reste exact pour
+ * |n| < 2^20, et le reste rend la réduction juste près des zéros de sin et de cos.
+ */
 const PIO2_1 = 1.5707963267341256;
 const PIO2_2 = 6.077100506303966e-11;
 const PIO2_3 = 2.0222662487111665e-21;
+const PIO2_3T = 8.4784276603689e-32;
 const INV_PIO2 = 0.6366197723675814;
 const PIO4 = 0.7853981633974483;
+/** Au-delà de 2^20 × π/2, les produits n × morceau ne seraient plus exacts. */
+const REDUCTION_LIMIT = 1647099.3291652855;
 
 /** ln 2 en deux morceaux, le premier sur 32 bits. */
 const LN2_HI = 0.6931471803691238;
@@ -70,16 +76,27 @@ function cosKernel(r: number): number {
 }
 
 /**
- * Sinus. Ramène x dans [-π/4, π/4] par multiples de π/2 (méthode de Cody et Waite).
- * Précis tant que |x| reste sous 10^6 environ ; au-delà, toujours déterministe.
+ * Réduit x à r = x − n π/2, avec |r| ≤ π/4 environ (méthode de Cody et Waite).
+ * Au-delà de REDUCTION_LIMIT, x est d'abord ramené modulo 2π, tel que le représente
+ * un double : le reste de `%` est exact, donc déterministe, mais le résultat perd
+ * alors sa précision. Le jeu n'emploie pas d'angles si grands.
+ */
+function reduce(x: number): { readonly n: number; readonly r: number } {
+  const bounded = Math.abs(x) < REDUCTION_LIMIT ? x : x % TAU;
+  const n = Math.round(bounded * INV_PIO2);
+  return { n, r: bounded - n * PIO2_1 - n * PIO2_2 - n * PIO2_3 - n * PIO2_3T };
+}
+
+/**
+ * Sinus, à 1 ou 2 ulp près sous REDUCTION_LIMIT, zéros compris ; au-delà, toujours
+ * déterministe et dans [-1, 1].
  */
 export function sin(x: number): number {
   if (!Number.isFinite(x)) return NaN;
   // Garde le signe de zéro : sin(-0) vaut -0.
   if (x === 0) return x;
   if (Math.abs(x) <= PIO4) return sinKernel(x);
-  const n = Math.round(x * INV_PIO2);
-  const r = x - n * PIO2_1 - n * PIO2_2 - n * PIO2_3;
+  const { n, r } = reduce(x);
   switch (n & 3) {
     case 0:
       return sinKernel(r);
@@ -92,12 +109,11 @@ export function sin(x: number): number {
   }
 }
 
-/** Cosinus, mêmes réduction et domaine que sin. */
+/** Cosinus, mêmes réduction, précision et domaine que sin. */
 export function cos(x: number): number {
   if (!Number.isFinite(x)) return NaN;
   if (Math.abs(x) <= PIO4) return cosKernel(x);
-  const n = Math.round(x * INV_PIO2);
-  const r = x - n * PIO2_1 - n * PIO2_2 - n * PIO2_3;
+  const { n, r } = reduce(x);
   switch (n & 3) {
     case 0:
       return cosKernel(r);
@@ -216,7 +232,9 @@ function integerPower(base: number, n: number): number {
 /**
  * Puissance x^y. Les cas particuliers suivent la norme ECMAScript
  * (Number::exponentiate) ; le cas général passe par exp(y ln x), ou par
- * l'exponentiation rapide quand y est un entier modéré.
+ * l'exponentiation rapide quand y est un entier modéré. Par exp(y ln x), l'erreur
+ * relative croît avec |y ln x| : de l'ordre de 10^-15 pour un résultat modéré, elle
+ * atteint 2 × 10^-13 près des débordements, où |y ln x| approche 709.
  */
 export function pow(x: number, y: number): number {
   if (Number.isNaN(y)) return NaN;
@@ -238,8 +256,10 @@ export function pow(x: number, y: number): number {
   let result: number;
   if (Number.isInteger(y) && Math.abs(y) <= 1024) {
     result = integerPower(magnitude, y);
-    // Un produit intermédiaire a pu déborder alors que le résultat reste représentable.
-    if (!Number.isFinite(result) || result === 0) result = exp(y * log(magnitude));
+    // Un résultat nul ou sous-normal a perdu sa précision dans les produits, alors qu'il
+    // peut rester représentable : exp(y ln x) fait mieux. Un débordement, lui, est réel,
+    // car les produits croissent avec le résultat.
+    if (result < SMALLEST_NORMAL) result = exp(y * log(magnitude));
   } else {
     result = exp(y * log(magnitude));
   }
