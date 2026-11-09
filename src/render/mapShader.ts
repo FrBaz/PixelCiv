@@ -9,7 +9,8 @@
  * au pixel de près, à la case de loin, pour rester stable au défilement.
  *
  * Les modes de carte (relief, biomes, ressources) remplacent la couleur par celle d'une
- * texture de superposition, une valeur par case, en gardant l'ombrage du relief.
+ * texture de superposition, une valeur par case, en gardant l'ombrage du relief. En
+ * relief, les rivières (pixels d'eau d'une case marquée par l'alpha 128) restent bleues.
  *
  * Écrit en GLSL ES 1.0 : PixiJS y ajoute ce qu'il faut pour WebGL 1 et 2.
  */
@@ -51,6 +52,8 @@ uniform float uSnow;
 uniform float uSeason;
 /** Mode de carte : 0 naturel, 1 couleur par case, 2 ressources. */
 uniform float uMode;
+/** Couleur des rivières dans les modes de carte. */
+uniform vec3 uRiverColor;
 /** 1 : trame au pixel ; 0 : trame à la case. */
 uniform float uFine;
 
@@ -114,6 +117,7 @@ void main() {
     vec4 overlay = texture(uOverlay, cellUv);
     if (uMode < 1.5) {
       color = overlay.rgb * shade;
+      if (land < 0.5 && overlay.a < 0.75) color = uRiverColor;
     } else {
       float grey = dot(color, vec3(0.3, 0.59, 0.11));
       color = mix(vec3(grey), color, 0.35) * 0.8;

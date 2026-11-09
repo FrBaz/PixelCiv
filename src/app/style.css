@@ -188,3 +188,85 @@ button:disabled {
   font-variant-numeric: tabular-nums;
   text-align: right;
 }
+
+.map-modes {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem;
+}
+
+.map-modes button {
+  padding: 0 0.75rem;
+}
+
+/* Colonne de droite : inspection d'une case et légende, sous la barre du haut. */
+.hud-side {
+  position: absolute;
+  top: 4rem;
+  right: 0.5rem;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 0.5rem;
+  max-width: min(20rem, calc(100% - 1rem));
+  max-height: calc(100% - 13rem);
+}
+
+.cell-info,
+.legend {
+  font-size: 0.875rem;
+  width: 100%;
+}
+
+.cell-info dl {
+  margin: 0;
+}
+
+.cell-info-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+
+.legend {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.legend-toggle {
+  align-self: flex-end;
+  padding: 0 0.75rem;
+}
+
+.legend-entries {
+  margin: 0.25rem 0 0;
+  padding: 0;
+  list-style: none;
+  overflow-y: auto;
+  min-height: 0;
+}
+
+.legend-entries li {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.125rem 0;
+}
+
+.legend-swatch {
+  flex: none;
+  width: 1rem;
+  height: 1rem;
+  border: 1px solid var(--parchment-dim);
+}
+
+/* Téléphone en portrait : la colonne de droite se fait plus étroite. */
+@media (max-width: 34rem) {
+  .hud-side {
+    top: 7rem;
+    max-width: 13rem;
+    max-height: calc(100% - 17rem);
+  }
+}

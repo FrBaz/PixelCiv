@@ -1,7 +1,8 @@
 /**
  * Modes de carte (tâche 1.8 ; IHM-01) : la superposition de chaque mode, une couleur par
  * case, et sa légende.
- * - Relief : la couleur du niveau d'altitude (data/altitude-levels.json), ombrée.
+ * - Relief : la couleur du niveau d'altitude (data/altitude-levels.json), ombrée, et les
+ *   rivières en bleu.
  * - Biomes : la couleur de base de chaque biome, ombrée.
  * - Ressources : la carte pâlie, et la couleur de chaque gisement (data/resources.json).
  */
@@ -11,6 +12,9 @@ import type { WorldLayers } from '../core/world';
 import type { MessageKey } from '../i18n';
 import { parseColor } from './bake';
 import type { MapMode } from './map';
+
+/** Alpha de superposition d'une case dont les pixels d'eau sont des rivières. */
+export const RIVER_CELL = 128;
 
 export interface ModeData {
   readonly biomes: readonly Biome[];
@@ -31,6 +35,7 @@ export function overlayTexels(
   const resourceColors = data.resources.map((resource) => parseColor(resource.color));
   for (let cell = 0; cell < count; cell++) {
     let color: readonly [number, number, number] | undefined;
+    let alpha = 255;
     if (mode === 'biomes') color = biomeColors.at(layers.biome[cell] ?? 0);
     else if (mode === 'relief') {
       // Les lacs prennent la couleur de leur profondeur, mesurée depuis leur surface (D2).
@@ -38,6 +43,9 @@ export function overlayTexels(
       const elevation = layers.elevation[cell] ?? 0;
       const meters = depth > 0 ? -depth : Math.max(0, elevation);
       color = levelColors.at(altitudeLevelIndex(data.altitudeLevels, meters));
+      // Hors de la mer et des lacs, les pixels d'eau sont des rivières, que le shader peint
+      // en bleu (alpha 128).
+      if (depth === 0) alpha = RIVER_CELL;
     } else {
       const deposit = layers.deposit[cell] ?? 0;
       color = deposit > 0 ? resourceColors.at(deposit - 1) : undefined;
@@ -47,7 +55,7 @@ export function overlayTexels(
     texels[offset] = color[0];
     texels[offset + 1] = color[1];
     texels[offset + 2] = color[2];
-    texels[offset + 3] = 255;
+    texels[offset + 3] = alpha;
   }
   return texels;
 }

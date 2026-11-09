@@ -89,6 +89,7 @@ export class MapView {
     uSnow: { value: 0, type: 'f32' },
     uSeason: { value: 0, type: 'f32' },
     uMode: { value: 0, type: 'f32' },
+    uRiverColor: { value: new Float32Array([0, 0, 1]), type: 'vec3<f32>' },
     uFine: { value: 1, type: 'f32' },
   });
   private readonly palettes: BufferImageSource;
@@ -109,6 +110,7 @@ export class MapView {
     const river = this.bake.at(biomes.findIndex((biome) => biome.id === 'river'));
     if (river === undefined) throw new Error('biome « rivière » absent de data/biomes.json');
     this.river = river;
+    this.globals.uniforms.uRiverColor = new Float32Array(river.base.map((value) => value / 255));
     this.palettes = dataSource(seasonPalettes(biomes), 3, biomes.length);
     this.globals.uniforms.uBiomes = biomes.length;
     this.globals.uniforms.uRiver = biomes.findIndex((biome) => biome.id === 'river');

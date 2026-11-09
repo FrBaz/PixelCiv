@@ -33,6 +33,8 @@ export interface DebugInfo {
   readonly memoryMb: number | undefined;
   /** Moteur de rendu (webgl, webgpu) et densité de pixels de l'écran. */
   readonly renderer: { readonly name: string; readonly resolution: number };
+  /** Blocs de carte qui restent à cuire. */
+  readonly chunks: number;
 }
 
 export const debugInfo = signal<DebugInfo | undefined>(undefined);
@@ -61,8 +63,45 @@ export function showNotice(key: MessageKey): void {
 /** Ce que l'interface peut demander au jeu. */
 export interface UiActions {
   send(message: MainMessage): void;
+  /** Change de mode de carte. */
+  setMapMode(mode: MapModeId): void;
   save(): Promise<void>;
   load(): Promise<void>;
   exportFile(): Promise<void>;
   importFile(file: File): Promise<void>;
 }
+
+/** Modes de carte (IHM-01) : naturel, relief, biomes, ressources. */
+export type MapModeId = 'natural' | 'relief' | 'biomes' | 'resources';
+
+/** Mode de carte affiché. */
+export const mapMode = signal<MapModeId>('natural');
+
+/** Légende du mode affiché : une couleur et un nom par entrée. */
+export const legendEntries = signal<
+  readonly { readonly color: string; readonly label: MessageKey }[]
+>([]);
+
+/** Ce que l'inspection montre d'une case touchée (IHM-02, version de la phase 1). */
+export interface CellDetails {
+  readonly x: number;
+  readonly y: number;
+  readonly biome: MessageKey;
+  readonly level: MessageKey;
+  /** Altitude (m), et profondeur de l'eau (m, 0 hors de l'eau). */
+  readonly elevation: number;
+  readonly depth: number;
+  /** Températures annuelle et du mois courant (°C), précipitations (mm par an). */
+  readonly temperature: number;
+  readonly monthly: number;
+  readonly precipitation: number;
+  /** Classe de rivière : 0 sans rivière, puis ruisseau, rivière, fleuve. */
+  readonly river: number;
+  readonly deposit: MessageKey | undefined;
+  /** Densités d'arbres et de buissons, en pourcentage. */
+  readonly trees: number;
+  readonly shrubs: number;
+}
+
+/** Case inspectée, ou undefined. */
+export const inspected = signal<CellDetails | undefined>(undefined);

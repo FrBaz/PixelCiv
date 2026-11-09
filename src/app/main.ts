@@ -3,13 +3,13 @@
 import { h, render } from 'preact';
 import { loadGameData, type GameData } from '../core/data';
 import { PROTOCOL_VERSION } from '../core/protocol';
-import { WORLD_SIZES, type WorldSizeId } from '../core/world';
+import { WORLD_SIZES, type WorldLayers, type WorldSizeId } from '../core/world';
 import { defaultWorldParams, type WorldParams } from '../core/worldParams';
 import { determinismSelfTest } from '../core/selftest';
 import { t } from '../i18n';
 import { CameraControls } from '../render/controls';
 import { cellAt, MapView } from '../render/map';
-import { overlayTexels } from '../render/mapModes';
+import { legend, overlayTexels } from '../render/mapModes';
 import { createRenderer } from '../render/renderer';
 import { App } from '../ui/App';
 import {
@@ -18,11 +18,16 @@ import {
   determinismOk,
   generation,
   generationMs,
+  inspected,
+  legendEntries,
+  mapMode,
   time,
   worldInfo,
+  type MapModeId,
 } from '../ui/store';
 import { DebugSampler, usedMemoryMb } from './debug';
 import { SaveManager, SaveStore } from './saves';
+import { describeCell } from './inspect';
 import { SeasonClock } from './seasonClock';
 import { SimulationClient } from './simulation';
 import './style.css';
@@ -72,15 +77,32 @@ async function main(): Promise<void> {
     resolution: () => app.renderer.resolution,
     world: () => map.world,
     onTap: (mapX, mapY) => {
-      // Débogage : ?brush=desert peint la case touchée de ce biome, par une commande de jeu.
-      if (brush === null) return;
       const cell = cellAt(mapX, mapY);
-      simulation.send({
-        type: 'game',
-        command: { type: 'paintBiome', x: cell.x, y: cell.y, biome: brush },
-      });
+      // Débogage : ?brush=desert peint la case touchée de ce biome, par une commande de jeu.
+      if (brush !== null) {
+        simulation.send({
+          type: 'game',
+          command: { type: 'paintBiome', x: cell.x, y: cell.y, biome: brush },
+        });
+        return;
+      }
+      inspect(cell.x, cell.y);
     },
   });
+  // Couches du monde affiché, pour l'inspection et les légendes.
+  let worldLayers: WorldLayers | undefined;
+  const inspect = (x: number, y: number) => {
+    const info = worldInfo.value;
+    if (worldLayers === undefined || info === undefined) return;
+    inspected.value = describeCell(
+      worldLayers,
+      info.size,
+      x,
+      y,
+      seasons.month(performance.now()),
+      data,
+    );
+  };
   const sampler = new DebugSampler();
   // Au retour d'un onglet masqué, la première image couvre toute l'absence : elle ne
   // compte pas comme une image lente.
@@ -97,7 +119,12 @@ async function main(): Promise<void> {
   });
   setInterval(() => {
     const renderer = { name: app.renderer.name, resolution: app.renderer.resolution };
-    debugInfo.value = { ...sampler.sample(), memoryMb: usedMemoryMb(), renderer };
+    debugInfo.value = {
+      ...sampler.sample(),
+      memoryMb: usedMemoryMb(),
+      renderer,
+      chunks: map.pendingChunks,
+    };
   }, 250);
 
   simulation.subscribe((message) => {
@@ -118,7 +145,10 @@ async function main(): Promise<void> {
       case 'snapshot': {
         worldInfo.value = message.world;
         const layers = message.layers;
+        worldLayers = layers;
+        inspected.value = undefined;
         map.setWorld(message.world, layers, (mode) => overlayTexels(mode, layers, modeData));
+        actions.setMapMode(mapMode.value);
         const world = map.world;
         if (world !== undefined) controls.center(world);
         time.value = message.time;
@@ -161,6 +191,12 @@ async function main(): Promise<void> {
   const actions = {
     send: (message: Parameters<SimulationClient['send']>[0]) => {
       simulation.send(message);
+    },
+    setMapMode: (mode: MapModeId) => {
+      mapMode.value = mode;
+      map.setMode(mode);
+      legendEntries.value =
+        mode === 'natural' || worldLayers === undefined ? [] : legend(mode, worldLayers, modeData);
     },
     save: () => saves.save(),
     load: () => saves.load(),

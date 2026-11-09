@@ -1,11 +1,11 @@
 /**
- * Panneau de débogage (NF-01) : images par seconde, durée des pas, mémoire, monde,
- * contenu et auto-test du déterminisme. Il s'ouvre par son bouton, ou par F3 et la
+ * Panneau de débogage (NF-01) : images par seconde, durée des pas, mémoire, monde (graine,
+ * taille, durée de la génération, blocs à cuire), contenu et auto-test du déterminisme. Il s'ouvre par son bouton, ou par F3 et la
  * touche ², au-dessus de Tab.
  */
 import { useEffect } from 'preact/hooks';
 import { t, type MessageKey } from '../i18n';
-import { content, debugInfo, debugOpen, determinismOk, worldInfo } from './store';
+import { content, debugInfo, debugOpen, determinismOk, generationMs, worldInfo } from './store';
 
 const round = (value: number, digits = 1) => Math.round(value * 10 ** digits) / 10 ** digits;
 
@@ -44,7 +44,8 @@ export function DebugToggle() {
 export function DebugPanel() {
   if (!debugOpen.value) return null;
   const info = debugInfo.value;
-  const size = worldInfo.value?.size;
+  const world = worldInfo.value;
+  const size = world?.size;
   const biomes = content.value?.biomes;
   const determinism = determinismOk.value;
   const rows: [MessageKey, string][] = [
@@ -70,11 +71,17 @@ export function DebugPanel() {
             resolution: round(info.renderer.resolution, 2),
           }),
     ],
+    ['debug.seed', world === undefined ? t('debug.unavailable') : world.params.seed],
     [
       'debug.world',
       size === undefined
         ? t('debug.unavailable')
         : t('debug.worldSize', { width: size.width, height: size.height }),
+    ],
+    ['debug.generation', milliseconds(generationMs.value)],
+    [
+      'debug.chunks',
+      info === undefined ? t('debug.unavailable') : t('debug.chunksValue', { count: info.chunks }),
     ],
     [
       'debug.content',
