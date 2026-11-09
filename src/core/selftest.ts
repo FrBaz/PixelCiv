@@ -1,8 +1,9 @@
 /**
  * Auto-test du déterminisme (ADR 0003) : le jeu recalcule au démarrage, dans le
- * navigateur, des empreintes du générateur et de dmath, et les compare aux valeurs
- * de référence. Le panneau de débogage affiche le résultat : un écart trahirait un
- * moteur qui ne donne pas les mêmes bits.
+ * navigateur, des empreintes du générateur pseudo-aléatoire et de dmath, et, dans le
+ * worker, celle d'un petit monde de référence ; il les compare aux valeurs de
+ * référence. Le panneau de débogage affiche le résultat : un écart trahirait un moteur
+ * qui ne donne pas les mêmes bits.
  */
 import { cos, exp, log, pow, sin } from './dmath';
 import { Fingerprint } from './hash';
@@ -21,6 +22,15 @@ export const EXPECTED_FINGERPRINTS: DeterminismFingerprints = {
   rng: '4ec1a8f2',
   dmath: 'cc526a73',
 };
+
+/**
+ * Monde de référence de l'auto-test du worker : cette graine, les paramètres par défaut,
+ * sur une carte de 64 × 32 cases, que le worker génère en quelques dizaines de ms.
+ */
+export const SELFTEST_WORLD = { seed: 'autotest', size: { width: 64, height: 32 } } as const;
+
+/** Empreinte de ses couches (layersFingerprint), figée par les tests de la génération. */
+export const EXPECTED_WORLD_FINGERPRINT = 'a9418520';
 
 export function determinismFingerprints(): DeterminismFingerprints {
   const stream = new Rng('pixelciv').stream('selftest');

@@ -1,14 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import { loadGameData } from '../core/data';
-import { Fingerprint } from '../core/hash';
 import {
   flowDirection,
   GENERATION_STAGES,
-  LAYER_NAMES,
+  layersFingerprint,
   riverClass,
   WORLD_SIZES,
   type GenerationStage,
-  type WorldLayers,
   type WorldSize,
 } from '../core/world';
 import { defaultWorldParams, type WorldParams } from '../core/worldParams';
@@ -28,13 +26,6 @@ function generate(
   overrides: Partial<WorldParams> = {},
 ) {
   return generateWorld({ ...params(seed, overrides), size }, data);
-}
-
-/** Empreinte de toutes les couches d'un monde. */
-export function layersFingerprint(layers: WorldLayers): string {
-  const fingerprint = new Fingerprint();
-  for (const name of LAYER_NAMES) fingerprint.string(name).typedArray(layers[name]);
-  return fingerprint.hex();
 }
 
 describe('génération du monde', () => {
@@ -89,6 +80,52 @@ describe('génération du monde', () => {
     const wet = generate('réglages', size, { humidity: 1.4 });
     expect((mean(warm.temperature) - mean(base.temperature)) / 10).toBeCloseTo(5, 1);
     expect(mean(wet.precipitation) / mean(base.precipitation)).toBeCloseTo(1.4, 1);
+  });
+
+  it('se referme sans couture : toutes les couches, biomes et rivières compris', () => {
+    const size = WORLD_SIZES.small;
+    const { width, height } = size;
+    const layers = generate('couture', size);
+    /** Écart moyen entre les colonnes x et x + 1, la dernière paire passant la couture. */
+    const gaps = (measure: (cell: number, next: number) => number) =>
+      Array.from({ length: width }, (_, x) => {
+        let sum = 0;
+        for (let y = 0; y < height; y++)
+          sum += measure(y * width + x, y * width + ((x + 1) % width));
+        return sum / height;
+      });
+    const expectSeamLikeOthers = (values: number[]) => {
+      const seam = values[width - 1] ?? 0;
+      const others = values.slice(0, width - 1);
+      expect(seam).toBeGreaterThanOrEqual(Math.min(...others));
+      expect(seam).toBeLessThanOrEqual(Math.max(...others));
+    };
+    for (const name of [
+      'elevation',
+      'temperature',
+      'amplitude',
+      'precipitation',
+      'trees',
+    ] as const) {
+      const field = layers[name];
+      expectSeamLikeOthers(gaps((cell, next) => Math.abs((field[next] ?? 0) - (field[cell] ?? 0))));
+    }
+    // Les biomes changent d'une colonne à l'autre aussi souvent à la couture qu'ailleurs.
+    expectSeamLikeOthers(
+      gaps((cell, next) => ((layers.biome[cell] ?? 0) === (layers.biome[next] ?? 0) ? 0 : 1)),
+    );
+    // Autant de rivières passent la couture que d'une colonne à la suivante, dans les deux
+    // sens : vers l'est (E, SE, NE), et vers l'ouest depuis la colonne suivante.
+    const east = new Set([0, 1, 7]);
+    const west = new Set([3, 4, 5]);
+    const crossing = (drainage: number, directions: Set<number>) =>
+      riverClass(drainage) > 0 && directions.has(flowDirection(drainage)) ? 1 : 0;
+    const rivers = gaps(
+      (cell, next) =>
+        crossing(layers.drainage[cell] ?? 0, east) + crossing(layers.drainage[next] ?? 0, west),
+    );
+    expect(rivers[width - 1]).toBeGreaterThan(0);
+    expectSeamLikeOthers(rivers);
   });
 
   it("montre les mêmes continents dans l'aperçu réduit", () => {

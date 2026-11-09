@@ -64,8 +64,9 @@ async function main(): Promise<void> {
   // Le contenu est validé au démarrage : une donnée invalide lève ici une DataError.
   const data = loadGameData();
   content.value = { biomes: data.biomes.entries.length };
-  // Auto-test du déterminisme : ce moteur redonne-t-il les empreintes de référence ?
-  determinismOk.value = determinismSelfTest();
+  // Auto-test du déterminisme : ce moteur redonne-t-il les empreintes de référence ? Le
+  // worker y ajoute celle du monde de référence, à la poignée de main.
+  const determinism = determinismSelfTest();
   const query = new URLSearchParams(location.search);
   const brush = query.get('brush');
   const mapElement = element('map');
@@ -173,7 +174,8 @@ async function main(): Promise<void> {
   simulation.subscribe((message) => {
     switch (message.type) {
       case 'ready':
-        // Reprend la dernière partie si elle a été sauvegardée, sinon en commence une.
+        determinismOk.value = determinism && message.determinism;
+        // Reprend la dernière partie si elle a été sauvegardée, sinon ouvre l'écran de création.
         void saves
           .resume()
           .catch((error: unknown) => {

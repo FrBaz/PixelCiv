@@ -99,10 +99,31 @@ async function startedHost(seed = 'graine') {
 }
 
 describe('poignée de main', () => {
-  it('répond prêt à la bonne version du protocole', () => {
+  it("répond prêt à la bonne version du protocole, avec l'auto-test du générateur", () => {
     const env = new FakeEnvironment();
     newHost(env).receive({ type: 'hello', protocol: PROTOCOL_VERSION });
-    expect(env.messages('ready')).toEqual([{ type: 'ready', protocol: PROTOCOL_VERSION }]);
+    expect(env.messages('ready')).toEqual([
+      { type: 'ready', protocol: PROTOCOL_VERSION, determinism: true },
+    ]);
+  });
+
+  it('signale un générateur qui ne redonne pas le monde de référence', () => {
+    const env = new FakeEnvironment();
+    const host = new SimulationHost(env, testData, (params, onStage) => {
+      const world = generate(params, onStage);
+      world.biome[0] ^= 1;
+      return world;
+    });
+    host.receive({ type: 'hello', protocol: PROTOCOL_VERSION });
+    expect(env.messages('ready').at(0)?.determinism).toBe(false);
+    // Même un générateur qui échoue laisse la poignée de main aboutir : le panneau le dira.
+    const quiet = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const failing = new FakeEnvironment();
+    new SimulationHost(failing, testData, () => {
+      throw new Error('générateur en panne');
+    }).receive({ type: 'hello', protocol: PROTOCOL_VERSION });
+    expect(failing.messages('ready').at(0)?.determinism).toBe(false);
+    quiet.mockRestore();
   });
 
   it('refuse une autre version', () => {

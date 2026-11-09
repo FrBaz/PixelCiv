@@ -20,15 +20,17 @@ import {
   type WorkerMessage,
 } from '../core/protocol';
 import { readSave, SaveError, writeSave } from '../core/save/format';
+import { EXPECTED_WORLD_FINGERPRINT, SELFTEST_WORLD } from '../core/selftest';
 import { monthDuration, type SpeedId } from '../core/time';
 import {
   copyLayers,
   GENERATION_STAGES,
+  layersFingerprint,
   WORLD_SIZES,
   type GenerationStage,
   type WorldLayers,
 } from '../core/world';
-import { worldParamsSchema, type WorldParams } from '../core/worldParams';
+import { defaultWorldParams, worldParamsSchema, type WorldParams } from '../core/worldParams';
 import { GameCommandSchema } from '../sim/commands';
 import { MIGRATIONS, restoreState, saveState } from '../sim/save';
 import { createState, takeDirtyChunks, type SimState } from '../sim/state';
@@ -138,13 +140,28 @@ export class SimulationHost {
   private greet(protocol: number): void {
     this.greeted = protocol === PROTOCOL_VERSION;
     if (this.greeted) {
-      this.send({ type: 'ready', protocol: PROTOCOL_VERSION });
+      this.send({ type: 'ready', protocol: PROTOCOL_VERSION, determinism: this.selfTest() });
     } else {
       this.send({
         type: 'error',
         code: 'protocol',
         detail: `protocole ${protocol} reçu, ${PROTOCOL_VERSION} attendu`,
       });
+    }
+  }
+
+  /**
+   * Auto-test du générateur (ADR 0003) : le monde de référence, généré dans ce moteur,
+   * redonne-t-il son empreinte ?
+   */
+  private selfTest(): boolean {
+    const params = defaultWorldParams(this.data.worldgen.parameters, SELFTEST_WORLD.seed, 'small');
+    try {
+      const world = this.generate({ ...params, size: SELFTEST_WORLD.size }, () => undefined);
+      return layersFingerprint(world) === EXPECTED_WORLD_FINGERPRINT;
+    } catch (error) {
+      console.error(error);
+      return false;
     }
   }
 

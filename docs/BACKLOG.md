@@ -75,18 +75,52 @@ Objectif : porter le pipeline du prototype en TypeScript, sur un monde cylindriq
 
 | # | Tâche | Exigences | Critère d'acceptation | État |
 |---|---|---|---|---|
-| 1.1 | Bruit simplex 3D déterministe et échantillonnage sur un cylindre : la longitude devient un angle, et la carte se referme d'est en ouest. | MON-01, MON-04 | Valeurs continues à la couture ; même graine, même bruit. | à faire |
-| 1.2 | Relief : bruit fractal à trois échelles, plus des chaînes de montagnes par bruit de crêtes (D12). Paramètres : niveau de la mer, part des terres, relief. Correspondance en mètres et 20 niveaux d'altitude (D11). | MON-03, MON-05, MON-14 | 3 à 6 % des terres au-dessus de la moyenne montagne ; crêtes continues, avec des cols. | à faire |
-| 1.3 | Climat : températures recalibrées, gradient de 6,5 °C par 1 000 m ; précipitations par bandes de latitude, vents dominants et ombre pluviométrique ; continentalité ; températures mensuelles (D8, D13). | MON-04, MON-15, SAI-01, SAI-02 | Environ 27 °C à l'équateur et −25 °C aux pôles ; présence de déserts subtropicaux et de déserts d'abri. | à faire |
-| 1.4 | Hydrologie continue d'est en ouest. Un seul niveau de la mer, et un océan limité aux eaux reliées à l'océan mondial (D1). Remplissage avec pente minimale sur les plats, puis accumulation. Lacs par bilan hydrique (D2) et trois classes de rivières (D3). L'alias du prototype est corrigé. | MON-04, MON-07, MON-11 | Toute rivière rejoint la mer ou un lac ; aucune n'est coupée à la couture, ni rectiligne. | à faire |
-| 1.5 | Les 32 biomes naturels (D6), décrits dans `data/biomes.json` et classés selon le mois le plus chaud et le plus froid (D13). Côtes typées (D4) et zones humides (D5). | MON-08, MON-10, MON-12, MON-13 | Plages sur une seule rangée côtière ; glaciers seulement là où le mois le plus chaud reste sous 0 °C. | à faire |
-| 1.6 | Ressources et flore : gisements selon l'altitude et le biome, ressources des milieux humides et salés, densités d'arbres et de buissons. | RES-01, RES-03, RES-05 | Répartition lisible en mode de carte « ressources ». | à faire |
-| 1.7 | Cuisson des blocs dans un worker : tuiles de 4 px avec variations, débordement du relief, shader (pente, lumière du nord-est, teinte thermique). Texture de données des saisons, une valeur par case (D10). | REN-01, REN-02, REN-09, REN-10 | Rendu fidèle au prototype, sans couture visible. | à faire |
-| 1.8 | Affichage : zoom net, niveaux de détail de base, modes de carte « relief », « biomes » et « ressources » avec légende. Neige et glace saisonnières, par shader et palettes saisonnières (D10). | REN-03, REN-08, REN-10, IHM-01 | 60 images/s sur PC et 30 sur téléphone, sur une carte Grand, saisons comprises. | à faire |
-| 1.9 | Écran de création : graine, taille, paramètres, aperçu, régénération. | CRE-01, MON-02 | Utilisable au doigt sur téléphone. | à faire |
-| 1.10 | Tests et bancs d'essai : empreinte des cartes par graine, continuité de la couture, durée de génération par taille. | NF-03, NF-09 | Un monde Grand se génère en moins de 10 s sur PC ; la mesure sur téléphone est consignée. | à faire |
+| 1.1 | Bruit simplex 3D déterministe et échantillonnage sur un cylindre : la longitude devient un angle, et la carte se referme d'est en ouest. | MON-01, MON-04 | Valeurs continues à la couture ; même graine, même bruit. | fait |
+| 1.2 | Relief : bruit fractal à trois échelles, plus des chaînes de montagnes par bruit de crêtes (D12). Paramètres : niveau de la mer, part des terres, relief. Correspondance en mètres et 20 niveaux d'altitude (D11). | MON-03, MON-05, MON-14 | 3 à 6 % des terres au-dessus de la moyenne montagne ; crêtes continues, avec des cols. | fait |
+| 1.3 | Climat : températures recalibrées, gradient de 6,5 °C par 1 000 m ; précipitations par bandes de latitude, vents dominants et ombre pluviométrique ; continentalité ; températures mensuelles (D8, D13). | MON-04, MON-15, SAI-01, SAI-02 | Environ 27 °C à l'équateur et −25 °C aux pôles ; présence de déserts subtropicaux et de déserts d'abri. | fait |
+| 1.4 | Hydrologie continue d'est en ouest. Un seul niveau de la mer, et un océan limité aux eaux reliées à l'océan mondial (D1). Remplissage avec pente minimale sur les plats, puis accumulation. Lacs par bilan hydrique (D2) et trois classes de rivières (D3). L'alias du prototype est corrigé. | MON-04, MON-07, MON-11 | Toute rivière rejoint la mer ou un lac ; aucune n'est coupée à la couture, ni rectiligne. | fait |
+| 1.5 | Les 32 biomes naturels (D6), décrits dans `data/biomes.json` et classés selon le mois le plus chaud et le plus froid (D13). Côtes typées (D4) et zones humides (D5). | MON-08, MON-10, MON-12, MON-13 | Plages sur une seule rangée côtière ; glaciers seulement là où le mois le plus chaud reste sous 0 °C. | fait |
+| 1.6 | Ressources et flore : gisements selon l'altitude et le biome, ressources des milieux humides et salés, densités d'arbres et de buissons. | RES-01, RES-03, RES-05 | Répartition lisible en mode de carte « ressources ». | fait |
+| 1.7 | Cuisson des blocs dans un worker : tuiles de 4 px avec variations, débordement du relief, shader (pente, lumière du nord-est, teinte thermique). Texture de données des saisons, une valeur par case (D10). | REN-01, REN-02, REN-09, REN-10 | Rendu fidèle au prototype, sans couture visible. | fait |
+| 1.8 | Affichage : zoom net, niveaux de détail de base, modes de carte « relief », « biomes » et « ressources » avec légende. Neige et glace saisonnières, par shader et palettes saisonnières (D10). | REN-03, REN-08, REN-10, IHM-01 | 60 images/s sur PC et 30 sur téléphone, sur une carte Grand, saisons comprises. | fait |
+| 1.9 | Écran de création : graine, taille, paramètres, aperçu, régénération. | CRE-01, MON-02 | Utilisable au doigt sur téléphone. | fait |
+| 1.10 | Tests et bancs d'essai : empreinte des cartes par graine, continuité de la couture, durée de génération par taille. | NF-03, NF-09 | Un monde Grand se génère en moins de 10 s sur PC ; la mesure sur téléphone est consignée. | fait |
 
 ### Notes
+
+Les dix tâches sont faites, chacune dans son commit (« 1.1 : … » à « 1.10 : … »), plus un commit qui branche le monde généré dans la simulation (protocole 2, sauvegardes 3). Décisions : ADR 0009 (génération) et ADR 0010 (rendu).
+
+**Mesures sur cinq mondes Grand**, aux paramètres par défaut (graines `pixelciv`, `alpha`, `beta`, `gamma`, `delta`) :
+
+| Mesure | Cible | Résultat |
+|---|---|---|
+| Part des terres | 35 % (paramètre) | 35,6 à 35,9 % |
+| Terres au-dessus de 1 800 m (moyenne montagne et plus) | 3 à 6 % (MON-14) | 4,4 à 4,5 % |
+| Lacs (doux, salés, salars) | — | 2,5 à 5,3 % des terres |
+| Glaciers | là où le mois le plus chaud reste sous 0 °C | 11,6 à 17,4 % des terres, surtout aux pôles |
+| Déserts | subtropicaux et d'abri | 2,8 à 9,6 % des terres |
+| Zones humides | — | 4,9 à 7,8 % des terres |
+| Plages | une seule rangée côtière (D4) | 1,8 à 2,7 % des terres |
+| Température annuelle, toutes cases de la bande | ≈ 27 °C à l'équateur, ≈ −25 °C aux pôles | 25,0 à 26,8 °C ; −23,6 à −24,5 °C (montagnes comprises) |
+| Rivières | — | 4 000 à 5 000 cases de ruisseau, 1 900 à 2 300 de rivière, 500 à 800 de fleuve |
+
+**Durées de génération** (`npm run bench`, Node 22, conteneur de développement) : Petit 0,70 s, Moyen 1,32 s, Grand 2,22 s, Immense 8,89 s. Dans Chromium, dans le worker : Moyen 1,7 s, Grand 2,7 s ; la carte Grand est entièrement cuite environ 3 s plus tard. NF-03 (Grand en moins de 10 s sur PC) est tenu.
+
+**Téléphone, en émulation seulement.** Chromium ne ralentit pas les workers (« Operation is only supported for pages, not workers ») : la génération a été mesurée sur le fil principal d'une page au processeur ralenti 4 fois, le ralentissement que Lighthouse prête à un téléphone de milieu de gamme. Petit 3,1 s, Moyen 6,5 s, Grand 10,6 s. D'où le Moyen par défaut au doigt (MON-02 laisse ce défaut à calibrer), et l'Immense réservé au PC. **À confirmer sur un vrai téléphone** : après la création d'un monde, le panneau de débogage donne la durée de la génération.
+
+**Images par seconde : non mesurées.** Le Chromium sans écran du conteneur dessine en logiciel (SwiftShader) : 31 images/s en 1280 × 720 sur une carte Grand, 13 à 15 en émulation de téléphone, ce qui ne dit rien d'une vraie carte graphique. Le critère de 1.8 (60 images/s sur PC, 30 sur téléphone) reste à vérifier sur des appareils réels, avec le panneau de débogage. Le rendu est conçu pour : un maillage par bloc visible, sans recuisson pour les saisons, et des mipmaps sous le zoom 1.
+
+**Écarts à C1 et calibrations** (détails dans l'ADR 0009) :
+- D1 : seuil de l'océan à 0,5 % de la carte, au lieu de « par exemple 2 % », qui changeait trop de mers intérieures en lacs.
+- D2 : les sédiments comblent 85 % de chaque cuvette avant les lacs ; sans cela, les lacs couvraient 8 à 13 % des terres.
+- D3 : seuils des rivières en débit par case d'une carte Grand (ruisseau, ×4 rivière, ×16 fleuve), divisés par le paramètre « rivières ».
+- Le biome « rivière » est le lit d'un fleuve, infranchissable ; ruisseaux et rivières coulent sur les autres biomes.
+- L'« alias du prototype », faute du notebook, est lu de trois façons, toutes couvertes (ADR 0009).
+- Le fond s'abaisse un peu vers les pôles (mers polaires) ; une élévation polaire faisait des lacs de barrage.
+
+**Contrôles de la tâche 1.10.** Empreintes de référence de quatre mondes, couche par couche (`src/worldgen/reference.test.ts`) : changer la génération les change, et oblige à augmenter `GENERATOR_VERSION`. Couture : toutes les couches, les biomes et les rivières passent la couture comme une paire de colonnes quelconque. Auto-test dans le navigateur : le worker génère un monde de 64 × 32 cases à la poignée de main et compare son empreinte ; le panneau de débogage dit « conforme aux références » dans Chromium.
+
+**Interface.** L'inspection d'une case se fait d'un clic, d'un appui bref ou d'un appui long (IHM-07). Sans sauvegarde automatique, le jeu s'ouvre sur l'écran de création ; on peut y charger la sauvegarde manuelle ou importer un fichier. L'adresse peut encore nommer un monde pour le débogage (`?seed=abc&size=large`), qui commence alors directement.
 
 ## À fournir par l'auteur
 

@@ -12,6 +12,7 @@ Jeu de simulation de mondes et de vies en pixel art, à la croisée de WorldBox,
 
 - `npm run dev` : serveur de développement, accessible depuis un téléphone du réseau local
 - `npm test` : tests (Vitest)
+- `npm run bench` : banc d'essai de la génération, durée par taille de monde (hors des tests)
 - `npm run typecheck` et `npm run lint`
 - `npm run format` : mise en forme par Prettier
 - `npm run build` : build de production, déployé sur GitHub Pages depuis `main`

@@ -1,4 +1,5 @@
 /** Dimensions du monde, découpage en blocs de carte (ADR 0002) et couches (ADR 0009). */
+import { Fingerprint } from './hash';
 
 /** Côté d'un bloc de carte, en cases. */
 export const CHUNK_SIZE = 64;
@@ -75,6 +76,8 @@ export const LAYER_NAMES = [
   'shrubs',
 ] as const satisfies readonly (keyof WorldLayers)[];
 
+export type LayerName = (typeof LAYER_NAMES)[number];
+
 /** Type de tableau de chaque couche. */
 export const LAYER_TYPES = {
   elevation: Int16Array,
@@ -122,6 +125,13 @@ export function emptyLayers(size: WorldSize): WorldLayers {
 }
 
 /** Copie de toutes les couches, dans des tampons neufs (transferts, sauvegardes). */
+/** Empreinte de toutes les couches d'un monde, dans l'ordre de LAYER_NAMES (ADR 0003). */
+export function layersFingerprint(layers: WorldLayers): string {
+  const fingerprint = new Fingerprint();
+  for (const name of LAYER_NAMES) fingerprint.string(name).typedArray(layers[name]);
+  return fingerprint.hex();
+}
+
 export function copyLayers(layers: WorldLayers): WorldLayers {
   return {
     elevation: layers.elevation.slice(),

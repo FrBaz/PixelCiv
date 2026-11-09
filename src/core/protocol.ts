@@ -92,7 +92,11 @@ export interface StepStats {
 
 /** Messages du worker vers le fil principal. */
 export type WorkerMessage =
-  | { readonly type: 'ready'; readonly protocol: number }
+  /**
+   * Poignée de main réussie. `determinism` : le générateur redonne-t-il, dans ce moteur,
+   * l'empreinte du monde de référence (ADR 0003) ?
+   */
+  | { readonly type: 'ready'; readonly protocol: number; readonly determinism: boolean }
   /** Génération en cours : l'étape `stage` commence, la `step`-ième sur `steps`. */
   | {
       readonly type: 'progress';
