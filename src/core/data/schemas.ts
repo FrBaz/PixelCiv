@@ -41,7 +41,8 @@ export const BiomeSchema = z
     fertility: ShareSchema,
     /**
      * Multiplicateur du coût de déplacement à pied ; null pour les eaux qu'on ne franchit
-     * pas à pied (océans, lacs). Une rivière se franchit, selon sa classe (C1, D3).
+     * pas à pied : océans, lacs, et lit des fleuves, qu'on passe par un pont ou un bac
+     * (C1, D3). Ruisseaux et rivières coulent sur les autres biomes.
      */
     movementCost: z.number().min(1).nullable(),
     /** Côtes (D4) : facilité de débarquement. */

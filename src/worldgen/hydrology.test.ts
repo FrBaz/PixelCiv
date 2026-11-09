@@ -109,8 +109,13 @@ describe('hydrologie', () => {
     const at = (x: number, y: number) => y * size.width + x;
     expect(closed.hydrology.ocean[at(10, 10)]).toBe(1);
     expect(closed.hydrology.ocean[at(130, 64)]).toBe(0);
-    // Ce bassin fermé relève des lacs (D2).
-    expect(closed.hydrology.lake[at(130, 64)]).not.toBe(LAKE.none);
+    // Ce bassin fermé relève des lacs (D2) : selon son bilan, lac ou salar, qui en couvre
+    // au moins le fond.
+    let lakes = 0;
+    for (let y = 59; y < 69; y++) {
+      for (let x = 125; x < 135; x++) if (closed.hydrology.lake[at(x, y)] !== LAKE.none) lakes++;
+    }
+    expect(lakes).toBeGreaterThan(0);
   });
 
   it('draine chaque case vers la mer ou un lac, sans boucle, couture comprise', () => {

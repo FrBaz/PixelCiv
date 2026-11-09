@@ -16,6 +16,7 @@
  */
 import { pow } from '../core/dmath';
 import type { Rng } from '../core/rng';
+import { latitude } from './climate';
 import { quantile, smoothstep } from './grid';
 import { NoiseLayer, type CylinderSampler, type Fractal } from './sampler';
 
@@ -53,6 +54,10 @@ const LOWLAND_DETAIL = 0.9;
 const MOUNTAIN_DETAIL = 3;
 /** Hauteur des crêtes, au relief par défaut, en unités de hauteur brute. */
 const RIDGE_HEIGHT = 0.55;
+
+/** Abaissement du fond vers les pôles, à partir de la latitude POLAR_SINK_FROM. */
+const POLAR_SINK_FROM = 0.75;
+const POLAR_SINK = 0.15;
 
 /** Décalage du niveau de la mer à ±1, en unités de hauteur brute. */
 const SEA_SHIFT = 0.05;
@@ -95,7 +100,15 @@ export function rawHeight(sampler: CylinderSampler, rng: Rng, relief: number): F
   const passes = sampler.fractal(layer('passes'), PASSES);
   const ridgeHeight = RIDGE_HEIGHT * (0.2 + 1.6 * relief);
   const height = new Float32Array(continents.length);
+  const { width } = sampler;
   for (let index = 0; index < height.length; index++) {
+    // Vers les pôles, le fond s'abaisse un peu : des mers polaires plutôt que des calottes
+    // sans fin, et des rivières qui gagnent la mer au lieu de longer le bord de la carte.
+    const polar = smoothstep(
+      POLAR_SINK_FROM,
+      1,
+      latitude(Math.floor(index / width), sampler.height),
+    );
     const continent = continents[index] ?? 0;
     // Profil en travers d'une chaîne : une crête étroite sur un socle de piémonts deux
     // fois et demie plus large, nuls à CHAIN_WIDTH de la ligne de crête.
@@ -116,7 +129,8 @@ export function rawHeight(sampler: CylinderSampler, rng: Rng, relief: number): F
       WEIGHTS.detail *
         (LOWLAND_DETAIL + (1 - LOWLAND_DETAIL) * Math.min(1, rugged) + MOUNTAIN_DETAIL * mountain) *
         (detail[index] ?? 0) +
-      ridgeHeight * mountain;
+      ridgeHeight * mountain -
+      POLAR_SINK * polar;
   }
   return height;
 }

@@ -338,10 +338,23 @@ function receivers(
   return { receiver, direction };
 }
 
-/** Part des pluies qui ruisselle, selon la température : l'évaporation croît avec elle. */
-function runoffShare(temperature: number): number {
-  return Math.min(0.85, Math.max(0.1, 0.85 - 0.02 * temperature));
+/**
+ * Ruissellement annuel (mm) : la pluie moins l'évapotranspiration réelle, par la formule
+ * de Turc et Pike, ET = P / √(1 + (P / ETP)²). L'évapotranspiration potentielle croît
+ * avec la température. Un désert ne ruisselle presque pas ; un climat froid et humide
+ * ruisselle presque toute sa pluie.
+ */
+export function runoff(precipitation: number, temperature: number): number {
+  const potential = Math.max(
+    POTENTIAL_EVAPORATION.minimum,
+    POTENTIAL_EVAPORATION.perDegree * (temperature + 5),
+  );
+  const ratio = precipitation / potential;
+  return precipitation - precipitation / Math.sqrt(1 + ratio * ratio);
 }
+
+/** Évapotranspiration potentielle (mm par an) : par degré au-dessus de −5 °C, et minimum. */
+const POTENTIAL_EVAPORATION = { perDegree: 50, minimum: 100 };
 
 /** Évaporation annuelle d'une case de lac (mm), selon sa température. */
 function lakeEvaporation(config: HydrologyConfig, temperature: number): number {
@@ -424,10 +437,10 @@ export function generateHydrology(
   }
 
   // Ruissellement de chaque case, en mm par an et par case Grand.
-  const runoff = new Float64Array(count);
+  const water = new Float64Array(count);
   for (let index = 0; index < count; index++) {
     if (!ocean[index]) {
-      runoff[index] = (precipitation[index] ?? 0) * runoffShare(temperature[index] ?? 0) * cellArea;
+      water[index] = runoff(precipitation[index] ?? 0, temperature[index] ?? 0) * cellArea;
     }
   }
 
@@ -436,7 +449,7 @@ export function generateHydrology(
   // en amont : on recommence jusqu'à ce que plus aucun ne change (D2).
   for (let pass = 0; pass < 8; pass++) {
     const inflow = new Float64Array(basins.length + 1);
-    accumulate(receiver, runoff, labels, basins, inflow);
+    accumulate(receiver, water, labels, basins, inflow);
     let changed = false;
     for (const [offset, basin] of basins.entries()) {
       basin.inflow = inflow[offset + 1] ?? 0;
@@ -506,7 +519,7 @@ export function generateHydrology(
       );
     }
   }
-  const final = accumulate(receiver, runoff, labels, basins);
+  const final = accumulate(receiver, water, labels, basins);
 
   // Rivières (D3) : au-delà du seuil, ruisseau, rivière, puis fleuve.
   const threshold = config.riverThreshold / params.rivers;

@@ -58,7 +58,7 @@
     "family": "water",
     "name": "biome.river",
     "fertility": 0,
-    "movementCost": 3,
+    "movementCost": null,
     "disease": false,
     "resources": ["fish"],
     "flora": {

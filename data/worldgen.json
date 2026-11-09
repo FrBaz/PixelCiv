@@ -1,11 +1,41 @@
 {
   "parameters": {
-    "landShare": { "min": 0.15, "max": 0.6, "default": 0.35, "step": 0.01 },
-    "seaLevel": { "min": -1, "max": 1, "default": 0, "step": 0.1 },
-    "relief": { "min": 0, "max": 1, "default": 0.5, "step": 0.05 },
-    "temperature": { "min": -10, "max": 10, "default": 0, "step": 0.5 },
-    "humidity": { "min": 0.5, "max": 1.5, "default": 1, "step": 0.05 },
-    "rivers": { "min": 0.5, "max": 2, "default": 1, "step": 0.05 }
+    "landShare": {
+      "min": 0.15,
+      "max": 0.6,
+      "default": 0.35,
+      "step": 0.01
+    },
+    "seaLevel": {
+      "min": -1,
+      "max": 1,
+      "default": 0,
+      "step": 0.1
+    },
+    "relief": {
+      "min": 0,
+      "max": 1,
+      "default": 0.5,
+      "step": 0.05
+    },
+    "temperature": {
+      "min": -10,
+      "max": 10,
+      "default": 0,
+      "step": 0.5
+    },
+    "humidity": {
+      "min": 0.5,
+      "max": 1.5,
+      "default": 1,
+      "step": 0.05
+    },
+    "rivers": {
+      "min": 0.5,
+      "max": 2,
+      "default": 1,
+      "step": 0.05
+    }
   },
   "ocean": {
     "minShare": 0.005
@@ -23,8 +53,216 @@
     "infill": 0.85,
     "saltFlatRatio": 0.12,
     "saltFlatShare": 0.35,
-    "lakeEvaporation": { "perDegree": 40, "minimum": 150 },
+    "lakeEvaporation": {
+      "perDegree": 40,
+      "minimum": 150
+    },
     "riverThreshold": 60000,
     "riverClasses": [4, 16]
+  },
+  "aridity": {
+    "perDegree": 20,
+    "base": 140,
+    "minimum": 50
+  },
+  "coasts": {
+    "reliefRadius": 2
+  },
+  "wetlands": {
+    "maxSlope": 0.4,
+    "waterDistance": 4,
+    "maxAltitude": 300,
+    "minPrecipitation": 900,
+    "patchFrequency": 30,
+    "patchThreshold": 0.35
+  },
+  "classification": {
+    "ocean": [
+      {
+        "biome": "coastal-ocean",
+        "when": {
+          "altitude": [-200, null]
+        }
+      },
+      {
+        "biome": "ocean",
+        "when": {
+          "altitude": [-1000, null]
+        }
+      },
+      {
+        "biome": "deep-ocean"
+      }
+    ],
+    "lakes": {
+      "fresh": "lake",
+      "salt": "salt-lake",
+      "saltFlat": "salar"
+    },
+    "river": "river",
+    "glacier": {
+      "biome": "glacier",
+      "when": {
+        "warmest": [null, 0]
+      }
+    },
+    "coast": [
+      {
+        "biome": "cliff",
+        "when": {
+          "relief": [0.88, null]
+        }
+      },
+      {
+        "biome": "rocky-coast",
+        "when": {
+          "temperature": [null, 3]
+        }
+      },
+      {
+        "biome": "rocky-coast",
+        "when": {
+          "relief": [0.7, null]
+        }
+      },
+      {
+        "biome": "mangrove",
+        "when": {
+          "temperature": [24, null],
+          "precipitation": [1400, null],
+          "slope": [null, 0.35]
+        }
+      },
+      {
+        "biome": "coastal-marsh",
+        "when": {
+          "temperature": [8, 24],
+          "precipitation": [1000, null],
+          "slope": [null, 0.35]
+        }
+      },
+      {
+        "biome": "beach"
+      }
+    ],
+    "wetland": [
+      {
+        "biome": "bog",
+        "when": {
+          "temperature": [null, 3]
+        }
+      },
+      {
+        "biome": "marsh",
+        "when": {
+          "temperature": [null, 22]
+        }
+      },
+      {
+        "biome": "swamp"
+      }
+    ],
+    "land": [
+      {
+        "biome": "high-mountain",
+        "when": {
+          "altitude": [2600, null]
+        }
+      },
+      {
+        "biome": "alpine",
+        "when": {
+          "warmest": [null, 10],
+          "altitude": [1000, null]
+        }
+      },
+      {
+        "biome": "tundra",
+        "when": {
+          "warmest": [null, 10]
+        }
+      },
+      {
+        "biome": "mountain",
+        "when": {
+          "altitude": [1800, null]
+        }
+      },
+      {
+        "biome": "desert",
+        "when": {
+          "aridity": [null, 0.5]
+        }
+      },
+      {
+        "biome": "savanna",
+        "when": {
+          "aridity": [null, 1],
+          "coldest": [18, null]
+        }
+      },
+      {
+        "biome": "cold-steppe",
+        "when": {
+          "aridity": [null, 1],
+          "coldest": [null, -3]
+        }
+      },
+      {
+        "biome": "steppe",
+        "when": {
+          "aridity": [null, 1]
+        }
+      },
+      {
+        "biome": "tropical-grassland",
+        "when": {
+          "coldest": [18, null],
+          "precipitation": [null, 1200]
+        }
+      },
+      {
+        "biome": "tropical-forest",
+        "when": {
+          "coldest": [18, null],
+          "precipitation": [null, 2000]
+        }
+      },
+      {
+        "biome": "rainforest",
+        "when": {
+          "coldest": [18, null]
+        }
+      },
+      {
+        "biome": "cold-forest",
+        "when": {
+          "coldest": [null, -3],
+          "warmest": [12, null],
+          "precipitation": [600, null]
+        }
+      },
+      {
+        "biome": "taiga",
+        "when": {
+          "coldest": [null, -3]
+        }
+      },
+      {
+        "biome": "grassland",
+        "when": {
+          "precipitation": [null, 600]
+        }
+      },
+      {
+        "biome": "temperate-forest",
+        "when": {
+          "precipitation": [null, 1600]
+        }
+      },
+      {
+        "biome": "temperate-rainforest"
+      }
+    ]
   }
 }

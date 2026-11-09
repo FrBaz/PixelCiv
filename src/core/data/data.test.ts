@@ -72,11 +72,14 @@ describe('validation', () => {
     expect(load([{ ...beach, movementCost: null }])).toThrow(/movementCost/);
   });
 
-  it('laisse franchir les rivières à pied, mais pas la haute mer (C1, D3)', () => {
+  it('ne laisse franchir à pied ni le fleuve, ni les lacs, ni la mer (C1, D3)', () => {
+    // Le biome « rivière » est le lit d'un fleuve, qu'on passe par un pont ou un bac ;
+    // ruisseaux et rivières coulent sur les autres biomes, qu'on franchit.
     const cost = (id: string) => biomesJson.find((biome) => biome.id === id)?.movementCost;
-    expect(cost('river')).toBeGreaterThanOrEqual(1);
+    expect(cost('river')).toBeNull();
     expect(cost('deep-ocean')).toBeNull();
     expect(cost('lake')).toBeNull();
+    expect(cost('beach')).toBeGreaterThanOrEqual(1);
   });
 });
 

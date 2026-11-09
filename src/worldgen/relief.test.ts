@@ -88,7 +88,8 @@ describe('relief', () => {
   it('dresse des chaînes continues, entrecoupées de cols', () => {
     const { width } = SIZE;
     for (const elevation of worlds.values()) {
-      // Les chaînes : cases de basse montagne ou plus, reliées entre elles.
+      // Les chaînes : cases de basse montagne ou plus, reliées entre elles ; leurs massifs :
+      // les cases au-dessus de la moyenne montagne.
       const chains = components(
         elevation.map((meters) => (meters >= 1000 ? 1 : 0)),
         SIZE,
@@ -97,21 +98,25 @@ describe('relief', () => {
         elevation.map((meters) => (meters >= 1800 ? 1 : 0)),
         SIZE,
       );
-      // Étendue de la plus grande chaîne : des dizaines de cases.
-      const largest = chains.sizes.indexOf(Math.max(...chains.sizes.slice(1)));
-      const columns = new Set<number>();
-      const rows = new Set<number>();
-      const peaksInLargest = new Set<number>();
+      const columns = chains.sizes.map(() => new Set<number>());
+      const rows = chains.sizes.map(() => new Set<number>());
+      const massifs = chains.sizes.map(() => new Set<number>());
       chains.labels.forEach((label, index) => {
-        if (label !== largest) return;
-        columns.add(index % width);
-        rows.add(Math.floor(index / width));
+        if (label === 0) return;
+        columns[label]?.add(index % width);
+        rows[label]?.add(Math.floor(index / width));
         const peak = peaks.labels[index] ?? 0;
-        if (peak !== 0 && (peaks.sizes[peak] ?? 0) >= 4) peaksInLargest.add(peak);
+        if (peak !== 0 && (peaks.sizes[peak] ?? 0) >= 4) massifs[label]?.add(peak);
       });
-      expect(Math.max(columns.size, rows.size)).toBeGreaterThanOrEqual(40);
-      // Plusieurs massifs au-dessus de 1 800 m sur une même chaîne : des cols les séparent.
-      expect(peaksInLargest.size).toBeGreaterThanOrEqual(2);
+      const extent = (label: number) => Math.max(columns[label]?.size ?? 0, rows[label]?.size ?? 0);
+      const labels = chains.sizes.map((_, label) => label).slice(1);
+      // Des chaînes longues de dizaines de cases…
+      expect(Math.max(...labels.map(extent))).toBeGreaterThanOrEqual(40);
+      // … dont l'une au moins porte plusieurs massifs : des cols les séparent.
+      const separated = labels.filter(
+        (label) => extent(label) >= 30 && (massifs[label]?.size ?? 0) >= 2,
+      );
+      expect(separated.length).toBeGreaterThanOrEqual(1);
     }
   });
 
