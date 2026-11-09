@@ -9,7 +9,7 @@ import { determinismSelfTest } from '../core/selftest';
 import { t } from '../i18n';
 import { CameraControls } from '../render/controls';
 import { cellAt, MapView } from '../render/map';
-import { biomePalettes } from '../render/bake';
+import { overlayTexels } from '../render/mapModes';
 import { createRenderer } from '../render/renderer';
 import { App } from '../ui/App';
 import {
@@ -23,6 +23,7 @@ import {
 } from '../ui/store';
 import { DebugSampler, usedMemoryMb } from './debug';
 import { SaveManager, SaveStore } from './saves';
+import { SeasonClock } from './seasonClock';
 import { SimulationClient } from './simulation';
 import './style.css';
 
@@ -50,12 +51,17 @@ async function main(): Promise<void> {
   content.value = { biomes: data.biomes.entries.length };
   // Auto-test du déterminisme : ce moteur redonne-t-il les empreintes de référence ?
   determinismOk.value = determinismSelfTest();
-  const palettes = biomePalettes(data.biomes.entries);
   const query = new URLSearchParams(location.search);
   const brush = query.get('brush');
   const mapElement = element('map');
   const app = await createRenderer(mapElement);
-  const map = new MapView(app);
+  const map = new MapView(app, data.biomes.entries);
+  const seasons = new SeasonClock();
+  const modeData = {
+    biomes: data.biomes.entries,
+    altitudeLevels: data.altitudeLevels.entries,
+    resources: data.resources.entries,
+  };
   const simulation = new SimulationClient();
   // Sans IndexedDB (navigation privée, stockage refusé), le jeu tourne sans sauvegarde locale.
   const store = await SaveStore.open().catch(() => undefined);
@@ -86,6 +92,7 @@ async function main(): Promise<void> {
     // La durée réelle de l'image : deltaMS est plafonné à 100 ms, et cacherait les à-coups.
     if (returning) returning = false;
     else sampler.frame(ticker.elapsedMS);
+    map.setSeason(seasons.month(performance.now()));
     map.draw(controls.update(ticker.deltaMS));
   });
   setInterval(() => {
@@ -110,18 +117,22 @@ async function main(): Promise<void> {
         break;
       case 'snapshot': {
         worldInfo.value = message.world;
-        map.setWorld(message.world, message.layers, palettes);
+        const layers = message.layers;
+        map.setWorld(message.world, layers, (mode) => overlayTexels(mode, layers, modeData));
         const world = map.world;
         if (world !== undefined) controls.center(world);
         time.value = message.time;
+        seasons.update(message.time, performance.now());
         break;
       }
       case 'delta':
         map.updateChunks(message.chunks);
         time.value = message.time;
+        seasons.update(message.time, performance.now());
         break;
       case 'time':
         time.value = message.time;
+        seasons.update(message.time, performance.now());
         break;
       case 'stats':
         sampler.step(message.stats.stepMs);

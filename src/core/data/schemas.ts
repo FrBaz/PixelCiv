@@ -31,6 +31,25 @@ export const BIOME_FAMILIES = [
   'tropical',
 ] as const;
 
+/** Motifs des tuiles : herbe, forêt, sable, roche, glace, marais, eau. */
+export const TILE_STYLES = ['grass', 'forest', 'sand', 'rock', 'ice', 'marsh', 'water'] as const;
+
+/**
+ * Végétation d'un biome, pour le rendu des saisons (C1, D10) : persistante, caduque,
+ * herbe, herbe tropicale, toundra, ou aucune.
+ */
+export const VEGETATION_TYPES = [
+  'none',
+  'evergreen',
+  'deciduous',
+  'grass',
+  'tropical-grass',
+  'tundra',
+] as const;
+
+/** Couvertures saisonnières (C1, D9) : neige, glace d'eau douce, banquise côtière. */
+export const SEASON_COVERS = ['none', 'snow', 'ice', 'sea-ice'] as const;
+
 /** Biome naturel (MON-08, MON-10, C1). */
 export const BiomeSchema = z
   .object({
@@ -57,6 +76,27 @@ export const BiomeSchema = z
       .strict(),
     /** Palette par rôles (REN-09) : ombre, base, lumière. */
     palette: z.object({ shadow: ColorSchema, base: ColorSchema, light: ColorSchema }).strict(),
+    /** Motif des tuiles de 4 px (REN-01), que la cuisson tire de la palette. */
+    tile: z.enum(TILE_STYLES),
+    /** Végétation, pour le rendu des saisons (C1, D10). */
+    vegetation: z.enum(VEGETATION_TYPES),
+    /**
+     * Saisons (C1, D9 et D10) : ce qui couvre le biome par grand froid (neige sur les
+     * terres, glace sur l'eau douce, banquise sur la mer côtière, rien sinon) et la palette
+     * de cette couverture, propre au biome.
+     */
+    seasons: z
+      .object({
+        cover: z.enum(SEASON_COVERS),
+        palette: z
+          .object({ shadow: ColorSchema, base: ColorSchema, light: ColorSchema })
+          .strict()
+          .optional(),
+      })
+      .strict()
+      .refine((seasons) => (seasons.cover === 'none') === (seasons.palette === undefined), {
+        message: 'une couverture saisonnière, et elle seule, a sa palette',
+      }),
   })
   .strict()
   .superRefine((biome, context) => {
@@ -65,6 +105,21 @@ export const BiomeSchema = z
         code: 'custom',
         message: "seule l'eau peut être infranchissable à pied",
         path: ['movementCost'],
+      });
+    }
+    if ((biome.family === 'water') !== (biome.tile === 'water')) {
+      context.addIssue({
+        code: 'custom',
+        message: 'les eaux, et elles seules, ont le motif « eau »',
+        path: ['tile'],
+      });
+    }
+    const waterCover = biome.seasons.cover === 'ice' || biome.seasons.cover === 'sea-ice';
+    if (biome.family !== 'water' && waterCover) {
+      context.addIssue({
+        code: 'custom',
+        message: 'seules les eaux gèlent ; les terres ont de la neige',
+        path: ['seasons', 'cover'],
       });
     }
     if ((biome.family === 'coast') !== (biome.landing !== undefined)) {
@@ -127,6 +182,8 @@ export const AltitudeLevelSchema = z
     fertility: ShareSchema.nullable(),
     /** Constructions permises ; elles seront reliées aux bâtiments en phase 3. */
     construction: z.array(IdSchema),
+    /** Couleur du mode de carte « relief ». */
+    color: ColorSchema,
   })
   .strict()
   .superRefine((level, context) => {

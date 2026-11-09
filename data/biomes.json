@@ -13,9 +13,14 @@
       "species": []
     },
     "palette": {
-      "shadow": "#0e1f3d",
-      "base": "#15305a",
-      "light": "#1d3f73"
+      "shadow": "#162c64",
+      "base": "#1e3a7a",
+      "light": "#28488a"
+    },
+    "tile": "water",
+    "vegetation": "none",
+    "seasons": {
+      "cover": "none"
     }
   },
   {
@@ -32,9 +37,14 @@
       "species": []
     },
     "palette": {
-      "shadow": "#163a66",
-      "base": "#1d4a80",
-      "light": "#275a94"
+      "shadow": "#1e427e",
+      "base": "#265292",
+      "light": "#3564a3"
+    },
+    "tile": "water",
+    "vegetation": "none",
+    "seasons": {
+      "cover": "none"
     }
   },
   {
@@ -51,9 +61,19 @@
       "species": []
     },
     "palette": {
-      "shadow": "#1f5a8c",
-      "base": "#2a6ea3",
-      "light": "#3a82b6"
+      "shadow": "#376e9d",
+      "base": "#468ab6",
+      "light": "#58a2c9"
+    },
+    "tile": "water",
+    "vegetation": "none",
+    "seasons": {
+      "cover": "sea-ice",
+      "palette": {
+        "shadow": "#b2cadc",
+        "base": "#d2e4f0",
+        "light": "#ecf6fc"
+      }
     }
   },
   {
@@ -70,9 +90,19 @@
       "species": []
     },
     "palette": {
-      "shadow": "#2a6aa0",
-      "base": "#3480b8",
-      "light": "#4a96cc"
+      "shadow": "#4380b6",
+      "base": "#56a0d4",
+      "light": "#6abae9"
+    },
+    "tile": "water",
+    "vegetation": "none",
+    "seasons": {
+      "cover": "ice",
+      "palette": {
+        "shadow": "#a8c4d6",
+        "base": "#c6deea",
+        "light": "#e2f0f8"
+      }
     }
   },
   {
@@ -89,9 +119,19 @@
       "species": []
     },
     "palette": {
-      "shadow": "#24618f",
-      "base": "#2f76a8",
-      "light": "#4189bb"
+      "shadow": "#2868a8",
+      "base": "#397eba",
+      "light": "#4a94cc"
+    },
+    "tile": "water",
+    "vegetation": "none",
+    "seasons": {
+      "cover": "ice",
+      "palette": {
+        "shadow": "#a8c4d6",
+        "base": "#c6deea",
+        "light": "#e2f0f8"
+      }
     }
   },
   {
@@ -108,9 +148,19 @@
       "species": []
     },
     "palette": {
-      "shadow": "#3d7d96",
-      "base": "#4f93aa",
-      "light": "#6aa8bb"
+      "shadow": "#4e989e",
+      "base": "#64beb8",
+      "light": "#7adbcb"
+    },
+    "tile": "water",
+    "vegetation": "none",
+    "seasons": {
+      "cover": "ice",
+      "palette": {
+        "shadow": "#a8c4d6",
+        "base": "#c6deea",
+        "light": "#e2f0f8"
+      }
     }
   },
   {
@@ -128,9 +178,19 @@
       "species": ["palm", "scrub"]
     },
     "palette": {
-      "shadow": "#b89a62",
-      "base": "#d8c08a",
-      "light": "#ecd8a8"
+      "shadow": "#b7af6d",
+      "base": "#ebdb7f",
+      "light": "#fffb8f"
+    },
+    "tile": "sand",
+    "vegetation": "none",
+    "seasons": {
+      "cover": "snow",
+      "palette": {
+        "shadow": "#b0becc",
+        "base": "#dee7f0",
+        "light": "#f6fafd"
+      }
     }
   },
   {
@@ -148,9 +208,19 @@
       "species": ["heather"]
     },
     "palette": {
-      "shadow": "#5d5a55",
-      "base": "#7a766f",
-      "light": "#97928a"
+      "shadow": "#6d6b67",
+      "base": "#8c8678",
+      "light": "#a79d87"
+    },
+    "tile": "rock",
+    "vegetation": "none",
+    "seasons": {
+      "cover": "snow",
+      "palette": {
+        "shadow": "#a0a8b2",
+        "base": "#dee7f0",
+        "light": "#f6fafd"
+      }
     }
   },
   {
@@ -168,9 +238,19 @@
       "species": ["heather"]
     },
     "palette": {
-      "shadow": "#4a4540",
-      "base": "#645d55",
-      "light": "#807870"
+      "shadow": "#5a5553",
+      "base": "#746a60",
+      "light": "#8c7f6e"
+    },
+    "tile": "rock",
+    "vegetation": "none",
+    "seasons": {
+      "cover": "snow",
+      "palette": {
+        "shadow": "#a0a8b2",
+        "base": "#dee7f0",
+        "light": "#f6fafd"
+      }
     }
   },
   {
@@ -188,9 +268,19 @@
       "species": ["mangrove-tree", "reed"]
     },
     "palette": {
-      "shadow": "#23402a",
-      "base": "#2f5636",
-      "light": "#3e6c44"
+      "shadow": "#1c5643",
+      "base": "#246c4e",
+      "light": "#32815b"
+    },
+    "tile": "forest",
+    "vegetation": "evergreen",
+    "seasons": {
+      "cover": "snow",
+      "palette": {
+        "shadow": "#6d8f8e",
+        "base": "#dee7f0",
+        "light": "#f6fafd"
+      }
     }
   },
   {
@@ -208,9 +298,19 @@
       "species": ["reed"]
     },
     "palette": {
-      "shadow": "#4a5e3c",
-      "base": "#5e744c",
-      "light": "#74895e"
+      "shadow": "#5a754f",
+      "base": "#74925c",
+      "light": "#8cab6a"
+    },
+    "tile": "marsh",
+    "vegetation": "grass",
+    "seasons": {
+      "cover": "snow",
+      "palette": {
+        "shadow": "#b0becc",
+        "base": "#dee7f0",
+        "light": "#f6fafd"
+      }
     }
   },
   {
@@ -227,9 +327,19 @@
       "species": ["reed", "birch"]
     },
     "palette": {
-      "shadow": "#3e5236",
-      "base": "#526845",
-      "light": "#677e56"
+      "shadow": "#43663e",
+      "base": "#568048",
+      "light": "#6a9754"
+    },
+    "tile": "marsh",
+    "vegetation": "grass",
+    "seasons": {
+      "cover": "snow",
+      "palette": {
+        "shadow": "#b0becc",
+        "base": "#dee7f0",
+        "light": "#f6fafd"
+      }
     }
   },
   {
@@ -246,9 +356,19 @@
       "species": ["heather", "birch", "dwarf-willow"]
     },
     "palette": {
-      "shadow": "#4a4636",
-      "base": "#5f5a45",
-      "light": "#757056"
+      "shadow": "#575645",
+      "base": "#706c50",
+      "light": "#87815d"
+    },
+    "tile": "marsh",
+    "vegetation": "tundra",
+    "seasons": {
+      "cover": "snow",
+      "palette": {
+        "shadow": "#b0becc",
+        "base": "#d6e2ee",
+        "light": "#f6fafd"
+      }
     }
   },
   {
@@ -265,9 +385,19 @@
       "species": ["tropical-hardwood", "reed"]
     },
     "palette": {
-      "shadow": "#24382a",
-      "base": "#304a36",
-      "light": "#3e5c44"
+      "shadow": "#174a34",
+      "base": "#1e5c3c",
+      "light": "#2c6f48"
+    },
+    "tile": "forest",
+    "vegetation": "evergreen",
+    "seasons": {
+      "cover": "snow",
+      "palette": {
+        "shadow": "#6b8a88",
+        "base": "#dee7f0",
+        "light": "#f6fafd"
+      }
     }
   },
   {
@@ -284,9 +414,14 @@
       "species": []
     },
     "palette": {
-      "shadow": "#c8d4dc",
-      "base": "#dde7ee",
-      "light": "#f0f6fa"
+      "shadow": "#b8c2d4",
+      "base": "#ecf3f6",
+      "light": "#ffffff"
+    },
+    "tile": "ice",
+    "vegetation": "none",
+    "seasons": {
+      "cover": "none"
     }
   },
   {
@@ -303,9 +438,19 @@
       "species": ["dwarf-willow", "heather"]
     },
     "palette": {
-      "shadow": "#7d806a",
-      "base": "#959880",
-      "light": "#adb098"
+      "shadow": "#7a8572",
+      "base": "#9ca684",
+      "light": "#b9c194"
+    },
+    "tile": "grass",
+    "vegetation": "tundra",
+    "seasons": {
+      "cover": "snow",
+      "palette": {
+        "shadow": "#b0becc",
+        "base": "#d6e2ee",
+        "light": "#f6fafd"
+      }
     }
   },
   {
@@ -322,9 +467,19 @@
       "species": ["conifer", "larch", "berry-bush"]
     },
     "palette": {
-      "shadow": "#1f3a2c",
-      "base": "#2b4c39",
-      "light": "#395f48"
+      "shadow": "#22534f",
+      "base": "#2c685c",
+      "light": "#3b7c6a"
+    },
+    "tile": "forest",
+    "vegetation": "evergreen",
+    "seasons": {
+      "cover": "snow",
+      "palette": {
+        "shadow": "#708e94",
+        "base": "#dee7f0",
+        "light": "#f6fafd"
+      }
     }
   },
   {
@@ -341,9 +496,19 @@
       "species": ["larch", "birch", "conifer", "berry-bush"]
     },
     "palette": {
-      "shadow": "#26402c",
-      "base": "#33543a",
-      "light": "#42684a"
+      "shadow": "#2a5b43",
+      "base": "#36724e",
+      "light": "#46875b"
+    },
+    "tile": "forest",
+    "vegetation": "deciduous",
+    "seasons": {
+      "cover": "snow",
+      "palette": {
+        "shadow": "#74918e",
+        "base": "#dee7f0",
+        "light": "#f6fafd"
+      }
     }
   },
   {
@@ -360,9 +525,19 @@
       "species": ["scrub"]
     },
     "palette": {
-      "shadow": "#847a58",
-      "base": "#9c926c",
-      "light": "#b3aa84"
+      "shadow": "#818060",
+      "base": "#a6a070",
+      "light": "#c4ba7f"
+    },
+    "tile": "grass",
+    "vegetation": "grass",
+    "seasons": {
+      "cover": "snow",
+      "palette": {
+        "shadow": "#b0becc",
+        "base": "#d6e2ee",
+        "light": "#f6fafd"
+      }
     }
   },
   {
@@ -379,9 +554,19 @@
       "species": ["dwarf-willow", "heather"]
     },
     "palette": {
-      "shadow": "#6f7560",
-      "base": "#868c76",
-      "light": "#9ea48e"
+      "shadow": "#64765d",
+      "base": "#80946c",
+      "light": "#99ad7a"
+    },
+    "tile": "grass",
+    "vegetation": "tundra",
+    "seasons": {
+      "cover": "snow",
+      "palette": {
+        "shadow": "#b0becc",
+        "base": "#d6e2ee",
+        "light": "#f6fafd"
+      }
     }
   },
   {
@@ -398,9 +583,19 @@
       "species": ["conifer", "heather"]
     },
     "palette": {
-      "shadow": "#6a625a",
-      "base": "#827970",
-      "light": "#9a9188"
+      "shadow": "#5f5d59",
+      "base": "#7a7468",
+      "light": "#938a76"
+    },
+    "tile": "rock",
+    "vegetation": "evergreen",
+    "seasons": {
+      "cover": "snow",
+      "palette": {
+        "shadow": "#a0a8b2",
+        "base": "#dee7f0",
+        "light": "#f6fafd"
+      }
     }
   },
   {
@@ -417,9 +612,19 @@
       "species": []
     },
     "palette": {
-      "shadow": "#8a8680",
-      "base": "#a5a19b",
-      "light": "#c2beb8"
+      "shadow": "#7e7e83",
+      "base": "#a29e98",
+      "light": "#bfb8a9"
+    },
+    "tile": "rock",
+    "vegetation": "none",
+    "seasons": {
+      "cover": "snow",
+      "palette": {
+        "shadow": "#a0a8b2",
+        "base": "#dee7f0",
+        "light": "#f6fafd"
+      }
     }
   },
   {
@@ -436,9 +641,19 @@
       "species": ["broadleaf", "berry-bush"]
     },
     "palette": {
-      "shadow": "#5f7a3a",
-      "base": "#748f48",
-      "light": "#8aa55a"
+      "shadow": "#3b7834",
+      "base": "#4c963c",
+      "light": "#5faf48"
+    },
+    "tile": "grass",
+    "vegetation": "grass",
+    "seasons": {
+      "cover": "snow",
+      "palette": {
+        "shadow": "#b0becc",
+        "base": "#dee7f0",
+        "light": "#f6fafd"
+      }
     }
   },
   {
@@ -455,9 +670,19 @@
       "species": ["scrub"]
     },
     "palette": {
-      "shadow": "#8a8448",
-      "base": "#a09a5a",
-      "light": "#b6b06e"
+      "shadow": "#898853",
+      "base": "#b0aa60",
+      "light": "#cfc56e"
+    },
+    "tile": "grass",
+    "vegetation": "grass",
+    "seasons": {
+      "cover": "snow",
+      "palette": {
+        "shadow": "#b0becc",
+        "base": "#dee7f0",
+        "light": "#f6fafd"
+      }
     }
   },
   {
@@ -474,9 +699,19 @@
       "species": ["broadleaf", "birch", "berry-bush"]
     },
     "palette": {
-      "shadow": "#2f4a26",
-      "base": "#3d5e31",
-      "light": "#4d733e"
+      "shadow": "#24602b",
+      "base": "#2e7832",
+      "light": "#3e8e3d"
+    },
+    "tile": "forest",
+    "vegetation": "deciduous",
+    "seasons": {
+      "cover": "snow",
+      "palette": {
+        "shadow": "#719484",
+        "base": "#dee7f0",
+        "light": "#f6fafd"
+      }
     }
   },
   {
@@ -493,9 +728,19 @@
       "species": ["conifer", "broadleaf", "berry-bush"]
     },
     "palette": {
-      "shadow": "#1f3d26",
-      "base": "#2a5032",
-      "light": "#376440"
+      "shadow": "#1b5030",
+      "base": "#226438",
+      "light": "#307843"
+    },
+    "tile": "forest",
+    "vegetation": "deciduous",
+    "seasons": {
+      "cover": "snow",
+      "palette": {
+        "shadow": "#6d8c86",
+        "base": "#dee7f0",
+        "light": "#f6fafd"
+      }
     }
   },
   {
@@ -512,9 +757,19 @@
       "species": ["cactus", "scrub"]
     },
     "palette": {
-      "shadow": "#b49a62",
-      "base": "#c9b078",
-      "light": "#dcc690"
+      "shadow": "#b0a569",
+      "base": "#e2ce7a",
+      "light": "#ffed89"
+    },
+    "tile": "sand",
+    "vegetation": "none",
+    "seasons": {
+      "cover": "snow",
+      "palette": {
+        "shadow": "#b0becc",
+        "base": "#dee7f0",
+        "light": "#f6fafd"
+      }
     }
   },
   {
@@ -531,9 +786,19 @@
       "species": []
     },
     "palette": {
-      "shadow": "#d8d4cc",
-      "base": "#e8e4dc",
-      "light": "#f6f3ee"
+      "shadow": "#afb1b5",
+      "base": "#e0ddd2",
+      "light": "#fffde7"
+    },
+    "tile": "ice",
+    "vegetation": "none",
+    "seasons": {
+      "cover": "snow",
+      "palette": {
+        "shadow": "#b0becc",
+        "base": "#dee7f0",
+        "light": "#f6fafd"
+      }
     }
   },
   {
@@ -550,9 +815,19 @@
       "species": ["acacia", "scrub"]
     },
     "palette": {
-      "shadow": "#8f8a3e",
-      "base": "#a6a04e",
-      "light": "#bdb662"
+      "shadow": "#9c9047",
+      "base": "#c8b452",
+      "light": "#ead05f"
+    },
+    "tile": "grass",
+    "vegetation": "tropical-grass",
+    "seasons": {
+      "cover": "snow",
+      "palette": {
+        "shadow": "#b0becc",
+        "base": "#dee7f0",
+        "light": "#f6fafd"
+      }
     }
   },
   {
@@ -569,9 +844,19 @@
       "species": ["acacia", "palm", "scrub"]
     },
     "palette": {
-      "shadow": "#6c8a36",
-      "base": "#829f44",
-      "light": "#98b556"
+      "shadow": "#6d883e",
+      "base": "#8caa48",
+      "light": "#a7c554"
+    },
+    "tile": "grass",
+    "vegetation": "tropical-grass",
+    "seasons": {
+      "cover": "snow",
+      "palette": {
+        "shadow": "#b0becc",
+        "base": "#dee7f0",
+        "light": "#f6fafd"
+      }
     }
   },
   {
@@ -588,9 +873,19 @@
       "species": ["tropical-hardwood", "palm", "scrub"]
     },
     "palette": {
-      "shadow": "#23502a",
-      "base": "#2f6636",
-      "light": "#3d7c44"
+      "shadow": "#1f6330",
+      "base": "#287c38",
+      "light": "#379243"
+    },
+    "tile": "forest",
+    "vegetation": "evergreen",
+    "seasons": {
+      "cover": "snow",
+      "palette": {
+        "shadow": "#6f9586",
+        "base": "#dee7f0",
+        "light": "#f6fafd"
+      }
     }
   },
   {
@@ -607,9 +902,19 @@
       "species": ["tropical-hardwood", "palm"]
     },
     "palette": {
-      "shadow": "#1b4424",
-      "base": "#255830",
-      "light": "#316c3c"
+      "shadow": "#17532b",
+      "base": "#1e6832",
+      "light": "#2c7c3d"
+    },
+    "tile": "forest",
+    "vegetation": "evergreen",
+    "seasons": {
+      "cover": "snow",
+      "palette": {
+        "shadow": "#6b8e84",
+        "base": "#dee7f0",
+        "light": "#f6fafd"
+      }
     }
   }
 ]

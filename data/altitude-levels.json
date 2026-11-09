@@ -8,7 +8,8 @@
     "movement": null,
     "navigation": "open-sea",
     "fertility": null,
-    "construction": []
+    "construction": [],
+    "color": "#0e1f4d"
   },
   {
     "id": "ocean",
@@ -19,7 +20,8 @@
     "movement": null,
     "navigation": "open-sea",
     "fertility": null,
-    "construction": []
+    "construction": [],
+    "color": "#16306b"
   },
   {
     "id": "slope",
@@ -30,7 +32,8 @@
     "movement": null,
     "navigation": "offshore",
     "fertility": null,
-    "construction": []
+    "construction": [],
+    "color": "#244a8c"
   },
   {
     "id": "shelf",
@@ -41,7 +44,8 @@
     "movement": null,
     "navigation": "near-coast",
     "fertility": null,
-    "construction": []
+    "construction": [],
+    "color": "#3a6fae"
   },
   {
     "id": "coastal-water",
@@ -52,7 +56,8 @@
     "movement": null,
     "navigation": "coasting",
     "fertility": null,
-    "construction": []
+    "construction": [],
+    "color": "#5a93c8"
   },
   {
     "id": "foreshore",
@@ -63,7 +68,8 @@
     "movement": null,
     "navigation": "coasting",
     "fertility": null,
-    "construction": []
+    "construction": [],
+    "color": "#86b8dc"
   },
   {
     "id": "backshore",
@@ -73,7 +79,8 @@
     "max": 5,
     "movement": 1,
     "fertility": 0.7,
-    "construction": ["port", "saltworks"]
+    "construction": ["port", "saltworks"],
+    "color": "#e9e2b4"
   },
   {
     "id": "plain-one",
@@ -83,7 +90,8 @@
     "max": 50,
     "movement": 1,
     "fertility": 1,
-    "construction": ["any"]
+    "construction": ["any"],
+    "color": "#5a9e4a"
   },
   {
     "id": "plain-two",
@@ -93,7 +101,8 @@
     "max": 100,
     "movement": 1,
     "fertility": 1,
-    "construction": ["any"]
+    "construction": ["any"],
+    "color": "#74ab52"
   },
   {
     "id": "plain-three",
@@ -103,7 +112,8 @@
     "max": 200,
     "movement": 1,
     "fertility": 1,
-    "construction": ["any"]
+    "construction": ["any"],
+    "color": "#90b85c"
   },
   {
     "id": "plain-four",
@@ -113,7 +123,8 @@
     "max": 300,
     "movement": 1,
     "fertility": 1,
-    "construction": ["any"]
+    "construction": ["any"],
+    "color": "#abc365"
   },
   {
     "id": "plain-five",
@@ -123,7 +134,8 @@
     "max": 400,
     "movement": 1,
     "fertility": 1,
-    "construction": ["any"]
+    "construction": ["any"],
+    "color": "#c3c96d"
   },
   {
     "id": "hill-one",
@@ -133,7 +145,8 @@
     "max": 600,
     "movement": 1.5,
     "fertility": 0.8,
-    "construction": ["any", "castle"]
+    "construction": ["any", "castle"],
+    "color": "#d3c46c"
   },
   {
     "id": "hill-two",
@@ -143,7 +156,8 @@
     "max": 800,
     "movement": 1.5,
     "fertility": 0.8,
-    "construction": ["any", "castle"]
+    "construction": ["any", "castle"],
+    "color": "#d8b562"
   },
   {
     "id": "hill-three",
@@ -153,7 +167,8 @@
     "max": 1000,
     "movement": 1.5,
     "fertility": 0.8,
-    "construction": ["any", "castle"]
+    "construction": ["any", "castle"],
+    "color": "#cf9f57"
   },
   {
     "id": "low-mountain-one",
@@ -163,7 +178,8 @@
     "max": 1400,
     "movement": 2.5,
     "fertility": 0.5,
-    "construction": ["village", "mine", "fort"]
+    "construction": ["village", "mine", "fort"],
+    "color": "#bb8550"
   },
   {
     "id": "low-mountain-two",
@@ -173,7 +189,8 @@
     "max": 1800,
     "movement": 2.5,
     "fertility": 0.5,
-    "construction": ["village", "mine", "fort"]
+    "construction": ["village", "mine", "fort"],
+    "color": "#a36e48"
   },
   {
     "id": "mid-mountain",
@@ -183,7 +200,8 @@
     "max": 2600,
     "movement": 4,
     "fertility": 0.25,
-    "construction": ["hamlet", "mine", "fort"]
+    "construction": ["hamlet", "mine", "fort"],
+    "color": "#8c5b42"
   },
   {
     "id": "high-mountain",
@@ -193,7 +211,8 @@
     "max": 3800,
     "movement": 6,
     "fertility": 0,
-    "construction": ["mine", "pass-fort"]
+    "construction": ["mine", "pass-fort"],
+    "color": "#9b8d86"
   },
   {
     "id": "summit",
@@ -203,6 +222,7 @@
     "max": null,
     "movement": null,
     "fertility": 0,
-    "construction": ["sacred-site"]
+    "construction": ["sacred-site"],
+    "color": "#f2f2f0"
   }
 ]

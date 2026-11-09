@@ -13,3 +13,4 @@ Chaque décision d'architecture fait l'objet d'un ADR court (CLAUDE.md, section 
 | [0007](0007-sauvegardes.md) | Sauvegardes | accepté |
 | [0008](0008-credits-et-licences.md) | Crédits et avis de licence | accepté |
 | [0009](0009-generation-du-monde.md) | Génération du monde | accepté |
+| [0010](0010-rendu-de-la-carte.md) | Rendu de la carte | accepté |

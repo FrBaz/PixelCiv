@@ -1,30 +1,124 @@
 /**
- * Vue de la carte : une texture par bloc, recuite quand le bloc change (REN-02),
- * et des sprites placés à chaque image sur les blocs visibles, modulo la largeur du
- * monde (ADR 0002). Les positions sont entières en pixels physiques.
+ * Vue de la carte (tâches 1.7 et 1.8 ; REN-01 à REN-03, REN-10 ; ADR 0010).
+ *
+ * Une texture par bloc, cuite par les workers de cuisson, et recuite quand le bloc
+ * change (REN-02) ; un maillage par bloc visible, placé à chaque image modulo la largeur
+ * du monde (ADR 0002), à des positions entières en pixels physiques. Le shader des blocs
+ * y pose les saisons et les modes de carte, d'après la texture de données des saisons
+ * et la texture de superposition du mode, une valeur par case.
+ *
+ * Les textures des blocs ont leurs mipmaps, filtrés au plus proche : aux zooms
+ * inférieurs à 1, chaque pixel de l'écran lit le niveau qui lui correspond, sans
+ * scintiller (niveau de détail de base).
  */
-import { BufferImageSource, Container, Sprite, Texture, type Application } from 'pixi.js';
+import {
+  BufferImageSource,
+  Container,
+  Mesh,
+  MeshGeometry,
+  Shader,
+  UniformGroup,
+  type Application,
+} from 'pixi.js';
+import type { Biome } from '../core/data/schemas';
 import type { ChunkPatch, WorldInfo } from '../core/protocol';
-import { CHUNK_SIZE, chunkGrid, type ChunkGrid, type WorldLayers } from '../core/world';
-import { bakeChunk, CHUNK_PX, type BakeWorld, type BiomePalette } from './bake';
-import { TILE_PX, visibleChunks, type Camera, type Extent } from './camera';
+import {
+  CHUNK_SIZE,
+  chunkGrid,
+  type ChunkGrid,
+  type WorldLayers,
+  type WorldSize,
+} from '../core/world';
+import { bakeBiomes, CHUNK_PX, type BakeBiome } from './bake';
+import { Baker } from './baker';
+import { displayScale, TILE_PX, visibleChunks, type Camera, type Extent } from './camera';
+import { MAP_FRAGMENT, MAP_VERTEX } from './mapShader';
+import { seasonPalettes, seasonTexels } from './seasons';
 
-interface ChunkTexture {
+/** Modes de carte (IHM-01) : naturel, puis les superpositions. */
+export const MAP_MODES = ['natural', 'relief', 'biomes', 'resources'] as const;
+export type MapMode = (typeof MAP_MODES)[number];
+
+/** Couleurs de superposition d'un mode : un texel RGBA par case. */
+export type OverlayBuilder = (mode: Exclude<MapMode, 'natural'>) => Uint8Array<ArrayBuffer>;
+
+/** Maillage d'un bloc, sous le shader de la carte. */
+type ChunkMesh = Mesh<MeshGeometry, Shader>;
+
+interface ChunkView {
   readonly pixels: Uint8Array<ArrayBuffer>;
   readonly source: BufferImageSource;
-  readonly texture: Texture;
+  readonly shader: Shader;
+  readonly mesh: ChunkMesh;
+  baked: boolean;
+}
+
+/** Texture de données brutes, filtrée au plus proche, sans prémultiplication. */
+function dataSource(
+  pixels: Uint8Array<ArrayBuffer>,
+  width: number,
+  height: number,
+  mipmaps = false,
+) {
+  return new BufferImageSource({
+    resource: pixels,
+    width,
+    height,
+    scaleMode: 'nearest',
+    alphaMode: 'premultiplied-alpha',
+    autoGenerateMipmaps: mipmaps,
+  });
 }
 
 export class MapView {
   private readonly app: Application;
   private readonly layer = new Container();
-  private readonly sprites: Sprite[] = [];
+  private readonly biomes: readonly Biome[];
+  private readonly bake: readonly BakeBiome[];
+  private readonly river: BakeBiome;
+  private readonly geometry = new MeshGeometry({
+    positions: new Float32Array([0, 0, CHUNK_PX, 0, CHUNK_PX, CHUNK_PX, 0, CHUNK_PX]),
+    uvs: new Float32Array([0, 0, 1, 0, 1, 1, 0, 1]),
+    indices: new Uint32Array([0, 1, 2, 0, 2, 3]),
+  });
+  /** Réglages communs à tous les blocs : saison, mode, trame, tailles. */
+  private readonly globals = new UniformGroup({
+    uWorldCells: { value: new Float32Array([1, 1]), type: 'vec2<f32>' },
+    uBiomes: { value: 1, type: 'f32' },
+    uRiver: { value: 0, type: 'f32' },
+    uSnow: { value: 0, type: 'f32' },
+    uSeason: { value: 0, type: 'f32' },
+    uMode: { value: 0, type: 'f32' },
+    uFine: { value: 1, type: 'f32' },
+  });
+  private readonly palettes: BufferImageSource;
+  private readonly baker: Baker;
   private grid: ChunkGrid | undefined;
-  private chunks: ChunkTexture[] = [];
-  private baked: BakeWorld | undefined;
+  private size: WorldSize | undefined;
+  private layers: WorldLayers | undefined;
+  private chunks: ChunkView[] = [];
+  private data: BufferImageSource | undefined;
+  private overlay: BufferImageSource | undefined;
+  private overlays: OverlayBuilder | undefined;
+  private mode: MapMode = 'natural';
 
-  constructor(app: Application) {
+  constructor(app: Application, biomes: readonly Biome[]) {
     this.app = app;
+    this.biomes = biomes;
+    this.bake = bakeBiomes(biomes);
+    const river = this.bake.at(biomes.findIndex((biome) => biome.id === 'river'));
+    if (river === undefined) throw new Error('biome « rivière » absent de data/biomes.json');
+    this.river = river;
+    this.palettes = dataSource(seasonPalettes(biomes), 3, biomes.length);
+    this.globals.uniforms.uBiomes = biomes.length;
+    this.globals.uniforms.uRiver = biomes.findIndex((biome) => biome.id === 'river');
+    this.globals.uniforms.uSnow = Math.max(
+      0,
+      biomes.findIndex((biome) => biome.seasons.cover === 'snow'),
+    );
+    this.baker = new Baker((column, row, pixels) => {
+      this.baked(column, row, pixels);
+    });
     app.stage.addChild(this.layer);
   }
 
@@ -43,52 +137,78 @@ export class MapView {
     };
   }
 
-  /** Nouveau monde : une texture par bloc, cuite d'après ses couches. */
-  setWorld(info: WorldInfo, layers: WorldLayers, palettes: readonly BiomePalette[]): void {
-    for (const chunk of this.chunks) chunk.texture.destroy(true);
-    const grid = chunkGrid(info.size);
-    this.grid = grid;
-    this.baked = { size: info.size, layers, palettes };
-    this.chunks = Array.from({ length: grid.columns * grid.rows }, () => {
-      const pixels = new Uint8Array(CHUNK_PX * CHUNK_PX * 4);
-      const source = new BufferImageSource({
-        resource: pixels,
-        width: CHUNK_PX,
-        height: CHUNK_PX,
-        scaleMode: 'nearest',
-      });
-      return { pixels, source, texture: new Texture({ source }) };
-    });
-    for (let row = 0; row < grid.rows; row++) {
-      for (let column = 0; column < grid.columns; column++) this.bake(column, row);
-    }
+  /** Blocs qui restent à cuire. */
+  get pendingChunks(): number {
+    return this.baker.remaining;
   }
 
-  /** Reporte les blocs modifiés dans les couches, et recuit ces blocs, eux seuls. */
+  /** Nouveau monde : textures neuves, cuisson de tous les blocs, visibles d'abord. */
+  setWorld(info: WorldInfo, layers: WorldLayers, overlays: OverlayBuilder): void {
+    for (const chunk of this.chunks) {
+      chunk.mesh.destroy();
+      chunk.source.destroy();
+    }
+    for (const mesh of this.copies) mesh.destroy();
+    this.copies = [];
+    this.data?.destroy();
+    this.overlay?.destroy();
+    const { size } = info;
+    const grid = chunkGrid(size);
+    this.grid = grid;
+    this.size = size;
+    this.layers = layers;
+    this.overlays = overlays;
+    this.data = dataSource(seasonTexels(size, layers, this.biomes), size.width, size.height);
+    this.overlay = dataSource(
+      new Uint8Array(size.width * size.height * 4),
+      size.width,
+      size.height,
+    );
+    this.globals.uniforms.uWorldCells = new Float32Array([size.width, size.height]);
+    this.chunks = Array.from({ length: grid.columns * grid.rows }, (_, index) =>
+      this.chunkView(index % grid.columns, Math.floor(index / grid.columns)),
+    );
+    this.setMode(this.mode);
+    this.baker.setWorld(size, layers, this.bake, this.river);
+  }
+
+  /** Reporte les blocs modifiés dans les couches et la texture des saisons, puis les recuit. */
   updateChunks(patches: readonly ChunkPatch[]): void {
-    const world = this.baked;
-    if (world === undefined) return;
-    const { width } = world.size;
+    const layers = this.layers;
+    const size = this.size;
+    if (layers === undefined || size === undefined || patches.length === 0) return;
     for (const patch of patches) {
       for (let line = 0; line < CHUNK_SIZE; line++) {
-        const start = (patch.row * CHUNK_SIZE + line) * width + patch.column * CHUNK_SIZE;
-        world.layers.biome.set(
-          patch.biome.subarray(line * CHUNK_SIZE, (line + 1) * CHUNK_SIZE),
-          start,
-        );
+        const start = (patch.row * CHUNK_SIZE + line) * size.width + patch.column * CHUNK_SIZE;
+        layers.biome.set(patch.biome.subarray(line * CHUNK_SIZE, (line + 1) * CHUNK_SIZE), start);
       }
-      this.bake(patch.column, patch.row);
+      this.baker.patch(patch);
     }
+    const data = this.data;
+    if (data !== undefined) {
+      (data.resource as Uint8Array).set(seasonTexels(size, layers, this.biomes));
+      data.update();
+    }
+    if (this.mode !== 'natural') this.setMode(this.mode);
   }
 
-  private bake(column: number, row: number): void {
-    const grid = this.grid;
-    const world = this.baked;
-    if (grid === undefined || world === undefined) return;
-    const chunk = this.chunks.at(row * grid.columns + column);
-    if (chunk === undefined) return;
-    chunk.pixels.set(bakeChunk(world, column, row));
-    chunk.source.update();
+  /** Mois courant, continu : 0 au début de janvier, 11,5 à la mi-décembre. */
+  setSeason(month: number): void {
+    this.globals.uniforms.uSeason = Math.cos((2 * Math.PI * (month - 6.5)) / 12);
+  }
+
+  /** Mode de carte : sa superposition se calcule à la demande. */
+  setMode(mode: MapMode): void {
+    this.mode = mode;
+    this.globals.uniforms.uMode = mode === 'natural' ? 0 : mode === 'resources' ? 2 : 1;
+    const overlay = this.overlay;
+    if (mode === 'natural' || overlay === undefined || this.overlays === undefined) return;
+    (overlay.resource as Uint8Array).set(this.overlays(mode));
+    overlay.update();
+  }
+
+  get currentMode(): MapMode {
+    return this.mode;
   }
 
   /** Dessine les blocs visibles depuis la caméra. */
@@ -96,28 +216,102 @@ export class MapView {
     const grid = this.grid;
     if (grid === undefined) return;
     const { resolution } = this.app.renderer;
+    const scale = displayScale(camera.zoom);
+    // De près, la trame suit les pixels ; de loin, les cases, pour ne pas scintiller.
+    this.globals.uniforms.uFine = scale >= 1 ? 1 : 0;
     const placements = visibleChunks(camera, this.viewport, grid, CHUNK_PX);
-    while (this.sprites.length < placements.length) {
-      const sprite = new Sprite();
-      this.layer.addChild(sprite);
-      this.sprites.push(sprite);
+    for (const chunk of this.chunks) chunk.mesh.visible = false;
+    const shown = new Set<ChunkMesh>();
+    const order: { column: number; row: number; distance: number }[] = [];
+    const center = { x: this.viewport.width / 2, y: this.viewport.height / 2 };
+    for (const placement of placements) {
+      const chunk = this.chunks.at(placement.row * grid.columns + placement.column);
+      if (chunk === undefined) continue;
+      order.push({
+        column: placement.column,
+        row: placement.row,
+        distance: Math.hypot(
+          placement.left + placement.width / 2 - center.x,
+          placement.top + placement.height / 2 - center.y,
+        ),
+      });
+      if (!chunk.baked) continue;
+      // Un bloc affiché deux fois (monde plus étroit que l'écran) : une copie du maillage.
+      const mesh = shown.has(chunk.mesh) ? this.copyOf(chunk) : chunk.mesh;
+      shown.add(mesh);
+      mesh.visible = true;
+      mesh.position.set(placement.left / resolution, placement.top / resolution);
+      mesh.scale.set(
+        placement.width / resolution / CHUNK_PX,
+        placement.height / resolution / CHUNK_PX,
+      );
     }
-    this.sprites.forEach((sprite, index) => {
-      const placement = placements.at(index);
-      const chunk =
-        placement === undefined
-          ? undefined
-          : this.chunks.at(placement.row * grid.columns + placement.column);
-      if (placement === undefined || chunk === undefined) {
-        sprite.visible = false;
-        return;
-      }
-      sprite.visible = true;
-      sprite.texture = chunk.texture;
-      sprite.position.set(placement.left / resolution, placement.top / resolution);
-      sprite.width = placement.width / resolution;
-      sprite.height = placement.height / resolution;
+    this.releaseCopies(shown);
+    this.globals.update();
+    order.sort((a, b) => a.distance - b.distance);
+    this.baker.prioritize(order);
+  }
+
+  private chunkView(column: number, row: number): ChunkView {
+    const pixels = new Uint8Array(CHUNK_PX * CHUNK_PX * 4);
+    const source = dataSource(pixels, CHUNK_PX, CHUNK_PX, true);
+    const origin = new UniformGroup({
+      uOrigin: {
+        value: new Float32Array([column * CHUNK_SIZE, row * CHUNK_SIZE]),
+        type: 'vec2<f32>',
+      },
     });
+    const shader = this.shaderFor(source, origin);
+    const mesh: ChunkMesh = new Mesh({ geometry: this.geometry, shader });
+    mesh.visible = false;
+    this.layer.addChild(mesh);
+    return { pixels, source, shader, mesh, baked: false };
+  }
+
+  private shaderFor(source: BufferImageSource, origin: UniformGroup): Shader {
+    return Shader.from({
+      gl: { vertex: MAP_VERTEX, fragment: MAP_FRAGMENT, name: 'pixelciv-map' },
+      resources: {
+        uChunk: source,
+        uData: this.data ?? source,
+        uPalettes: this.palettes,
+        uOverlay: this.overlay ?? source,
+        globals: this.globals,
+        origin,
+      },
+    });
+  }
+
+  /** Copies des maillages d'un bloc qui paraît plusieurs fois à l'écran. */
+  private copies: ChunkMesh[] = [];
+  private copiesInUse = 0;
+
+  private copyOf(chunk: ChunkView): ChunkMesh {
+    let mesh = this.copies.at(this.copiesInUse);
+    if (mesh === undefined) {
+      mesh = new Mesh<MeshGeometry, Shader>({ geometry: this.geometry, shader: chunk.shader });
+      this.layer.addChild(mesh);
+      this.copies.push(mesh);
+    } else {
+      mesh.shader = chunk.shader;
+    }
+    this.copiesInUse++;
+    return mesh;
+  }
+
+  private releaseCopies(shown: Set<ChunkMesh>): void {
+    for (const mesh of this.copies) if (!shown.has(mesh)) mesh.visible = false;
+    this.copiesInUse = 0;
+  }
+
+  private baked(column: number, row: number, pixels: Uint8Array<ArrayBuffer>): void {
+    const grid = this.grid;
+    if (grid === undefined) return;
+    const chunk = this.chunks.at(row * grid.columns + column);
+    if (chunk === undefined) return;
+    chunk.pixels.set(pixels);
+    chunk.source.update();
+    chunk.baked = true;
   }
 }
 
