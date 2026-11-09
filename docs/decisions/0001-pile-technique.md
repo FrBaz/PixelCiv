@@ -23,7 +23,7 @@ Le code est vérifié par trois programmes TypeScript :
 - `tsconfig.app.json` : le reste de `src`, avec la bibliothèque DOM ;
 - `tsconfig.node.json` : `vite.config.ts` et `tools/`, avec les types de Node.
 
-Les tests sont typés avec le code qu'ils testent. Les imports relatifs s'écrivent sans extension et se résolvent comme sous Vite ; les outils de `tools/` passent par Vitest ou par Vite. Ce choix sera revu le jour où un outil devra tourner directement sous Node.
+Les tests sont typés avec le code qu'ils testent. Dans `src`, les imports relatifs s'écrivent sans extension et se résolvent comme sous Vite. La configuration de Vite et les modules de `tools/` qu'elle importe portent l'extension `.ts` : le chargeur natif de configuration de Vite, appelé à devenir la règle, l'exige. Les outils de `tools/` passent par Vitest ou par Vite ; ce choix sera revu le jour où l'un d'eux devra tourner directement sous Node.
 
 Garde-fous :
 - ESLint traduit en règles les consignes de déterminisme et d'isolement du worker (ADR 0003 et 0004). `tools/eslint-config.test.ts` vérifie ces règles.

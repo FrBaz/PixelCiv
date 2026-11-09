@@ -1,5 +1,5 @@
 import { defineConfig } from 'vitest/config';
-import { bundleLicenses } from './tools/bundle-licenses';
+import { bundleLicenses } from './tools/bundle-licenses.ts';
 
 // Configuration de Vite (serveur de développement et build) et de Vitest (tests).
 export default defineConfig({

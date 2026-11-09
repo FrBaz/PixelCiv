@@ -9,7 +9,12 @@
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import type { Plugin } from 'vite';
-import { LICENSE_POLICY, licenseProblem, type LicenseIssue, type LicensePolicy } from './licenses';
+import {
+  LICENSE_POLICY,
+  licenseProblem,
+  type LicenseIssue,
+  type LicensePolicy,
+} from './licenses.ts';
 
 /** Champs utiles du package.json d'un paquet. */
 export interface PackageInfo {

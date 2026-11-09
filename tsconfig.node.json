@@ -1,9 +1,12 @@
 {
   // Code exécuté sous Node : configuration de Vite et outils de tools/, tests compris.
+  // Le chargeur natif de Vite, appelé à devenir la règle, exige l'extension .ts dans
+  // les imports de la configuration et des modules qu'elle charge.
   "extends": "./tsconfig.base.json",
   "compilerOptions": {
     "lib": ["ES2023"],
-    "types": ["node"]
+    "types": ["node"],
+    "allowImportingTsExtensions": true
   },
   "include": ["vite.config.ts", "tools"]
 }
