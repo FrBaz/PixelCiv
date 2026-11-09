@@ -67,5 +67,28 @@
   "save.error.corrupt": "Cette sauvegarde est abîmée.",
   "save.error.storage": "Le stockage local est indisponible.",
   "save.fileName": "pixelciv-an-{year}.pxcv",
-  "notice.close": "Fermer"
+  "notice.close": "Fermer",
+  "debug.toggle": "Débogage",
+  "debug.title": "Débogage",
+  "debug.fps": "Images par seconde",
+  "debug.frame": "Image la plus longue",
+  "debug.step": "Durée moyenne d'un pas",
+  "debug.stepMax": "Pas le plus long",
+  "debug.memory": "Mémoire",
+  "debug.renderer": "Rendu",
+  "debug.world": "Monde",
+  "debug.worldSize": "{width} × {height} cases",
+  "debug.content": "Contenu",
+  "debug.biomes": {
+    "one": "{count} biome",
+    "other": "{count} biomes"
+  },
+  "debug.determinism": "Déterminisme",
+  "debug.determinism.ok": "conforme aux références",
+  "debug.determinism.ko": "écart avec les références !",
+  "debug.unavailable": "indisponible",
+  "unit.ms": "{value} ms",
+  "unit.mb": "{value} Mo",
+  "unit.number": "{value}",
+  "debug.rendererValue": "{name} · ×{resolution}"
 }

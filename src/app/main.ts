@@ -3,12 +3,14 @@
 import { h, render } from 'preact';
 import { loadGameData } from '../core/data';
 import { PROTOCOL_VERSION } from '../core/protocol';
+import { determinismSelfTest } from '../core/selftest';
 import { t } from '../i18n';
 import { CameraControls } from '../render/controls';
 import { cellAt, MapView } from '../render/map';
 import { createRenderer } from '../render/renderer';
 import { App } from '../ui/App';
-import { content, stats, time } from '../ui/store';
+import { content, debugInfo, determinismOk, time, worldInfo } from '../ui/store';
+import { DebugSampler, usedMemoryMb } from './debug';
 import { AUTO_SLOT, SaveManager, SaveStore } from './saves';
 import { SimulationClient } from './simulation';
 import './style.css';
@@ -24,6 +26,8 @@ async function main(): Promise<void> {
   // Le contenu est validé au démarrage : une donnée invalide lève ici une DataError.
   const data = loadGameData();
   content.value = { biomes: data.biomes.entries.length };
+  // Auto-test du déterminisme : ce moteur redonne-t-il les empreintes de référence ?
+  determinismOk.value = determinismSelfTest();
   const mapElement = element('map');
   const app = await createRenderer(mapElement);
   const map = new MapView(app);
@@ -41,9 +45,15 @@ async function main(): Promise<void> {
       simulation.send({ type: 'game', command: { type: 'paint', x: cell.x, y: cell.y, value: 8 } });
     },
   });
+  const sampler = new DebugSampler();
   app.ticker.add((ticker) => {
+    sampler.frame(ticker.deltaMS);
     map.draw(controls.update(ticker.deltaMS));
   });
+  const renderer = { name: app.renderer.name, resolution: app.renderer.resolution };
+  setInterval(() => {
+    debugInfo.value = { ...sampler.sample(), memoryMb: usedMemoryMb(), renderer };
+  }, 250);
 
   simulation.subscribe((message) => {
     switch (message.type) {
@@ -55,6 +65,7 @@ async function main(): Promise<void> {
         });
         break;
       case 'snapshot': {
+        worldInfo.value = message.world;
         map.setWorld(message.world, message.chunks);
         const world = map.world;
         if (world !== undefined) controls.center(world);
@@ -69,7 +80,7 @@ async function main(): Promise<void> {
         time.value = message.time;
         break;
       case 'stats':
-        stats.value = message.stats;
+        sampler.step(message.stats.stepMs);
         break;
       case 'error':
         console.error(`worker : ${message.code} (${message.detail})`);

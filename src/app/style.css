@@ -154,3 +154,34 @@ button:disabled {
   align-items: center;
   gap: 0.5rem;
 }
+
+.debug-toggle {
+  pointer-events: auto;
+  padding: 0 0.75rem;
+}
+
+.debug-panel {
+  flex-basis: 100%;
+  max-width: 24rem;
+  font-size: 0.875rem;
+}
+
+.debug-panel dl {
+  margin: 0;
+}
+
+.debug-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.debug-row dt {
+  color: var(--parchment-dim);
+}
+
+.debug-row dd {
+  margin: 0;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}

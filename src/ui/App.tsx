@@ -2,6 +2,7 @@
  * Racine de l'interface, superposée à la carte. Les barres du haut et du bas
  * accueillent les panneaux ; elles respectent les zones de sécurité (style.css).
  */
+import { DebugPanel, DebugToggle } from './DebugPanel';
 import { Notice } from './Notice';
 import { SaveMenu } from './SaveMenu';
 import type { UiActions } from './store';
@@ -12,6 +13,8 @@ export function App({ actions }: { actions: UiActions }) {
     <div class="hud">
       <div class="hud-bar hud-top">
         <TimeControls actions={actions} />
+        <DebugToggle />
+        <DebugPanel />
       </div>
       <div class="hud-bar hud-bottom">
         <Notice />
