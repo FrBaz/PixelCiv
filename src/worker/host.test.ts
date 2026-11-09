@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { PROTOCOL_VERSION, type WorkerMessage } from '../core/protocol';
 import { CHUNK_SIZE } from '../core/world';
-import { NORMAL_MONTH_MS, SimulationHost, type HostEnvironment } from './host';
+import { monthDuration, NORMAL_MONTH_MS } from '../core/time';
+import { SimulationHost, type HostEnvironment } from './host';
 
 /** Imitation du worker : horloge, minuteries et messages sous contrôle du test. */
 class FakeEnvironment implements HostEnvironment {
@@ -127,5 +128,60 @@ describe('partie', () => {
     const stats = env.messages('stats').at(0)?.stats;
     expect(stats?.stepMs).toBeGreaterThanOrEqual(200);
     expect(stats?.stepMs).toBeLessThan(210);
+  });
+});
+
+describe('temps', () => {
+  it('se met en pause, puis reprend', () => {
+    const { env, host } = startedHost();
+    host.receive({ type: 'setPaused', paused: true });
+    expect(env.messages('time').at(-1)?.time).toEqual({ tick: 0, paused: true, speed: 'normal' });
+    env.advance(5_000);
+    expect(env.messages('delta')).toEqual([]);
+    host.receive({ type: 'setPaused', paused: false });
+    env.advance(NORMAL_MONTH_MS);
+    expect(env.messages('delta').map((delta) => delta.time.tick)).toEqual([1]);
+  });
+
+  it('avance plus vite en vitesse rapide', () => {
+    const { env, host } = startedHost();
+    host.receive({ type: 'setSpeed', speed: 'fast' });
+    env.advance(10_000 / 4);
+    expect(env.messages('delta').at(-1)?.time).toEqual({ tick: 12, paused: false, speed: 'fast' });
+  });
+
+  it("n'avance que d'un pas à la demande, et seulement en pause", () => {
+    const { env, host } = startedHost();
+    host.receive({ type: 'stepOnce' });
+    expect(env.messages('delta')).toEqual([]);
+    host.receive({ type: 'setPaused', paused: true });
+    host.receive({ type: 'stepOnce' });
+    expect(env.messages('delta').map((delta) => delta.time.tick)).toEqual([1]);
+  });
+
+  it('ne rattrape pas son retard par rafales', () => {
+    const { env, host } = startedHost();
+    host.receive({ type: 'setSpeed', speed: 'faster' });
+    host.receive({ type: 'debugStepCost', milliseconds: 200 });
+    env.advancePerRead = 1;
+    env.advance(2_000);
+    // Un pas de 200 ms tous les 52 ms demandés : la simulation va aussi vite qu'elle peut.
+    const steps = env.messages('delta').length;
+    expect(monthDuration('faster')).toBeLessThan(200);
+    expect(steps).toBeGreaterThanOrEqual(8);
+    expect(steps).toBeLessThanOrEqual(11);
+  });
+});
+
+describe('commandes de jeu', () => {
+  it("s'appliquent au début du pas suivant", () => {
+    const { env, host } = startedHost();
+    env.advance(NORMAL_MONTH_MS * 3);
+    host.receive({ type: 'game', command: { type: 'paint', x: 1, y: 7, value: 3 } });
+    expect(env.messages('delta').every((delta) => delta.chunks.length === 0)).toBe(true);
+    env.advance(NORMAL_MONTH_MS);
+    const delta = env.messages('delta').at(-1);
+    expect(delta?.time.tick).toBe(4);
+    expect(delta?.chunks.at(0)?.cells[7 * CHUNK_SIZE + 1]).toBe(3);
   });
 });

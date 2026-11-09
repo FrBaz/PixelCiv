@@ -11,9 +11,15 @@ export function applyCommand(state: SimState, command: GameCommand): void {
   setTestCell(state, command.x, command.y, command.value);
 }
 
-/** Fait avancer l'état d'un pas, après avoir appliqué les commandes reçues. */
+/**
+ * Fait avancer l'état d'un pas. Les commandes reçues s'appliquent d'abord, et sont
+ * journalisées avec le pas au début duquel elles s'appliquent.
+ */
 export function step(state: SimState, commands: readonly GameCommand[]): void {
-  for (const command of commands) applyCommand(state, command);
+  for (const command of commands) {
+    state.commandLog.push({ tick: state.tick, command });
+    applyCommand(state, command);
+  }
   state.tick++;
 }
 

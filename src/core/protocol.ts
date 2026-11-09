@@ -4,6 +4,7 @@
  * Tous les messages sont des unions discriminées par `type`. Les gros volumes
  * voyagent en ArrayBuffer transférés : `transferablesOf` les rassemble.
  */
+import type { SpeedId } from './time';
 import type { WorldSize, WorldSizeId } from './world';
 
 /** Version du protocole, vérifiée à la poignée de main. */
@@ -20,11 +21,21 @@ export interface PaintCommand {
 /** Commande de jeu : elle modifie l'état, et s'applique au début d'un pas (ADR 0003). */
 export type GameCommand = PaintCommand;
 
+/** Commande de jeu journalisée : `tick` est le pas au début duquel elle s'est appliquée. */
+export interface LoggedCommand {
+  readonly tick: number;
+  readonly command: GameCommand;
+}
+
 /** Messages du fil principal vers le worker. */
 export type MainMessage =
   | { readonly type: 'hello'; readonly protocol: number }
   | { readonly type: 'newGame'; readonly seed: string; readonly size: WorldSizeId }
   | { readonly type: 'game'; readonly command: GameCommand }
+  | { readonly type: 'setSpeed'; readonly speed: SpeedId }
+  | { readonly type: 'setPaused'; readonly paused: boolean }
+  /** Avance d'un seul pas, en pause. */
+  | { readonly type: 'stepOnce' }
   /** Coût factice ajouté à chaque pas, en millisecondes (débogage). */
   | { readonly type: 'debugStepCost'; readonly milliseconds: number };
 
@@ -45,6 +56,8 @@ export interface WorldInfo {
 export interface TimeInfo {
   /** Nombre de pas, donc de mois, écoulés depuis le début de la partie. */
   readonly tick: number;
+  readonly paused: boolean;
+  readonly speed: SpeedId;
 }
 
 /** Mesures du worker, pour le panneau de débogage. */
@@ -65,6 +78,8 @@ export type WorkerMessage =
     }
   /** Ce qui a changé depuis le dernier message : blocs modifiés et temps. */
   | { readonly type: 'delta'; readonly time: TimeInfo; readonly chunks: readonly ChunkLayer[] }
+  /** Changement de vitesse ou de pause, sans pas. */
+  | { readonly type: 'time'; readonly time: TimeInfo }
   | { readonly type: 'stats'; readonly stats: StepStats }
   /** Erreur : `code` désigne le message affiché, `detail` aide au débogage. */
   | { readonly type: 'error'; readonly code: ErrorCode; readonly detail: string };
@@ -83,8 +98,12 @@ export function transferablesOf(message: MainMessage | WorkerMessage): ArrayBuff
     case 'hello':
     case 'newGame':
     case 'game':
+    case 'setSpeed':
+    case 'setPaused':
+    case 'stepOnce':
     case 'debugStepCost':
     case 'ready':
+    case 'time':
     case 'stats':
     case 'error':
       return [];

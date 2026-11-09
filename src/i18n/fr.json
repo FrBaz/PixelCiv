@@ -1,3 +1,24 @@
 {
-  "app.title": "PixelCiv"
+  "app.title": "PixelCiv",
+  "calendar.month.january": "janvier",
+  "calendar.month.february": "février",
+  "calendar.month.march": "mars",
+  "calendar.month.april": "avril",
+  "calendar.month.may": "mai",
+  "calendar.month.june": "juin",
+  "calendar.month.july": "juillet",
+  "calendar.month.august": "août",
+  "calendar.month.september": "septembre",
+  "calendar.month.october": "octobre",
+  "calendar.month.november": "novembre",
+  "calendar.month.december": "décembre",
+  "calendar.date": "{month} de l'an {year}",
+  "time.controls": "Contrôle du temps",
+  "time.pause": "Mettre en pause",
+  "time.resume": "Reprendre",
+  "time.step": "Avancer d'un mois",
+  "time.speed.slow": "Vitesse lente",
+  "time.speed.normal": "Vitesse normale",
+  "time.speed.fast": "Vitesse rapide",
+  "time.speed.faster": "Vitesse très rapide"
 }

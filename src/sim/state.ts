@@ -3,7 +3,7 @@
  * « Performances »). La phase 0 n'a qu'une couche de test.
  */
 import { wrapX } from '../core/cylinder';
-import type { ChunkLayer } from '../core/protocol';
+import type { ChunkLayer, LoggedCommand } from '../core/protocol';
 import { CHUNK_SIZE, chunkGrid, type WorldSize } from '../core/world';
 
 export interface SimState {
@@ -13,6 +13,8 @@ export interface SimState {
   tick: number;
   /** Couche de test : une valeur par case, ligne par ligne, 0 pour une case vide. */
   readonly testLayer: Uint8Array<ArrayBuffer>;
+  /** Commandes de jeu appliquées, dans l'ordre : rejouées depuis la graine, elles redonnent l'état. */
+  readonly commandLog: LoggedCommand[];
   /**
    * Blocs modifiés depuis le dernier envoi, un drapeau par bloc. Ce n'est pas l'état
    * du monde : ni la sauvegarde ni l'empreinte n'en tiennent compte.
@@ -27,6 +29,7 @@ export function createState(seed: string, size: WorldSize): SimState {
     size,
     tick: 0,
     testLayer: new Uint8Array(size.width * size.height),
+    commandLog: [],
     dirtyChunks: new Uint8Array(grid.columns * grid.rows),
   };
 }

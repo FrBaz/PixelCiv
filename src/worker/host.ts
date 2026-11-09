@@ -1,7 +1,7 @@
 /**
  * Hôte de la simulation dans le worker (ADR 0004) : il reçoit les messages, cadence
- * les pas, les mesure et envoie les résultats. Il est le seul, côté worker, à lire
- * l'horloge ; il ne la transmet jamais à l'état.
+ * les pas selon la vitesse, les mesure et envoie les résultats. Il est le seul, côté
+ * worker, à lire l'horloge ; il ne la transmet jamais à l'état.
  *
  * L'environnement (messagerie, horloge, minuteries) est injecté : le worker fournit
  * le vrai, les tests une imitation.
@@ -11,8 +11,10 @@ import {
   transferablesOf,
   type GameCommand,
   type MainMessage,
+  type TimeInfo,
   type WorkerMessage,
 } from '../core/protocol';
+import { monthDuration, type SpeedId } from '../core/time';
 import { WORLD_SIZES } from '../core/world';
 import { allChunks, createState, takeDirtyChunks, type SimState } from '../sim/state';
 import { step } from '../sim/step';
@@ -25,16 +27,17 @@ export interface HostEnvironment {
   clearTimer(handle: number): void;
 }
 
-/** Durée d'un mois en vitesse normale : une année dure 10 s (MOD-06). */
-export const NORMAL_MONTH_MS = 10_000 / 12;
-
 export class SimulationHost {
   private readonly env: HostEnvironment;
   private state: SimState | undefined;
   private pending: GameCommand[] = [];
+  private paused = false;
+  private speed: SpeedId = 'normal';
+  /** Instant prévu du prochain pas, sur l'horloge de l'environnement. */
+  private nextStepAt = 0;
+  private timer: number | undefined;
   /** Coût factice ajouté à chaque pas (débogage), en millisecondes. */
   private stepCost = 0;
-  private timer: number | undefined;
 
   constructor(env: HostEnvironment) {
     this.env = env;
@@ -61,12 +64,32 @@ export class SimulationHost {
           this.send({ type: 'error', code: 'noGame', detail: 'commande reçue avant la partie' });
           return;
         }
+        // La commande s'appliquera au début du prochain pas, qui l'horodatera.
         this.pending.push(message.command);
+        break;
+      case 'setSpeed':
+        this.speed = message.speed;
+        this.nextStepAt = this.env.now() + monthDuration(this.speed);
+        this.reschedule();
+        this.sendTime();
+        break;
+      case 'setPaused':
+        this.paused = message.paused;
+        this.nextStepAt = this.env.now() + monthDuration(this.speed);
+        this.reschedule();
+        this.sendTime();
+        break;
+      case 'stepOnce':
+        if (this.paused) this.runStep();
         break;
       case 'debugStepCost':
         this.stepCost = Math.max(0, message.milliseconds);
         break;
     }
+  }
+
+  private time(state: SimState): TimeInfo {
+    return { tick: state.tick, paused: this.paused, speed: this.speed };
   }
 
   private start(state: SimState): void {
@@ -75,19 +98,37 @@ export class SimulationHost {
     this.send({
       type: 'snapshot',
       world: { seed: state.seed, size: state.size },
-      time: { tick: state.tick },
+      time: this.time(state),
       chunks: allChunks(state),
     });
-    this.schedule();
+    this.nextStepAt = this.env.now() + monthDuration(this.speed);
+    this.reschedule();
   }
 
-  private schedule(): void {
+  /** Programme le prochain pas, sauf en pause ou sans partie. */
+  private reschedule(): void {
     if (this.timer !== undefined) this.env.clearTimer(this.timer);
+    this.timer = undefined;
+    if (this.paused || this.state === undefined) return;
+    const delay = Math.max(0, this.nextStepAt - this.env.now());
     this.timer = this.env.setTimer(() => {
       this.timer = undefined;
       this.runStep();
-      this.schedule();
-    }, NORMAL_MONTH_MS);
+      this.advanceSchedule();
+      this.reschedule();
+    }, delay);
+  }
+
+  /**
+   * Avance l'horaire d'un mois. Si la simulation a pris plus d'un mois de retard sur
+   * l'horloge, elle repart de maintenant, sans rattraper par rafales : elle tourne
+   * alors simplement aussi vite qu'elle le peut.
+   */
+  private advanceSchedule(): void {
+    const duration = monthDuration(this.speed);
+    const now = this.env.now();
+    this.nextStepAt += duration;
+    if (this.nextStepAt < now - duration) this.nextStepAt = now;
   }
 
   private runStep(): void {
@@ -104,8 +145,12 @@ export class SimulationHost {
       }
     }
     const stepMs = this.env.now() - start;
-    this.send({ type: 'delta', time: { tick: state.tick }, chunks: takeDirtyChunks(state) });
+    this.send({ type: 'delta', time: this.time(state), chunks: takeDirtyChunks(state) });
     this.send({ type: 'stats', stats: { stepMs } });
+  }
+
+  private sendTime(): void {
+    if (this.state !== undefined) this.send({ type: 'time', time: this.time(this.state) });
   }
 
   private send(message: WorkerMessage): void {
