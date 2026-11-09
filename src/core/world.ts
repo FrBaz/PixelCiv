@@ -1,4 +1,4 @@
-/** Dimensions du monde et découpage en blocs de carte (ADR 0002). */
+/** Dimensions du monde, découpage en blocs de carte (ADR 0002) et couches (ADR 0009). */
 
 /** Côté d'un bloc de carte, en cases. */
 export const CHUNK_SIZE = 64;
@@ -136,3 +136,7 @@ export function copyLayers(layers: WorldLayers): WorldLayers {
     shrubs: layers.shrubs.slice(),
   };
 }
+
+/** Étapes de la génération d'un monde, dans l'ordre (ADR 0009). */
+export const GENERATION_STAGES = ['relief', 'climate', 'hydrology', 'biomes', 'resources'] as const;
+export type GenerationStage = (typeof GENERATION_STAGES)[number];

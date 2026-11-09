@@ -19,9 +19,10 @@ export const SAVE_MAGIC = 'PXCV';
 
 /**
  * Version courante du format et de son contenu. Historique : 1, première version ;
- * 2, commandes en attente du prochain pas.
+ * 2, commandes en attente du prochain pas ; 3, le monde généré de la phase 1, à la
+ * place de la grille de test.
  */
-export const SAVE_FORMAT_VERSION = 2;
+export const SAVE_FORMAT_VERSION = 3;
 
 /**
  * Taille maximale d'une sauvegarde, compressée ou non, en octets. Elle borne la mémoire
@@ -41,6 +42,7 @@ export const MAX_HEADER_BYTES = 8 * 1024 * 1024;
 export type SavedArray =
   | Uint8Array<ArrayBuffer>
   | Uint16Array<ArrayBuffer>
+  | Int16Array<ArrayBuffer>
   | Uint32Array<ArrayBuffer>
   | Int32Array<ArrayBuffer>
   | Float32Array<ArrayBuffer>
@@ -77,6 +79,7 @@ export class SaveError extends Error {
 const ARRAY_TYPES = {
   u8: Uint8Array,
   u16: Uint16Array,
+  i16: Int16Array,
   u32: Uint32Array,
   i32: Int32Array,
   f32: Float32Array,
@@ -88,6 +91,7 @@ type ArrayType = keyof typeof ARRAY_TYPES;
 function arrayType(array: SavedArray): ArrayType {
   if (array instanceof Uint8Array) return 'u8';
   if (array instanceof Uint16Array) return 'u16';
+  if (array instanceof Int16Array) return 'i16';
   if (array instanceof Uint32Array) return 'u32';
   if (array instanceof Int32Array) return 'i32';
   if (array instanceof Float32Array) return 'f32';
@@ -111,7 +115,7 @@ const HeaderSchema = z
           .object({
             // Un identifiant simple : ni « __proto__ », ni rien qui ne soit un nom de tableau.
             name: z.string().regex(/^[A-Za-z][A-Za-z0-9]*$/),
-            type: z.enum(['u8', 'u16', 'u32', 'i32', 'f32', 'f64']),
+            type: z.enum(['u8', 'u16', 'i16', 'u32', 'i32', 'f32', 'f64']),
             offset: z.number().int().nonnegative(),
             length: z.number().int().nonnegative(),
           })

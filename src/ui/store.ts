@@ -4,6 +4,7 @@
  */
 import { signal } from '@preact/signals';
 import type { MainMessage, TimeInfo, WorldInfo } from '../core/protocol';
+import type { GenerationStage } from '../core/world';
 import type { MessageKey } from '../i18n';
 
 /** Temps de la partie, inconnu avant le premier instantané. */
@@ -14,6 +15,14 @@ export const content = signal<{ readonly biomes: number } | undefined>(undefined
 
 /** Monde de la partie en cours. */
 export const worldInfo = signal<WorldInfo | undefined>(undefined);
+
+/** Génération en cours : l'étape commencée, la step-ième sur steps. */
+export const generation = signal<
+  { readonly stage: GenerationStage; readonly step: number; readonly steps: number } | undefined
+>(undefined);
+
+/** Durée de la dernière génération de monde, en millisecondes. */
+export const generationMs = signal<number | undefined>(undefined);
 
 /** Mesures du panneau de débogage, rafraîchies quelques fois par seconde. */
 export interface DebugInfo {

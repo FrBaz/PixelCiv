@@ -11,6 +11,7 @@
  * L'environnement (messagerie, horloge, minuteries) est injecté : le worker fournit
  * le vrai, les tests une imitation.
  */
+import type { GameData } from '../core/data';
 import {
   PROTOCOL_VERSION,
   transferablesOf,
@@ -20,11 +21,19 @@ import {
 } from '../core/protocol';
 import { readSave, SaveError, writeSave } from '../core/save/format';
 import { monthDuration, type SpeedId } from '../core/time';
-import { WORLD_SIZES } from '../core/world';
+import {
+  copyLayers,
+  GENERATION_STAGES,
+  WORLD_SIZES,
+  type GenerationStage,
+  type WorldLayers,
+} from '../core/world';
+import { worldParamsSchema, type WorldParams } from '../core/worldParams';
 import { GameCommandSchema } from '../sim/commands';
 import { MIGRATIONS, restoreState, saveState } from '../sim/save';
-import { allChunks, createState, takeDirtyChunks, type SimState } from '../sim/state';
+import { createState, takeDirtyChunks, type SimState } from '../sim/state';
 import { step } from '../sim/step';
+import { GENERATOR_VERSION, type GenerationParams } from '../worldgen/generate';
 
 export interface HostEnvironment {
   post(message: WorkerMessage, transfer: Transferable[]): void;
@@ -34,8 +43,19 @@ export interface HostEnvironment {
   clearTimer(handle: number): void;
 }
 
+/** Générateur de mondes : generateWorld, ou une imitation rapide dans les tests. */
+export type WorldGenerator = (
+  params: GenerationParams,
+  onStage: (stage: GenerationStage) => void,
+) => WorldLayers;
+
+/** Largeur d'un aperçu de l'écran de création, en colonnes : bornes et parité. */
+export const PREVIEW_WIDTH = { min: 32, max: 512 } as const;
+
 export class SimulationHost {
   private readonly env: HostEnvironment;
+  private readonly data: GameData;
+  private readonly generate: WorldGenerator;
   private state: SimState | undefined;
   /** Poignée de main : rien d'autre n'est traité avant qu'elle ait réussi. */
   private greeted = false;
@@ -51,8 +71,10 @@ export class SimulationHost {
   /** File des opérations sur la partie entière. */
   private operations: Promise<void> = Promise.resolve();
 
-  constructor(env: HostEnvironment) {
+  constructor(env: HostEnvironment, data: GameData, generate: WorldGenerator) {
     this.env = env;
+    this.data = data;
+    this.generate = generate;
   }
 
   receive(message: MainMessage): void {
@@ -66,12 +88,16 @@ export class SimulationHost {
     }
     switch (message.type) {
       case 'newGame': {
-        const { seed, size } = message;
+        const params = this.checkParams(message.params);
+        if (params === undefined) break;
         this.enqueue(() => {
-          this.start(createState(seed, WORLD_SIZES[size]));
+          this.newGame(params);
         });
         break;
       }
+      case 'preview':
+        this.preview(message.requestId, message.params, message.width);
+        break;
       case 'game':
         this.command(message.command);
         break;
@@ -130,6 +156,52 @@ export class SimulationHost {
     });
   }
 
+  /** Vérifie des paramètres de monde ; signale une erreur s'ils sont invalides. */
+  private checkParams(params: unknown): WorldParams | undefined {
+    const parsed = worldParamsSchema(this.data.worldgen.parameters).safeParse(params);
+    if (parsed.success) return parsed.data;
+    this.send({ type: 'error', code: 'params', detail: 'paramètres de monde invalides' });
+    return undefined;
+  }
+
+  /** Génère le monde demandé, étape par étape, puis y commence une partie. */
+  private newGame(params: WorldParams): void {
+    const start = this.env.now();
+    const steps = GENERATION_STAGES.length;
+    const world = this.generate({ ...params, size: WORLD_SIZES[params.size] }, (stage) => {
+      this.send({ type: 'progress', stage, step: GENERATION_STAGES.indexOf(stage), steps });
+    });
+    this.send({ type: 'generated', milliseconds: this.env.now() - start });
+    this.start(createState(params, world));
+  }
+
+  /**
+   * Aperçu de l'écran de création : le même monde, sur une carte réduite. Il ne touche
+   * pas à la partie, et passe hors de la file des opérations.
+   */
+  private preview(requestId: number, params: unknown, width: number): void {
+    const valid = this.checkParams(params);
+    if (valid === undefined) return;
+    if (
+      !Number.isInteger(width) ||
+      width % 2 !== 0 ||
+      width < PREVIEW_WIDTH.min ||
+      width > PREVIEW_WIDTH.max
+    ) {
+      this.send({ type: 'error', code: 'params', detail: `largeur d'aperçu invalide : ${width}` });
+      return;
+    }
+    const size = { width, height: width / 2 };
+    const world = this.generate({ ...valid, size }, () => undefined);
+    this.send({
+      type: 'previewReady',
+      requestId,
+      size,
+      biome: world.biome,
+      elevation: world.elevation,
+    });
+  }
+
   /** Vérifie une commande de jeu ; elle s'appliquera au début du prochain pas. */
   private command(command: unknown): void {
     if (this.state === undefined) {
@@ -137,7 +209,7 @@ export class SimulationHost {
       return;
     }
     const parsed = GameCommandSchema.safeParse(command);
-    if (!parsed.success) {
+    if (!parsed.success || this.data.biomes.indexOf(parsed.data.biome) === undefined) {
       this.send({ type: 'error', code: 'command', detail: 'commande invalide' });
       return;
     }
@@ -182,7 +254,7 @@ export class SimulationHost {
       this.send({ type: 'saveFailed', requestId, reason: 'noGame' });
       return;
     }
-    const save = saveState(this.state);
+    const save = saveState(this.state, GENERATOR_VERSION, this.data);
     let file: Uint8Array<ArrayBuffer>;
     try {
       file = await writeSave(save);
@@ -198,7 +270,7 @@ export class SimulationHost {
   private async load(requestId: number, data: ArrayBuffer): Promise<void> {
     let state: SimState;
     try {
-      state = restoreState(await readSave(new Uint8Array(data), MIGRATIONS));
+      state = restoreState(await readSave(new Uint8Array(data), MIGRATIONS), this.data);
     } catch (error) {
       this.send({
         type: 'loadFailed',
@@ -220,9 +292,9 @@ export class SimulationHost {
     this.state = state;
     this.send({
       type: 'snapshot',
-      world: { seed: state.seed, size: state.size },
+      world: { params: state.params, size: state.size },
       time: this.time(state),
-      chunks: allChunks(state),
+      layers: copyLayers(state.world),
     });
     const duration = monthDuration(this.speed);
     this.nextStepAt = this.env.now() + duration;
@@ -261,7 +333,7 @@ export class SimulationHost {
     if (state === undefined) return;
     const start = this.env.now();
     // Les commandes en attente s'appliquent au début du pas, qui les horodate.
-    step(state, state.pending.splice(0));
+    step(state, state.pending.splice(0), this.data);
     if (this.stepCost > 0) {
       const end = start + this.stepCost;
       while (this.env.now() < end) {

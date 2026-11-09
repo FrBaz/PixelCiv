@@ -3,14 +3,16 @@ import { loadGameData } from '../core/data';
 import { Fingerprint } from '../core/hash';
 import {
   flowDirection,
+  GENERATION_STAGES,
   LAYER_NAMES,
   riverClass,
   WORLD_SIZES,
+  type GenerationStage,
   type WorldLayers,
   type WorldSize,
 } from '../core/world';
 import { defaultWorldParams, type WorldParams } from '../core/worldParams';
-import { GENERATION_STAGES, generateWorld, type GenerationStage } from './generate';
+import { generateWorld } from './generate';
 import { neighborTable } from './grid';
 
 const data = loadGameData();

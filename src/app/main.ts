@@ -1,15 +1,26 @@
 // Point d'entrée de l'application : crée le rendu de la carte, l'interface et le worker
 // de simulation, puis les relie.
 import { h, render } from 'preact';
-import { loadGameData } from '../core/data';
+import { loadGameData, type GameData } from '../core/data';
 import { PROTOCOL_VERSION } from '../core/protocol';
+import { WORLD_SIZES, type WorldSizeId } from '../core/world';
+import { defaultWorldParams, type WorldParams } from '../core/worldParams';
 import { determinismSelfTest } from '../core/selftest';
 import { t } from '../i18n';
 import { CameraControls } from '../render/controls';
 import { cellAt, MapView } from '../render/map';
+import { biomePalettes } from '../render/bake';
 import { createRenderer } from '../render/renderer';
 import { App } from '../ui/App';
-import { content, debugInfo, determinismOk, time, worldInfo } from '../ui/store';
+import {
+  content,
+  debugInfo,
+  determinismOk,
+  generation,
+  generationMs,
+  time,
+  worldInfo,
+} from '../ui/store';
 import { DebugSampler, usedMemoryMb } from './debug';
 import { SaveManager, SaveStore } from './saves';
 import { SimulationClient } from './simulation';
@@ -21,6 +32,17 @@ function element(id: string): HTMLElement {
   return found;
 }
 
+/**
+ * Paramètres de la première partie, sans sauvegarde à reprendre : ceux par défaut, ou
+ * ceux de l'adresse, pour le débogage (?seed=abc&size=large).
+ */
+function startingParams(data: GameData, query: URLSearchParams): WorldParams {
+  const size = query.get('size') ?? 'small';
+  const seed = query.get('seed') ?? 'pixelciv';
+  const sizeId: WorldSizeId = Object.hasOwn(WORLD_SIZES, size) ? (size as WorldSizeId) : 'small';
+  return defaultWorldParams(data.worldgen.parameters, seed.slice(0, 64) || 'pixelciv', sizeId);
+}
+
 async function main(): Promise<void> {
   document.title = t('app.title');
   // Le contenu est validé au démarrage : une donnée invalide lève ici une DataError.
@@ -28,6 +50,9 @@ async function main(): Promise<void> {
   content.value = { biomes: data.biomes.entries.length };
   // Auto-test du déterminisme : ce moteur redonne-t-il les empreintes de référence ?
   determinismOk.value = determinismSelfTest();
+  const palettes = biomePalettes(data.biomes.entries);
+  const query = new URLSearchParams(location.search);
+  const brush = query.get('brush');
   const mapElement = element('map');
   const app = await createRenderer(mapElement);
   const map = new MapView(app);
@@ -41,9 +66,13 @@ async function main(): Promise<void> {
     resolution: () => app.renderer.resolution,
     world: () => map.world,
     onTap: (mapX, mapY) => {
-      // Pinceau de test : peint la case touchée, par une commande de jeu.
+      // Débogage : ?brush=desert peint la case touchée de ce biome, par une commande de jeu.
+      if (brush === null) return;
       const cell = cellAt(mapX, mapY);
-      simulation.send({ type: 'game', command: { type: 'paint', x: cell.x, y: cell.y, value: 8 } });
+      simulation.send({
+        type: 'game',
+        command: { type: 'paintBiome', x: cell.x, y: cell.y, biome: brush },
+      });
     },
   });
   const sampler = new DebugSampler();
@@ -75,13 +104,13 @@ async function main(): Promise<void> {
             return false;
           })
           .then((resumed) => {
-            if (!resumed) simulation.send({ type: 'newGame', seed: 'pixelciv', size: 'small' });
+            if (!resumed) simulation.send({ type: 'newGame', params: startingParams(data, query) });
             saves.startAutosave();
           });
         break;
       case 'snapshot': {
         worldInfo.value = message.world;
-        map.setWorld(message.world, message.chunks);
+        map.setWorld(message.world, message.layers, palettes);
         const world = map.world;
         if (world !== undefined) controls.center(world);
         time.value = message.time;
@@ -96,6 +125,16 @@ async function main(): Promise<void> {
         break;
       case 'stats':
         sampler.step(message.stats.stepMs);
+        break;
+      case 'progress':
+        generation.value = { stage: message.stage, step: message.step, steps: message.steps };
+        break;
+      case 'generated':
+        generation.value = undefined;
+        generationMs.value = message.milliseconds;
+        break;
+      case 'previewReady':
+        // Réponse aux aperçus de l'écran de création (tâche 1.9).
         break;
       case 'error':
         console.error(`worker : ${message.code} (${message.detail})`);
@@ -122,7 +161,7 @@ async function main(): Promise<void> {
   // La poignée de main d'abord : le worker refuse tout message qui la précède.
   simulation.send({ type: 'hello', protocol: PROTOCOL_VERSION });
   // Débogage : ?stepCost=200 ajoute un coût factice de 200 ms à chaque pas.
-  const stepCost = Number(new URLSearchParams(location.search).get('stepCost') ?? 0);
+  const stepCost = Number(query.get('stepCost') ?? 0);
   if (stepCost > 0) simulation.send({ type: 'debugStepCost', milliseconds: stepCost });
 }
 

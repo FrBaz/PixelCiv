@@ -1,13 +1,13 @@
 /**
- * Vue de la carte : une texture par bloc, mise à jour quand le bloc change (REN-02),
+ * Vue de la carte : une texture par bloc, recuite quand le bloc change (REN-02),
  * et des sprites placés à chaque image sur les blocs visibles, modulo la largeur du
  * monde (ADR 0002). Les positions sont entières en pixels physiques.
  */
 import { BufferImageSource, Container, Sprite, Texture, type Application } from 'pixi.js';
-import type { ChunkLayer, WorldInfo } from '../core/protocol';
-import { chunkGrid, type ChunkGrid } from '../core/world';
+import type { ChunkPatch, WorldInfo } from '../core/protocol';
+import { CHUNK_SIZE, chunkGrid, type ChunkGrid, type WorldLayers } from '../core/world';
+import { bakeChunk, CHUNK_PX, type BakeWorld, type BiomePalette } from './bake';
 import { TILE_PX, visibleChunks, type Camera, type Extent } from './camera';
-import { bakeTestChunk, CHUNK_PX } from './testGrid';
 
 interface ChunkTexture {
   readonly pixels: Uint8Array<ArrayBuffer>;
@@ -21,6 +21,7 @@ export class MapView {
   private readonly sprites: Sprite[] = [];
   private grid: ChunkGrid | undefined;
   private chunks: ChunkTexture[] = [];
+  private baked: BakeWorld | undefined;
 
   constructor(app: Application) {
     this.app = app;
@@ -42,11 +43,13 @@ export class MapView {
     };
   }
 
-  /** Nouveau monde : une texture par bloc, remplie par l'instantané. */
-  setWorld(world: WorldInfo, layers: readonly ChunkLayer[]): void {
+  /** Nouveau monde : une texture par bloc, cuite d'après ses couches. */
+  setWorld(info: WorldInfo, layers: WorldLayers, palettes: readonly BiomePalette[]): void {
     for (const chunk of this.chunks) chunk.texture.destroy(true);
-    this.grid = chunkGrid(world.size);
-    this.chunks = Array.from({ length: this.grid.columns * this.grid.rows }, () => {
+    const grid = chunkGrid(info.size);
+    this.grid = grid;
+    this.baked = { size: info.size, layers, palettes };
+    this.chunks = Array.from({ length: grid.columns * grid.rows }, () => {
       const pixels = new Uint8Array(CHUNK_PX * CHUNK_PX * 4);
       const source = new BufferImageSource({
         resource: pixels,
@@ -56,19 +59,36 @@ export class MapView {
       });
       return { pixels, source, texture: new Texture({ source }) };
     });
-    this.updateChunks(layers);
+    for (let row = 0; row < grid.rows; row++) {
+      for (let column = 0; column < grid.columns; column++) this.bake(column, row);
+    }
   }
 
-  /** Recuit les blocs modifiés, et eux seuls. */
-  updateChunks(layers: readonly ChunkLayer[]): void {
-    const grid = this.grid;
-    if (grid === undefined) return;
-    for (const layer of layers) {
-      const chunk = this.chunks.at(layer.row * grid.columns + layer.column);
-      if (chunk === undefined) continue;
-      chunk.pixels.set(bakeTestChunk(layer, grid));
-      chunk.source.update();
+  /** Reporte les blocs modifiés dans les couches, et recuit ces blocs, eux seuls. */
+  updateChunks(patches: readonly ChunkPatch[]): void {
+    const world = this.baked;
+    if (world === undefined) return;
+    const { width } = world.size;
+    for (const patch of patches) {
+      for (let line = 0; line < CHUNK_SIZE; line++) {
+        const start = (patch.row * CHUNK_SIZE + line) * width + patch.column * CHUNK_SIZE;
+        world.layers.biome.set(
+          patch.biome.subarray(line * CHUNK_SIZE, (line + 1) * CHUNK_SIZE),
+          start,
+        );
+      }
+      this.bake(patch.column, patch.row);
     }
+  }
+
+  private bake(column: number, row: number): void {
+    const grid = this.grid;
+    const world = this.baked;
+    if (grid === undefined || world === undefined) return;
+    const chunk = this.chunks.at(row * grid.columns + column);
+    if (chunk === undefined) return;
+    chunk.pixels.set(bakeChunk(world, column, row));
+    chunk.source.update();
   }
 
   /** Dessine les blocs visibles depuis la caméra. */

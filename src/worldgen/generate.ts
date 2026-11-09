@@ -11,7 +11,13 @@
 import type { GameData } from '../core/data';
 import type { ParameterName } from '../core/data/worldgen';
 import { Rng } from '../core/rng';
-import { emptyLayers, encodeDrainage, type WorldLayers, type WorldSize } from '../core/world';
+import {
+  emptyLayers,
+  encodeDrainage,
+  type GenerationStage,
+  type WorldLayers,
+  type WorldSize,
+} from '../core/world';
 import { classifyBiomes } from './biomes';
 import { generateClimate } from './climate';
 import { findOcean, generateHydrology, LAKE } from './hydrology';
@@ -21,10 +27,6 @@ import { CylinderSampler } from './sampler';
 
 /** Version du générateur : elle change quand un même monde ne se génère plus pareil. */
 export const GENERATOR_VERSION = 1;
-
-/** Étapes de la génération, dans l'ordre. */
-export const GENERATION_STAGES = ['relief', 'climate', 'hydrology', 'biomes', 'resources'] as const;
-export type GenerationStage = (typeof GENERATION_STAGES)[number];
 
 /** Ce que la génération demande : graine, taille et réglages. */
 export type GenerationParams = {
