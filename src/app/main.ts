@@ -47,9 +47,16 @@ async function main(): Promise<void> {
     },
   });
   const sampler = new DebugSampler();
+  // Au retour d'un onglet masqué, la première image couvre toute l'absence : elle ne
+  // compte pas comme une image lente.
+  let returning = false;
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible') returning = true;
+  });
   app.ticker.add((ticker) => {
     // La durée réelle de l'image : deltaMS est plafonné à 100 ms, et cacherait les à-coups.
-    sampler.frame(ticker.elapsedMS);
+    if (returning) returning = false;
+    else sampler.frame(ticker.elapsedMS);
     map.draw(controls.update(ticker.deltaMS));
   });
   setInterval(() => {

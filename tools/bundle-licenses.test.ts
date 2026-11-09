@@ -6,13 +6,13 @@ import { afterAll, describe, expect, it } from 'vitest';
 import {
   auditBundle,
   bundleLicenses,
-  isPackageReference,
   licenseNotice,
   licenseText,
   missingCredits,
   packageOfModule,
   readPackage,
   repositoryLink,
+  stylesheetPackages,
   stylesheetReferences,
   type PackageInfo,
 } from './bundle-licenses';
@@ -226,17 +226,62 @@ describe('feuilles de style', () => {
     ]);
   });
 
-  it('distingue les paquets des fichiers du projet', () => {
-    const importer = '/repo/src/app/style.css';
-    expect(isPackageReference('css-reset/reset.css', importer, '/repo')).toBe(true);
-    expect(isPackageReference('~pkg/a.css', importer, '/repo')).toBe(true);
-    expect(isPackageReference('../../node_modules/pkg/a.css', importer, '/repo')).toBe(true);
-    expect(isPackageReference('/node_modules/pkg/a.css', importer, '/repo')).toBe(true);
-    expect(isPackageReference('./base.css', importer, '/repo')).toBe(false);
-    expect(isPackageReference('/assets/a.png', importer, '/repo')).toBe(false);
-    expect(isPackageReference('data:image/png;base64,AAAA', importer, '/repo')).toBe(false);
-    expect(isPackageReference('https://example.org/a.css', importer, '/repo')).toBe(false);
-    expect(isPackageReference('#filtre', importer, '/repo')).toBe(false);
+  it('lit aussi image-set() et les chemins entre guillemets qui ont des espaces', () => {
+    const css = [
+      '.a { background-image: image-set(\'fake-lib/a.png\' 1x, url("b c.png") 2x); }',
+      '.b { background-image: -webkit-image-set("fake-lib/b.png" 1x); }',
+      "@import url('mes styles.css') layer(base);",
+    ].join('\n');
+    expect(stylesheetReferences(css)).toEqual([
+      'mes styles.css',
+      'b c.png',
+      'fake-lib/a.png',
+      'fake-lib/b.png',
+    ]);
+  });
+
+  it("résout comme Vite : relatif d'abord, même sans « ./ », puis paquet", () => {
+    const dir = folder({
+      'src/style.css': '',
+      'src/local.css': "@import 'fake-lib/reset.css';",
+      'src/img/a.png': '',
+      'node_modules/fake-lib/package.json': JSON.stringify({
+        name: 'fake-lib',
+        version: '1.0.0',
+        license: 'MIT',
+      }),
+      'node_modules/fake-lib/reset.css': "@import '@scope/deep/base.css';",
+      'node_modules/@scope/deep/package.json': JSON.stringify({
+        name: '@scope/deep',
+        version: '2.0.0',
+        license: 'ISC',
+      }),
+      'node_modules/@scope/deep/base.css': 'html { margin: 0; }',
+      'node_modules/normalize.css/package.json': JSON.stringify({
+        name: 'normalize.css',
+        version: '8.0.1',
+        license: 'MIT',
+        style: 'normalize.css',
+      }),
+      'node_modules/normalize.css/normalize.css': 'html { line-height: 1.15; }',
+      'node_modules/fonts/package.json': JSON.stringify({
+        name: 'fonts',
+        version: '3.0.0',
+        license: 'MIT',
+      }),
+    });
+    const importer = path.join(dir, 'src/style.css');
+    const names = (css: string) =>
+      [...new Set(stylesheetPackages(css, importer, dir).map((info) => info.name))].sort();
+    // Chemins nus qui désignent des fichiers du projet : aucun paquet.
+    expect(names("@import 'img/../img/a.png'; .a { background: url(img/a.png); }")).toEqual([]);
+    // Une chaîne d'@import, du projet vers un paquet, puis vers un autre.
+    expect(names("@import 'local.css';")).toEqual(['@scope/deep', 'fake-lib']);
+    expect(names("@font-face { src: url('~fonts/x.woff2'); }")).toEqual(['fonts']);
+    expect(names(".a { background: image-set('fake-lib/a.png' 1x); }")).toEqual(['fake-lib']);
+    // Un paquet nommé comme une feuille de style est un dossier : il est relevé, pas lu.
+    expect(names("@import 'normalize.css';")).toEqual(['normalize.css']);
+    expect(names('@import url(https://example.org/a.css); .b { mask: url(#m); }')).toEqual([]);
   });
 });
 
@@ -325,17 +370,45 @@ describe('bundleLicenses', () => {
     );
   });
 
-  it("refuse une feuille de style du projet qui tire celle d'un paquet", async () => {
-    const dir = project({});
+  it('contrôle les paquets que tirent les feuilles de style, de proche en proche', async () => {
+    const chain = (credits: string, license = 'MIT') => {
+      const dir = project({ credits, license });
+      writeFileSync(path.join(dir, 'style.css'), "@import 'b.css';\nbody { margin: 0; }\n");
+      writeFileSync(path.join(dir, 'b.css'), "@import 'fake-lib/reset.css';\n");
+      writeFileSync(path.join(dir, 'node_modules/fake-lib/reset.css'), 'html { color: red; }\n');
+      writeFileSync(path.join(dir, 'main.js'), "import './style.css';\n");
+      return dir;
+    };
+    const notice = (await buildProject(chain('| `fake-lib` |\n'))).get('licenses.txt');
+    expect(notice).toContain('fake-lib 1.2.3 (MIT)');
+    await expect(buildProject(chain(''))).rejects.toThrow(/absents de CREDITS\.md.*fake-lib/);
+    await expect(buildProject(chain('| `fake-lib` |\n', 'MPL-2.0'))).rejects.toThrow(
+      /fake-lib@1\.2\.3 \(MPL-2\.0\)/,
+    );
+  });
+
+  it('contrôle aussi les styles de index.html', async () => {
+    const dir = project({ credits: '' });
+    writeFileSync(path.join(dir, 'node_modules/fake-lib/reset.css'), 'html { color: red; }\n');
+    writeFileSync(
+      path.join(dir, 'index.html'),
+      '<!doctype html><style>@import \'fake-lib/reset.css\';</style><script type="module" src="./main.js"></script>\n',
+    );
+    writeFileSync(path.join(dir, 'main.js'), 'document.title = "x";\n');
+    await expect(buildProject(dir)).rejects.toThrow(/absents de CREDITS\.md.*fake-lib/);
+  });
+
+  it('admet les chemins nus vers les fichiers du projet', async () => {
+    const dir = project({ credits: '' });
+    mkdirSync(path.join(dir, 'img'));
+    writeFileSync(path.join(dir, 'img/a.png'), 'png');
+    writeFileSync(path.join(dir, 'local.css'), 'p { color: blue; }\n');
     writeFileSync(
       path.join(dir, 'style.css'),
-      "@import 'fake-lib/reset.css';\nbody { margin: 0; }\n",
+      "@import 'local.css';\nbody { background: url(img/a.png); }\n",
     );
-    writeFileSync(path.join(dir, 'node_modules/fake-lib/reset.css'), 'html { color: red; }\n');
     writeFileSync(path.join(dir, 'main.js'), "import './style.css';\n");
-    await expect(buildProject(dir)).rejects.toThrow(
-      /style\.css tire fake-lib\/reset\.css d'un paquet/,
-    );
+    await expect(buildProject(dir)).resolves.toBeDefined();
   });
 
   it("voit la feuille de style d'un paquet importée depuis le JS", async () => {

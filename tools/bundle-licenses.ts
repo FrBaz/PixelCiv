@@ -9,7 +9,7 @@
  * distribué) ou s'il manque à CREDITS.md. Le build principal joint enfin au jeu les
  * textes de licence de tous ces paquets, que le code minifié ne contient plus.
  */
-import { readdirSync, readFileSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import path from 'node:path';
 import type { Plugin, Rolldown } from 'vite';
 import {
@@ -196,30 +196,105 @@ export interface BundleLicensesOptions {
   readonly notice?: string;
 }
 
-/** Feuilles de style du projet : seuls les CSS sont employés, sans préprocesseur. */
+/** Feuilles de style que le contrôle suit : des CSS, sans préprocesseur. */
 const STYLESHEET = /\.(css|pcss|postcss)$/;
 
-/** Chemins qu'une feuille de style va chercher : `@import` et `url()`, hors commentaires. */
+/** Retire les guillemets autour d'un chemin. */
+const unquote = (token: string) => token.replace(/^(['"])(.*)\1$/s, '$2');
+
+/** Contenu des parenthèses ouvertes juste avant `start`, parenthèses imbriquées comprises. */
+function parenthesized(text: string, start: number): string {
+  let depth = 1;
+  for (let index = start; index < text.length; index++) {
+    if (text[index] === '(') depth++;
+    else if (text[index] === ')' && --depth === 0) return text.slice(start, index);
+  }
+  return text.slice(start);
+}
+
+/**
+ * Chemins qu'une feuille de style va chercher, hors commentaires : `@import`, `url()`
+ * et les chaînes de `image-set()`, avec ou sans guillemets.
+ */
 export function stylesheetReferences(code: string): string[] {
   const text = code.replace(/\/\*[\s\S]*?\*\//g, '');
   const references = new Set<string>();
-  for (const match of text.matchAll(/@import\s+(?:url\(\s*)?(['"]?)([^'"\s;)]+)\1/g)) {
-    references.add(match[2]);
+  for (const match of text.matchAll(/@import\s+(?:url\(\s*)?('[^']*'|"[^"]*"|[^'"\s;)]+)/g)) {
+    references.add(unquote(match[1]));
   }
-  for (const match of text.matchAll(/url\(\s*(['"]?)([^'")\s]+)\1\s*\)/g)) {
-    references.add(match[2]);
+  for (const match of text.matchAll(/url\(\s*('[^']*'|"[^"]*"|[^'")\s]+)\s*\)/g)) {
+    references.add(unquote(match[1]));
+  }
+  for (const match of text.matchAll(/image-set\(/g)) {
+    const inner = parenthesized(text, match.index + match[0].length);
+    for (const quoted of inner.matchAll(/'[^']*'|"[^"]*"/g)) references.add(unquote(quoted[0]));
   }
   return [...references].filter((reference) => reference !== '');
 }
 
-/** Le chemin mène-t-il à un paquet : nom nu, `~paquet`, ou chemin qui passe par node_modules ? */
-export function isPackageReference(reference: string, importer: string, root: string): boolean {
-  if (/^(data:|[a-z]+:\/\/|\/\/|#)/i.test(reference)) return false;
-  if (!reference.startsWith('.') && !reference.startsWith('/')) return true;
-  const target = reference.startsWith('/')
-    ? path.join(root, reference)
-    : path.resolve(path.dirname(importer), reference);
-  return target.split(path.sep).includes('node_modules');
+/** Le chemin désigne-t-il un fichier ? Un paquet peut s'appeler « normalize.css ». */
+function isFile(file: string): boolean {
+  try {
+    return statSync(file).isFile();
+  } catch {
+    return false;
+  }
+}
+
+/** Dossier du paquet `name`, cherché dans les node_modules, du dossier `from` vers la racine. */
+function packageDirectory(from: string, name: string): string | undefined {
+  for (let directory = from; ; directory = path.dirname(directory)) {
+    const candidate = path.join(directory, 'node_modules', name);
+    if (existsSync(path.join(candidate, 'package.json'))) return candidate;
+    if (path.dirname(directory) === directory) return undefined;
+  }
+}
+
+/**
+ * Paquets que tire une feuille de style, de proche en proche. Les chemins se résolvent
+ * comme Vite les résout : d'abord relatifs, même sans « ./ », puis comme un paquet ; les
+ * feuilles qu'ils désignent, du projet ou d'un paquet, sont lues à leur tour.
+ */
+export function stylesheetPackages(
+  code: string,
+  importer: string,
+  root: string,
+  read: PackageReader = readPackage,
+  seen = new Set<string>(),
+): BundledPackage[] {
+  const found: BundledPackage[] = [];
+  for (const reference of stylesheetReferences(code)) {
+    // Données, adresses d'un autre site, fragments : rien à distribuer depuis le projet.
+    if (/^(data:|[a-z][a-z0-9+.-]*:|\/\/|#)/i.test(reference)) continue;
+    const bare = (reference.split(/[?#]/)[0] ?? '').replace(/^~/, '');
+    if (bare === '') continue;
+    let target: string | undefined;
+    if (bare.startsWith('/')) target = path.join(root, bare);
+    else if (bare.startsWith('.') || existsSync(path.resolve(path.dirname(importer), bare))) {
+      target = path.resolve(path.dirname(importer), bare);
+    } else {
+      const segments = bare.split('/');
+      const depth = segments[0]?.startsWith('@') ? 2 : 1;
+      const directory = packageDirectory(
+        path.dirname(importer),
+        segments.slice(0, depth).join('/'),
+      );
+      if (directory !== undefined) {
+        target =
+          segments.length > depth ? path.join(directory, ...segments.slice(depth)) : directory;
+        const info = packageOfModule(path.join(directory, 'package.json'), read);
+        if (info !== undefined) found.push(info);
+      }
+    }
+    if (target === undefined) continue;
+    const owner = packageOfModule(target, read);
+    if (owner !== undefined) found.push(owner);
+    if (STYLESHEET.test(target) && !seen.has(target) && isFile(target)) {
+      seen.add(target);
+      found.push(...stylesheetPackages(readFileSync(target, 'utf8'), target, root, read, seen));
+    }
+  }
+  return found;
 }
 
 const moduleIdsOf = (bundle: Rolldown.OutputBundle): string[] =>
@@ -243,16 +318,20 @@ export function bundleLicenses(options: BundleLicensesOptions = {}): {
   /** Paquets distribués, tous bundles confondus. */
   const distributed = new Map<string, BundledPackage>();
 
-  /** Enregistre les paquets d'un bundle ; renvoie l'erreur à lever s'il y en a une. */
-  const record = (bundle: Rolldown.OutputBundle): string | undefined => {
-    const packages = bundledPackages(moduleIdsOf(bundle), read);
-    for (const info of packages) distributed.set(packageKey(info), info);
-    const issues = auditPackages(packages, policy);
+  /** Message d'erreur pour des écarts de licence, ou undefined s'il n'y en a pas. */
+  const issuesMessage = (issues: readonly LicenseIssue[]): string | undefined => {
     if (issues.length === 0) return undefined;
     const list = issues
       .map((issue) => `${issue.name}@${issue.version} (${issue.license ?? 'sans licence'})`)
       .join(', ');
     return `Licences non admises dans le bundle (AST-05) : ${list}`;
+  };
+
+  /** Enregistre les paquets d'un bundle ; renvoie l'erreur à lever s'il y en a une. */
+  const record = (bundle: Rolldown.OutputBundle): string | undefined => {
+    const packages = bundledPackages(moduleIdsOf(bundle), read);
+    for (const info of packages) distributed.set(packageKey(info), info);
+    return issuesMessage(auditPackages(packages, policy));
   };
 
   let root = process.cwd();
@@ -262,28 +341,26 @@ export function bundleLicenses(options: BundleLicensesOptions = {}): {
     configResolved(config) {
       root = config.root;
     },
-    // Une feuille de style du projet qui en tire une d'un paquet, par `@import` ou
-    // `url()`, l'insère sans en faire un module : le contrôle ne la verrait pas.
+    // Une feuille de style insère ce qu'elle importe sans en faire des modules : ses
+    // paquets, de `@import` en `@import`, sont relevés ici. Les styles de index.html
+    // arrivent en modules « index.html?html-proxy…css ».
     transform: {
       order: 'pre',
       handler(code, id) {
-        const file = id.split('?')[0] ?? id;
-        if (!STYLESHEET.test(file) || file.split('/').includes('node_modules')) return null;
-        const references = stylesheetReferences(code).filter((reference) =>
-          isPackageReference(reference, file, root),
-        );
-        if (references.length > 0) {
-          this.error(
-            `${path.relative(root, file)} tire ${references.join(', ')} d'un paquet. ` +
-              'Importe cette feuille de style depuis le JS, où le contrôle des licences et des ' +
-              'crédits la voit (ADR 0008).',
-          );
+        const [file = id, query = ''] = id.split('?');
+        const inline =
+          file.endsWith('.html') && query.includes('html-proxy') && query.endsWith('.css');
+        if (!STYLESHEET.test(file) && !inline) return null;
+        for (const info of stylesheetPackages(code, file, root, read)) {
+          distributed.set(packageKey(info), info);
         }
         return null;
       },
     },
     generateBundle(_options, bundle) {
-      const error = record(bundle);
+      record(bundle);
+      // Tous les paquets distribués : ceux des bundles, des workers et des feuilles de style.
+      const error = issuesMessage(auditPackages(distributed.values(), policy));
       if (error !== undefined) this.error(error);
       let text: string;
       try {

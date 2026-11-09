@@ -71,6 +71,15 @@ export class CameraControls {
       event.preventDefault();
     });
     element.addEventListener('wheel', this.onWheel, { passive: false });
+    // Un pincement au pavé tactile arrive en molette avec Ctrl : hors de la carte, sur
+    // l'interface, il zoomerait la page, et l'étirerait d'un facteur quelconque.
+    window.addEventListener(
+      'wheel',
+      (event) => {
+        if (event.ctrlKey) event.preventDefault();
+      },
+      { passive: false },
+    );
     window.addEventListener('keydown', this.onKeyDown);
     window.addEventListener('keyup', this.onKeyUp);
     window.addEventListener('blur', () => {
@@ -182,7 +191,12 @@ export class CameraControls {
         : event.deltaMode === WheelEvent.DOM_DELTA_LINE
           ? 16
           : this.options.element.clientHeight;
-    const factor = Math.exp(-event.deltaY * unit * 0.002);
+    const delta = event.deltaY * unit;
+    // Pincement au pavé tactile : Chromium l'envoie en petits écarts avec Ctrl, dont la
+    // somme vaut -100 ln(facteur des doigts) ; la carte suit alors les doigts. Un cran
+    // de molette, lui, vaut une centaine de pixels.
+    const pinch = event.ctrlKey && Math.abs(delta) < 50;
+    const factor = Math.exp(-delta * (pinch ? 0.01 : 0.002));
     const point = this.point(event);
     this.camera = zoomAt(this.camera, factor, this.options.viewport(), point.x, point.y);
   };

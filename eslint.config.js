@@ -102,6 +102,29 @@ const globalObjectProperties = ['globalThis', 'self'].flatMap((object) => [
 const globalObjects = new Set(['Math', 'globalThis', 'self']);
 
 /**
+ * L'identifiant n'apparaît-il que dans une requête de type, comme `typeof Math.sin` ?
+ *
+ * @param {any} identifier
+ */
+function inTypeQuery(identifier) {
+  let node = identifier.parent;
+  while (node?.type === 'TSQualifiedName') node = node.parent;
+  return node?.type === 'TSTypeQuery';
+}
+
+/**
+ * La clé d'un accès calculé est-elle écrite en clair : `Math['sin']`, `` Math[`sin`] `` ?
+ *
+ * @param {any} key
+ */
+function isStaticKey(key) {
+  return (
+    (key.type === 'Literal' && typeof key.value === 'string') ||
+    (key.type === 'TemplateLiteral' && key.expressions.length === 0)
+  );
+}
+
+/**
  * N'admet Math, globalThis et self que comme objet direct d'un accès à une propriété.
  * Un alias (`const M = Math`), un passage en argument ou un détour (`globalThis.self`)
  * échapperaient aux interdictions de propriétés, qui ne lisent que l'accès direct.
@@ -133,12 +156,18 @@ const directGlobals = {
         for (const reference of references) {
           const { identifier } = reference;
           if (!globalObjects.has(identifier.name)) continue;
-          // Le type Math (`(m: Math) => …`) ne donne accès à rien.
+          // Le type Math (`(m: Math) => …`) ou `typeof Math.sin` ne donnent accès à rien.
           if ('isValueReference' in reference && reference.isValueReference === false) continue;
+          if (inTypeQuery(identifier)) continue;
           const parent = /** @type {import('estree').Node & { parent?: import('estree').Node }} */ (
             identifier
           ).parent;
-          const direct = parent?.type === 'MemberExpression' && parent.object === identifier;
+          // Un accès calculé dont la clé n'est pas écrite en clair (`Math[op]`) échappe aux
+          // interdictions de propriétés, qui ne lisent que les noms connus.
+          const direct =
+            parent?.type === 'MemberExpression' &&
+            parent.object === identifier &&
+            (!parent.computed || isStaticKey(parent.property));
           // globalThis.self, self.globalThis : l'objet global atteint par un détour.
           const detour =
             direct &&
@@ -167,10 +196,46 @@ const textAttributes = new Set([
   'aria-placeholder',
   'aria-roledescription',
   'aria-valuetext',
+  'caption',
+  'description',
+  'heading',
+  'hint',
   'label',
+  'legend',
+  'message',
   'placeholder',
+  'subtitle',
+  'text',
   'title',
+  'tooltip',
 ]);
+
+/** Types de champ dont la valeur s'affiche sur le bouton. */
+const buttonInputs = new Set(['button', 'reset', 'submit']);
+
+/**
+ * L'attribut porte-t-il un texte lu par l'utilisateur ? Aussi la valeur d'un bouton de
+ * formulaire, `<input type="submit" value="…">`.
+ *
+ * @param {any} attribute
+ */
+function isTextAttribute(attribute) {
+  if (attribute.name.type !== 'JSXIdentifier') return false;
+  const name = attribute.name.name;
+  if (textAttributes.has(name)) return true;
+  const element = attribute.parent;
+  if (
+    name !== 'value' ||
+    element?.name?.type !== 'JSXIdentifier' ||
+    element.name.name !== 'input'
+  ) {
+    return false;
+  }
+  const type = element.attributes.find(
+    (/** @type {any} */ other) => other.type === 'JSXAttribute' && other.name.name === 'type',
+  );
+  return type?.value?.type === 'Literal' && buttonInputs.has(type.value.value);
+}
 
 /** Nœuds qui transmettent une chaîne sans la transformer : `a ? 'x' : 'y'`, `a ?? 'x'`… */
 const passThrough = new Set([
@@ -205,7 +270,11 @@ const hardcodedText = {
       /** @type {any} */
       let current = node;
       let parent = current.parent;
-      while (parent != null && passThrough.has(parent.type)) {
+      while (
+        parent != null &&
+        (passThrough.has(parent.type) ||
+          (parent.type === 'BinaryExpression' && parent.operator === '+'))
+      ) {
         if (parent.type === 'ConditionalExpression' && parent.test === current) return false;
         current = parent;
         parent = parent.parent;
@@ -215,12 +284,7 @@ const hardcodedText = {
         parent = parent.parent;
         if (parent?.type === 'JSXElement' || parent?.type === 'JSXFragment') return true;
       }
-      return (
-        parent?.type === 'JSXAttribute' &&
-        parent.value === current &&
-        parent.name.type === 'JSXIdentifier' &&
-        textAttributes.has(parent.name.name)
-      );
+      return parent?.type === 'JSXAttribute' && parent.value === current && isTextAttribute(parent);
     }
 
     return {
@@ -353,15 +417,23 @@ const workerBoundaries = {
      * @param {any} node
      * @param {boolean} [glob]
      */
-    function check(node, glob = false) {
+    /**
+     * @param {any} node chemin à vérifier
+     * @param {boolean} [glob] motif de glob
+     * @param {boolean} [prefix] seul le début du chemin compte : option `base` d'un glob
+     */
+    function check(node, glob = false, prefix = false) {
       // Un motif négatif de glob retire des fichiers, il n'en ajoute pas.
-      if (glob && node?.type === 'Literal' && String(node.value).startsWith('!')) return;
+      const head =
+        node?.type === 'Literal' ? String(node.value) : (node?.quasis?.[0]?.value.cooked ?? '');
+      if (glob && head.startsWith('!')) return;
       const specifier = specifierOf(node, glob);
       if (specifier === undefined) {
         context.report({ node, messageId: 'opaque' });
         return;
       }
-      const { text, open } = specifier;
+      const { text } = specifier;
+      const open = specifier.open || prefix;
       if (text.startsWith('/') || text.startsWith('.')) {
         const target = text.startsWith('/') ? path.join(ROOT, text) : path.resolve(directory, text);
         if (reachesMainThread(target, open)) context.report({ node, messageId: 'directory' });
@@ -378,9 +450,24 @@ const workerBoundaries = {
       ExportAllDeclaration: (node) => check(node.source),
       ImportExpression: (node) => check(node.source),
       'CallExpression[callee.object.type="MetaProperty"][callee.property.name="glob"]': (node) => {
-        const [patterns] = node.arguments;
-        const list = patterns?.type === 'ArrayExpression' ? patterns.elements : [patterns];
-        for (const pattern of list) check(pattern, true);
+        const [patterns, options] = node.arguments;
+        if (patterns === undefined) {
+          context.report({ node, messageId: 'opaque' });
+          return;
+        }
+        const list = patterns.type === 'ArrayExpression' ? patterns.elements : [patterns];
+        // Un trou dans la liste ([, './a/*.ts']) ne désigne rien.
+        for (const pattern of list) if (pattern != null) check(pattern, true);
+        // L'option base enracine les motifs relatifs ailleurs : tout ce qui est dessous compte.
+        if (options?.type === 'ObjectExpression') {
+          for (const property of options.properties) {
+            const key = property.type === 'Property' ? property.key : undefined;
+            const named = key?.type === 'Identifier' ? key.name : key?.value;
+            if (named === 'base') check(property.value, false, true);
+          }
+        } else if (options !== undefined) {
+          context.report({ node: options, messageId: 'opaque' });
+        }
       },
     };
   },

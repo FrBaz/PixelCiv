@@ -1,5 +1,5 @@
 # Dépendances et fichiers produits
-node_modules/
+node_modules
 dist/
 coverage/
 *.tsbuildinfo

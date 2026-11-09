@@ -56,6 +56,18 @@ describe('déterminisme', () => {
     ['const { ...m } = Math; m.random();', 'pixelciv/direct-globals'],
     ['const { random } = Math; random();', 'no-restricted-properties', 'pixelciv/direct-globals'],
     ['export const pick = (f: (m: Math) => number) => f(Math);', 'pixelciv/direct-globals'],
+    // Accès calculés dont la clé n'est pas écrite en clair.
+    [
+      "type F = 'sin' | 'cos'; export const f = (op: F, x: number) => Math[op](x);",
+      'pixelciv/direct-globals',
+    ],
+    [
+      "export const k = 'performance' as const; export const n = globalThis[k].now();",
+      'pixelciv/direct-globals',
+    ],
+    ["export const d = self['Da' + 'te'];", 'pixelciv/direct-globals'],
+    // Clé écrite en clair : la règle des propriétés la voit.
+    ["export const s = Math['sin'](1);", 'no-restricted-properties'],
   ])('signale %s', async (code, ...expected) => {
     for (const filePath of workerFiles) {
       expect(await ruleIds(code, filePath), filePath).toEqual(expected);
@@ -72,6 +84,16 @@ describe('déterminisme', () => {
       'no-restricted-properties',
       'no-restricted-globals',
     ]);
+  });
+
+  it.each([
+    'export const sin: typeof Math.sin = (x) => x;',
+    'export type R = ReturnType<typeof Math.random>;',
+    'export type K = keyof typeof Math;',
+    'export type G = typeof globalThis;',
+    "export const r = Math['sqrt'](2) + Math[`floor`](1.5);",
+  ])('admet %s', async (code) => {
+    expect(await ruleIds(code, 'src/core/probe.ts')).toEqual([]);
   });
 
   it('admet les opérations exactes de Math et les échanges du worker', async () => {
@@ -125,6 +147,10 @@ describe('frontières du worker', () => {
     'export const p = (name: string) => import(name);',
     "export const p = import('/node_modules/pixi.js/lib/index.mjs');",
     "export const p = import.meta.glob('../../node_modules/@pixi/*/lib/*.mjs');",
+    // L'option base enracine les motifs ailleurs ; un glob sans motif ne dit rien.
+    "export const p = import.meta.glob('./*.ts', { base: '../ui', eager: true });",
+    "export const p = import.meta.glob('./*.ts', { base: '/src/render' });",
+    'export const p = import.meta.glob();',
   ])('signale %s', async (code) => {
     for (const filePath of [...workerFiles, 'src/worker/probe.ts', 'src/sim/probe.test.ts']) {
       expect(await ruleIds(code, filePath), filePath).toEqual(['pixelciv/worker-boundaries']);
@@ -147,12 +173,21 @@ describe('frontières du worker', () => {
     "export const p = import('./local');",
     "export const p = import.meta.glob('./local/*.ts');",
     "export const p = import.meta.glob(['../core/*.ts', '!../ui/*.ts']);",
+    'export const p = import.meta.glob([`./local/*.ts`, `!./local/skip.ts`]);',
+    "export const p = import.meta.glob('./*.ts', { base: './local', eager: true });",
     'export const p = (name: string) => import(`./local/${name}.ts`);',
     "export const p = (name: string) => import('../core/' + name);",
     "export { value } from './local';",
     'const value = 1; export { value };',
   ])('admet %s', async (code) => {
     expect(await ruleIds(code, 'src/sim/probe.ts')).toEqual([]);
+  });
+
+  it('ne plante pas sur un trou dans une liste de motifs', async () => {
+    // Seule la règle des tableaux creux s'en plaint : la frontière n'y voit rien.
+    expect(
+      await ruleIds("export const p = import.meta.glob([, './local/*.ts']);", 'src/sim/probe.ts'),
+    ).toEqual(['no-sparse-arrays']);
   });
 
   it('signale les sous-dossiers selon leur profondeur', async () => {
@@ -185,6 +220,13 @@ describe('textes affichés', () => {
     '<button title={`Fermer`} />',
     "<button title={on ? 'Ouvrir' : 'Fermer'} />",
     "<>{'Bonjour' as string}</>",
+    // Concaténations, attributs de texte des composants, boutons de formulaire.
+    "<p>{'Année ' + label}</p>",
+    "<p>{label + ' ans'}</p>",
+    "<button title={'Fermer ' + label} />",
+    '<Button text="Fermer" />',
+    '<Panel heading="Sauvegardes" />',
+    '<input type="submit" value="Envoyer" />',
   ])('signale %s', async (jsx) => {
     // Une condition entre deux textes en compte deux.
     const ids = await ruleIds(component(jsx), 'src/ui/Probe.tsx');
@@ -207,6 +249,9 @@ describe('textes affichés', () => {
     "<p>{t(on ? 'time.resume' : 'time.pause')}</p>",
     "<button title={t('notice.close')} />",
     "<p>{on ? t('a.b') : label}</p>",
+    '<input type="text" value={label} />',
+    '<input type="checkbox" value="oui" />',
+    '<Button variant="primary" />',
   ])('admet %s', async (jsx) => {
     expect(await ruleIds(component(jsx), 'src/ui/Probe.tsx')).toEqual([]);
   });
