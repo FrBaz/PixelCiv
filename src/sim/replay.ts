@@ -16,7 +16,7 @@ export function replay(
   ticks: number,
   content: SimContent,
 ): SimState {
-  const state = createState(params, copyLayers(world));
+  const state = createState(params, copyLayers(world), content);
   let next = 0;
   while (state.tick < ticks) {
     const commands: GameCommand[] = [];

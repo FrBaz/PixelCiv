@@ -55,6 +55,8 @@ export const CHRONICLE_KINDS = [
   'groupExtinct',
   /** Une famine emporte `count` membres d'un groupe en un mois. */
   'famine',
+  /** Un groupe trop petit rejoint `other`, avec ses `count` membres. */
+  'groupMerged',
 ] as const;
 export type ChronicleKind = (typeof CHRONICLE_KINDS)[number];
 

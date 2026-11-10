@@ -28,6 +28,7 @@ import {
   type DeathCause,
   type Population,
 } from './population';
+import { cellDistance } from './groups';
 import { adaptationOf, cellTemperature, closeKin, monthOf, MONTHS_PER_YEAR } from './people';
 import { inheritedFamilyName } from './spawn';
 import { cultureOf } from './society';
@@ -335,17 +336,21 @@ function ageInYearsOf(people: Population, slot: number, tick: number): number {
 }
 
 /**
- * Couples : chaque célibataire en âge d'un groupe trouve, avec une probabilité mensuelle,
- * un conjoint célibataire de l'autre sexe dans le même groupe, d'un âge proche, et qui
- * n'est pas un proche parent.
+ * Couples : chaque célibataire en âge trouve, avec une probabilité mensuelle, un conjoint
+ * célibataire de l'autre sexe, d'un âge proche, qui n'est pas un proche parent : dans son
+ * groupe d'abord, sinon dans un groupe voisin de sa culture, que l'un des deux rejoint
+ * avec ses enfants (les bandes échangent leurs conjoints). Le conjoint du plus petit des
+ * deux groupes rejoint le plus grand ; à taille égale, la femme rejoint l'homme.
  */
 function formCouples(state: SimState, content: SimContent): void {
-  const { people, tick } = state;
+  const { people, tick, society } = state;
   const random = state.rng.stream('sim.couples');
   const women = new Map<number, number[]>();
   const men = new Map<number, number[]>();
+  const sizes = new Map<number, number>();
   people.forEach((slot) => {
     const group = people.get('group', slot);
+    sizes.set(group, (sizes.get(group) ?? 0) + 1);
     if (group === NONE || people.get('partner', slot) !== NONE) return;
     const species = content.species.entries.at(people.get('species', slot));
     if (species === undefined || ageInYearsOf(people, slot, tick) < species.couple.minAge) return;
@@ -354,26 +359,76 @@ function formCouples(state: SimState, content: SimContent): void {
     if (list === undefined) lists.set(group, [slot]);
     else list.push(slot);
   });
+  const compatibleMen = (woman: number, candidates: readonly number[]) => {
+    const species = content.species.entries.at(people.get('species', woman));
+    const gap = (species?.couple.maxGap ?? 0) * MONTHS_PER_YEAR;
+    const age = people.age(woman, tick);
+    return candidates.filter(
+      (man) =>
+        people.get('partner', man) === NONE &&
+        people.get('species', man) === people.get('species', woman) &&
+        Math.abs(people.age(man, tick) - age) <= gap &&
+        !closeKin(people, woman, man),
+    );
+  };
+  const marry = (woman: number, man: number) => {
+    people.set('partner', woman, people.get('id', man));
+    people.set('partner', man, people.get('id', woman));
+  };
+  const unmatched: number[] = [];
   for (const [group, list] of women) {
-    const candidates = men.get(group);
-    if (candidates === undefined) continue;
+    const candidates = men.get(group) ?? [];
     for (const woman of list) {
       const species = content.species.entries.at(people.get('species', woman));
       if (species === undefined || random.nextFloat() >= species.pairing) continue;
-      const age = people.age(woman, tick);
-      const gap = species.couple.maxGap * MONTHS_PER_YEAR;
-      const compatible = candidates.filter(
-        (man) =>
-          people.get('partner', man) === NONE &&
-          people.get('species', man) === people.get('species', woman) &&
-          Math.abs(people.age(man, tick) - age) <= gap &&
-          !closeKin(people, woman, man),
-      );
-      if (compatible.length === 0) continue;
-      const man = compatible.at(random.nextInt(compatible.length));
-      if (man === undefined) continue;
-      people.set('partner', woman, people.get('id', man));
-      people.set('partner', man, people.get('id', woman));
+      const man = random.pickOrUndefined(compatibleMen(woman, candidates));
+      if (man === undefined) unmatched.push(woman);
+      else marry(woman, man);
     }
   }
+  // Dans un groupe voisin de la même culture.
+  const distance = content.nomads.marriage;
+  for (const woman of unmatched) {
+    const home = society.groups.get(people.get('group', woman));
+    if (home === undefined) continue;
+    const candidates: number[] = [];
+    for (const [group, list] of men) {
+      const other = society.groups.get(group);
+      if (other === undefined || other.id === home.id || other.culture !== home.culture) continue;
+      if (cellDistance(state.size.width, home.x, home.y, other.x, other.y) > distance) continue;
+      candidates.push(...list);
+    }
+    const man = random.pickOrUndefined(compatibleMen(woman, candidates));
+    if (man === undefined) continue;
+    marry(woman, man);
+    const womanGroup = people.get('group', woman);
+    const manGroup = people.get('group', man);
+    if ((sizes.get(womanGroup) ?? 0) > (sizes.get(manGroup) ?? 0)) {
+      joinGroup(people, man, womanGroup, tick, content);
+    } else {
+      joinGroup(people, woman, manGroup, tick, content);
+    }
+  }
+}
+
+/** Fait passer un individu dans le groupe `group`, avec ses enfants qui vivaient avec lui. */
+export function joinGroup(
+  people: Population,
+  slot: number,
+  group: number,
+  tick: number,
+  content: SimContent,
+): void {
+  const id = people.get('id', slot);
+  const from = people.get('group', slot);
+  people.forEach((other) => {
+    if (people.get('group', other) !== from) return;
+    if (people.get('mother', other) !== id && people.get('father', other) !== id) return;
+    const species = content.species.entries.at(people.get('species', other));
+    if (species === undefined || people.age(other, tick) >= species.maturity * MONTHS_PER_YEAR) {
+      return;
+    }
+    people.set('group', other, group);
+  });
+  people.set('group', slot, group);
 }

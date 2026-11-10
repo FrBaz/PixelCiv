@@ -31,7 +31,7 @@ export function testWorld(seed = 'graine'): WorldLayers {
 
 /** Nouvel état, sur le monde Petit de cette graine. */
 export function testState(seed = 'graine'): SimState {
-  return createState(testParams(seed), testWorld(seed));
+  return createState(testParams(seed), testWorld(seed), testData);
 }
 
 /** Coordonnées des n premières cases dont le biome est de la famille voulue. */

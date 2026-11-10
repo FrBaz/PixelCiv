@@ -190,7 +190,7 @@ export class SimulationHost {
       this.send({ type: 'progress', stage, step: GENERATION_STAGES.indexOf(stage), steps });
     });
     this.send({ type: 'generated', milliseconds: this.env.now() - start });
-    this.start(createState(params, world));
+    this.start(createState(params, world, this.data));
   }
 
   /**

@@ -4,16 +4,17 @@ import biomes from '../../../data/biomes.json';
 import cultures from '../../../data/cultures.json';
 import flora from '../../../data/flora.json';
 import genetics from '../../../data/genetics.json';
+import nomads from '../../../data/nomads.json';
 import resources from '../../../data/resources.json';
 import species from '../../../data/species.json';
 import worldgen from '../../../data/worldgen.json';
 import { DataError, loadCatalog, loadSettings, type Catalog } from './catalog';
-import { CulturesSchema, GeneticsSchema, SpeciesListSchema } from './people';
+import { CulturesSchema, GeneticsSchema, NomadsSchema, SpeciesListSchema } from './people';
 import { AltitudeLevelsSchema, BiomesSchema, FlorasSchema, ResourcesSchema } from './schemas';
 import { classifiedBiomes, WorldgenSchema } from './worldgen';
 
 export type { Catalog } from './catalog';
-export type { Cultures, Genetics, Locus, Species, Subspecies, Trait } from './people';
+export type { Cultures, Genetics, Locus, Nomads, Species, Subspecies, Trait } from './people';
 export type { AltitudeLevel, Biome, Flora, Resource } from './schemas';
 export type { Parameter, ParameterName, Worldgen } from './worldgen';
 
@@ -28,6 +29,7 @@ export function loadGameData() {
     species: loadCatalog('data/species.json', SpeciesListSchema, species),
     genetics: loadSettings('data/genetics.json', GeneticsSchema, genetics),
     cultures: loadSettings('data/cultures.json', CulturesSchema, cultures),
+    nomads: loadSettings('data/nomads.json', NomadsSchema, nomads),
   };
   const problems = checkContent(data);
   if (problems.length > 0) throw new DataError(`contenu incohérent\n${problems.join('\n')}`);

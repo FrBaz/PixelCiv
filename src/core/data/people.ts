@@ -193,3 +193,41 @@ export const CulturesSchema = z
   .strict();
 
 export type Cultures = z.infer<typeof CulturesSchema>;
+
+/**
+ * Groupes nomades (C2, D4 et D13 ; tâches 2.4 et 2.5) : marche, scission, aire, recherche
+ * de nourriture, réserves et stocks de nourriture des cases.
+ */
+export const NomadsSchema = z
+  .object({
+    /** Cases de plaine parcourues à pied en un mois (C2, D13). */
+    walk: z.number().positive(),
+    /** Taille au-delà de laquelle un groupe se scinde (C2, D4). */
+    split: z.number().int().min(4),
+    /** Rayon de l'aire d'un groupe autour de son centre, en cases. */
+    range: z.number().positive(),
+    /**
+     * Distance, en cases, à laquelle un célibataire trouve un conjoint dans un autre groupe
+     * de sa culture, faute d'en trouver dans le sien : les bandes échangent leurs conjoints.
+     */
+    marriage: z.number().min(0),
+    /** Un groupe de moins de membres rejoint un groupe voisin, à la distance du mariage. */
+    merge: z.number().int().min(0),
+    /** Rayon, en cases, où le groupe cherche sa nourriture, et part des stocks qu'il prend. */
+    forage: z.object({ radius: z.number().int().min(1).max(8), share: ShareSchema }).strict(),
+    /** Réserves pour l'hiver (SAI-03) : en mois de besoin du groupe, et pertes par mois. */
+    reserve: z.object({ months: z.number().min(0), spoilage: ShareSchema }).strict(),
+    /** Stocks d'une case : leur plafond, en mois de rendement au sommet de la saison. */
+    stocks: z
+      .object({
+        plants: z.object({ capacity: z.number().positive() }).strict(),
+        game: z.object({ capacity: z.number().positive() }).strict(),
+        fish: z.object({ capacity: z.number().positive() }).strict(),
+      })
+      .strict(),
+    /** Pêche d'une rivière, par classe (aucune, ruisseau, rivière, fleuve), en part de celle du biome « rivière ». */
+    river: z.tuple([ShareSchema, ShareSchema, ShareSchema, ShareSchema]),
+  })
+  .strict();
+
+export type Nomads = z.infer<typeof NomadsSchema>;

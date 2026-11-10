@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { GameCommandSchema } from './commands';
 import { NONE } from './population';
-import { membersOf } from './spawn';
+import { membersOf, spawnGroup } from './spawn';
 import { step } from './step';
 import { firstCellOf, testData, testState } from './testing';
 
@@ -12,14 +12,15 @@ describe("apparition d'un groupe (CRE-03, C2 D4)", () => {
   it('forme un groupe de familles, avec sa langue et sa culture embryonnaires', () => {
     const state = testState();
     const cell = firstCellOf(state, (family) => family === 'temperate');
-    step(state, [spawn(cell.x, cell.y, 20)], testData);
+    // L'apparition seule, sans le mois qui suit, où le groupe se déplacerait déjà.
+    spawnGroup(state, spawn(cell.x, cell.y, 20), testData);
     const group = [...state.society.groups.values()].at(0);
     if (group === undefined) throw new Error('aucun groupe');
     expect(group).toMatchObject({ x: cell.x, y: cell.y, culture: 1, parent: NONE });
     expect(state.society.languages).toHaveLength(1);
     expect(state.society.cultures[0]).toMatchObject({ id: 1, language: 1 });
     const members = membersOf(state.people, group.id);
-    expect(members.length).toBeGreaterThanOrEqual(19);
+    expect(members).toHaveLength(20);
     // Des couples, et des enfants nés d'eux, dans le même groupe.
     let couples = 0;
     let children = 0;

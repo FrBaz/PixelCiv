@@ -102,6 +102,11 @@ export class RandomStream {
     return this.nextFloat() < probability;
   }
 
+  /** Un élément au hasard d'une liste, ou undefined si elle est vide (sans tirage). */
+  pickOrUndefined<T>(items: readonly T[]): T | undefined {
+    return items.length === 0 ? undefined : items[this.nextInt(items.length)];
+  }
+
   /** Un élément au hasard d'une liste non vide. */
   pick<T>(items: readonly T[]): T {
     const item = items[this.nextInt(items.length)];

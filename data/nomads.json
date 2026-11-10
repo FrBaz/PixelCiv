@@ -1,0 +1,27 @@
+{
+  "walk": 30,
+  "split": 30,
+  "range": 20,
+  "marriage": 30,
+  "merge": 5,
+  "forage": {
+    "radius": 4,
+    "share": 0.5
+  },
+  "reserve": {
+    "months": 2,
+    "spoilage": 0.1
+  },
+  "stocks": {
+    "plants": {
+      "capacity": 4
+    },
+    "game": {
+      "capacity": 10
+    },
+    "fish": {
+      "capacity": 6
+    }
+  },
+  "river": [0, 0.3, 0.6, 1]
+}
