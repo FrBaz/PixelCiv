@@ -2,21 +2,25 @@ import { describe, expect, it } from 'vitest';
 import { loadGameData } from '../core/data';
 import { Fingerprint } from '../core/hash';
 import { Rng } from '../core/rng';
-import { WORLD_SIZES, type WorldSize } from '../core/world';
+import { flowDirection, riverClass, WORLD_SIZES, type WorldSize } from '../core/world';
+import { defaultWorldParams } from '../core/worldParams';
 import { generateClimate } from './climate';
+import { generateWorld } from './generate';
 import { DIRECTIONS, neighborTable } from './grid';
 import {
   findOcean,
   generateHydrology,
   LAKE,
+  lakeEvaporation,
   NO_DIRECTION,
   RIVER,
   type Hydrology,
 } from './hydrology';
-import { generateRelief } from './relief';
+import { generateRelief, reliefSettings } from './relief';
 import { CylinderSampler } from './sampler';
 
-const { worldgen } = loadGameData();
+const data = loadGameData();
+const { worldgen } = data;
 const SIZE = WORLD_SIZES.small;
 
 interface World {
@@ -28,7 +32,12 @@ interface World {
 function world(seed: string, rivers = 1): World {
   const sampler = new CylinderSampler(SIZE);
   const rng = new Rng(seed);
-  const elevation = generateRelief(sampler, rng, { landShare: 0.35, seaLevel: 0, relief: 0.5 });
+  const elevation = generateRelief(
+    sampler,
+    rng,
+    { landShare: 0.35, seaLevel: 0, relief: 0.5 },
+    reliefSettings(data.worldgen, data.altitudeLevels.entries),
+  );
   const ocean = findOcean(elevation, SIZE, worldgen.ocean.minShare);
   const climate = generateClimate(sampler, rng, elevation, ocean, worldgen.climate, {
     temperature: 0,
@@ -118,9 +127,11 @@ describe('hydrologie', () => {
     expect(lakes).toBeGreaterThan(0);
   });
 
-  it('draine chaque case vers la mer ou un lac, sans boucle, couture comprise', () => {
+  it('draine chaque case vers la mer, un lac ou le bord des pôles, sans boucle, couture comprise', () => {
     for (const { size, hydrology } of worlds) {
       const count = size.width * size.height;
+      // Au bord des pôles, l'eau quitte la carte.
+      const edge = (cell: number) => cell < size.width || cell >= count - size.width;
       // 0 : inconnu, 1 : en cours de parcours, 2 : mène à la mer ou à un lac.
       const state = new Uint8Array(count);
       const path: number[] = [];
@@ -138,7 +149,10 @@ describe('hydrologie', () => {
         // Une case déjà en cours de parcours trahirait une boucle ; une case sans aval
         // hors de la mer et des lacs, une eau qui ne mène nulle part.
         const ends =
-          state[cell] === 2 || hydrology.ocean[cell] === 1 || hydrology.lake[cell] !== LAKE.none;
+          state[cell] === 2 ||
+          hydrology.ocean[cell] === 1 ||
+          hydrology.lake[cell] !== LAKE.none ||
+          edge(cell);
         if (!ends) failures++;
         for (const visited of path) state[visited] = 2;
         path.length = 0;
@@ -147,14 +161,16 @@ describe('hydrologie', () => {
     }
   });
 
-  it('mène toute rivière à la mer ou à un lac, sans interruption (D3)', () => {
+  it('mène toute rivière à la mer, à un lac ou au bord des pôles, sans interruption (D3)', () => {
     for (const { size, hydrology } of worlds) {
       const count = size.width * size.height;
+      const edge = (cell: number) => cell < size.width || cell >= count - size.width;
       for (let start = 0; start < count; start++) {
         if (hydrology.river[start] === RIVER.none) continue;
         let cell = start;
-        for (;;) {
-          if (hydrology.ocean[cell] || hydrology.lake[cell] !== LAKE.none) break;
+        for (let steps = 0; ; steps++) {
+          expect(steps).toBeLessThan(count);
+          if (hydrology.ocean[cell] || hydrology.lake[cell] !== LAKE.none || edge(cell)) break;
           // Tant qu'elle n'a pas atteint la mer ou un lac, la rivière reste une rivière.
           expect(hydrology.river[cell]).not.toBe(RIVER.none);
           cell = hydrology.receiver[cell] ?? -1;
@@ -203,13 +219,10 @@ describe('hydrologie', () => {
     expect(dense).toBeGreaterThan(sparse * 2);
   });
 
-  it('ne trace aucune rivière rectiligne', () => {
+  it('ne trace aucune rivière rectiligne, bord des pôles compris', () => {
     for (const { size, hydrology } of worlds) {
       let longest = 0;
-      // Les trois lignes du bord polaire, sans voisins au-delà, sont laissées de côté : une
-      // calotte glaciaire les couvre, où l'étape des biomes efface les rivières.
-      const polar = 3 * size.width;
-      for (let start = polar; start < size.width * size.height - polar; start++) {
+      for (let start = 0; start < size.width * size.height; start++) {
         if (hydrology.river[start] === RIVER.none) continue;
         const direction = hydrology.direction[start];
         let run = 1;
@@ -227,6 +240,69 @@ describe('hydrologie', () => {
       // Sur une carte Petit, une case couvre près de 80 km : douze cases font 950 km.
       expect(longest).toBeLessThanOrEqual(12);
     }
+  });
+
+  it('ne trace pas de rivière rectiligne dans les bassins fermés des mondes secs', () => {
+    // Des réglages secs et chargés de terres, où les bassins sans exutoire abondent, et un
+    // monde chaud dont les pôles ne sont pas sous la glace.
+    const cases = [
+      { seed: 'p18', landShare: 0.45, humidity: 0.7 },
+      { seed: 'p11', landShare: 0.6, seaLevel: -1 },
+      { seed: 'eta', landShare: 0.6, seaLevel: -1, temperature: 10, humidity: 0.5 },
+    ];
+    for (const { seed, ...overrides } of cases) {
+      const params = { ...defaultWorldParams(worldgen.parameters, seed, 'small'), ...overrides };
+      const layers = generateWorld({ ...params, size: SIZE }, data);
+      const { width, height } = SIZE;
+      const neighbors = neighborTable(SIZE);
+      let longest = 0;
+      for (let start = 0; start < width * height; start++) {
+        const code = layers.drainage[start] ?? 0;
+        if (riverClass(code) === 0) continue;
+        const direction = flowDirection(code);
+        let run = 1;
+        let cell = neighbors[start * 8 + direction] ?? -1;
+        while (
+          cell >= 0 &&
+          run <= width &&
+          riverClass(layers.drainage[cell] ?? 0) > 0 &&
+          flowDirection(layers.drainage[cell] ?? 0) === direction
+        ) {
+          run++;
+          cell = neighbors[cell * 8 + direction] ?? -1;
+        }
+        longest = Math.max(longest, run);
+      }
+      expect(longest, seed).toBeLessThanOrEqual(12);
+    }
+  });
+
+  it('étend un lac salé en vraie nappe : aucune terre sèche voisine sous sa surface', () => {
+    for (const { size, hydrology } of [...worlds, world('p9')]) {
+      const neighbors = neighborTable(size);
+      let below = 0;
+      for (let index = 0; index < size.width * size.height; index++) {
+        if (hydrology.lake[index] !== LAKE.salt) continue;
+        const surface = hydrology.lakeSurface[index] ?? 0;
+        for (let d = 0; d < 8; d++) {
+          const other = neighbors[index * 8 + d] ?? -1;
+          if (other < 0 || hydrology.ocean[other] || hydrology.lake[other] !== LAKE.none) continue;
+          if ((hydrology.elevation[other] ?? 0) < surface - 0.5) below++;
+        }
+      }
+      expect(below).toBe(0);
+    }
+  });
+
+  it("évapore moins un lac sous un air humide qu'un lac sous un air sec (D2)", () => {
+    const config = worldgen.hydrology;
+    const dry = lakeEvaporation(config, 20, 100);
+    const normal = lakeEvaporation(config, 20, config.lakeEvaporation.humidity.reference);
+    const wet = lakeEvaporation(config, 20, 4000);
+    expect(dry).toBeGreaterThan(normal);
+    expect(wet).toBeLessThan(normal);
+    expect(normal).toBeCloseTo(40 * 30, 6);
+    expect(wet).toBeCloseTo(normal * config.lakeEvaporation.humidity.min, 6);
   });
 
   it('forme des lacs par bilan hydrique : eau douce, lac salé ou salar (D2)', () => {
@@ -263,6 +339,14 @@ describe('hydrologie', () => {
       return largest;
     };
     expect(outlet(wet)).toBeGreaterThan(0);
+    // Sous le col, à (128, 81) : l'exutoire du lac d'eau douce porte bien plus que le
+    // ruissellement de la pente, qui reste tout ce qui passe sous le lac salé.
+    const below = 81 * size.width + 128;
+    expect(wet.hydrology.flow[below] ?? 0).toBeGreaterThan(20 * (dry.hydrology.flow[below] ?? 0));
+    // Le lac salé est un puits : aucune de ses cases ne s'écoule.
+    dry.hydrology.lake.forEach((lake, index) => {
+      if (lake === LAKE.salt) expect(dry.hydrology.receiver[index]).toBe(-1);
+    });
     // La surface d'un lac d'eau douce est son niveau de débordement, au-dessus de son fond.
     const surface = wet.hydrology.lakeSurface[at];
     expect(surface).toBeGreaterThan(wet.hydrology.elevation[at] ?? 0);
@@ -334,7 +418,10 @@ describe('hydrologie', () => {
     for (let start = 0; start < width * size.height; start++) {
       if (tilted.hydrology.river[start] === RIVER.none) continue;
       let cell = start;
-      while (!tilted.hydrology.ocean[cell] && tilted.hydrology.lake[cell] === LAKE.none) {
+      for (let steps = 0; ; steps++) {
+        expect(steps).toBeLessThan(width * size.height);
+        expect(cell).toBeGreaterThanOrEqual(0);
+        if (tilted.hydrology.ocean[cell] || tilted.hydrology.lake[cell] !== LAKE.none) break;
         expect(tilted.hydrology.river[cell]).not.toBe(RIVER.none);
         cell = tilted.hydrology.receiver[cell] ?? -1;
       }

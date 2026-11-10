@@ -21,6 +21,18 @@ export function loadGameData() {
     flora: loadCatalog('data/flora.json', FlorasSchema, flora),
     worldgen: loadSettings('data/worldgen.json', WorldgenSchema, worldgen),
   };
+  const problems = checkContent(data);
+  if (problems.length > 0) throw new DataError(`contenu incohérent\n${problems.join('\n')}`);
+  return data;
+}
+
+export type GameData = ReturnType<typeof loadGameData>;
+
+/**
+ * Cohérence entre les fichiers de contenu, une fois chacun validé : une entrée par
+ * problème, aucune si tout va bien.
+ */
+export function checkContent(data: GameData): string[] {
   // Les fichiers se renvoient les uns aux autres par identifiants : tous doivent exister.
   const problems: string[] = [];
   const check = (file: string, ids: Iterable<string>, catalog: Catalog<{ id: string }>) => {
@@ -43,8 +55,30 @@ export function loadGameData() {
     data.resources.entries.flatMap((resource) => resource.deposit?.biomes ?? []),
     data.biomes,
   );
-  if (problems.length > 0) throw new DataError(`contenu incohérent\n${problems.join('\n')}`);
-  return data;
+  // La flore d'un biome s'accorde à ses densités : des arbres demandent une espèce
+  // d'arbre, des buissons une espèce de buisson, et une espèce listée sa densité.
+  for (const biome of data.biomes.entries) {
+    const kinds = new Set(
+      biome.flora.species.map(
+        (species) => data.flora.entries.at(data.flora.indexOf(species) ?? -1)?.kind,
+      ),
+    );
+    for (const [kind, density] of [
+      ['tree', biome.flora.trees],
+      ['shrub', biome.flora.shrubs],
+    ] as const) {
+      if (density > 0 && !kinds.has(kind))
+        problems.push(`data/biomes.json (flore) : ${biome.id} a des ${kind} sans espèce`);
+      if (density === 0 && kinds.has(kind))
+        problems.push(`data/biomes.json (flore) : ${biome.id} liste des ${kind} sans densité`);
+    }
+  }
+  // Les couches du monde rangent le biome et le gisement (indice + 1) sur un octet.
+  if (data.biomes.entries.length > 256)
+    problems.push('data/biomes.json : 256 biomes au plus (couche biome sur un octet)');
+  if (data.resources.entries.length > 255)
+    problems.push(
+      'data/resources.json : 255 ressources au plus (couche des gisements sur un octet)',
+    );
+  return problems;
 }
-
-export type GameData = ReturnType<typeof loadGameData>;

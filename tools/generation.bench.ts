@@ -40,7 +40,7 @@ describe("génération d'un monde, par taille", () => {
           `de ${format(Math.min(...times))} à ${format(Math.max(...times))} ` +
           `(${String(times.length)} mondes)\n`,
       );
-      if (id === 'large') expect(mean).toBeLessThan(LARGE_TARGET_MS);
+      if (id === 'large') expect(Math.max(...times)).toBeLessThan(LARGE_TARGET_MS);
     });
   }
 });

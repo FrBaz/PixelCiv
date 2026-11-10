@@ -82,29 +82,32 @@ Objectif : porter le pipeline du prototype en TypeScript, sur un monde cylindriq
 | 1.5 | Les 32 biomes naturels (D6), décrits dans `data/biomes.json` et classés selon le mois le plus chaud et le plus froid (D13). Côtes typées (D4) et zones humides (D5). | MON-08, MON-10, MON-12, MON-13 | Plages sur une seule rangée côtière ; glaciers seulement là où le mois le plus chaud reste sous 0 °C. | fait |
 | 1.6 | Ressources et flore : gisements selon l'altitude et le biome, ressources des milieux humides et salés, densités d'arbres et de buissons. | RES-01, RES-03, RES-05 | Répartition lisible en mode de carte « ressources ». | fait |
 | 1.7 | Cuisson des blocs dans un worker : tuiles de 4 px avec variations, débordement du relief, shader (pente, lumière du nord-est, teinte thermique). Texture de données des saisons, une valeur par case (D10). | REN-01, REN-02, REN-09, REN-10 | Rendu fidèle au prototype, sans couture visible. | fait |
-| 1.8 | Affichage : zoom net, niveaux de détail de base, modes de carte « relief », « biomes » et « ressources » avec légende. Neige et glace saisonnières, par shader et palettes saisonnières (D10). | REN-03, REN-08, REN-10, IHM-01 | 60 images/s sur PC et 30 sur téléphone, sur une carte Grand, saisons comprises. | fait |
+| 1.8 | Affichage : zoom net, niveaux de détail de base, modes de carte « relief », « biomes » et « ressources » avec légende. Neige et glace saisonnières, par shader et palettes saisonnières (D10). | REN-03, REN-08, REN-10, IHM-01 | 60 images/s sur PC et 30 sur téléphone, sur une carte Grand, saisons comprises. | à relire : images/s à mesurer sur appareils |
 | 1.9 | Écran de création : graine, taille, paramètres, aperçu, régénération. | CRE-01, MON-02 | Utilisable au doigt sur téléphone. | fait |
-| 1.10 | Tests et bancs d'essai : empreinte des cartes par graine, continuité de la couture, durée de génération par taille. | NF-03, NF-09 | Un monde Grand se génère en moins de 10 s sur PC ; la mesure sur téléphone est consignée. | fait |
+| 1.10 | Tests et bancs d'essai : empreinte des cartes par graine, continuité de la couture, durée de génération par taille. | NF-03, NF-09 | Un monde Grand se génère en moins de 10 s sur PC ; la mesure sur téléphone est consignée. | à relire : mesure sur un vrai téléphone |
 
 ### Notes
 
-Les dix tâches sont faites, chacune dans son commit (« 1.1 : … » à « 1.10 : … »), plus un commit qui branche le monde généré dans la simulation (protocole 2, sauvegardes 3). Décisions : ADR 0009 (génération) et ADR 0010 (rendu).
+Les dix tâches sont réalisées, chacune dans son commit (« 1.1 : … » à « 1.10 : … »), plus un commit qui branche le monde généré dans la simulation (protocole 2, sauvegardes 3). Décisions : ADR 0009 (génération) et ADR 0010 (rendu). Deux critères demandent des appareils réels, hors de portée du conteneur : les images par seconde de 1.8, et la durée de génération sur téléphone de 1.10 ; ces deux tâches restent « à relire » jusqu'à ces mesures.
 
-**Mesures sur cinq mondes Grand**, aux paramètres par défaut (graines `pixelciv`, `alpha`, `beta`, `gamma`, `delta`) :
+**Relecture de la phase 1.** Une relecture contradictoire a relevé 64 remarques ; 53 ont été confirmées par une seconde vérification, et toutes sont corrigées dans les commits « relecture : … » et « rendu : … ». La génération en sort changée : générateur version 2 (ADR 0009, révisé). Principaux changements : cols portés par les chaînes, correspondance de D11 dans les données, pluie de relief bornée, saisons communes (`src/core/seasons.ts`, saison sèche des tropiques comprise), lacs salés en vraie nappe, bassins fermés sans ligne droite, évaporation selon l'humidité et le dégel, zones humides de même part à toutes les tailles, ressources des milieux humides et salés visibles (RES-05).
+
+**Mesures sur cinq mondes Grand**, générateur version 2, aux paramètres par défaut (graines `pixelciv`, `alpha`, `beta`, `gamma`, `delta`) :
 
 | Mesure | Cible | Résultat |
 |---|---|---|
-| Part des terres | 35 % (paramètre) | 35,6 à 35,9 % |
+| Part des terres | 35 % (paramètre) | 35,4 à 35,9 % |
 | Terres au-dessus de 1 800 m (moyenne montagne et plus) | 3 à 6 % (MON-14) | 4,4 à 4,5 % |
-| Lacs (doux, salés, salars) | — | 2,5 à 5,3 % des terres |
-| Glaciers | là où le mois le plus chaud reste sous 0 °C | 11,6 à 17,4 % des terres, surtout aux pôles |
-| Déserts | subtropicaux et d'abri | 2,8 à 9,6 % des terres |
-| Zones humides | — | 4,9 à 7,8 % des terres |
-| Plages | une seule rangée côtière (D4) | 1,8 à 2,7 % des terres |
-| Température annuelle, toutes cases de la bande | ≈ 27 °C à l'équateur, ≈ −25 °C aux pôles | 25,0 à 26,8 °C ; −23,6 à −24,5 °C (montagnes comprises) |
-| Rivières | — | 4 000 à 5 000 cases de ruisseau, 1 900 à 2 300 de rivière, 500 à 800 de fleuve |
+| Lacs (doux, salés, salars) | — | 0,9 à 4,2 % des terres |
+| Glaciers | là où le mois le plus chaud reste sous 0 °C | 11,1 à 17,7 % des terres, surtout aux pôles |
+| Déserts | subtropicaux et d'abri | 2,1 à 5,1 % des terres |
+| Zones humides | — | 5,2 à 8,3 % des terres, dont 4,2 à 7,2 % à l'intérieur des terres (marais, tourbières, marécages) |
+| Plages | une seule rangée côtière (D4) | 2,1 à 3,4 % des terres |
+| Température annuelle, toutes cases de la bande | ≈ 27 °C à l'équateur, ≈ −25 °C aux pôles | 25,0 à 26,8 °C ; −23,6 à −24,4 °C (montagnes comprises) |
+| Rivières | — | 4 100 à 4 500 cases de ruisseau, 2 000 à 2 400 de rivière, 480 à 790 de fleuve |
+| Pluie annuelle la plus forte | — | 13,6 à 14,9 m, contre 53 à 62 m avant la borne de la pluie de relief |
 
-**Durées de génération** (`npm run bench`, Node 22, conteneur de développement) : Petit 0,70 s, Moyen 1,32 s, Grand 2,22 s, Immense 8,89 s. Dans Chromium, dans le worker : Moyen 1,7 s, Grand 2,7 s ; la carte Grand est entièrement cuite environ 3 s plus tard. NF-03 (Grand en moins de 10 s sur PC) est tenu.
+**Durées de génération** (`npm run bench`, Node 22, conteneur de développement, générateur version 2) : Petit 0,72 s, Moyen 1,48 s, Grand 2,37 s (2,47 s au plus), Immense 9,47 s. Dans Chromium, dans le worker : Moyen 1,7 s, Grand 2,7 s ; la carte Grand est entièrement cuite environ 3 s plus tard. NF-03 (Grand en moins de 10 s sur PC) est tenu.
 
 **Téléphone, en émulation seulement.** Chromium ne ralentit pas les workers (« Operation is only supported for pages, not workers ») : la génération a été mesurée sur le fil principal d'une page au processeur ralenti 4 fois, le ralentissement que Lighthouse prête à un téléphone de milieu de gamme. Petit 3,1 s, Moyen 6,5 s, Grand 10,6 s. D'où le Moyen par défaut au doigt (MON-02 laisse ce défaut à calibrer), et l'Immense réservé au PC. **À confirmer sur un vrai téléphone** : après la création d'un monde, le panneau de débogage donne la durée de la génération.
 
@@ -118,7 +121,7 @@ Les dix tâches sont faites, chacune dans son commit (« 1.1 : … » à « 1.10
 - L'« alias du prototype », faute du notebook, est lu de trois façons, toutes couvertes (ADR 0009).
 - Le fond s'abaisse un peu vers les pôles (mers polaires) ; une élévation polaire faisait des lacs de barrage.
 
-**Contrôles de la tâche 1.10.** Empreintes de référence de quatre mondes, couche par couche (`src/worldgen/reference.test.ts`) : changer la génération les change, et oblige à augmenter `GENERATOR_VERSION`. Couture : toutes les couches, les biomes et les rivières passent la couture comme une paire de colonnes quelconque. Auto-test dans le navigateur : le worker génère un monde de 64 × 32 cases à la poignée de main et compare son empreinte ; le panneau de débogage dit « conforme aux références » dans Chromium.
+**Contrôles de la tâche 1.10.** Empreintes de référence de cinq mondes, couche par couche (`src/worldgen/reference.test.ts`), dont un Moyen, où les étapes qui dépendent de la taille prennent les valeurs d'une carte Grand : changer la génération les change. On augmente alors `GENERATOR_VERSION`, que le test compare à la version des empreintes ; rien n'y oblige vraiment, sinon cette comparaison. Couture : les dix couches (catégories comprises : gisements et directions d'écoulement), les biomes et les rivières passent la couture comme une paire de colonnes quelconque. Le banc d'essai échoue si le plus lent des mondes Grand dépasse 10 s. Auto-test dans le navigateur : le worker génère un monde de 64 × 32 cases à la poignée de main et compare son empreinte ; le panneau de débogage dit « conforme aux références » dans Chromium.
 
 **Interface.** L'inspection d'une case se fait d'un clic, d'un appui bref ou d'un appui long (IHM-07). Sans sauvegarde automatique, le jeu s'ouvre sur l'écran de création ; on peut y charger la sauvegarde manuelle ou importer un fichier. L'adresse peut encore nommer un monde pour le débogage (`?seed=abc&size=large`), qui commence alors directement.
 

@@ -89,6 +89,7 @@
     "kind": "mineral",
     "name": "resource.salt",
     "color": "#f4f1e4",
+    "overlay": true,
     "deposit": {
       "abundance": 0.08,
       "altitudes": [],
@@ -137,19 +138,22 @@
     "id": "reeds",
     "kind": "living",
     "name": "resource.reeds",
-    "color": "#b5b867"
+    "color": "#b5b867",
+    "overlay": true
   },
   {
     "id": "peat",
     "kind": "living",
     "name": "resource.peat",
-    "color": "#5a4632"
+    "color": "#5a4632",
+    "overlay": true
   },
   {
     "id": "bog-iron",
     "kind": "living",
     "name": "resource.bog-iron",
-    "color": "#8a6a4a"
+    "color": "#8a6a4a",
+    "overlay": true
   },
   {
     "id": "waterfowl",

@@ -39,9 +39,25 @@ describe("inspection d'une case", () => {
       precipitation: 410,
       river: 0,
       deposit: undefined,
+      resources: ['resource.game'],
       trees: 20,
       shrubs: 100,
     });
+  });
+
+  it('nomme les ressources du milieu, et la pluie du mois (SAI-02)', () => {
+    const layers = world();
+    layers.biome[0] = data.biomes.indexOf('bog') ?? 0;
+    expect(describeCell(layers, size, 0, 0, 0.5, data)?.resources).toEqual([
+      'resource.peat',
+      'resource.bog-iron',
+    ]);
+    // Sur douze mois, la pluie des mois redonne la pluie annuelle.
+    let year = 0;
+    for (let month = 0; month < 12; month++) {
+      year += describeCell(layers, size, 1, 1, month + 0.5, data)?.monthlyPrecipitation ?? 0;
+    }
+    expect(year).toBeCloseTo(410, 6);
   });
 
   it('suit les saisons de chaque hémisphère : la mi-janvier est froide au nord', () => {

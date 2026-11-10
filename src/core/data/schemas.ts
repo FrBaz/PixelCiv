@@ -290,6 +290,11 @@ export const ResourceSchema = z
     /** Couleur du mode de carte « ressources ». */
     color: ColorSchema,
     deposit: DepositSchema.optional(),
+    /**
+     * Ressource du milieu montrée en mode « ressources » sur les biomes qui la portent
+     * (data/biomes.json) : celles des milieux humides et salés (RES-05).
+     */
+    overlay: z.boolean().optional(),
   })
   .strict()
   .refine((resource) => (resource.kind === 'mineral') === (resource.deposit !== undefined), {

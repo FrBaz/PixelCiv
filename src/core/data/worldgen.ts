@@ -94,6 +94,28 @@ export const WorldgenSchema = z
         rivers: ParameterSchema,
       })
       .strict(),
+    /**
+     * D11, D12 : correspondance entre la hauteur générée et l'altitude. Sur terre,
+     * altitude = maxAltitude × hn^altitudeExponent ; en mer, profondeur = maxDepth ×
+     * dn^depthExponent. La profondeur médiane des mers vaut medianDepth, et la part des
+     * terres au-dessus de la moyenne montagne (D11) mountainShare.base + perRelief × relief.
+     */
+    relief: z
+      .object({
+        maxAltitude: z.number().min(1000).max(9000),
+        maxDepth: z.number().min(1000).max(11000),
+        altitudeExponent: Positive,
+        depthExponent: Positive,
+        medianDepth: Positive,
+        mountainShare: z.object({ base: Share, perRelief: Share }).strict(),
+      })
+      .strict()
+      .refine((relief) => relief.medianDepth < relief.maxDepth, {
+        message: 'la profondeur médiane reste sous la profondeur maximale',
+      })
+      .refine((relief) => relief.mountainShare.base + relief.mountainShare.perRelief < 1, {
+        message: 'la part des montagnes reste sous 1',
+      }),
     /** D1 : part minimale de la carte d'une masse d'eau, pour compter comme mer. */
     ocean: z.object({ minShare: Share }).strict(),
     /** D8, D13 : températures, gradient, pluies. */
@@ -114,7 +136,24 @@ export const WorldgenSchema = z
         infill: z.number().min(0).max(0.99),
         saltFlatRatio: Share,
         saltFlatShare: Share,
-        lakeEvaporation: z.object({ perDegree: Positive, minimum: z.number().min(0) }).strict(),
+        lakeEvaporation: z
+          .object({
+            perDegree: Positive,
+            minimum: z.number().min(0),
+            // Facteur d'humidité (D2) : l'air humide évapore moins.
+            humidity: z
+              .object({
+                reference: Positive,
+                strength: z.number().min(0),
+                min: Positive,
+                max: Positive,
+              })
+              .strict()
+              .refine((range) => range.min <= 1 && range.max >= 1, {
+                message: "le facteur d'humidité encadre 1",
+              }),
+          })
+          .strict(),
         riverThreshold: Positive,
         riverClasses: z
           .tuple([Positive, Positive])

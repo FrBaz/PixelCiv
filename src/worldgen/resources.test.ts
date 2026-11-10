@@ -70,32 +70,43 @@ describe('ressources et flore', () => {
   });
 
   it('regroupe les gisements en provinces', () => {
-    // Un gisement a bien plus souvent un gisement du même minerai dans son voisinage que
-    // si les gisements étaient semés au hasard sur les cases admises.
+    // Un gisement de cuivre a bien plus souvent un gisement de cuivre dans son voisinage
+    // que si les gisements étaient semés au hasard sur les cases qui admettent le cuivre.
     const layers = worlds[1] ?? world('alpha');
     const { width, height } = SIZE;
-    const copper = (resources.indexOf('copper') ?? 0) + 1;
+    const copper = resources.entries.find((resource) => resource.id === 'copper');
+    const code = (resources.indexOf('copper') ?? 0) + 1;
+    const families = new Set<string>(copper?.deposit?.altitudes ?? []);
+    const admits = (cell: number) => {
+      if (biomes.entries.at(layers.biome[cell] ?? 0)?.family === 'water') return false;
+      const level = altitudeLevels.entries.at(
+        altitudeLevelIndex(altitudeLevels.entries, layers.elevation[cell] ?? 0),
+      );
+      return families.has(level?.family ?? '');
+    };
     let deposits = 0;
+    let admitted = 0;
     let neighbors = 0;
+    let admittedNeighbors = 0;
     for (let y = 3; y < height - 3; y++) {
       for (let x = 0; x < width; x++) {
-        if (layers.deposit[y * width + x] !== copper) continue;
+        if (admits(y * width + x)) admitted++;
+        if (layers.deposit[y * width + x] !== code) continue;
         deposits++;
         for (let dy = -3; dy <= 3; dy++) {
           for (let dx = -3; dx <= 3; dx++) {
-            if (
-              (dx !== 0 || dy !== 0) &&
-              layers.deposit[(y + dy) * width + ((x + dx + width) % width)] === copper
-            ) {
-              neighbors++;
-            }
+            if (dx === 0 && dy === 0) continue;
+            const other = (y + dy) * width + ((x + dx + width) % width);
+            if (layers.deposit[other] === code) neighbors++;
+            if (admits(other)) admittedNeighbors++;
           }
         }
       }
     }
-    const density = deposits / count;
     expect(deposits).toBeGreaterThan(10);
-    expect(neighbors / deposits).toBeGreaterThan(48 * density * 3);
+    // Au hasard, chaque voisin admis serait un gisement avec la probabilité deposits / admitted.
+    const scattered = (admittedNeighbors * deposits) / admitted;
+    expect(neighbors).toBeGreaterThan(2 * scattered);
   });
 
   it('tire le sel des salars, des marais littoraux et des déserts (RES-05)', () => {
@@ -142,6 +153,10 @@ describe('ressources et flore', () => {
       expect(mean('temperate-forest')).toBeGreaterThan(150);
       expect(mean('glacier')).toBe(0);
       expect(mean('deep-ocean')).toBe(0);
+      if (sums.has('desert')) expect(mean('desert')).toBeLessThan(0.05 * 255);
     }
+    expect(worlds.some((layers) => layers.biome.includes(biomes.indexOf('desert') ?? -1))).toBe(
+      true,
+    );
   });
 });

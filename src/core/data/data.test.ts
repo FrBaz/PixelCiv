@@ -3,7 +3,7 @@ import altitudeLevelsJson from '../../../data/altitude-levels.json';
 import biomesJson from '../../../data/biomes.json';
 import fr from '../../i18n/fr.json';
 import { DataError, loadCatalog } from './catalog';
-import { loadGameData } from './index';
+import { checkContent, loadGameData, type GameData } from './index';
 import { AltitudeLevelsSchema, BiomesSchema } from './schemas';
 
 /** Les 32 biomes naturels de la séance C1 (D6), par famille, tels que la séance les nomme. */
@@ -104,5 +104,78 @@ describe('data/altitude-levels.json', () => {
         levels.map((level) => (level.id === 'shelf' ? { ...level, navigation: undefined } : level)),
       ),
     ).toThrow(/naviguent/);
+  });
+});
+
+describe('noms traduits', () => {
+  const data = loadGameData();
+
+  it('a un nom traduit pour chaque ressource et chaque espèce de la flore', () => {
+    // Ces noms s'affichent par tKey : leur clé ne se vérifie pas à la compilation.
+    const names = [
+      ...data.resources.entries.map((resource) => resource.name),
+      ...data.flora.entries.map((species) => species.name),
+    ];
+    expect(names.filter((name) => typeof messages[name] !== 'string')).toEqual([]);
+  });
+});
+
+describe('cohérence du contenu', () => {
+  const data = loadGameData();
+  /** Les données livrées, dont un biome est remplacé. */
+  const withBiome = (
+    id: string,
+    change: (biome: GameData['biomes']['entries'][number]) => object,
+  ) =>
+    ({
+      ...data,
+      biomes: {
+        ...data.biomes,
+        entries: data.biomes.entries.map((biome) => (biome.id === id ? change(biome) : biome)),
+        indexOf: (key: string) => data.biomes.indexOf(key),
+      },
+    }) as GameData;
+
+  it('ne trouve rien à redire aux données livrées', () => {
+    expect(checkContent(data)).toEqual([]);
+  });
+
+  it("relève une flore qui contredit les densités d'un biome", () => {
+    const treeless = withBiome('desert', (biome) => ({
+      ...biome,
+      flora: { ...biome.flora, trees: 0.4 },
+    }));
+    expect(checkContent(treeless)).toEqual([
+      'data/biomes.json (flore) : desert a des tree sans espèce',
+    ]);
+    const unlisted = withBiome('glacier', (biome) => ({
+      ...biome,
+      flora: { ...biome.flora, species: ['conifer'] },
+    }));
+    expect(checkContent(unlisted)).toEqual([
+      'data/biomes.json (flore) : glacier liste des tree sans densité',
+    ]);
+  });
+
+  it('relève un identifiant inconnu', () => {
+    const unknown = withBiome('marsh', (biome) => ({ ...biome, resources: ['unobtainium'] }));
+    expect(checkContent(unknown)).toEqual([
+      'data/biomes.json (ressources) : inconnus : unobtainium',
+    ]);
+  });
+
+  it('borne les catalogues aux octets des couches du monde', () => {
+    const many = {
+      ...data,
+      resources: {
+        ...data.resources,
+        entries: Array.from({ length: 256 }, (_, index) => ({
+          ...data.resources.entries[index % data.resources.entries.length],
+        })),
+      },
+    } as GameData;
+    expect(checkContent(many)).toContain(
+      'data/resources.json : 255 ressources au plus (couche des gisements sur un octet)',
+    );
   });
 });

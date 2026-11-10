@@ -54,12 +54,15 @@ describe('bruit simplex 3D', () => {
   });
 
   it('est continu : aucun saut entre deux points voisins, bords des mailles compris', () => {
+    // Le noyau d'origine de Gustavson (rayon² de 0,6) laisse aux bords des mailles des
+    // sauts de quelques millièmes. Le pas, très fin, les sépare de la pente du bruit.
     const noise = simplex('continu');
     const random = new RandomStream(streamSeed('continu', 'directions'));
     // Pente maximale du bruit : quelques unités par unité de distance.
     const slope = 12;
-    const step = 1e-3;
-    for (let line = 0; line < 50; line++) {
+    const step = 2e-5;
+    let steepest = 0;
+    for (let line = 0; line < 20; line++) {
       const origin = [random.nextFloat() * 50, random.nextFloat() * 50, random.nextFloat() * 50];
       const direction = [
         random.nextFloat() - 0.5,
@@ -70,13 +73,14 @@ describe('bruit simplex 3D', () => {
       const [dx, dy, dz] = direction.map((value) => value / norm) as [number, number, number];
       const [ox, oy, oz] = origin as [number, number, number];
       let previous = noise.noise(ox, oy, oz);
-      // 4 000 pas de 0,001 : la ligne traverse des dizaines de mailles.
-      for (let index = 1; index <= 4000; index++) {
+      // 100 000 pas : la ligne traverse des dizaines de mailles.
+      for (let index = 1; index <= 100_000; index++) {
         const t = index * step;
         const value = noise.noise(ox + dx * t, oy + dy * t, oz + dz * t);
-        expect(Math.abs(value - previous)).toBeLessThan(slope * step);
+        steepest = Math.max(steepest, Math.abs(value - previous) / step);
         previous = value;
       }
     }
+    expect(steepest).toBeLessThan(slope);
   });
 });
