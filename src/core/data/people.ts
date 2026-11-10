@@ -54,7 +54,10 @@ export const GeneticsSchema = z
     traits: uniqueIds(TraitSchema).max(MAX_TRAITS),
     mutation: z
       .object({
-        /** Probabilité, par locus et par naissance, qu'un allèle transmis en devienne un autre. */
+        /**
+         * Probabilité, par locus et par naissance, qu'un allèle transmis soit remplacé par un
+         * allèle tiré au hasard parmi ceux du locus, parfois le même.
+         */
         allele: ShareSchema,
         /** Probabilité, par trait et par naissance, d'un écart tiré au sort, et sa largeur. */
         trait: ShareSchema,
@@ -108,6 +111,13 @@ const MortalitySchema = z
     infant: z.object({ level: z.number().min(0), decay: z.number().positive() }).strict(),
     background: z.number().min(0),
     senescence: z.object({ level: z.number().min(0), growth: z.number().positive() }).strict(),
+    /** Part de la mortalité de fond due aux maladies ; le reste, aux accidents. */
+    diseaseShare: ShareSchema,
+    /**
+     * Nourrisson orphelin de mère : son risque d'enfance est multiplié par `factor` tant
+     * qu'il a moins de `months` mois, l'âge où il ne dépend plus d'elle.
+     */
+    orphan: z.object({ factor: z.number().min(1), months: z.number().int().min(0) }).strict(),
   })
   .strict();
 
@@ -117,6 +127,13 @@ const FertilitySchema = z
     from: z.number().positive(),
     peak: z.number().positive(),
     to: z.number().positive(),
+    /**
+     * Forme de la fécondité relative : `onset` au premier âge fécond, puis une croissance
+     * jusqu'à 1 au sommet ; elle reste entière sur la part `plateau` de la période qui suit
+     * le sommet, et décline enfin jusqu'à 0 à la fin de la période féconde.
+     */
+    onset: ShareSchema,
+    plateau: ShareSchema,
     /** Âge au-delà duquel un homme n'a plus d'enfant. */
     maleTo: z.number().positive(),
     /** Probabilité mensuelle de conception au sommet, pour une femme en couple, nourrie. */
@@ -150,8 +167,11 @@ export const SpeciesSchema = z
     /**
      * Rigueurs (SAI-03), en risque annuel de mort : un froid de 20 °C sous zéro, une
      * chaleur de 10 °C au-delà de 30 °C, une faim complète. Le froid et la chaleur frappent
-     * les plus fragiles (avant `frail[0]` ans, après `frail[1]`) ; les autres n'en
-     * reçoivent que `adults`. L'adaptation de la sous-espèce tempère le froid et la chaleur.
+     * les plus fragiles, les enfants (avant `frail[0]` ans) et les vieux (dès `frail[1]`
+     * ans) ; les autres n'en reçoivent que `adults`. L'adaptation de la sous-espèce tempère
+     * le froid et la chaleur ; la faim ne dépend que de la nutrition. C'est aussi dès
+     * `frail[1]` ans que la vieillesse tue : avant, les morts de la sénescence comptent
+     * parmi les maladies.
      */
     hardship: z
       .object({
@@ -171,20 +191,52 @@ export const SpeciesSchema = z
   .strict()
   .refine((species) => species.maturity < species.longevity, {
     message: "l'âge adulte précède la longévité",
-  });
+  })
+  .refine(
+    (species) => {
+      const [youngest, eldest] = spawnAdultAges(species);
+      return youngest <= eldest;
+    },
+    { message: "l'âge du couple précède la fin de la fécondité et la dernière année de vie" },
+  );
 
 export type Species = z.infer<typeof SpeciesSchema>;
 export type Subspecies = z.infer<typeof SubspeciesSchema>;
 export const SpeciesListSchema = uniqueIds(SpeciesSchema).min(1).max(255);
 
 /**
+ * Âges, en mois entiers, des adultes d'un groupe qui apparaît (CRE-03) : de l'âge du
+ * couple à la fin de la fécondité féminine, et au plus tard un an avant la longévité. Le
+ * schéma garantit que l'intervalle n'est pas vide.
+ */
+export function spawnAdultAges(species: {
+  readonly couple: { readonly minAge: number };
+  readonly fertility: { readonly to: number };
+  readonly longevity: number;
+}): readonly [youngest: number, eldest: number] {
+  return [
+    Math.ceil(species.couple.minAge * 12),
+    Math.floor(Math.min(species.fertility.to, species.longevity - 1) * 12),
+  ];
+}
+
+/**
  * Cultures embryonnaires (C2, D4) : fréquence de chaque règle de nommage (IND-08) parmi
- * les cultures qui naissent avec un groupe.
+ * les cultures qui naissent avec un groupe. Le nom de famille vient du père, de la mère,
+ * des deux (celui du père, puis celui de la mère), d'aucun, ou bien chacun reçoit un nom
+ * obtenu, un surnom qui lui est propre (`earned`) ; le métier et le lieu attendent la
+ * phase 3 (C2, D6).
  */
 export const CulturesSchema = z
   .object({
     naming: z
-      .object({ father: ShareSchema, mother: ShareSchema, both: ShareSchema, none: ShareSchema })
+      .object({
+        father: ShareSchema,
+        mother: ShareSchema,
+        both: ShareSchema,
+        none: ShareSchema,
+        earned: ShareSchema,
+      })
       .strict()
       .refine((weights) => Object.values(weights).some((weight) => weight > 0), {
         message: 'une règle de nommage au moins',
@@ -211,6 +263,12 @@ export const NomadsSchema = z
      * de sa culture, faute d'en trouver dans le sien : les bandes échangent leurs conjoints.
      */
     marriage: z.number().min(0),
+    /**
+     * Probabilité mensuelle qu'un célibataire qui ne trouve de conjoint ni dans son groupe
+     * ni dans les groupes voisins de sa culture en trouve un dans un groupe voisin d'une
+     * autre culture : le métissage (ESP-04).
+     */
+    intermarriage: ShareSchema,
     /** Un groupe de moins de membres rejoint un groupe voisin, à la distance du mariage. */
     merge: z.number().int().min(0),
     /** Rayon, en cases, où le groupe cherche sa nourriture, et part des stocks qu'il prend. */

@@ -4,6 +4,9 @@ import { RandomStream, streamSeed } from '../core/rng';
 import { GENERATOR_VERSION } from '../worldgen/generate';
 import { expressed, pureAncestry, randomGenome } from './genetics';
 import { FEMALE, GENOME_WORDS, MALE, NONE, Population, type NewPerson } from './population';
+import { familyName, givenName } from '../gen/names';
+import { personName, phonologyOf } from './records';
+import { cultureOf, languageOf } from './society';
 import { MIGRATIONS, restoreState, saveState } from './save';
 import type { SimState } from './state';
 import { fingerprint } from './step';
@@ -27,6 +30,7 @@ function person(overrides: Partial<NewPerson> = {}): NewPerson {
     culture: 1,
     givenName: 1,
     familyName: 1,
+    familyLanguage: 1,
     ...overrides,
   };
 }
@@ -157,6 +161,52 @@ describe('population (tâche 2.1)', () => {
     expect(fingerprint(restored)).toBe(fingerprint(state));
   });
 
+  it('relit une sauvegarde de la version 4 sans changer les noms affichés', async () => {
+    const state = populated();
+    const { people, society } = state;
+    // Une deuxième langue, et une culture sans nom de famille.
+    society.languages.push({ id: 2, seed: 4321 });
+    society.cultures.push({ id: 2, language: 2, naming: 'none', founded: 0 });
+    // Un enfant de la culture 1 dont le nom de famille est né dans la langue 2, et un
+    // fondateur de la culture 2 au code de nom de famille que rien ne montrait.
+    const child = people.add(person({ group: 1, familyName: 9, familyLanguage: 2, birth: -5 }));
+    const founder = people.add(person({ group: 1, culture: 2, familyName: 8, familyLanguage: 2 }));
+    people.remove(people.slotOf(2) ?? -1, 0, 'accident');
+    const data = save(state);
+    // La version 4 n'avait pas la langue des noms de famille : chacun s'écrivait dans celle
+    // de sa culture, sauf dans une culture sans nom de famille.
+    const arrays = Object.fromEntries(
+      Object.entries(data.arrays).filter(([name]) => !name.endsWith('FamilyLanguage')),
+    );
+    const shown = (sex: number, given: number, code: number, id: number) => {
+      const culture = cultureOf(society, id);
+      const words = phonologyOf(languageOf(society, culture?.language ?? 0)?.seed ?? 0);
+      const first = givenName(words, sex, given);
+      return culture?.naming === 'none' || code === 0
+        ? first
+        : `${first} ${familyName(words, code)}`;
+    };
+    const old = encodeSave({ meta: data.meta, json: data.json, arrays }, 4);
+    const restored = restoreState(await readSave(old, MIGRATIONS), testData);
+    const name = (id: number) => personName(restored.people, restored.society, id);
+    expect(name(people.get('id', child))).toBe(shown(FEMALE, 1, 9, 1));
+    expect(name(people.get('id', founder))).toBe(shown(FEMALE, 1, 8, 2));
+    expect(name(2)).toBe(shown(MALE, 1, 1, 1));
+    expect(name(1)).toBe(shown(FEMALE, 1, 1, 1));
+    // Chacun reçoit la langue de sa culture ; le code caché s'efface.
+    const living = restored.people.slotOf(people.get('id', child)) ?? -1;
+    expect(restored.people.get('familyLanguage', living)).toBe(1);
+    const hidden = restored.people.slotOf(people.get('id', founder)) ?? -1;
+    expect(restored.people.get('familyName', hidden)).toBe(0);
+    expect(restored.people.archive.columns.familyLanguage[0]).toBe(1);
+    // Et la partie relue se sauvegarde et se relit à l'identique.
+    const again = restoreState(
+      await readSave(await writeSave(save(restored)), MIGRATIONS),
+      testData,
+    );
+    expect(fingerprint(again)).toBe(fingerprint(restored));
+  });
+
   it('refuse une population forgée : index, emplacements, groupes, espèces', () => {
     const data = save(populated());
     const corrupt = (forged: SaveData) => () => restoreState(forged, testData);
@@ -174,6 +224,13 @@ describe('population (tâche 2.1)', () => {
     };
     expect(corrupt(unknownSpecies)).toThrow(/espèce inconnue/);
     expect(corrupt(withArray(data, 'peopleSex', new Uint8Array(1)))).toThrow(/mauvaise taille/);
+    // Un nom de famille dans une langue qui n'existe pas.
+    const languages = (data.arrays.peopleFamilyLanguage as Uint16Array).slice();
+    languages[0] = 7;
+    expect(corrupt(withArray(data, 'peopleFamilyLanguage', languages))).toThrow(/incohérent/);
+    const archived = (data.arrays.archiveFamilyLanguage as Uint16Array).slice();
+    archived[0] = 7;
+    expect(corrupt(withArray(data, 'archiveFamilyLanguage', archived))).toThrow(/incohérent/);
   });
 
   it('réécrit les génomes quand data/genetics.json change l’ordre de ses allèles', () => {

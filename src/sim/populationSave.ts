@@ -356,6 +356,7 @@ export function restorePeople(
     if (
       (group !== NONE && !groupMap.has(group)) ||
       people.get('culture', slot) > cultures.length ||
+      people.get('familyLanguage', slot) > languages.length ||
       !known(people.get('mother', slot)) ||
       !known(people.get('father', slot)) ||
       !known(people.get('partner', slot)) ||
@@ -382,7 +383,11 @@ export function restorePeople(
     seen[id] = 1;
     const kind = species.at(archive.columns.species[row] ?? 0);
     const cause = archive.columns.cause[row] ?? 0;
-    if (kind === undefined || cause >= DEATH_CAUSES.length) {
+    if (
+      kind === undefined ||
+      cause >= DEATH_CAUSES.length ||
+      (archive.columns.familyLanguage[row] ?? 0) > languages.length
+    ) {
       throw new SaveError('corrupt', 'mort incohérent');
     }
     archive.columns.species[row] = kind;

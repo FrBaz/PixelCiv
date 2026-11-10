@@ -3,14 +3,46 @@
  * généré une fois par fichier de test, et de quoi y commencer des parties. Le jeu
  * n'importe pas ce module.
  */
-import { loadGameData } from '../core/data';
-import { copyLayers, type WorldLayers } from '../core/world';
+import { loadGameData, type Species } from '../core/data';
+import { loadCatalog } from '../core/data/catalog';
+import { SpeciesListSchema } from '../core/data/people';
+import { copyLayers, emptyLayers, type WorldLayers } from '../core/world';
 import { defaultWorldParams, type WorldParams } from '../core/worldParams';
 import { generateWorld } from '../worldgen/generate';
 import { WORLD_SIZES } from '../core/world';
 import { createState, type SimState } from './state';
+import type { SimContent } from './step';
 
 export const testData = loadGameData();
+
+/** Les humains des données, l'espèce des tests. */
+export const testHuman: Species = (() => {
+  const human = testData.species.entries.at(0);
+  if (human === undefined) throw new Error('pas d’humains dans les données');
+  return human;
+})();
+
+/**
+ * Le contenu des tests, avec des humains modifiés par `change` ; la variante passe par le
+ * schéma de data/species.json, comme une espèce des données.
+ */
+export function withHuman(change: (human: Species) => Species): SimContent {
+  return {
+    ...testData,
+    species: loadCatalog('variante de data/species.json', SpeciesListSchema, [change(testHuman)]),
+  };
+}
+
+/**
+ * Nouvel état sur un monde Petit sans génération, tout de steppe à 120 m et à 0 °C : ni
+ * froid, ni chaleur, ni relief, de quoi poser des familles à la main ou mesurer vite.
+ */
+export function flatState(seed = 'plat'): SimState {
+  const world = emptyLayers(WORLD_SIZES.small);
+  world.biome.fill(testData.biomes.indexOf('steppe') ?? 0);
+  world.elevation.fill(120);
+  return createState(testParams(seed), world, testData);
+}
 
 const worlds = new Map<string, WorldLayers>();
 

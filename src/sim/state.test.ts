@@ -91,8 +91,9 @@ describe('pas', () => {
     for (let tick = 1; tick < 12; tick++) step(state, [], testData);
     expect(state.tick).toBe(12);
     // Empreinte de la phase 2 : l'état compte désormais la population, vide ici, et les
-    // flux des systèmes, qui tournent chaque mois.
-    expect(fingerprint(state)).toBe('a3d12685');
+    // flux des systèmes, qui tournent chaque mois. Relecture de la phase 2 : une colonne de
+    // plus, la langue du nom de famille.
+    expect(fingerprint(state)).toBe('d7269069');
   });
 
   it("redonnent l'empreinte de référence de vingt ans d'une population (ADR 0003)", () => {
@@ -111,6 +112,8 @@ describe('pas', () => {
     );
     for (let tick = 1; tick < 240; tick++) step(state, [], testData);
     expect(state.people.count).toBeGreaterThan(40);
-    expect(fingerprint(state)).toBe('fe229c9e');
+    // Relecture de la phase 2 : familles des groupes apparus, culture et nom à la
+    // naissance (C2, D2), premier mois de vie, proches parents, mariages entre cultures.
+    expect(fingerprint(state)).toBe('cbf85b43');
   });
 });

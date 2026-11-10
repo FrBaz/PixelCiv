@@ -117,8 +117,9 @@ describe('sauvegarde de la simulation', () => {
   });
 
   it('refuse les sauvegardes de la phase 0, sans monde à reprendre', async () => {
-    // Seule la version 3, celle de la phase 1, se migre : elle reçoit une population vide.
-    expect(Object.keys(MIGRATIONS)).toEqual(['3']);
+    // Seules les versions 3, celle de la phase 1, qui reçoit une population vide, et 4,
+    // celle de la phase 2 avant sa relecture, se migrent.
+    expect(Object.keys(MIGRATIONS)).toEqual(['3', '4']);
     for (let version = 1; version < 3; version++) {
       const old = encodeSave(save(played(1)), version);
       await expect(readSave(old, MIGRATIONS)).rejects.toMatchObject({ code: 'obsolete' });

@@ -82,7 +82,7 @@ export function step(
   for (const group of society.groups.values()) {
     feedGroup(group, members.get(group.id) ?? [], people, food, world, size, tick, content);
   }
-  lifeCycle(state, content);
+  lifeCycle(state, content, members);
   // Les fusions se décident toutes sur les membres d'après le cycle de vie ; les listes
   // se mettent à jour ensuite, dans l'ordre des emplacements, comme si on les recomptait.
   members = groupMembers(people);

@@ -3,6 +3,7 @@
   "split": 30,
   "range": 20,
   "marriage": 30,
+  "intermarriage": 0.25,
   "merge": 5,
   "forage": {
     "radius": 4,

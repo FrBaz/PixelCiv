@@ -8,8 +8,14 @@
  * et ses noms (src/gen/names.ts), à l'identique dans le worker et sur le fil principal.
  */
 
-/** Règle de nommage d'une culture (IND-08) : d'où l'enfant tient son nom de famille. */
-export const NAMING_RULES = ['father', 'mother', 'both', 'none'] as const;
+/**
+ * Règle de nommage d'une culture (IND-08 ; C2, D6) : d'où l'enfant tient son nom de
+ * famille. Il hérite de celui de son père, de sa mère, ou des deux (celui du père, puis,
+ * à l'affichage, celui de la mère) ; ou il n'en a pas ; ou il reçoit à la naissance un nom
+ * obtenu, un surnom propre à lui, tiré dans la langue de sa culture, qu'il ne tient de
+ * personne (« earned » ; le métier et le lieu attendent la phase 3).
+ */
+export const NAMING_RULES = ['father', 'mother', 'both', 'none', 'earned'] as const;
 export type NamingRule = (typeof NAMING_RULES)[number];
 
 export interface Language {

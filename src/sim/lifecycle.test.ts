@@ -1,15 +1,34 @@
 import { describe, expect, it } from 'vitest';
+import type { Species } from '../core/data';
 import type { SpawnGroupCommand } from '../core/protocol';
-import { fertilityAt, monthlyProbability, silerHazards } from './lifecycle';
-import { DEATH_CAUSES, FEMALE, NONE } from './population';
-import { closeKin, monthOf } from './people';
+import { RandomStream, streamSeed } from '../core/rng';
+import { pureAncestry } from './genetics';
+import {
+  birthCulture,
+  causeOf,
+  fertilityAt,
+  lifeCycle,
+  monthlyProbability,
+  silerHazards,
+} from './lifecycle';
+import {
+  ANCESTRY_SLOTS,
+  DEATH_CAUSES,
+  FEMALE,
+  GENOME_WORDS,
+  MALE,
+  NEVER,
+  NONE,
+  type DeathCause,
+  type NewPerson,
+} from './population';
+import { monthOf, MONTHS_PER_YEAR } from './people';
+import { field, personName, recordOf } from './records';
 import { membersOf } from './spawn';
+import type { NamingRule } from './society';
 import type { SimState } from './state';
-import { fingerprint, step } from './step';
-import { testData, testState } from './testing';
-
-const human = testData.species.entries.at(0);
-if (human === undefined) throw new Error('pas d’humains dans les données');
+import { fingerprint, step, type SimContent } from './step';
+import { flatState, testData, testHuman as human, testState, withHuman } from './testing';
 
 /** Cases de terre des biomes voulus, espacées. */
 function cells(state: SimState, biomes: readonly string[], count: number) {
@@ -39,19 +58,152 @@ function spawn(
   }));
 }
 
-function run(state: SimState, months: number): void {
-  for (let month = 0; month < months; month++) step(state, [], testData);
+function run(state: SimState, months: number, content: SimContent = testData): void {
+  for (let month = 0; month < months; month++) step(state, [], content);
 }
 
 /** Morts d'une cause, depuis le début de la partie. */
-function deathsBy(state: SimState, cause: string): number {
-  const code = DEATH_CAUSES.indexOf(cause as (typeof DEATH_CAUSES)[number]);
+function deathsBy(state: SimState, cause: DeathCause): number {
+  const code = DEATH_CAUSES.indexOf(cause);
   let count = 0;
   for (let row = 0; row < state.people.archive.rows; row++) {
     if (state.people.archive.columns.cause[row] === code) count++;
   }
   return count;
 }
+
+/** Mère, père et conjoint d'un individu, vivant ou mort. */
+function kin(state: SimState, id: number) {
+  const record = recordOf(state.people, id);
+  if (record === undefined) return { mother: NONE, father: NONE, partner: NONE };
+  return {
+    mother: field(state.people, record, 'mother'),
+    father: field(state.people, record, 'father'),
+    partner: field(state.people, record, 'partner'),
+  };
+}
+
+/**
+ * Proches parents au sens de la tâche 2.3, recalculés ici sans closeKin : ascendant et
+ * descendant sur deux générations, frères et sœurs, oncle ou tante, beau-parent.
+ */
+function related(state: SimState, a: number, b: number): boolean {
+  const parents = (id: number) => [kin(state, id).mother, kin(state, id).father];
+  const known = (ids: number[]) => ids.filter((id) => id !== NONE);
+  const parentsA = known(parents(a));
+  const parentsB = known(parents(b));
+  const grandA = known(parentsA.flatMap(parents));
+  const grandB = known(parentsB.flatMap(parents));
+  const siblings = (x: number[], y: number[]) => x.some((id) => y.includes(id));
+  return (
+    parentsA.includes(b) ||
+    parentsB.includes(a) ||
+    grandA.includes(b) ||
+    grandB.includes(a) ||
+    siblings(parentsA, parentsB) ||
+    parentsA.some((parent) => siblings(known(parents(parent)), parentsB)) ||
+    parentsB.some((parent) => siblings(known(parents(parent)), parentsA)) ||
+    parentsA.some((parent) => kin(state, parent).partner === b) ||
+    parentsB.some((parent) => kin(state, parent).partner === a)
+  );
+}
+
+/** Humains qui ne meurent pas (pour suivre une famille sans aléa de mort). */
+function immortal(species: Species): Species {
+  const { mortality, fertility } = species;
+  return {
+    ...species,
+    mortality: {
+      ...mortality,
+      infant: { ...mortality.infant, level: 0 },
+      background: 0,
+      senescence: { ...mortality.senescence, level: 0 },
+    },
+    fertility: { ...fertility, childbirthDeath: 0 },
+  };
+}
+
+const calm = withHuman(immortal);
+
+/**
+ * Une partie sur la steppe : pour chaque règle de nommage, une langue, une culture et un
+ * groupe, à deux cases l'un de l'autre.
+ */
+function founded(rules: readonly NamingRule[]): SimState {
+  const state = flatState();
+  rules.forEach((naming, index) => {
+    const id = index + 1;
+    state.society.languages.push({ id, seed: 7919 * id });
+    state.society.cultures.push({ id, language: id, naming, founded: 0 });
+    state.society.groups.set(id, {
+      id,
+      culture: id,
+      founded: 0,
+      parent: NONE,
+      leader: NONE,
+      x: 10 + 2 * index,
+      y: 60,
+      homeX: 10 + 2 * index,
+      homeY: 60,
+      targetX: -1,
+      targetY: -1,
+      food: 100,
+    });
+  });
+  state.society.nextGroupId = rules.length + 1;
+  return state;
+}
+
+/**
+ * Ajoute une personne ; par défaut, une femme de 25 ans du groupe et de la culture 1, sans
+ * parents connus, et son emplacement.
+ */
+function person(
+  state: SimState,
+  changes: Partial<NewPerson> & { readonly years?: number } = {},
+): number {
+  const { years = 25, ...rest } = changes;
+  return state.people.add({
+    sex: FEMALE,
+    birth: state.tick - Math.round(years * MONTHS_PER_YEAR),
+    species: 0,
+    ancestry: pureAncestry(1),
+    genome: new Uint32Array(GENOME_WORDS),
+    mother: NONE,
+    father: NONE,
+    group: 1,
+    culture: 1,
+    givenName: 11,
+    familyName: 0,
+    familyLanguage: rest.culture ?? 1,
+    ...rest,
+  });
+}
+
+const idOf = (state: SimState, slot: number) => state.people.get('id', slot);
+
+function marry(state: SimState, woman: number, man: number): void {
+  state.people.set('partner', woman, idOf(state, man));
+  state.people.set('partner', man, idOf(state, woman));
+}
+
+/** La femme de l'emplacement `woman` accouche ce mois-ci d'un enfant de `father`. */
+function atTerm(state: SimState, woman: number, father: number): void {
+  state.people.set('conceived', woman, state.tick - human.fertility.gestation);
+  state.people.set('pregnantBy', woman, idOf(state, father));
+}
+
+/** Emplacements des enfants nés au pas `tick`. */
+function bornAt(state: SimState, tick: number): number[] {
+  const born: number[] = [];
+  state.people.forEach((slot) => {
+    if (state.people.get('birth', slot) === tick) born.push(slot);
+  });
+  return born;
+}
+
+/** Le nom de famille dans un nom complet : ce qui suit le prénom. */
+const surname = (name: string) => name.split(' ').slice(1).join(' ');
 
 describe('cycle de vie (tâche 2.3)', () => {
   it("donne aux humains l'espérance de vie de chasseurs-cueilleurs", () => {
@@ -71,12 +223,18 @@ describe('cycle de vie (tâche 2.3)', () => {
     expect(at15).toBeLessThan(0.7);
   });
 
-  it('borne la fécondité féminine à sa période, avec un sommet', () => {
+  it('borne la fécondité féminine à sa période, avec un sommet, selon les données', () => {
     const { from, peak, to } = human.fertility;
     expect(fertilityAt(human, from - 1)).toBe(0);
     expect(fertilityAt(human, to)).toBe(0);
     expect(fertilityAt(human, peak + 1)).toBe(1);
     expect(fertilityAt(human, from + 1)).toBeLessThan(fertilityAt(human, peak));
+    expect(fertilityAt(human, from)).toBeCloseTo(human.fertility.onset, 9);
+    // La forme vient de data/species.json : fécondité entière dès le premier âge fécond, et
+    // jusqu'à la fin de la période.
+    const flat = { ...human, fertility: { ...human.fertility, onset: 1, plateau: 1 } };
+    expect(fertilityAt(flat, from)).toBe(1);
+    expect(fertilityAt(flat, to - 0.1)).toBe(1);
   });
 
   it('fait naître, vivre et mourir : une population nourrie se maintient et croît', () => {
@@ -88,44 +246,51 @@ describe('cycle de vie (tâche 2.3)', () => {
     const start = state.people.count;
     expect(start).toBeGreaterThan(110);
     run(state, 50 * 12);
-    expect(state.people.count).toBeGreaterThan(start);
-    expect(state.people.count).toBeLessThan(start * 4);
-    expect(state.people.archive.rows).toBeGreaterThan(50);
-    // Chaque enfant né en partie a ses deux parents, et vit dans le groupe de sa mère ou
-    // l'a quitté avec elle ; aucun couple ne réunit de proches parents.
+    const { people } = state;
+    expect(people.count).toBeGreaterThan(start);
+    expect(people.count).toBeLessThan(start * 4);
+    expect(people.archive.rows).toBeGreaterThan(50);
+    // Chaque enfant né en partie a ses deux parents. Celui qui n'est pas encore adulte et
+    // qui a encore un parent en vie vit dans le groupe de l'un d'eux : il a suivi celui qui
+    // a changé de groupe. Aucun couple ne réunit de proches parents.
     let born = 0;
-    state.people.forEach((slot) => {
-      if (state.people.get('birth', slot) <= 0) return;
+    let followed = 0;
+    people.forEach((slot) => {
+      if (people.get('birth', slot) <= 0) return;
       born++;
-      expect(state.people.get('mother', slot)).not.toBe(NONE);
-      expect(state.people.get('father', slot)).not.toBe(NONE);
-      const partner = state.people.slotOf(state.people.get('partner', slot));
-      if (partner !== undefined) expect(closeKin(state.people, slot, partner)).toBe(false);
+      expect(people.get('mother', slot)).not.toBe(NONE);
+      expect(people.get('father', slot)).not.toBe(NONE);
+      const partner = people.get('partner', slot);
+      if (partner !== NONE) expect(related(state, idOf(state, slot), partner)).toBe(false);
+      if (people.age(slot, state.tick) >= human.maturity * MONTHS_PER_YEAR) return;
+      const groups = ['mother', 'father'].flatMap((link) => {
+        const parent = people.slotOf(people.get(link as 'mother' | 'father', slot));
+        return parent === undefined ? [] : [people.get('group', parent)];
+      });
+      if (groups.length === 0) return;
+      followed++;
+      expect(groups).toContain(people.get('group', slot));
     });
     expect(born).toBeGreaterThan(50);
-  });
-
-  it('donne à l’enfant le nom de famille que fixe la règle de sa culture (IND-08)', () => {
-    const state = testState();
-    step(state, spawn(state, ['temperate-forest', 'grassland'], 4), testData);
-    run(state, 20 * 12);
-    let checked = 0;
-    state.people.forEach((slot) => {
-      if (state.people.get('birth', slot) <= 0) return;
-      const culture = state.society.cultures.at(state.people.get('culture', slot) - 1);
-      const parent = (key: 'mother' | 'father') => {
-        const id = state.people.get(key, slot);
-        const living = state.people.slotOf(id);
-        if (living !== undefined) return state.people.get('familyName', living);
-        return state.people.archive.columns.familyName[state.people.archivedRow(id) ?? 0] ?? 0;
-      };
-      const name = state.people.get('familyName', slot);
-      if (culture?.naming === 'mother') expect(name).toBe(parent('mother'));
-      else if (culture?.naming === 'none') expect(name).toBe(0);
-      else expect(name).toBe(parent('father'));
-      checked++;
+    expect(followed).toBeGreaterThan(20);
+    // Le premier mois de vie a son risque, celui de la table de Siler à 0 mois, rigueurs
+    // en plus : des nouveau-nés meurent le mois de leur naissance (L-7).
+    let births = 0;
+    let atBirth = 0;
+    const { archive } = people;
+    for (let row = 0; row < archive.rows; row++) {
+      if ((archive.columns.birth[row] ?? 0) <= 0) continue;
+      births++;
+      if (archive.columns.death[row] === archive.columns.birth[row]) atBirth++;
+    }
+    people.forEach((slot) => {
+      if (people.get('birth', slot) > 0) births++;
     });
-    expect(checked).toBeGreaterThan(10);
+    const firstMonth = monthlyProbability(
+      silerHazards(human, 0).infant + human.mortality.background,
+    );
+    expect(atBirth / births).toBeGreaterThan(firstMonth * 0.5);
+    expect(atBirth / births).toBeLessThan(firstMonth * 2);
   });
 
   it("tue davantage de froid les fragiles d'une sous-espèce des sables que les nordiques", () => {
@@ -192,3 +357,367 @@ describe('cycle de vie (tâche 2.3)', () => {
     expect(women).toBeGreaterThan(0);
   });
 });
+
+describe('causes de mort (IND-04)', () => {
+  it("ne fait mourir « de vieillesse » qu'à l'âge des vieux, hardship.frail[1] (L-5)", () => {
+    const random = new RandomStream(streamSeed('causes', 'tests'));
+    const none = { cold: 0, heat: 0, famine: 0 };
+    const tally = (years: number) => {
+      const counts = new Map<DeathCause, number>();
+      for (let draw = 0; draw < 4000; draw++) {
+        const cause = causeOf(human, years, silerHazards(human, years), none, 1, random);
+        counts.set(cause, (counts.get(cause) ?? 0) + 1);
+      }
+      return counts;
+    };
+    const old = human.hardship.frail[1];
+    for (const years of [0, 5, 16, 30, old - 1]) {
+      const counts = tally(years);
+      expect(counts.get('natural') ?? 0).toBe(0);
+      expect(counts.get('disease') ?? 0).toBeGreaterThan(0);
+    }
+    // À 75 ans, la sénescence domine : la plupart meurent de vieillesse.
+    expect(tally(75).get('natural') ?? 0).toBeGreaterThan(2000);
+    // Seule la rigueur du mois menace : elle seule tue.
+    expect(
+      causeOf(
+        human,
+        0.1,
+        { infant: 0, background: 0, senescence: 0 },
+        { ...none, cold: 1 },
+        1,
+        random,
+      ),
+    ).toBe('cold');
+  });
+});
+
+describe('naissances et familles (L-11)', () => {
+  it("espace les naissances d'une mère d'au moins une grossesse et un allaitement", () => {
+    const state = founded(['father']);
+    const woman = person(state, { years: 17 });
+    const man = person(state, { sex: MALE, years: 19 });
+    marry(state, woman, man);
+    const births: number[] = [];
+    for (let month = 0; month < 30 * MONTHS_PER_YEAR; month++) {
+      lifeCycle(state, calm);
+      for (const child of bornAt(state, state.tick)) {
+        expect(state.people.get('mother', child)).toBe(idOf(state, woman));
+        births.push(state.tick);
+      }
+      state.tick++;
+    }
+    expect(births.length).toBeGreaterThanOrEqual(4);
+    const { gestation, postpartum } = human.fertility;
+    for (let index = 1; index < births.length; index++) {
+      expect((births[index] ?? 0) - (births[index - 1] ?? 0)).toBeGreaterThanOrEqual(
+        gestation + postpartum,
+      );
+    }
+  });
+
+  it("ne donne plus d'enfant à un homme au-delà de fertility.maleTo", () => {
+    // Des femmes au sommet de leur fécondité, qui conçoivent dès qu'elles le peuvent.
+    const eager = withHuman((species) => {
+      const still = immortal(species);
+      return { ...still, fertility: { ...still.fertility, monthly: 1 } };
+    });
+    const state = founded(['father']);
+    const young = person(state, { years: 26 });
+    const old = person(state, { years: 26 });
+    marry(state, young, person(state, { sex: MALE, years: human.fertility.maleTo - 1 }));
+    marry(state, old, person(state, { sex: MALE, years: human.fertility.maleTo + 1 }));
+    for (let month = 0; month < 24; month++) {
+      lifeCycle(state, eager);
+      state.tick++;
+    }
+    expect(state.people.get('lastBirth', young)).not.toBe(NEVER);
+    expect(state.people.get('lastBirth', old)).toBe(NEVER);
+    expect(state.people.get('conceived', old)).toBe(NEVER);
+  });
+
+  it("laisse orphelin l'enfant d'une mère morte en couches, et plus exposé que les autres", () => {
+    // Deux mille femmes accouchent le même mois ; dans la variante, toutes en meurent.
+    const deliver = (content: SimContent) => {
+      const state = founded(['father']);
+      const father = person(state, { sex: MALE, years: 30 });
+      for (let index = 0; index < 2000; index++) atTerm(state, person(state), father);
+      lifeCycle(state, content);
+      let orphans = 0;
+      let deadAtBirth = 0;
+      for (let row = 0; row < state.people.archive.rows; row++) {
+        if (state.people.archive.columns.birth[row] === state.tick) deadAtBirth++;
+      }
+      state.people.forEach((slot) => {
+        if (state.people.get('birth', slot) !== state.tick) return;
+        if (state.people.slotOf(state.people.get('mother', slot)) === undefined) orphans++;
+      });
+      return { state, orphans, deadAtBirth };
+    };
+    const fatal = deliver(
+      withHuman((species) => ({
+        ...species,
+        fertility: { ...species.fertility, childbirthDeath: 1 },
+      })),
+    );
+    const safe = deliver(
+      withHuman((species) => ({
+        ...species,
+        fertility: { ...species.fertility, childbirthDeath: 0 },
+      })),
+    );
+    // Quelques femmes meurent d'autre chose avant d'accoucher.
+    expect(deathsBy(fatal.state, 'childbirth')).toBeGreaterThan(1990);
+    expect(deathsBy(safe.state, 'childbirth')).toBe(0);
+    expect(fatal.orphans).toBeGreaterThan(1500);
+    // Le risque du premier mois d'un orphelin est multiplié par mortality.orphan.factor.
+    expect(fatal.deadAtBirth).toBeGreaterThan(safe.deadAtBirth * 1.6);
+    expect(safe.deadAtBirth).toBeGreaterThan(30);
+  });
+
+  it("fait durer le surcroît de risque d'un orphelin selon mortality.orphan (L-8)", () => {
+    // Des orphelins de 40 mois : la variante les fait dépendre de leur mère jusqu'à 60 mois.
+    const deaths = (content: SimContent) => {
+      const state = founded(['father']);
+      for (let index = 0; index < 2000; index++) person(state, { years: 40 / 12 });
+      for (let month = 0; month < 12; month++) {
+        lifeCycle(state, content);
+        state.tick++;
+      }
+      return state.people.archive.rows;
+    };
+    const dependent = withHuman((species) => ({
+      ...species,
+      mortality: { ...species.mortality, orphan: { factor: 10, months: 60 } },
+    }));
+    expect(deaths(dependent)).toBeGreaterThan(deaths(testData) * 2.5);
+  });
+
+  it('emmène les jeunes enfants de qui rejoint le groupe de son conjoint, pas les adultes', () => {
+    // Le groupe 1 : un veuf, ses deux jeunes enfants et sa fille adulte. Le groupe 2, plus
+    // grand : une femme seule qui ne trouve pas de conjoint chez elle.
+    const state = founded(['father', 'father']);
+    state.society.groups.set(2, { ...(state.society.groups.get(2) ?? missing()), culture: 1 });
+    const widower = person(state, { sex: MALE, years: 35 });
+    const late = person(state, { years: 34 });
+    const mother = idOf(state, late);
+    marry(state, late, widower);
+    state.people.remove(late, state.tick, 'disease');
+    const children = (years: number, sex = FEMALE) =>
+      person(state, { sex, years, mother, father: idOf(state, widower) });
+    const young = [children(5, MALE), children(9)];
+    const adult = children(20);
+    const single = person(state, { group: 2, years: 33 });
+    for (let index = 0; index < 3; index++) {
+      marry(
+        state,
+        person(state, { group: 2, years: 40 }),
+        person(state, { group: 2, sex: MALE, years: 40 }),
+      );
+    }
+    const eager = withHuman((species) => ({ ...immortal(species), pairing: 1 }));
+    lifeCycle(state, eager);
+    expect(state.people.get('partner', single)).toBe(idOf(state, widower));
+    expect(state.people.get('group', widower)).toBe(2);
+    for (const child of young) expect(state.people.get('group', child)).toBe(2);
+    expect(state.people.get('group', adult)).toBe(1);
+  });
+
+  it('fait vivre une sous-espèce ajoutée aux données, sans toucher au code (ESP-03)', () => {
+    const content = withHuman((species) => ({
+      ...species,
+      subspecies: [
+        ...species.subspecies,
+        {
+          ...(species.subspecies[1] ?? missing()),
+          id: 'highland',
+          adaptation: { cold: 0.6, heat: 0.3, endurance: 0.9 },
+        },
+      ],
+    }));
+    const state = flatState();
+    step(
+      state,
+      [{ type: 'spawnGroup', x: 40, y: 60, species: 'human', subspecies: 'highland', count: 30 }],
+      content,
+    );
+    run(state, 10 * MONTHS_PER_YEAR, content);
+    const born = countBirths(state);
+    state.people.forEach((slot) => {
+      const shares = state.people.columns.ancestry.subarray(
+        slot * ANCESTRY_SLOTS,
+        (slot + 1) * ANCESTRY_SLOTS,
+      );
+      expect(Array.from(shares)).toEqual([0, 0, 0, 255]);
+    });
+    expect(born).toBeGreaterThanOrEqual(5);
+  });
+});
+
+describe('culture et nom à la naissance (C2, D2 ; IND-08)', () => {
+  /**
+   * Un couple mixte dans le groupe 1 : la mère, de la culture 1, avec `mothers` membres
+   * de sa culture en tout, le père de la culture 2 avec `fathers` ; l'enfant naît ce mois.
+   */
+  function mixed(rules: readonly NamingRule[], mothers: number, fathers: number) {
+    const state = founded(rules);
+    const mother = person(state, { familyName: 101, familyLanguage: 1 });
+    const father = person(state, { sex: MALE, culture: 2, familyName: 202, familyLanguage: 2 });
+    marry(state, mother, father);
+    for (let index = 1; index < mothers; index++) person(state, { years: 50 });
+    for (let index = 1; index < fathers; index++) person(state, { culture: 2, years: 50 });
+    atTerm(state, mother, father);
+    lifeCycle(state, calm);
+    const child = bornAt(state, state.tick).at(0);
+    if (child === undefined) throw new Error('aucune naissance');
+    const name = (slot: number) => personName(state.people, state.society, idOf(state, slot));
+    return { state, mother, father, child, name };
+  }
+
+  it('donne à l’enfant de parents de deux cultures celle qui domine dans son groupe', () => {
+    // La culture du père domine : l'enfant la reçoit, et le nom de son père tel quel.
+    const paternal = mixed(['father', 'father'], 2, 5);
+    expect(paternal.state.people.get('culture', paternal.child)).toBe(2);
+    expect(surname(paternal.name(paternal.child))).toBe(surname(paternal.name(paternal.father)));
+    // Celle de la mère domine : l'enfant la reçoit, mais le nom de son père garde sa
+    // langue ; seul son prénom est dans celle de la culture de sa mère.
+    const maternal = mixed(['father', 'father'], 5, 2);
+    const { state, child, father, name } = maternal;
+    expect(state.people.get('culture', child)).toBe(1);
+    expect(state.people.get('familyName', child)).toBe(202);
+    expect(state.people.get('familyLanguage', child)).toBe(2);
+    expect(surname(name(child))).toBe(surname(name(father)));
+  });
+
+  it('départage les cultures par le parent qui transmet le nom selon la règle de la mère', () => {
+    // À égalité, la règle de la culture de la mère désigne qui transmet le nom.
+    const byFather = mixed(['father', 'mother'], 3, 3);
+    expect(byFather.state.people.get('culture', byFather.child)).toBe(2);
+    // L'enfant suit alors la règle de sa culture, celle du père : le nom de sa mère.
+    expect(byFather.state.people.get('familyName', byFather.child)).toBe(101);
+    expect(byFather.state.people.get('familyLanguage', byFather.child)).toBe(1);
+    const byMother = mixed(['mother', 'father'], 3, 3);
+    expect(byMother.state.people.get('culture', byMother.child)).toBe(1);
+    // Une règle qui ne transmet pas de nom laisse la culture de la mère.
+    const none = mixed(['none', 'father'], 3, 3);
+    expect(none.state.people.get('culture', none.child)).toBe(1);
+    expect(none.state.people.get('familyName', none.child)).toBe(0);
+    // Des parents d'une même culture la donnent, sans regarder le groupe.
+    const state = founded(['father', 'father']);
+    const mother = person(state);
+    for (let index = 0; index < 5; index++) person(state, { culture: 2 });
+    expect(birthCulture(state, mother, 1, 1, () => [])).toBe(1);
+  });
+
+  it('applique la règle « les deux » et le nom obtenu de la culture de l’enfant', () => {
+    // « Les deux » : le nom du père, puis celui de la mère, chacun dans sa langue (D-11).
+    const both = mixed(['father', 'both'], 1, 4);
+    const { state, child, mother, father, name } = both;
+    expect(state.people.get('culture', child)).toBe(2);
+    expect(surname(name(child))).toBe(`${surname(name(father))} ${surname(name(mother))}`);
+    // Un nom obtenu est propre à l'enfant, dans la langue de sa culture (A-12).
+    const earned = mixed(['father', 'earned'], 1, 4);
+    const code = earned.state.people.get('familyName', earned.child);
+    expect(code).not.toBe(0);
+    expect(code).not.toBe(101);
+    expect(code).not.toBe(202);
+    expect(earned.state.people.get('familyLanguage', earned.child)).toBe(2);
+    expect(surname(earned.name(earned.child))).not.toBe('');
+  });
+});
+
+describe('métissage (ESP-04)', () => {
+  it('marie, plus rarement, des groupes voisins de cultures différentes', () => {
+    // Une nordique et un homme des sables, chacun seul dans son groupe, de part et d'autre
+    // de la couture est-ouest : ils finissent par se marier, et leurs enfants sont métis.
+    const state = founded(['father', 'mother']);
+    const width = state.size.width;
+    Object.assign(state.society.groups.get(1) ?? missing(), { x: 1, homeX: 1 });
+    Object.assign(state.society.groups.get(2) ?? missing(), { x: width - 2, homeX: width - 2 });
+    const woman = person(state, { years: 18, ancestry: pureAncestry(0) });
+    const man = person(state, {
+      sex: MALE,
+      years: 20,
+      group: 2,
+      culture: 2,
+      ancestry: pureAncestry(2),
+    });
+    const eager = withHuman((species) => ({ ...immortal(species), pairing: 1 }));
+    let married = -1;
+    for (let month = 0; month < 10 * MONTHS_PER_YEAR; month++) {
+      lifeCycle(state, eager);
+      if (married < 0 && state.people.get('partner', woman) === idOf(state, man)) {
+        married = month;
+      }
+      state.tick++;
+    }
+    // La probabilité de data/nomads.json : des mois d'attente, pas des années.
+    expect(married).toBeGreaterThanOrEqual(0);
+    expect(married).toBeLessThan(5 / testData.nomads.intermarriage);
+    // À taille égale, la femme rejoint le groupe de l'homme.
+    expect(state.people.get('group', woman)).toBe(2);
+    expect(countChildren(state, idOf(state, woman))).toBeGreaterThan(0);
+    state.people.forEach((slot) => {
+      if (state.people.get('mother', slot) !== idOf(state, woman)) return;
+      const shares = state.people.columns.ancestry;
+      expect(shares[slot * ANCESTRY_SLOTS]).toBe(128);
+      expect(shares[slot * ANCESTRY_SLOTS + 2]).toBe(127);
+    });
+  });
+
+  it('fait naître des métis de deux groupes voisins de sous-espèces différentes', () => {
+    // Deux petits groupes à quelques cases : sans mariage entre cultures, ils n'auraient
+    // de métis qu'en se réunissant, ce qui n'arrive pas ici.
+    const state = flatState();
+    step(
+      state,
+      [
+        { type: 'spawnGroup', x: 40, y: 60, species: 'human', subspecies: 'nordic', count: 10 },
+        { type: 'spawnGroup', x: 44, y: 62, species: 'human', subspecies: 'sands', count: 10 },
+      ],
+      testData,
+    );
+    run(state, 30 * MONTHS_PER_YEAR);
+    expect(state.society.chronicle.filter((entry) => entry.kind === 'groupMerged')).toEqual([]);
+    let metis = 0;
+    const { people } = state;
+    const archived = people.archive.columns.ancestry;
+    const mixedAt = (shares: ArrayLike<number>, at: number) =>
+      (shares[at] ?? 0) > 0 && (shares[at] ?? 0) < 255 ? 1 : 0;
+    people.forEach((slot) => {
+      metis += mixedAt(people.columns.ancestry, slot * ANCESTRY_SLOTS);
+    });
+    for (let row = 0; row < people.archive.rows; row++) {
+      metis += mixedAt(archived, row * ANCESTRY_SLOTS);
+    }
+    expect(metis).toBeGreaterThan(0);
+  });
+});
+
+/** Naissances de la partie, vivants et morts. */
+function countBirths(state: SimState): number {
+  let count = 0;
+  state.people.forEach((slot) => {
+    if (state.people.get('birth', slot) > 0) count++;
+  });
+  for (let row = 0; row < state.people.archive.rows; row++) {
+    if ((state.people.archive.columns.birth[row] ?? 0) > 0) count++;
+  }
+  return count;
+}
+
+/** Enfants d'une mère, vivants ou morts. */
+function countChildren(state: SimState, mother: number): number {
+  let count = 0;
+  state.people.forEach((slot) => {
+    if (state.people.get('mother', slot) === mother) count++;
+  });
+  for (let row = 0; row < state.people.archive.rows; row++) {
+    if (state.people.archive.columns.mother[row] === mother) count++;
+  }
+  return count;
+}
+
+function missing(): never {
+  throw new Error('donnée de test absente');
+}

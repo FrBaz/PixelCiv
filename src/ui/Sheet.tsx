@@ -118,6 +118,7 @@ const NAMING: Readonly<Record<string, MessageKey>> = {
   mother: 'group.naming.mother',
   both: 'group.naming.both',
   none: 'group.naming.none',
+  earned: 'group.naming.earned',
 };
 
 const level = (value: number): MessageKey =>

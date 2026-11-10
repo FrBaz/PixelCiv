@@ -13,12 +13,19 @@
       "senescence": {
         "level": 5e-5,
         "growth": 0.085
+      },
+      "diseaseShare": 0.6,
+      "orphan": {
+        "factor": 2.5,
+        "months": 24
       }
     },
     "fertility": {
       "from": 15,
       "peak": 24,
       "to": 45,
+      "onset": 0.4,
+      "plateau": 0.4,
       "maleTo": 70,
       "monthly": 0.08,
       "postpartum": 30,

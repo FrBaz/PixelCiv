@@ -3,6 +3,7 @@
     "father": 0.5,
     "mother": 0.15,
     "both": 0.15,
-    "none": 0.2
+    "none": 0.1,
+    "earned": 0.1
   }
 }
