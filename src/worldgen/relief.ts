@@ -3,17 +3,21 @@
  *
  * La hauteur brute additionne un bruit fractal à trois échelles (continents, régions,
  * détail) et des chaînes de montagnes : un bruit de crêtes, que module un champ de très
- * basse fréquence (où se dressent les chaînes), et qu'abaisse par endroits un bruit de
- * cols. Elle devient ensuite une altitude en mètres, par la correspondance de D11 :
+ * basse fréquence (où se dressent les chaînes), et qu'entaillent des cols, là où un autre
+ * bruit s'annule. Elle devient ensuite une altitude en mètres, par la correspondance de
+ * D11, dont data/worldgen.json donne les coefficients :
  *
  *   terres : altitude = 7 000 m × hn^1,6,   hn = (h − mer) / échelle des terres
  *   mers   : profondeur = 5 500 m × dn^1,4, dn = (mer − h) / échelle des mers
  *
  * Le niveau de la mer est le quantile qui laisse émergée la part des terres demandée,
  * relevé ou abaissé par le paramètre « niveau de la mer ». L'échelle des terres place
- * au-dessus de la moyenne montagne (1 800 m) une part des terres qui croît avec le
- * paramètre « relief » : 4,5 % par défaut, dans la cible de C1 (3 à 6 %).
+ * au-dessus de la moyenne montagne (le bas de son niveau dans data/altitude-levels.json)
+ * une part des terres qui croît avec le paramètre « relief » : 4,5 % par défaut, dans la
+ * cible de C1 (3 à 6 %).
  */
+import type { AltitudeLevel } from '../core/data/schemas';
+import type { Worldgen } from '../core/data/worldgen';
 import { pow } from '../core/dmath';
 import type { Rng } from '../core/rng';
 import { latitude } from './climate';
@@ -38,14 +42,19 @@ const WEIGHTS = { continents: 0.66, regions: 0.24, detail: 0.1 };
 /**
  * Chaînes de montagnes. Leurs crêtes suivent les lignes où s'annule un bruit de basse
  * fréquence (CHAINS) : de longues courbes, à l'image des chaînes réelles. Un champ de
- * très basse fréquence (RANGES) choisit celles qui se dressent, un bruit de crêtes plus
- * fin (SPURS) y ajoute contreforts et vallées, et un dernier bruit (PASSES) les abaisse
- * par endroits : les cols.
+ * très basse fréquence (RANGES) choisit celles qui se dressent, et un bruit de crêtes plus
+ * fin (SPURS) y ajoute contreforts et vallées. Les cols entaillent les crêtes là où
+ * s'annule l'un de deux derniers bruits (PASSES) : leurs lignes de zéro coupent toute
+ * chaîne de place en place, toutes les quelques dizaines de cases d'une carte Grand.
  */
 const CHAINS: Fractal = { frequency: 3.5, octaves: 3, gain: 0.45 };
 const RANGES: Fractal = { frequency: 2, octaves: 2 };
 const SPURS: Fractal = { frequency: 14, octaves: 3, gain: 0.5 };
-const PASSES: Fractal = { frequency: 18, octaves: 2 };
+const PASSES: Fractal = { frequency: 20, octaves: 2 };
+/** Demi-largeur d'un col, en valeur du bruit des cols. */
+const PASS_WIDTH = 0.14;
+/** Part de la crête qui reste au cœur d'un col. */
+const PASS_FLOOR = 0.1;
 /** Demi-largeur d'une chaîne, piémonts compris, en valeur du bruit des chaînes. */
 const CHAIN_WIDTH = 0.22;
 /** Part du détail gardée en plaine : de quoi infléchir les rivières sans heurter le relief. */
@@ -62,20 +71,29 @@ const POLAR_SINK = 0.15;
 /** Décalage du niveau de la mer à ±1, en unités de hauteur brute. */
 const SEA_SHIFT = 0.05;
 
-/** Correspondance de D11 : altitude et profondeur maximales, exposants. */
-export const MAX_ALTITUDE = 7000;
-export const MAX_DEPTH = 5500;
-const ALTITUDE_EXPONENT = 1.6;
-const DEPTH_EXPONENT = 1.4;
+/**
+ * Réglages du relief : la correspondance de D11 (data/worldgen.json), et l'altitude de la
+ * moyenne montagne, bas de son niveau dans data/altitude-levels.json.
+ */
+export interface ReliefSettings extends Readonly<Worldgen['relief']> {
+  readonly midMountain: number;
+}
 
-/** Altitude de la moyenne montagne (D11), et hn correspondant. */
-const MID_MOUNTAIN = 1800;
-/** Profondeur médiane des mers visée : celle des grands fonds. */
-const MEDIAN_DEPTH = 3500;
+/** Réglages du relief tirés des données. */
+export function reliefSettings(
+  worldgen: Worldgen,
+  levels: readonly AltitudeLevel[],
+): ReliefSettings {
+  const midMountain = levels.find((level) => level.family === 'mid-mountain')?.min;
+  if (midMountain === undefined || midMountain === null) {
+    throw new Error('data/altitude-levels.json : pas de niveau « moyenne montagne »');
+  }
+  return { ...worldgen.relief, midMountain };
+}
 
 /** Part des terres au-dessus de la moyenne montagne, selon le paramètre « relief ». */
-export function mountainShare(relief: number): number {
-  return 0.005 + 0.08 * relief;
+export function mountainShare(settings: ReliefSettings, relief: number): number {
+  return settings.mountainShare.base + settings.mountainShare.perRelief * relief;
 }
 
 /**
@@ -88,8 +106,18 @@ function soften(value: number, knee: number): number {
   return knee + (1 - knee) * (excess / (1 + excess));
 }
 
+/** Hauteur brute, et les chaînes de montagnes dont elle se compose. */
+export interface ReliefFields {
+  /** Hauteur brute : bruit à trois échelles et chaînes de montagnes. */
+  readonly height: Float32Array;
+  /** Chaînes, avant les cols : 0 hors d'elles, jusqu'à 1 sur les crêtes. */
+  readonly crest: Float32Array;
+  /** Entaille des cols, qui multiplie la crête : PASS_FLOOR au cœur d'un col, 1 ailleurs. */
+  readonly pass: Float32Array;
+}
+
 /** Hauteur brute : bruit à trois échelles et chaînes de montagnes. */
-export function rawHeight(sampler: CylinderSampler, rng: Rng, relief: number): Float32Array {
+export function reliefFields(sampler: CylinderSampler, rng: Rng, relief: number): ReliefFields {
   const layer = (name: string) => new NoiseLayer(rng.stream(`worldgen.relief.${name}`));
   const continents = sampler.fractal(layer('continents'), CONTINENTS);
   const regions = sampler.fractal(layer('regions'), REGIONS);
@@ -99,8 +127,11 @@ export function rawHeight(sampler: CylinderSampler, rng: Rng, relief: number): F
   const chainLayer = layer('chains');
   const spurLayer = layer('spurs');
   const passLayer = layer('passes');
+  const saddleLayer = layer('saddles');
   const ridgeHeight = RIDGE_HEIGHT * (0.2 + 1.6 * relief);
   const height = new Float32Array(continents.length);
+  const crests = new Float32Array(continents.length);
+  const passes = new Float32Array(continents.length).fill(1);
   const { width } = sampler;
   for (let index = 0; index < height.length; index++) {
     const x = index % width;
@@ -121,8 +152,15 @@ export function rawHeight(sampler: CylinderSampler, rng: Rng, relief: number): F
         const broad = 1 - distance / CHAIN_WIDTH;
         const spur = sampler.ridgedAt(spurLayer, SPURS, x, y);
         const crest = (0.55 * sharp * sharp + 0.45 * broad * Math.sqrt(broad)) * (0.6 + 0.4 * spur);
-        const pass =
-          0.3 + 0.7 * smoothstep(-0.5, -0.15, sampler.fractalAt(passLayer, PASSES, x, y));
+        // Un col : la crête s'abaisse de part et d'autre d'une ligne de zéro de l'un des
+        // deux bruits des cols. Une crête peut longer l'une de ces lignes, rarement les deux.
+        const notch = Math.min(
+          Math.abs(sampler.fractalAt(passLayer, PASSES, x, y)),
+          Math.abs(sampler.fractalAt(saddleLayer, PASSES, x, y)),
+        );
+        const pass = PASS_FLOOR + (1 - PASS_FLOOR) * smoothstep(0, PASS_WIDTH, notch);
+        crests[index] = crest * active * land;
+        passes[index] = pass;
         mountain = crest * active * land * pass;
       }
     }
@@ -137,7 +175,7 @@ export function rawHeight(sampler: CylinderSampler, rng: Rng, relief: number): F
       ridgeHeight * mountain -
       POLAR_SINK * polar;
   }
-  return height;
+  return { height, crest: crests, pass: passes };
 }
 
 /** Niveau de la mer en hauteur brute. */
@@ -150,17 +188,23 @@ export function seaThreshold(height: Float32Array, params: ReliefParams): number
  * case émergée a une altitude positive ou nulle, une case de mer une profondeur d'au
  * moins un mètre.
  */
-export function toElevation(height: Float32Array, sea: number, relief: number): Float32Array {
+export function toElevation(
+  height: Float32Array,
+  sea: number,
+  relief: number,
+  settings: ReliefSettings,
+): Float32Array {
+  const { maxAltitude, maxDepth, altitudeExponent, depthExponent } = settings;
   // Échelle des terres : la part voulue des terres dépasse la moyenne montagne.
-  const midHn = pow(MID_MOUNTAIN / MAX_ALTITUDE, 1 / ALTITUDE_EXPONENT);
+  const midHn = pow(settings.midMountain / maxAltitude, 1 / altitudeExponent);
   const landTop = quantile(
     height,
-    1 - mountainShare(relief),
+    1 - mountainShare(settings, relief),
     (index) => (height[index] ?? 0) > sea,
   );
   const landScale = Math.max(1e-6, (landTop - sea) / midHn);
   // Échelle des mers : la profondeur médiane est celle des grands fonds.
-  const medianDn = pow(MEDIAN_DEPTH / MAX_DEPTH, 1 / DEPTH_EXPONENT);
+  const medianDn = pow(settings.medianDepth / maxDepth, 1 / depthExponent);
   const seaMedian = quantile(height, 0.5, (index) => (height[index] ?? 0) <= sea);
   const seaScale = Math.max(1e-6, (sea - seaMedian) / medianDn);
   const elevation = new Float32Array(height.length);
@@ -168,10 +212,10 @@ export function toElevation(height: Float32Array, sea: number, relief: number): 
     const value = height[index] ?? 0;
     if (value > sea) {
       const hn = soften((value - sea) / landScale, 0.7);
-      elevation[index] = MAX_ALTITUDE * pow(hn, ALTITUDE_EXPONENT);
+      elevation[index] = maxAltitude * pow(hn, altitudeExponent);
     } else {
       const dn = soften((sea - value) / seaScale, 0.85);
-      elevation[index] = -Math.max(1, MAX_DEPTH * pow(dn, DEPTH_EXPONENT));
+      elevation[index] = -Math.max(1, maxDepth * pow(dn, depthExponent));
     }
   }
   return elevation;
@@ -182,8 +226,9 @@ export function generateRelief(
   sampler: CylinderSampler,
   rng: Rng,
   params: ReliefParams,
+  settings: ReliefSettings,
 ): Float32Array {
-  const height = rawHeight(sampler, rng, params.relief);
+  const { height } = reliefFields(sampler, rng, params.relief);
   const sea = seaThreshold(height, params);
-  return toElevation(height, sea, params.relief);
+  return toElevation(height, sea, params.relief, settings);
 }

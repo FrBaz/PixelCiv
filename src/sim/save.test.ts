@@ -1,13 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { loadCatalog } from '../core/data/catalog';
 import { BiomesSchema } from '../core/data/schemas';
-import {
-  encodeSave,
-  readSave,
-  SAVE_FORMAT_VERSION,
-  SaveError,
-  writeSave,
-} from '../core/save/format';
+import { encodeSave, readSave, SaveError, writeSave } from '../core/save/format';
 import { LAYER_NAMES } from '../core/world';
 import { GENERATOR_VERSION } from '../worldgen/generate';
 import { MIGRATIONS, restoreState, saveState } from './save';
@@ -123,8 +117,9 @@ describe('sauvegarde de la simulation', () => {
   });
 
   it('refuse les sauvegardes de la phase 0, sans monde à reprendre', async () => {
-    expect(Object.keys(MIGRATIONS)).toEqual([]);
-    for (let version = 1; version < SAVE_FORMAT_VERSION; version++) {
+    // Seule la version 3, celle de la phase 1, se migre : elle reçoit une population vide.
+    expect(Object.keys(MIGRATIONS)).toEqual(['3']);
+    for (let version = 1; version < 3; version++) {
       const old = encodeSave(save(played(1)), version);
       await expect(readSave(old, MIGRATIONS)).rejects.toMatchObject({ code: 'obsolete' });
     }

@@ -5,8 +5,9 @@
  * (D1) : la plus grande masse d'eau, et toute autre assez vaste. Les autres bassins,
  * même sous le niveau de la mer, relèvent des lacs (D2).
  */
+import { MONTH_CENTERS, monthlyTemperature } from '../core/seasons';
 import type { WorldSize } from '../core/world';
-import { components, neighborTable, opposite } from './grid';
+import { components, neighborTable } from './grid';
 
 /**
  * Océan mondial (D1) : parmi les cases sous le niveau de la mer, la plus grande masse
@@ -51,8 +52,22 @@ export interface HydrologyConfig {
   readonly saltFlatRatio: number;
   /** Part du bassin couverte par un salar. */
   readonly saltFlatShare: number;
-  /** Évaporation d'un lac : millimètres par an et par degré au-dessus de −10 °C, et minimum. */
-  readonly lakeEvaporation: { readonly perDegree: number; readonly minimum: number };
+  /**
+   * Évaporation d'un lac : millimètres par an et par degré au-dessus de −10 °C, et
+   * minimum ; puis un facteur d'humidité (D2), qui la baisse sous un air humide : la
+   * pluie locale en sert d'indice, rapportée à `reference` millimètres, avec la force
+   * `strength`, entre `min` et `max`.
+   */
+  readonly lakeEvaporation: {
+    readonly perDegree: number;
+    readonly minimum: number;
+    readonly humidity: {
+      readonly reference: number;
+      readonly strength: number;
+      readonly min: number;
+      readonly max: number;
+    };
+  };
   /** Débit d'une rivière, en millimètres par an et par case d'une carte Grand (D3). */
   readonly riverThreshold: number;
   /** Multiples du seuil où commencent la rivière et le fleuve (D3 : 4 et 16). */
@@ -101,12 +116,20 @@ export interface Hydrology {
  */
 const EPSILON = 1e-5;
 /**
+ * Part de la pente minimale tirée au sort, case par case (de 0 à FILL_JITTER fois
+ * EPSILON en plus) : le front du remplissage avance irrégulièrement, et les chenaux qui
+ * le suivent à travers une cuvette ne filent pas en ligne droite.
+ */
+const FILL_JITTER = 2;
+/**
  * Écart relatif de pente tiré au sort : chaque pente vers un voisin est multipliée par
  * un facteur de 0,5 à 1,5. L'eau descend toujours, mais sans filer tout droit.
  */
 const SLOPE_JITTER = 1;
 /** En deçà de cette profondeur de comblement (m), une case n'est pas dans une dépression. */
 const DEPRESSION = 0.01;
+/** Tours au plus du bilan des lacs : une chaîne de lacs se règle d'un maillon par tour. */
+const MAX_BALANCE_PASSES = 32;
 
 /**
  * Tas binaire de cases, ordonné par altitude remplie, puis par un tirage propre à
@@ -246,7 +269,12 @@ function priorityFlood(
       // relief d'origine. Le remplissage avance plus vite le long des vallées enfouies, et
       // le chemin de l'eau à travers une zone comblée les suit, au lieu de filer droit.
       const climb = Math.max(0, (elevation[other] ?? 0) - here);
-      filled[other] = Math.max(filled[other] ?? 0, base + EPSILON * (1 + climb));
+      // Un tirage propre à la case, décorrélé de celui qui départage le tas.
+      const draw = (Math.imul(tie[other] ?? 0, 0x9e3779b1) >>> 0) / 4294967296;
+      filled[other] = Math.max(
+        filled[other] ?? 0,
+        base + EPSILON * (1 + climb + FILL_JITTER * draw),
+      );
       parent[other] = cell;
       heap.push(other);
     }
@@ -356,12 +384,38 @@ export function runoff(precipitation: number, temperature: number): number {
 /** Évapotranspiration potentielle (mm par an) : par degré au-dessus de −5 °C, et minimum. */
 const POTENTIAL_EVAPORATION = { perDegree: 50, minimum: 100 };
 
-/** Évaporation annuelle d'une case de lac (mm), selon sa température. */
-function lakeEvaporation(config: HydrologyConfig, temperature: number): number {
-  return Math.max(
-    config.lakeEvaporation.minimum,
-    config.lakeEvaporation.perDegree * (temperature + 10),
+/**
+ * Évaporation annuelle d'une case de lac (mm) : elle croît avec la température et baisse
+ * avec l'humidité de l'air, dont la pluie locale donne l'indice (D2).
+ */
+export function lakeEvaporation(
+  config: HydrologyConfig,
+  temperature: number,
+  precipitation: number,
+  amplitude = 0,
+): number {
+  const { perDegree, minimum, humidity } = config.lakeEvaporation;
+  // Un lac gelé n'évapore pas : le minimum ne vaut que pour la part de l'année au-dessus
+  // de 0 °C. Une cuvette polaire, toujours gelée, reste ainsi un lac d'eau douce.
+  const base = Math.max(
+    minimum * thawedShare(temperature, amplitude),
+    perDegree * (temperature + 10),
   );
+  const dryness = 1 + humidity.strength * (1 - precipitation / humidity.reference);
+  return base * Math.min(humidity.max, Math.max(humidity.min, dryness));
+}
+
+/**
+ * Part de l'année où la température dépasse 0 °C, pour une moyenne `annual` et une
+ * demi-amplitude `amplitude` (D8) : la part des douze mois, pris en leur milieu, au-dessus
+ * de 0 °C.
+ */
+export function thawedShare(annual: number, amplitude: number): number {
+  let thawed = 0;
+  for (const month of MONTH_CENTERS) {
+    if (monthlyTemperature(annual, amplitude, false, month) > 0) thawed++;
+  }
+  return thawed / 12;
 }
 
 interface Basin {
@@ -384,6 +438,7 @@ export function generateHydrology(
   random: { nextUint32(): number },
   config: HydrologyConfig,
   params: HydrologyParams,
+  amplitude?: Float32Array,
   neighbors: Int32Array = neighborTable(size),
 ): Hydrology {
   const count = size.width * size.height;
@@ -392,7 +447,14 @@ export function generateHydrology(
   const cellArea = scale * scale;
   const tie = new Uint32Array(count);
   for (let index = 0; index < count; index++) tie[index] = random.nextUint32();
-  const { filled, parent } = priorityFlood(raw, ocean, neighbors, tie);
+  // Exutoires : l'océan, et le bord des pôles, où l'eau quitte la carte (sous la calotte
+  // ou dans la mer polaire) au lieu d'en longer le bord tout droit.
+  const outlet = Uint8Array.from(ocean);
+  for (let x = 0; x < size.width; x++) {
+    outlet[x] = 1;
+    outlet[(size.height - 1) * size.width + x] = 1;
+  }
+  const { filled, parent } = priorityFlood(raw, outlet, neighbors, tie);
   // Les sédiments comblent une part de chaque dépression. L'altitude remplie ne change
   // pas, ni donc l'ordre du remplissage : il suffit de relever le fond.
   const elevation = new Float32Array(raw);
@@ -401,12 +463,12 @@ export function generateHydrology(
     const depth = (filled[index] ?? 0) - value;
     if (!ocean[index] && depth > DEPRESSION) elevation[index] = value + config.infill * depth;
   }
-  const { receiver, direction } = receivers(elevation, ocean, filled, parent, neighbors, tie);
+  const { receiver, direction } = receivers(elevation, outlet, filled, parent, neighbors, tie);
 
   // Bassins : composantes des cases comblées de plus de DEPRESSION.
   const depression = new Uint8Array(count);
   for (let index = 0; index < count; index++) {
-    if (!ocean[index] && (filled[index] ?? 0) - (elevation[index] ?? 0) > DEPRESSION)
+    if (!outlet[index] && (filled[index] ?? 0) - (elevation[index] ?? 0) > DEPRESSION)
       depression[index] = 1;
   }
   const { labels, sizes } = components(depression, size, neighbors);
@@ -422,7 +484,12 @@ export function generateHydrology(
     let evaporation = 0;
     for (const index of cells) {
       maxDepth = Math.max(maxDepth, (filled[index] ?? 0) - (elevation[index] ?? 0));
-      evaporation += lakeEvaporation(config, temperature[index] ?? 0);
+      evaporation += lakeEvaporation(
+        config,
+        temperature[index] ?? 0,
+        precipitation[index] ?? 0,
+        amplitude?.[index] ?? 0,
+      );
     }
     const significant =
       cells.length * cellArea >= config.lakeMinArea && maxDepth >= config.lakeMinDepth;
@@ -445,14 +512,17 @@ export function generateHydrology(
   }
 
   // Accumulation, de l'amont vers l'aval. Un lac salé ou un salar garde tout ce qui lui
-  // parvient ; un lac d'eau douce perd son évaporation. Le type d'un lac dépend des lacs
-  // en amont : on recommence jusqu'à ce que plus aucun ne change (D2).
-  for (let pass = 0; pass < 8; pass++) {
+  // parvient ; un lac d'eau douce perd son évaporation. Le type et l'apport d'un lac
+  // dépendent des lacs en amont : on recommence jusqu'à ce que types et apports ne
+  // bougent plus (D2), une chaîne de lacs se réglant d'un maillon par tour.
+  for (let pass = 0; pass < MAX_BALANCE_PASSES; pass++) {
     const inflow = new Float64Array(basins.length + 1);
     accumulate(receiver, water, labels, basins, inflow);
     let changed = false;
     for (const [offset, basin] of basins.entries()) {
-      basin.inflow = inflow[offset + 1] ?? 0;
+      const next = inflow[offset + 1] ?? 0;
+      if (Math.abs(next - basin.inflow) > 1e-6 * Math.max(1, Math.abs(next))) changed = true;
+      basin.inflow = next;
       if (!basin.significant) continue;
       const ratio = basin.inflow / basin.evaporation;
       const kind =
@@ -462,7 +532,7 @@ export function generateHydrology(
         changed = true;
       }
     }
-    if (!changed && pass > 0) break;
+    if (!changed) break;
   }
 
   // Lacs : un lac d'eau douce remplit son bassin jusqu'à l'exutoire ; un lac salé n'en
@@ -477,6 +547,7 @@ export function generateHydrology(
       continue;
     }
     let chosen = basin.cells;
+    let surface = Number.NEGATIVE_INFINITY;
     if (basin.kind !== LAKE.fresh) {
       const ratio = basin.inflow / basin.evaporation;
       const share = basin.kind === LAKE.salt ? ratio : config.saltFlatShare;
@@ -485,14 +556,20 @@ export function generateHydrology(
         basin.cells.length,
         Math.max(minimum, Math.round(share * basin.cells.length)),
       );
-      chosen = lowestPart(basin.cells, offset + 1, keep, labels, elevation, neighbors, tie, level);
-    }
-    let surface = Number.NEGATIVE_INFINITY;
-    for (const index of chosen) {
-      surface = Math.max(
-        surface,
-        basin.kind === LAKE.fresh ? (filled[index] ?? 0) : (elevation[index] ?? 0),
+      const part = lowestPart(
+        basin.cells,
+        offset + 1,
+        keep,
+        labels,
+        elevation,
+        neighbors,
+        tie,
+        level,
       );
+      chosen = part.cells;
+      surface = part.surface;
+    } else {
+      for (const index of chosen) surface = Math.max(surface, filled[index] ?? 0);
     }
     for (const index of chosen) {
       lake[index] = basin.kind;
@@ -501,22 +578,11 @@ export function generateHydrology(
   }
 
   // Un bassin sans exutoire (lac salé, salar) garde son eau : elle y descend vers le lac,
-  // au lieu de gagner le bord par le chemin du remplissage. Son écoulement se refait par
-  // un remplissage parti du lac.
-  for (const [offset, basin] of basins.entries()) {
+  // au lieu de gagner le bord par le chemin du remplissage.
+  const local = new Int32Array(count).fill(-1);
+  for (const basin of basins) {
     if (basin.significant && basin.kind !== LAKE.fresh) {
-      routeToLake(
-        basin.cells,
-        offset + 1,
-        labels,
-        lake,
-        elevation,
-        neighbors,
-        tie,
-        level,
-        receiver,
-        direction,
-      );
+      routeToLake(basin.cells, lake, elevation, neighbors, tie, local, receiver, direction);
     }
   }
   const final = accumulate(receiver, water, labels, basins);
@@ -549,46 +615,48 @@ export function generateHydrology(
 }
 
 /**
- * Refait l'écoulement d'un bassin sans exutoire : un remplissage part de ses cases de lac
- * (ou de salar), puits de toute l'eau du bassin, et chaque autre case du bassin s'écoule
- * vers la case d'où ce remplissage l'a atteinte. `level` sert d'altitude de travail.
+ * Refait l'écoulement d'un bassin sans exutoire comme celui du reste de la carte, son lac
+ * (ou son salar) tenant lieu de mer : un remplissage parti du lac, avec la pente minimale
+ * et le choix des vallées enfouies de `priorityFlood`, puis la plus forte pente, à travers
+ * les cuvettes internes par leurs chenaux (`receivers`). L'eau descend ainsi les vallées
+ * du bassin jusqu'au lac, sans filer en ligne droite. Le calcul se fait sur les seules
+ * cases du bassin ; `local` sert de table de travail, remise à -1 après usage.
  */
 function routeToLake(
   cells: readonly number[],
-  label: number,
-  labels: Int32Array,
   lake: Uint8Array,
   elevation: Float32Array,
   neighbors: Int32Array,
   tie: Uint32Array,
-  level: Float64Array,
+  local: Int32Array,
   receiver: Int32Array,
   direction: Uint8Array,
 ): void {
-  const heap = new CellHeap(cells.length, level, tie);
-  const reached = new Set<number>();
-  for (const index of cells) {
-    level[index] = elevation[index] ?? 0;
-    if (lake[index] !== LAKE.none) {
-      receiver[index] = -1;
-      direction[index] = NO_DIRECTION;
-      reached.add(index);
-      heap.push(index);
-    }
-  }
-  while (heap.length > 0) {
-    const cell = heap.pop();
-    const next = (level[cell] ?? 0) + EPSILON;
+  const count = cells.length;
+  cells.forEach((cell, index) => {
+    local[cell] = index;
+  });
+  const subElevation = new Float32Array(count);
+  const subOutlet = new Uint8Array(count);
+  const subTie = new Uint32Array(count);
+  const subNeighbors = new Int32Array(count * 8).fill(-1);
+  cells.forEach((cell, index) => {
+    subElevation[index] = elevation[cell] ?? 0;
+    subOutlet[index] = lake[cell] !== LAKE.none ? 1 : 0;
+    subTie[index] = tie[cell] ?? 0;
     for (let d = 0; d < 8; d++) {
       const other = neighbors[cell * 8 + d] ?? -1;
-      if (other < 0 || labels[other] !== label || reached.has(other)) continue;
-      reached.add(other);
-      level[other] = Math.max(level[other] ?? 0, next);
-      receiver[other] = cell;
-      direction[other] = opposite(d);
-      heap.push(other);
+      subNeighbors[index * 8 + d] = other >= 0 ? (local[other] ?? -1) : -1;
     }
-  }
+  });
+  const { filled, parent } = priorityFlood(subElevation, subOutlet, subNeighbors, subTie);
+  const routed = receivers(subElevation, subOutlet, filled, parent, subNeighbors, subTie);
+  cells.forEach((cell, index) => {
+    const next = routed.receiver[index] ?? -1;
+    receiver[cell] = next >= 0 ? (cells[next] ?? -1) : -1;
+    direction[cell] = routed.direction[index] ?? NO_DIRECTION;
+  });
+  for (const cell of cells) local[cell] = -1;
 }
 
 /**
@@ -641,9 +709,12 @@ function accumulate(
 }
 
 /**
- * Partie basse d'un bassin : les `keep` premières cases d'un remplissage parti de sa case
- * la plus basse. Le lac salé ou le salar s'étend ainsi d'un seul tenant depuis le fond,
- * même sur un fond plat.
+ * Partie basse d'un bassin, en vraie nappe d'eau : un remplissage parti de sa case la
+ * plus basse range les cases par le niveau d'eau qui les atteint (l'altitude la plus
+ * haute du chemin le plus bas). Un lac à un niveau couvre toutes les cases que ce
+ * niveau atteint : au-delà d'un seuil, la cuvette suivante se remplit d'un coup. La
+ * partie basse est donc faite de niveaux entiers, au plus près de `keep` cases ; aucune
+ * case sèche voisine n'est plus basse que sa surface, qui est renvoyée avec elle.
  */
 function lowestPart(
   cells: readonly number[],
@@ -654,7 +725,7 @@ function lowestPart(
   neighbors: Int32Array,
   tie: Uint32Array,
   level: Float64Array,
-): number[] {
+): { cells: number[]; surface: number } {
   let lowest = cells[0] ?? 0;
   for (const index of cells) {
     const value = elevation[index] ?? 0;
@@ -665,18 +736,30 @@ function lowestPart(
   const reached = new Set<number>([lowest]);
   level[lowest] = elevation[lowest] ?? 0;
   heap.push(lowest);
-  const chosen: number[] = [];
-  while (heap.length > 0 && chosen.length < keep) {
+  const order: number[] = [];
+  while (heap.length > 0) {
     const cell = heap.pop();
-    chosen.push(cell);
-    const next = (level[cell] ?? 0) + EPSILON;
+    order.push(cell);
+    const here = level[cell] ?? 0;
     for (let d = 0; d < 8; d++) {
       const other = neighbors[cell * 8 + d] ?? -1;
       if (other < 0 || labels[other] !== label || reached.has(other)) continue;
       reached.add(other);
-      level[other] = Math.max(elevation[other] ?? 0, next);
+      level[other] = Math.max(elevation[other] ?? 0, here);
       heap.push(other);
     }
   }
-  return chosen;
+  // Niveaux entiers : on s'arrête au bout d'un niveau, celui qui approche le mieux `keep`.
+  let taken = 0;
+  let surface = level[lowest] ?? 0;
+  while (taken < order.length) {
+    const value = level[order[taken] ?? 0] ?? 0;
+    let end = taken;
+    while (end < order.length && level[order[end] ?? 0] === value) end++;
+    if (taken > 0 && end > keep && end - keep > keep - taken) break;
+    taken = end;
+    surface = value;
+    if (taken >= keep) break;
+  }
+  return { cells: order.slice(0, taken), surface };
 }

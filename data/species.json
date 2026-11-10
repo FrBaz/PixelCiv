@@ -1,0 +1,253 @@
+[
+  {
+    "id": "human",
+    "name": "species.human",
+    "maturity": 15,
+    "longevity": 95,
+    "mortality": {
+      "infant": {
+        "level": 0.42,
+        "decay": 1.13
+      },
+      "background": 0.01,
+      "senescence": {
+        "level": 5e-5,
+        "growth": 0.085
+      }
+    },
+    "fertility": {
+      "from": 15,
+      "peak": 24,
+      "to": 45,
+      "maleTo": 70,
+      "monthly": 0.15,
+      "postpartum": 24,
+      "gestation": 9,
+      "childbirthDeath": 0.01
+    },
+    "couple": {
+      "minAge": 16,
+      "maxGap": 15
+    },
+    "childNeed": 0.5,
+    "height": [145, 195],
+    "subspecies": [
+      {
+        "id": "nordic",
+        "name": "subspecies.nordic",
+        "adaptation": {
+          "cold": 0.8,
+          "heat": 0.2,
+          "endurance": 0.5
+        },
+        "biomes": [
+          "taiga",
+          "cold-forest",
+          "tundra",
+          "cold-steppe",
+          "temperate-forest",
+          "temperate-rainforest",
+          "bog"
+        ],
+        "appearance": {
+          "alleles": {
+            "eyes": {
+              "brown": 0.25,
+              "green": 0.2,
+              "blue": 0.55
+            },
+            "hair": {
+              "black": 0.05,
+              "brown": 0.35,
+              "blond": 0.45,
+              "red": 0.15
+            },
+            "face": {
+              "oval": 0.3,
+              "round": 0.2,
+              "square": 0.3,
+              "long": 0.2
+            },
+            "nose": {
+              "straight": 0.4,
+              "broad": 0.1,
+              "aquiline": 0.2,
+              "small": 0.3
+            }
+          },
+          "traits": {
+            "skin": {
+              "mean": 0.12,
+              "sd": 0.05
+            },
+            "height": {
+              "mean": 0.62,
+              "sd": 0.12
+            },
+            "strength": {
+              "mean": 0.55,
+              "sd": 0.15
+            },
+            "speed": {
+              "mean": 0.5,
+              "sd": 0.15
+            },
+            "vision": {
+              "mean": 0.5,
+              "sd": 0.15
+            },
+            "intelligence": {
+              "mean": 0.5,
+              "sd": 0.15
+            },
+            "ambition": {
+              "mean": 0.5,
+              "sd": 0.15
+            }
+          }
+        }
+      },
+      {
+        "id": "plains",
+        "name": "subspecies.plains",
+        "adaptation": {
+          "cold": 0.45,
+          "heat": 0.5,
+          "endurance": 0.6
+        },
+        "biomes": [
+          "grassland",
+          "steppe",
+          "temperate-forest",
+          "savanna",
+          "tropical-grassland",
+          "marsh"
+        ],
+        "appearance": {
+          "alleles": {
+            "eyes": {
+              "brown": 0.65,
+              "green": 0.2,
+              "blue": 0.15
+            },
+            "hair": {
+              "black": 0.3,
+              "brown": 0.55,
+              "blond": 0.1,
+              "red": 0.05
+            },
+            "face": {
+              "oval": 0.35,
+              "round": 0.3,
+              "square": 0.2,
+              "long": 0.15
+            },
+            "nose": {
+              "straight": 0.35,
+              "broad": 0.25,
+              "aquiline": 0.15,
+              "small": 0.25
+            }
+          },
+          "traits": {
+            "skin": {
+              "mean": 0.45,
+              "sd": 0.1
+            },
+            "height": {
+              "mean": 0.5,
+              "sd": 0.12
+            },
+            "strength": {
+              "mean": 0.5,
+              "sd": 0.15
+            },
+            "speed": {
+              "mean": 0.55,
+              "sd": 0.15
+            },
+            "vision": {
+              "mean": 0.5,
+              "sd": 0.15
+            },
+            "intelligence": {
+              "mean": 0.5,
+              "sd": 0.15
+            },
+            "ambition": {
+              "mean": 0.5,
+              "sd": 0.15
+            }
+          }
+        }
+      },
+      {
+        "id": "sands",
+        "name": "subspecies.sands",
+        "adaptation": {
+          "cold": 0.15,
+          "heat": 0.85,
+          "endurance": 0.7
+        },
+        "biomes": ["desert", "savanna", "tropical-grassland", "steppe", "beach", "tropical-forest"],
+        "appearance": {
+          "alleles": {
+            "eyes": {
+              "brown": 0.9,
+              "green": 0.07,
+              "blue": 0.03
+            },
+            "hair": {
+              "black": 0.85,
+              "brown": 0.15,
+              "blond": 0,
+              "red": 0
+            },
+            "face": {
+              "oval": 0.3,
+              "round": 0.2,
+              "square": 0.15,
+              "long": 0.35
+            },
+            "nose": {
+              "straight": 0.25,
+              "broad": 0.35,
+              "aquiline": 0.3,
+              "small": 0.1
+            }
+          },
+          "traits": {
+            "skin": {
+              "mean": 0.8,
+              "sd": 0.08
+            },
+            "height": {
+              "mean": 0.56,
+              "sd": 0.12
+            },
+            "strength": {
+              "mean": 0.5,
+              "sd": 0.15
+            },
+            "speed": {
+              "mean": 0.55,
+              "sd": 0.15
+            },
+            "vision": {
+              "mean": 0.55,
+              "sd": 0.15
+            },
+            "intelligence": {
+              "mean": 0.5,
+              "sd": 0.15
+            },
+            "ambition": {
+              "mean": 0.5,
+              "sd": 0.15
+            }
+          }
+        }
+      }
+    ]
+  }
+]

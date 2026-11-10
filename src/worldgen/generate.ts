@@ -21,12 +21,12 @@ import {
 import { classifyBiomes } from './biomes';
 import { generateClimate } from './climate';
 import { findOcean, generateHydrology, LAKE } from './hydrology';
-import { generateRelief } from './relief';
+import { generateRelief, reliefSettings } from './relief';
 import { placeResources } from './resources';
 import { CylinderSampler } from './sampler';
 
 /** Version du générateur : elle change quand un même monde ne se génère plus pareil. */
-export const GENERATOR_VERSION = 1;
+export const GENERATOR_VERSION = 2;
 
 /** Ce que la génération demande : graine, taille et réglages. */
 export type GenerationParams = {
@@ -49,7 +49,12 @@ export function generateWorld(
   const rng = new Rng(params.seed);
 
   onStage('relief');
-  const relief = generateRelief(sampler, rng, params);
+  const relief = generateRelief(
+    sampler,
+    rng,
+    params,
+    reliefSettings(worldgen, data.altitudeLevels.entries),
+  );
   const ocean = findOcean(relief, size, worldgen.ocean.minShare);
 
   onStage('climate');
@@ -65,15 +70,45 @@ export function generateWorld(
     rng.stream('worldgen.hydrology'),
     worldgen.hydrology,
     params,
+    climate.amplitude,
   );
-  const { elevation } = hydrology;
+
+  // Valeurs du monde stocké, arrondies et bornées à leur type avant le classement : les
+  // biomes et les gisements se décident sur ce que le monde garde, qui respecte donc ses
+  // propres règles. Les cuvettes comblées et la surface des lacs ont leur altitude, et
+  // leur température suit le gradient de 6,5 °C par 1 000 m.
+  const count = size.width * size.height;
+  const elevation = new Float32Array(count);
+  const temperature = new Float32Array(count);
+  const amplitude = new Float32Array(count);
+  const precipitation = new Float32Array(count);
+  const { lapseRate } = worldgen.climate;
+  for (let cell = 0; cell < count; cell++) {
+    const meters = hydrology.elevation[cell] ?? 0;
+    const sea = ocean[cell] === 1;
+    const lake = hydrology.lake[cell] ?? LAKE.none;
+    const water = lake === LAKE.fresh || lake === LAKE.salt;
+    // Au plus -1 en mer, négatif au fond d'un lac ou d'un salar, au moins 0 sur les terres.
+    elevation[cell] = sea
+      ? -Math.min(32767, Math.max(1, Math.round(-meters)))
+      : lake === LAKE.none
+        ? Math.min(32767, Math.max(0, Math.round(meters)))
+        : Math.max(-32768, Math.min(32767, Math.round(meters)));
+    const surface = sea ? 0 : water ? (hydrology.lakeSurface[cell] ?? meters) : meters;
+    const lift = sea ? 0 : Math.max(0, surface) - Math.max(0, relief[cell] ?? 0);
+    const celsius = (climate.temperature[cell] ?? 0) - (lapseRate * lift) / 1000;
+    temperature[cell] = Math.max(-3276.8, Math.min(3276.7, Math.round(celsius * 10) / 10));
+    amplitude[cell] = Math.min(25.5, Math.round((climate.amplitude[cell] ?? 0) * 10) / 10);
+    precipitation[cell] = Math.min(65535, Math.round(climate.precipitation[cell] ?? 0));
+  }
+  const stored = { ...climate, temperature, amplitude, precipitation };
 
   onStage('biomes');
   const { biome, river } = classifyBiomes(
     sampler,
     rng,
     elevation,
-    climate,
+    stored,
     hydrology,
     worldgen,
     data.biomes,
@@ -82,26 +117,25 @@ export function generateWorld(
   onStage('resources');
   const resources = placeResources(sampler, rng, elevation, biome, data);
 
-  // Couches compactes : entiers arrondis, bornés à leur type.
+  // Couches compactes.
   const layers = emptyLayers(size);
-  const count = size.width * size.height;
   for (let cell = 0; cell < count; cell++) {
     const meters = elevation[cell] ?? 0;
     const sea = ocean[cell] === 1;
-    layers.elevation[cell] = sea
-      ? -Math.min(32767, Math.max(1, Math.round(-meters)))
-      : Math.max(-32768, Math.min(32767, Math.round(meters)));
+    layers.elevation[cell] = meters;
     const lake = hydrology.lake[cell];
-    if (sea) layers.waterDepth[cell] = Math.min(65535, Math.max(1, Math.round(-meters)));
-    else if (lake === LAKE.fresh || lake === LAKE.salt) {
+    // Un lac salé gelé toute l'année est sous la calotte : il n'a plus d'eau libre.
+    const open = data.biomes.entries.at(biome[cell] ?? 0)?.family === 'water';
+    if (sea) layers.waterDepth[cell] = Math.min(65535, Math.max(1, -meters));
+    else if (open && (lake === LAKE.fresh || lake === LAKE.salt)) {
       const depth = (hydrology.lakeSurface[cell] ?? meters) - meters;
       layers.waterDepth[cell] = Math.min(65535, Math.max(1, Math.round(depth)));
     }
     layers.biome[cell] = biome[cell] ?? 0;
     layers.drainage[cell] = encodeDrainage(hydrology.direction[cell] ?? 8, river[cell] ?? 0);
-    layers.temperature[cell] = Math.round((climate.temperature[cell] ?? 0) * 10);
-    layers.amplitude[cell] = Math.min(255, Math.round((climate.amplitude[cell] ?? 0) * 10));
-    layers.precipitation[cell] = Math.min(65535, Math.round(climate.precipitation[cell] ?? 0));
+    layers.temperature[cell] = Math.round((temperature[cell] ?? 0) * 10);
+    layers.amplitude[cell] = Math.round((amplitude[cell] ?? 0) * 10);
+    layers.precipitation[cell] = precipitation[cell] ?? 0;
     layers.deposit[cell] = resources.deposit[cell] ?? 0;
     layers.trees[cell] = resources.trees[cell] ?? 0;
     layers.shrubs[cell] = resources.shrubs[cell] ?? 0;

@@ -5,14 +5,37 @@ import { Fingerprint } from '../core/hash';
 import { Rng } from '../core/rng';
 import { WORLD_SIZES } from '../core/world';
 import { components } from './grid';
-import { generateRelief, mountainShare, type ReliefParams } from './relief';
+import {
+  generateRelief,
+  mountainShare,
+  reliefFields,
+  reliefSettings,
+  seaThreshold,
+  toElevation,
+  type ReliefParams,
+} from './relief';
 import { CylinderSampler } from './sampler';
 
+const data = loadGameData();
+const SETTINGS = reliefSettings(data.worldgen, data.altitudeLevels.entries);
 const DEFAULTS: ReliefParams = { landShare: 0.35, seaLevel: 0, relief: 0.5 };
 const SIZE = WORLD_SIZES.small;
 
+/** Bas d'un niveau d'altitude de data/altitude-levels.json, en mètres. */
+function levelFloor(id: string): number {
+  return data.altitudeLevels.entries.find((level) => level.id === id)?.min ?? Number.NaN;
+}
+const MID_MOUNTAIN = levelFloor('mid-mountain');
+const HIGH_MOUNTAIN = levelFloor('high-mountain');
+const SUMMIT = levelFloor('summit');
+
 function relief(seed: string, params: Partial<ReliefParams> = {}): Float32Array {
-  return generateRelief(new CylinderSampler(SIZE), new Rng(seed), { ...DEFAULTS, ...params });
+  return generateRelief(
+    new CylinderSampler(SIZE),
+    new Rng(seed),
+    { ...DEFAULTS, ...params },
+    SETTINGS,
+  );
 }
 
 function share(elevation: Float32Array, test: (meters: number) => boolean): number {
@@ -24,6 +47,27 @@ function share(elevation: Float32Array, test: (meters: number) => boolean): numb
 /** Part des terres au-dessus de `meters`. */
 function landAbove(elevation: Float32Array, meters: number): number {
   return share(elevation, (value) => value >= meters) / share(elevation, (value) => value >= 0);
+}
+
+/** Plus grande étendue, en colonnes ou en lignes, des taches d'au moins `meters`. */
+function longestExtent(elevation: Float32Array, meters: number): number {
+  const found = components(
+    elevation.map((value) => (value >= meters ? 1 : 0)),
+    SIZE,
+  );
+  const columns = found.sizes.map(() => new Set<number>());
+  const rows = found.sizes.map(() => new Set<number>());
+  found.labels.forEach((label, index) => {
+    if (label === 0) return;
+    columns[label]?.add(index % SIZE.width);
+    rows[label]?.add(Math.floor(index / SIZE.width));
+  });
+  return Math.max(
+    0,
+    ...found.sizes.slice(1).map((_, label) => {
+      return Math.max(columns[label + 1]?.size ?? 0, rows[label + 1]?.size ?? 0);
+    }),
+  );
 }
 
 describe('relief', () => {
@@ -52,18 +96,19 @@ describe('relief', () => {
   });
 
   it('place de 3 à 6 % des terres au-dessus de la moyenne montagne (C1, D12)', () => {
+    expect(MID_MOUNTAIN).toBe(1800);
     for (const elevation of worlds.values()) {
-      const above = landAbove(elevation, 1800);
+      const above = landAbove(elevation, MID_MOUNTAIN);
       expect(above).toBeGreaterThanOrEqual(0.03);
       expect(above).toBeLessThanOrEqual(0.06);
     }
   });
 
   it('suit le paramètre « relief », de plat à montagneux', () => {
-    const flat = landAbove(relief('pixelciv', { relief: 0 }), 1800);
-    const steep = landAbove(relief('pixelciv', { relief: 1 }), 1800);
-    expect(flat).toBeCloseTo(mountainShare(0), 2);
-    expect(steep).toBeCloseTo(mountainShare(1), 2);
+    const flat = landAbove(relief('pixelciv', { relief: 0 }), MID_MOUNTAIN);
+    const steep = landAbove(relief('pixelciv', { relief: 1 }), MID_MOUNTAIN);
+    expect(flat).toBeCloseTo(mountainShare(SETTINGS, 0), 2);
+    expect(steep).toBeCloseTo(mountainShare(SETTINGS, 1), 2);
     expect(steep).toBeGreaterThan(flat * 5);
   });
 
@@ -78,9 +123,9 @@ describe('relief', () => {
         // Une case de mer a au moins un mètre de fond : altitude et mer ne se confondent pas.
         if (meters < 0 && meters > -1) ambiguous++;
       }
-      expect(highest).toBeLessThanOrEqual(7000);
-      expect(highest).toBeGreaterThan(2600);
-      expect(deepest).toBeGreaterThanOrEqual(-5500);
+      expect(highest).toBeLessThanOrEqual(SETTINGS.maxAltitude);
+      expect(highest).toBeGreaterThan(HIGH_MOUNTAIN);
+      expect(deepest).toBeGreaterThanOrEqual(-SETTINGS.maxDepth);
       expect(ambiguous).toBe(0);
     }
   });
@@ -95,7 +140,7 @@ describe('relief', () => {
         SIZE,
       );
       const peaks = components(
-        elevation.map((meters) => (meters >= 1800 ? 1 : 0)),
+        elevation.map((meters) => (meters >= MID_MOUNTAIN ? 1 : 0)),
         SIZE,
       );
       const columns = chains.sizes.map(() => new Set<number>());
@@ -117,6 +162,54 @@ describe('relief', () => {
         (label) => extent(label) >= 30 && (massifs[label]?.size ?? 0) >= 2,
       );
       expect(separated.length).toBeGreaterThanOrEqual(1);
+    }
+  });
+
+  it('dresse ses crêtes sur les chaînes, et les entaille de cols (D12)', () => {
+    for (const seed of seeds) {
+      const fields = reliefFields(new CylinderSampler(SIZE), new Rng(seed), DEFAULTS.relief);
+      const sea = seaThreshold(fields.height, DEFAULTS);
+      const elevation = toElevation(fields.height, sea, DEFAULTS.relief, SETTINGS);
+      // Altitude moyenne des terres hors des chaînes, des crêtes intactes, et des cols.
+      const groups = { plain: [0, 0], crest: [0, 0], pass: [0, 0] };
+      let land = 0;
+      for (let cell = 0; cell < elevation.length; cell++) {
+        const meters = elevation[cell] ?? 0;
+        if (meters < 0) continue;
+        land++;
+        const crest = fields.crest[cell] ?? 0;
+        const pass = fields.pass[cell] ?? 1;
+        const group =
+          crest === 0
+            ? groups.plain
+            : crest < 0.5
+              ? undefined
+              : pass === 1
+                ? groups.crest
+                : pass <= 0.3
+                  ? groups.pass
+                  : undefined;
+        if (group === undefined) continue;
+        group[0] = (group[0] ?? 0) + meters;
+        group[1] = (group[1] ?? 0) + 1;
+      }
+      const mean = ([sum = 0, count = 0]: number[]) => sum / count;
+      const crests = groups.crest[1] ?? 0;
+      const passes = groups.pass[1] ?? 0;
+      // Des crêtes sur une part des terres, bien plus hautes que les plaines alentour…
+      expect(crests + passes).toBeGreaterThan(0.002 * land);
+      expect(mean(groups.crest)).toBeGreaterThan(2.5 * mean(groups.plain));
+      // … et des cols de place en place, où la crête retombe.
+      expect(passes / (crests + passes)).toBeGreaterThan(0.05);
+      expect(passes / (crests + passes)).toBeLessThan(0.4);
+      expect(mean(groups.pass)).toBeLessThan(0.4 * mean(groups.crest));
+    }
+  });
+
+  it("n'élève pas de murailles : les cols coupent les sommets, même au relief le plus fort", () => {
+    // Le sommet est infranchissable aux armées (D11) : ses taches restent courtes.
+    for (const seed of seeds) {
+      expect(longestExtent(relief(seed, { relief: 1 }), SUMMIT)).toBeLessThanOrEqual(45);
     }
   });
 

@@ -3,7 +3,7 @@ import altitudeLevelsJson from '../../../data/altitude-levels.json';
 import biomesJson from '../../../data/biomes.json';
 import fr from '../../i18n/fr.json';
 import { DataError, loadCatalog } from './catalog';
-import { loadGameData } from './index';
+import { checkContent, loadGameData, type GameData } from './index';
 import { AltitudeLevelsSchema, BiomesSchema } from './schemas';
 
 /** Les 32 biomes naturels de la séance C1 (D6), par famille, tels que la séance les nomme. */
@@ -104,5 +104,144 @@ describe('data/altitude-levels.json', () => {
         levels.map((level) => (level.id === 'shelf' ? { ...level, navigation: undefined } : level)),
       ),
     ).toThrow(/naviguent/);
+  });
+});
+
+describe('noms traduits', () => {
+  const data = loadGameData();
+
+  it('a un nom traduit pour chaque ressource et chaque espèce de la flore', () => {
+    // Ces noms s'affichent par tKey : leur clé ne se vérifie pas à la compilation.
+    const names = [
+      ...data.resources.entries.map((resource) => resource.name),
+      ...data.flora.entries.map((species) => species.name),
+    ];
+    expect(names.filter((name) => typeof messages[name] !== 'string')).toEqual([]);
+  });
+});
+
+describe('cohérence du contenu', () => {
+  const data = loadGameData();
+  /** Les données livrées, dont un biome est remplacé. */
+  const withBiome = (
+    id: string,
+    change: (biome: GameData['biomes']['entries'][number]) => object,
+  ) =>
+    ({
+      ...data,
+      biomes: {
+        ...data.biomes,
+        entries: data.biomes.entries.map((biome) => (biome.id === id ? change(biome) : biome)),
+        indexOf: (key: string) => data.biomes.indexOf(key),
+      },
+    }) as GameData;
+
+  it('ne trouve rien à redire aux données livrées', () => {
+    expect(checkContent(data)).toEqual([]);
+  });
+
+  it("relève une flore qui contredit les densités d'un biome", () => {
+    const treeless = withBiome('desert', (biome) => ({
+      ...biome,
+      flora: { ...biome.flora, trees: 0.4 },
+    }));
+    expect(checkContent(treeless)).toEqual([
+      'data/biomes.json (flore) : desert a des tree sans espèce',
+    ]);
+    const unlisted = withBiome('glacier', (biome) => ({
+      ...biome,
+      flora: { ...biome.flora, species: ['conifer'] },
+    }));
+    expect(checkContent(unlisted)).toEqual([
+      'data/biomes.json (flore) : glacier liste des tree sans densité',
+    ]);
+  });
+
+  it('relève un identifiant inconnu', () => {
+    const unknown = withBiome('marsh', (biome) => ({ ...biome, resources: ['unobtainium'] }));
+    expect(checkContent(unknown)).toEqual([
+      'data/biomes.json (ressources) : inconnus : unobtainium',
+    ]);
+  });
+
+  it('borne les catalogues aux octets des couches du monde', () => {
+    const many = {
+      ...data,
+      resources: {
+        ...data.resources,
+        entries: Array.from({ length: 256 }, (_, index) => ({
+          ...data.resources.entries[index % data.resources.entries.length],
+        })),
+      },
+    } as GameData;
+    expect(checkContent(many)).toContain(
+      'data/resources.json : 255 ressources au plus (couche des gisements sur un octet)',
+    );
+  });
+});
+
+describe('data/species.json et data/genetics.json', () => {
+  const { species, genetics } = loadGameData();
+
+  it('compte les humains en trois sous-espèces : nordiques, des plaines, des sables (ESP-01)', () => {
+    expect(species.entries.map((entry) => entry.id)).toEqual(['human']);
+    expect(species.entries[0]?.subspecies.map((entry) => entry.id)).toEqual([
+      'nordic',
+      'plains',
+      'sands',
+    ]);
+  });
+
+  it('ne distingue pas les sous-espèces par leurs capacités mentales (ESP-02)', () => {
+    for (const entry of species.entries) {
+      const mind = (id: string) =>
+        entry.subspecies.map((subspecies) => subspecies.appearance.traits[id]);
+      for (const id of ['intelligence', 'ambition']) {
+        const distributions = mind(id);
+        expect(distributions[0]).toBeDefined();
+        for (const distribution of distributions) expect(distribution).toEqual(distributions[0]);
+      }
+    }
+  });
+
+  it('a un nom traduit pour chaque espèce, sous-espèce, locus, allèle et trait', () => {
+    const names = [
+      ...species.entries.flatMap((entry) => [
+        entry.name,
+        ...entry.subspecies.map((subspecies) => subspecies.name),
+      ]),
+      ...genetics.loci.flatMap((locus) => [locus.name, ...locus.alleles.map((a) => a.name)]),
+      ...genetics.traits.map((trait) => trait.name),
+    ];
+    expect(names.filter((name) => typeof messages[name] !== 'string')).toEqual([]);
+  });
+
+  it('relève une apparence qui renvoie à un allèle ou à un trait inconnu', () => {
+    const data = loadGameData();
+    const human = data.species.entries.at(0);
+    if (human === undefined) throw new Error('pas d’espèce');
+    const broken = {
+      ...human,
+      subspecies: human.subspecies.map((subspecies, index) =>
+        index === 0
+          ? {
+              ...subspecies,
+              appearance: {
+                alleles: { ...subspecies.appearance.alleles, eyes: { violet: 1 } },
+                traits: { ...subspecies.appearance.traits, charm: { mean: 0.5, sd: 0.1 } },
+              },
+            }
+          : subspecies,
+      ),
+    };
+    const problems = checkContent({
+      ...data,
+      species: { ...data.species, entries: [broken] },
+    });
+    expect(problems).toEqual([
+      'data/species.json (human, nordic) : allèles inconnus : violet',
+      "data/species.json (human, nordic) : aucun allèle du locus eyes n'a de fréquence",
+      'data/species.json (human, nordic) : traits inconnus : charm',
+    ]);
   });
 });

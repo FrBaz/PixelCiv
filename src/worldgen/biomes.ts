@@ -18,7 +18,8 @@ import {
 } from '../core/data/worldgen';
 import type { Rng } from '../core/rng';
 import type { WorldSize } from '../core/world';
-import { extremeMonths, type Climate } from './climate';
+import { extremeMonths } from '../core/seasons';
+import type { Climate } from './climate';
 import { distanceField, neighborTable } from './grid';
 import { LAKE, RIVER, type Hydrology } from './hydrology';
 import { NoiseLayer, type CylinderSampler } from './sampler';
@@ -71,26 +72,27 @@ function ranks(values: Float64Array, keep: (index: number) => boolean): Float64A
   return result;
 }
 
-/** Ouverture morphologique par un carré de 2 × 2 : efface les cases isolées (D5). */
-function opening(mask: Uint8Array, size: WorldSize): Uint8Array {
+/**
+ * Ouverture morphologique par un carré de `side` × `side` cases : efface les taches plus
+ * petites (D5). Un côté de 1 ne change rien.
+ */
+function opening(mask: Uint8Array, size: WorldSize, side: number): Uint8Array {
+  if (side <= 1) return Uint8Array.from(mask);
   const { width, height } = size;
   const at = (x: number, y: number) => y * width + ((x + width) % width);
-  const eroded = new Uint8Array(mask.length);
-  for (let y = 0; y + 1 < height; y++) {
-    for (let x = 0; x < width; x++) {
-      if (mask[at(x, y)] && mask[at(x + 1, y)] && mask[at(x, y + 1)] && mask[at(x + 1, y + 1)]) {
-        eroded[at(x, y)] = 1;
-      }
+  const fits = (x: number, y: number) => {
+    for (let dy = 0; dy < side; dy++) {
+      for (let dx = 0; dx < side; dx++) if (!mask[at(x + dx, y + dy)]) return false;
     }
-  }
+    return true;
+  };
   const result = new Uint8Array(mask.length);
-  for (let y = 0; y + 1 < height; y++) {
+  for (let y = 0; y + side <= height; y++) {
     for (let x = 0; x < width; x++) {
-      if (!eroded[at(x, y)]) continue;
-      result[at(x, y)] = 1;
-      result[at(x + 1, y)] = 1;
-      result[at(x, y + 1)] = 1;
-      result[at(x + 1, y + 1)] = 1;
+      if (!fits(x, y)) continue;
+      for (let dy = 0; dy < side; dy++) {
+        for (let dx = 0; dx < side; dx++) result[at(x + dx, y + dy)] = 1;
+      }
     }
   }
   return result;
@@ -215,7 +217,9 @@ export function classifyBiomes(
       candidate[cell] = 1;
     }
   }
-  const wetland = opening(candidate, size);
+  // Sans case isolée : une tache fait au moins 2 × 2 cases d'une carte Grand, soit une case
+  // d'une carte Petit et 4 × 4 d'une carte Immense.
+  const wetland = opening(candidate, size, Math.round((2 * size.width) / 1024));
 
   // Classement.
   const biome = new Uint8Array(count);
@@ -250,7 +254,10 @@ export function classifyBiomes(
       continue;
     }
     const lakeKind = lake[cell] ?? LAKE.none;
-    if (lakeKind !== LAKE.none) {
+    // Un salar est une terre émergée, un lac salé une eau sans exutoire : sous un mois le
+    // plus chaud resté sous 0 °C, la calotte les couvre (D13). Un lac d'eau douce reste un
+    // lac, gelé toute l'année.
+    if (lakeKind !== LAKE.none && (lakeKind === LAKE.fresh || !matches(glacierRule, values))) {
       biome[cell] = lakeBiomes[lakeKind] ?? 0;
       continue;
     }

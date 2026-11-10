@@ -225,7 +225,8 @@ async function main(): Promise<void> {
         const layers = message.layers;
         worldLayers = layers;
         inspected.value = undefined;
-        map.setWorld(message.world, layers, (mode) => overlayTexels(mode, layers, modeData));
+        const { width } = message.world.size;
+        map.setWorld(message.world, layers, (mode) => overlayTexels(mode, layers, modeData, width));
         actions.setMapMode(mapMode.value);
         const world = map.world;
         if (world !== undefined) controls.center(world);

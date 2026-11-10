@@ -30,7 +30,7 @@ export const EXPECTED_FINGERPRINTS: DeterminismFingerprints = {
 export const SELFTEST_WORLD = { seed: 'autotest', size: { width: 64, height: 32 } } as const;
 
 /** Empreinte de ses couches (layersFingerprint), figée par les tests de la génération. */
-export const EXPECTED_WORLD_FINGERPRINT = 'a9418520';
+export const EXPECTED_WORLD_FINGERPRINT = '8d21020b';
 
 export function determinismFingerprints(): DeterminismFingerprints {
   const stream = new Rng('pixelciv').stream('selftest');

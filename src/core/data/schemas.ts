@@ -17,7 +17,7 @@ export const MessageKeySchema = z.string().regex(/^[a-z]+(\.[a-z0-9-]+)+$/, 'cl�
 export const ColorSchema = z.string().regex(/^#[0-9a-f]{6}$/, 'couleur #rrggbb');
 
 /** Proportion dans [0, 1]. */
-const ShareSchema = z.number().min(0).max(1);
+export const ShareSchema = z.number().min(0).max(1);
 
 /** Familles de biomes de la séance C1 (D6). */
 export const BIOME_FAMILIES = [
@@ -247,7 +247,7 @@ export const AltitudeLevelsSchema = z
   });
 
 /** Liste d'entrées aux identifiants uniques. */
-function uniqueIds<T extends { readonly id: string }>(entry: z.ZodType<T>) {
+export function uniqueIds<T extends { readonly id: string }>(entry: z.ZodType<T>) {
   return z.array(entry).superRefine((entries, context) => {
     const seen = new Set<string>();
     entries.forEach((item, index) => {
@@ -290,6 +290,11 @@ export const ResourceSchema = z
     /** Couleur du mode de carte « ressources ». */
     color: ColorSchema,
     deposit: DepositSchema.optional(),
+    /**
+     * Ressource du milieu montrée en mode « ressources » sur les biomes qui la portent
+     * (data/biomes.json) : celles des milieux humides et salés (RES-05).
+     */
+    overlay: z.boolean().optional(),
   })
   .strict()
   .refine((resource) => (resource.kind === 'mineral') === (resource.deposit !== undefined), {

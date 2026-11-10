@@ -37,7 +37,7 @@ PixiJS inclut à son tour :
 
 ## Algorithmes
 
-Ces algorithmes ont été réécrits à partir de leur description publiée, sans reprise de code.
+Ces algorithmes ont été réécrits à partir de leur description publiée, sans reprise de code, sauf le bruit simplex, porté du code de Stefan Gustavson, versé au domaine public.
 
 | Algorithme | Usage | Auteurs | Référence |
 |---|---|---|---|
@@ -45,6 +45,13 @@ Ces algorithmes ont été réécrits à partir de leur description publiée, san
 | SplitMix et finaliseur de MurmurHash3 | Graines des flux du générateur (`src/core/rng.ts`) | Guy L. Steele Jr., Doug Lea et Christine H. Flood ; Austin Appleby | « Fast Splittable Pseudorandom Number Generators », OOPSLA 2014 ; https://github.com/aappleby/smhasher |
 | FNV-1a | Empreintes de l'état (`src/core/hash.ts`) | Glenn Fowler, Landon Curt Noll et Kiem-Phong Vo | http://www.isthe.com/chongo/tech/comp/fnv/ |
 | Réduction d'argument de Cody et Waite | Fonctions trigonométriques déterministes (`src/core/dmath.ts`) | William J. Cody et William Waite | *Software Manual for the Elementary Functions*, Prentice-Hall, 1980 |
+| Bruit simplex | Relief, climat, flore et gisements (`src/core/noise.ts`), au noyau resserré à √0,5 | Ken Perlin ; forme et code de Stefan Gustavson (domaine public) | Ken Perlin, « Noise hardware », SIGGRAPH 2001 ; Stefan Gustavson, « Simplex noise demystified », 2005 |
+| Bruit de crêtes | Chaînes de montagnes (`src/worldgen/sampler.ts`) | F. Kenton Musgrave | *Texturing and Modeling: A Procedural Approach*, Academic Press, 1994 |
+| Priority-Flood, variante epsilon | Comblement des dépressions et écoulement (`src/worldgen/hydrology.ts`) | Richard Barnes, Clarence Lehman et David Mulla | « Priority-Flood: An optimal depression-filling and watershed-labeling algorithm for digital elevation models », *Computers & Geosciences* 62, 2014 |
+| Algorithme de Dial | Champs de distance (`src/worldgen/grid.ts`) | Robert B. Dial | « Algorithm 360: Shortest-path forest with topological ordering », *Communications of the ACM* 12, 1969 |
+| Formule de Turc et Pike | Évapotranspiration et ruissellement (`src/worldgen/hydrology.ts`) | Lucien Turc ; J. G. Pike | L. Turc, « Le bilan d'eau des sols », *Annales agronomiques*, 1954 ; J. G. Pike, « The estimation of annual run-off from meteorological data in a tropical climate », *Journal of Hydrology* 2, 1964 |
+| Seuil d'aridité de Köppen | Climats secs du classement des biomes (`data/worldgen.json`) | Wladimir Köppen | « Das geographische System der Klimate », *Handbuch der Klimatologie*, 1936 |
+| Tramage ordonné de Bayer | Couverture de neige et de glace, sans sortir des palettes (`src/render/bake.ts`, `src/render/mapShader.ts`) | Bryce E. Bayer | « An optimum method for two-level rendition of continuous-tone pictures », IEEE International Conference on Communications, 1973 |
 
 ## Outils de développement
 

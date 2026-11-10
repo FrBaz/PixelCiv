@@ -133,13 +133,17 @@ export interface CellDetails {
   /** Altitude (m), et profondeur de l'eau (m, 0 hors de l'eau). */
   readonly elevation: number;
   readonly depth: number;
-  /** Températures annuelle et du mois courant (°C), précipitations (mm par an). */
+  /** Températures annuelle et du mois courant (°C). */
   readonly temperature: number;
   readonly monthly: number;
+  /** Précipitations annuelles (mm par an), et celles du mois courant (mm). */
   readonly precipitation: number;
+  readonly monthlyPrecipitation: number;
   /** Classe de rivière : 0 sans rivière, puis ruisseau, rivière, fleuve. */
   readonly river: number;
   readonly deposit: MessageKey | undefined;
+  /** Ressources du milieu que porte le biome. */
+  readonly resources: readonly MessageKey[];
   /** Densités d'arbres et de buissons, en pourcentage. */
   readonly trees: number;
   readonly shrubs: number;

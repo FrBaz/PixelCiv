@@ -21,6 +21,7 @@ import {
   type Application,
 } from 'pixi.js';
 import type { Biome } from '../core/data/schemas';
+import { seasonFactor } from '../core/seasons';
 import type { ChunkPatch, WorldInfo } from '../core/protocol';
 import {
   CHUNK_SIZE,
@@ -207,7 +208,7 @@ export class MapView {
 
   /** Mois courant, continu : 0 au début de janvier, 11,5 à la mi-décembre. */
   setSeason(month: number): void {
-    this.globals.uniforms.uSeason = Math.cos((2 * Math.PI * (month - 6.5)) / 12);
+    this.globals.uniforms.uSeason = seasonFactor(month);
   }
 
   /** Mode de carte : sa superposition se calcule à la demande. */

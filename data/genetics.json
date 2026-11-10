@@ -1,0 +1,152 @@
+{
+  "loci": [
+    {
+      "id": "eyes",
+      "name": "gene.eyes",
+      "alleles": [
+        {
+          "id": "brown",
+          "name": "gene.eyes.brown",
+          "dominance": 2,
+          "color": "#5b3a1e"
+        },
+        {
+          "id": "green",
+          "name": "gene.eyes.green",
+          "dominance": 1,
+          "color": "#4f7a3a"
+        },
+        {
+          "id": "blue",
+          "name": "gene.eyes.blue",
+          "dominance": 0,
+          "color": "#4a7fb5"
+        }
+      ]
+    },
+    {
+      "id": "hair",
+      "name": "gene.hair",
+      "alleles": [
+        {
+          "id": "black",
+          "name": "gene.hair.black",
+          "dominance": 3,
+          "color": "#1f1b19"
+        },
+        {
+          "id": "brown",
+          "name": "gene.hair.brown",
+          "dominance": 2,
+          "color": "#5c3b22"
+        },
+        {
+          "id": "blond",
+          "name": "gene.hair.blond",
+          "dominance": 1,
+          "color": "#d6b46a"
+        },
+        {
+          "id": "red",
+          "name": "gene.hair.red",
+          "dominance": 0,
+          "color": "#a8492b"
+        }
+      ]
+    },
+    {
+      "id": "face",
+      "name": "gene.face",
+      "alleles": [
+        {
+          "id": "oval",
+          "name": "gene.face.oval",
+          "dominance": 2
+        },
+        {
+          "id": "round",
+          "name": "gene.face.round",
+          "dominance": 1
+        },
+        {
+          "id": "square",
+          "name": "gene.face.square",
+          "dominance": 1
+        },
+        {
+          "id": "long",
+          "name": "gene.face.long",
+          "dominance": 0
+        }
+      ]
+    },
+    {
+      "id": "nose",
+      "name": "gene.nose",
+      "alleles": [
+        {
+          "id": "straight",
+          "name": "gene.nose.straight",
+          "dominance": 1
+        },
+        {
+          "id": "broad",
+          "name": "gene.nose.broad",
+          "dominance": 1
+        },
+        {
+          "id": "aquiline",
+          "name": "gene.nose.aquiline",
+          "dominance": 0
+        },
+        {
+          "id": "small",
+          "name": "gene.nose.small",
+          "dominance": 0
+        }
+      ]
+    }
+  ],
+  "traits": [
+    {
+      "id": "skin",
+      "name": "trait.skin",
+      "variation": 0.05
+    },
+    {
+      "id": "height",
+      "name": "trait.height",
+      "variation": 0.085
+    },
+    {
+      "id": "strength",
+      "name": "trait.strength",
+      "variation": 0.1
+    },
+    {
+      "id": "speed",
+      "name": "trait.speed",
+      "variation": 0.1
+    },
+    {
+      "id": "vision",
+      "name": "trait.vision",
+      "variation": 0.1
+    },
+    {
+      "id": "intelligence",
+      "name": "trait.intelligence",
+      "variation": 0.1
+    },
+    {
+      "id": "ambition",
+      "name": "trait.ambition",
+      "variation": 0.1
+    }
+  ],
+  "mutation": {
+    "allele": 0.002,
+    "trait": 0.005,
+    "jump": 0.2
+  }
+}

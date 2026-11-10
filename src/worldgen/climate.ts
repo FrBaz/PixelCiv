@@ -15,8 +15,9 @@
  * haute de la carte. Les distances se comptent en fraction du tour du monde : le climat
  * ne dépend pas de la résolution de la carte.
  */
-import { cos, exp, pow, TAU } from '../core/dmath';
+import { exp, pow } from '../core/dmath';
 import type { Rng } from '../core/rng';
+import { latitude } from '../core/seasons';
 import type { WorldSize } from '../core/world';
 import { boxBlur, distanceField, neighborTable } from './grid';
 import { NoiseLayer, type CylinderSampler, type Fractal } from './sampler';
@@ -52,15 +53,7 @@ export interface Climate {
   readonly continentality: Float32Array;
 }
 
-/** Latitude de la ligne y : 0 à l'équateur, 1 aux pôles. */
-export function latitude(y: number, height: number): number {
-  return Math.abs((2 * (y + 0.5)) / height - 1);
-}
-
-/** Vrai si la ligne y est dans l'hémisphère sud (moitié basse de la carte). */
-export function southern(y: number, height: number): boolean {
-  return y >= height / 2;
-}
+export { latitude, southern } from '../core/seasons';
 
 /** Variation saisonnière de bruit, petite et lente : le climat n'est pas une simple bande. */
 const VARIATION: Fractal = { frequency: 3, octaves: 3 };
@@ -84,12 +77,6 @@ export function rainBand(lat: number): number {
   return 0.15 + 0.9 * exp(-equator * equator) + 0.6 * exp(-front * front);
 }
 
-/** Sens du vent dominant à la latitude `lat` : -1 vers l'ouest, +1 vers l'est. */
-export function windDirection(lat: number): -1 | 1 {
-  // Alizés et vents d'est polaires soufflent vers l'ouest, les vents d'ouest vers l'est.
-  return lat >= 1 / 3 && lat < 2 / 3 ? 1 : -1;
-}
-
 /** Humidité que l'air peut porter à la température t (°C), relative. */
 function saturation(t: number): number {
   return Math.min(1.2, Math.max(0.05, (t + 15) / 45));
@@ -108,9 +95,14 @@ function perCell(rate: number, width: number): number {
 const EVAPORATION_RATE = 40;
 const RAIN_RATE = 14;
 const OCEAN_RAIN_RATE = 4;
-const EXCESS_RATE = 30;
-/** Pluie de relief : supplément du taux de pluie par kilomètre de montée. */
+const EXCESS_RATE = 100;
+/**
+ * Pluie de relief : supplément du taux de pluie par kilomètre de montée, borné à
+ * OROGRAPHIC_CAP fois le taux de pluie ordinaire. Sans borne, un versant raide recevait
+ * en quelques cases presque toute l'humidité de l'air : 30 à 60 fois la pluie normale.
+ */
 const OROGRAPHIC_RAIN = 0.5;
+const OROGRAPHIC_CAP = 3;
 /**
  * Part de la pluie qui retourne à l'air au-dessus des terres (évapotranspiration) : plus
  * forte sous les tropiques humides, plus faible sous les climats secs.
@@ -188,7 +180,8 @@ function advect(
         const excess = Math.max(0, m - capacity) * excessRate;
         m -= excess;
         const relativeHumidity = Math.min(1, m / capacity);
-        const rate = Math.min(1, rainRate * factor + OROGRAPHIC_RAIN * climb) * relativeHumidity;
+        const orographic = Math.min(OROGRAPHIC_CAP * rainRate, OROGRAPHIC_RAIN * climb);
+        const rate = Math.min(1, rainRate * factor + orographic) * relativeHumidity;
         fallen = excess + m * rate;
         const recycling = RECYCLING.base + RECYCLING.wet * Math.min(1, factor);
         m += recycling * fallen - m * rate;
@@ -268,26 +261,25 @@ export function generateClimate(
     }
   }
 
-  // Continentalité : distance à l'océan, à vol d'oiseau et face au vent.
+  // Continentalité : distance à l'océan, à vol d'oiseau et face au vent. Les deux sens
+  // du vent se mêlent selon la latitude, sans cassure à 30° et 60°, comme pour la pluie.
   const distance = distanceField(ocean, size, neighbors);
   const half = CONTINENTAL_DISTANCE * width;
-  const upwind = new Float32Array(count);
-  for (let y = 0; y < height; y++) {
-    const direction = windDirection(latitude(y, height));
-    let run = Number.POSITIVE_INFINITY;
-    for (let step = 0; step < 2 * width; step++) {
-      const x = direction > 0 ? step % width : width - 1 - (step % width);
-      const index = y * width + x;
-      run = ocean[index] ? 0 : run + 1;
-      if (step >= width) upwind[index] = run;
-    }
-  }
+  const eastward = upwindRuns(size, ocean, 1);
+  const westward = upwindRuns(size, ocean, -1);
   const continentality = new Float32Array(count);
   for (let index = 0; index < count; index++) {
     if (ocean[index]) continue;
+    const y = Math.floor(index / width);
+    const weight = westerlyWeight(latitude(y, height));
     const near = distance[index] ?? 0;
-    const wind = Math.min(upwind[index] ?? 0, 4 * width);
-    continentality[index] = 0.5 * (near / (near + half)) + 0.5 * (wind / (wind + 2 * half));
+    const exposure = (run: number) => {
+      const wind = Math.min(run, 4 * width);
+      return wind / (wind + 2 * half);
+    };
+    const wind =
+      weight * exposure(eastward[index] ?? 0) + (1 - weight) * exposure(westward[index] ?? 0);
+    continentality[index] = 0.5 * (near / (near + half)) + 0.5 * wind;
   }
 
   // Demi-amplitude saisonnière (D8).
@@ -310,8 +302,10 @@ export function generateClimate(
   // et de la température, et non de la forme des continents.
   let reference = 0;
   let samples = 0;
+  // Sur une carte basse, les lignes les plus proches de l'équateur en tiennent lieu.
+  const band = Math.max(0.05, 1.5 / height);
   for (let y = 0; y < height; y++) {
-    if (latitude(y, height) >= 0.05) continue;
+    if (latitude(y, height) >= band) continue;
     for (let x = 0; x < width; x++) {
       const index = y * width + x;
       if (ocean[index]) {
@@ -343,26 +337,23 @@ export function generateClimate(
   return { temperature, amplitude, precipitation, continentality };
 }
 
-/** cos(2π (mois − 6,5) / 12) pour chaque mois (0 = janvier) : la saison de D8. */
-const SEASON = Float64Array.from({ length: 12 }, (_, month) => cos((TAU * (month - 6.5)) / 12));
-
-/** Température du mois `month` (0 = janvier) d'une case, selon son hémisphère (D8). */
-export function monthlyTemperature(
-  annual: number,
-  amplitude: number,
-  south: boolean,
-  month: number,
-): number {
-  return annual + amplitude * (SEASON[month] ?? 0) * (south ? -1 : 1);
+/**
+ * Distance au vent, en cases, de la dernière case d'océan d'un vent qui souffle dans le
+ * sens `direction` ; le monde est balayé deux fois, pour boucler à la couture.
+ */
+function upwindRuns(size: WorldSize, ocean: Uint8Array, direction: -1 | 1): Float32Array {
+  const { width, height } = size;
+  const runs = new Float32Array(width * height);
+  for (let y = 0; y < height; y++) {
+    let run = Number.POSITIVE_INFINITY;
+    for (let step = 0; step < 2 * width; step++) {
+      const x = direction > 0 ? step % width : width - 1 - (step % width);
+      const index = y * width + x;
+      run = ocean[index] ? 0 : run + 1;
+      if (step >= width) runs[index] = run;
+    }
+  }
+  return runs;
 }
 
-/** Écart du mois le plus chaud (et du plus froid) à la moyenne annuelle, en part de A. */
-export const SEASON_PEAK = Math.max(...SEASON);
-
-/** Températures du mois le plus chaud et du plus froid d'une case. */
-export function extremeMonths(
-  annual: number,
-  amplitude: number,
-): { warmest: number; coldest: number } {
-  return { warmest: annual + SEASON_PEAK * amplitude, coldest: annual - SEASON_PEAK * amplitude };
-}
+export { extremeMonths, monthlyTemperature } from '../core/seasons';

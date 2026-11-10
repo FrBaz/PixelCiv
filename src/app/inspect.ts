@@ -1,9 +1,11 @@
 /**
  * Description d'une case pour l'inspection (IHM-02, première version) : tout ce que les
- * couches du monde en disent, avec la température du mois courant (C1, D8).
+ * couches du monde en disent, avec la température et la pluie du mois courant (C1, D8 ;
+ * SAI-02), calculées comme dans la génération et le shader.
  */
 import { altitudeLevelIndex } from '../core/altitude';
 import type { GameData } from '../core/data';
+import { latitude, monthlyPrecipitation, monthlyTemperature, southern } from '../core/seasons';
 import { riverClass, type WorldLayers, type WorldSize } from '../core/world';
 import type { MessageKey } from '../i18n';
 import type { CellDetails } from '../ui/store';
@@ -30,9 +32,14 @@ export function describeCell(
   );
   const temperature = (layers.temperature[cell] ?? 0) / 10;
   const amplitude = (layers.amplitude[cell] ?? 0) / 10;
-  const south = row >= size.height / 2;
-  const season = Math.cos((2 * Math.PI * (month - 6.5)) / 12) * (south ? -1 : 1);
+  const precipitation = layers.precipitation[cell] ?? 0;
+  const south = southern(row, size.height);
   const deposit = layers.deposit[cell] ?? 0;
+  // Ressources du milieu, que le biome porte (RES-03 à RES-05).
+  const resources = (biome?.resources ?? []).flatMap((id) => {
+    const name = data.resources.entries.at(data.resources.indexOf(id) ?? -1)?.name;
+    return name === undefined ? [] : [name];
+  }) as MessageKey[];
   return {
     x: column,
     y: row,
@@ -41,13 +48,20 @@ export function describeCell(
     elevation,
     depth,
     temperature,
-    monthly: temperature + amplitude * season,
-    precipitation: layers.precipitation[cell] ?? 0,
+    monthly: monthlyTemperature(temperature, amplitude, south, month),
+    precipitation,
+    monthlyPrecipitation: monthlyPrecipitation(
+      precipitation,
+      latitude(row, size.height),
+      south,
+      month,
+    ),
     river: riverClass(layers.drainage[cell] ?? 0),
     deposit:
       deposit > 0
         ? (data.resources.entries.at(deposit - 1)?.name as MessageKey | undefined)
         : undefined,
+    resources,
     trees: Math.round(((layers.trees[cell] ?? 0) / 255) * 100),
     shrubs: Math.round(((layers.shrubs[cell] ?? 0) / 255) * 100),
   };

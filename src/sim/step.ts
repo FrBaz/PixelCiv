@@ -10,6 +10,7 @@ import { Fingerprint } from '../core/hash';
 import type { GameCommand } from '../core/protocol';
 import { LAYER_NAMES } from '../core/world';
 import { PARAMETER_NAMES } from '../core/data/worldgen';
+import { fingerprintPeople } from './populationSave';
 import { cellIndex, markDirty, type SimState } from './state';
 
 /** Contenu dont la simulation se sert. */
@@ -54,6 +55,7 @@ export function fingerprint(state: SimState): string {
     .uint32(state.tick);
   for (const name of PARAMETER_NAMES) fingerprint.string(name).float64(state.params[name]);
   for (const name of LAYER_NAMES) fingerprint.string(name).typedArray(state.world[name]);
+  fingerprintPeople(fingerprint, state.people, state.society);
   for (const [name, words] of Object.entries(state.rng.states())) {
     fingerprint.string(name);
     for (const word of words) fingerprint.uint32(word);

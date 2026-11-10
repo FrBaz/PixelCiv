@@ -8,16 +8,17 @@ import {
   latitude,
   monthlyTemperature,
   rainBand,
-  SEASON_PEAK,
   westerlyWeight,
   type Climate,
   type ClimateConfig,
 } from './climate';
 import { findOcean } from './hydrology';
-import { generateRelief } from './relief';
+import { seamOutliers } from './seamCheck';
+import { generateRelief, reliefSettings } from './relief';
 import { CylinderSampler } from './sampler';
 
-const { worldgen } = loadGameData();
+const data = loadGameData();
+const { worldgen } = data;
 const CONFIG: ClimateConfig = worldgen.climate;
 const PARAMS = { temperature: 0, humidity: 1 };
 
@@ -31,7 +32,12 @@ interface World {
 function world(seed: string, size: WorldSize = WORLD_SIZES.small): World {
   const sampler = new CylinderSampler(size);
   const rng = new Rng(seed);
-  const elevation = generateRelief(sampler, rng, { landShare: 0.35, seaLevel: 0, relief: 0.5 });
+  const elevation = generateRelief(
+    sampler,
+    rng,
+    { landShare: 0.35, seaLevel: 0, relief: 0.5 },
+    reliefSettings(data.worldgen, data.altitudeLevels.entries),
+  );
   const ocean = findOcean(elevation, size, worldgen.ocean.minShare);
   return {
     size,
@@ -101,14 +107,15 @@ describe('climat', () => {
   });
 
   it('inverse les saisons entre les hémisphères (D8)', () => {
-    expect(monthlyTemperature(10, 8, false, 6)).toBeGreaterThan(17);
-    expect(monthlyTemperature(10, 8, true, 6)).toBeLessThan(3);
-    expect(monthlyTemperature(10, 8, false, 0)).toBeLessThan(3);
-    expect(monthlyTemperature(10, 8, true, 0)).toBeGreaterThan(17);
+    // Mi-juillet (6,5) et mi-janvier (0,5), en mois continus.
+    expect(monthlyTemperature(10, 8, false, 6.5)).toBeCloseTo(18, 10);
+    expect(monthlyTemperature(10, 8, true, 6.5)).toBeCloseTo(2, 10);
+    expect(monthlyTemperature(10, 8, false, 0.5)).toBeCloseTo(2, 10);
+    expect(monthlyTemperature(10, 8, true, 0.5)).toBeCloseTo(18, 10);
+    // Le mois le plus chaud culmine à T + A : la classification voit ce que voit le joueur.
     const { warmest, coldest } = extremeMonths(10, 8);
-    expect(warmest).toBeCloseTo(10 + 8 * SEASON_PEAK, 10);
-    expect(coldest).toBeCloseTo(10 - 8 * SEASON_PEAK, 10);
-    expect(SEASON_PEAK).toBeCloseTo(Math.cos(Math.PI / 12), 12);
+    expect(warmest).toBe(18);
+    expect(coldest).toBe(2);
   });
 
   it('suit la demi-amplitude de D8, selon la latitude et la continentalité', () => {
@@ -184,6 +191,19 @@ describe('climat', () => {
     expect(lee).toBeLessThan(column(plain, 265) * 0.7);
   });
 
+  it('borne la pluie des versants au vent : pas de pic de dizaines de mètres par an', () => {
+    for (const { ocean, climate } of worlds) {
+      const land: number[] = [];
+      climate.precipitation.forEach((value, index) => {
+        if (!ocean[index]) land.push(value);
+      });
+      land.sort((a, b) => a - b);
+      const quantile = (q: number) => land[Math.floor(q * (land.length - 1))] ?? 0;
+      expect(quantile(0.999)).toBeLessThan(12000);
+      expect(quantile(1)).toBeLessThan(20000);
+    }
+  });
+
   it('trouve des déserts d’abri derrière les montagnes des mondes générés', () => {
     let shadows = 0;
     for (const { size, elevation, ocean, climate } of worlds) {
@@ -208,23 +228,49 @@ describe('climat', () => {
     expect(shadows).toBeGreaterThan(50);
   });
 
-  it('se referme sans couture, températures et pluies comprises', () => {
+  it('se referme sans couture, températures, amplitudes et pluies comprises', () => {
     for (const { size, climate } of worlds) {
+      for (const field of [climate.temperature, climate.amplitude, climate.precipitation]) {
+        // Ligne par ligne, la couture est une paire de colonnes comme les autres.
+        expect(seamOutliers(field, size)).toBeLessThan(0.2);
+      }
+    }
+    // Une marche à la couture, elle, se voit sur presque toutes les lignes.
+    const { size, climate } = worlds[0] ?? world('pixelciv');
+    const stepped = climate.temperature.map((value, index) =>
+      index % size.width === 0 ? value + 5 : value,
+    );
+    expect(seamOutliers(stepped, size)).toBeGreaterThan(0.8);
+  });
+
+  it('mêle les deux vents de la continentalité sans cassure à 30° et 60°', () => {
+    for (const { size, ocean, climate } of worlds) {
       const { width, height } = size;
-      for (const field of [climate.temperature, climate.precipitation]) {
-        const gaps = Array.from({ length: width }, (_, x) => {
-          let sum = 0;
-          for (let y = 0; y < height; y++) {
-            sum += Math.abs(
-              (field[y * width + ((x + 1) % width)] ?? 0) - (field[y * width + x] ?? 0),
-            );
+      // Écart moyen de demi-amplitude entre deux lignes voisines, sur les terres.
+      const change = Array.from({ length: height - 1 }, (_, y) => {
+        let sum = 0;
+        let count = 0;
+        for (let x = 0; x < width; x++) {
+          const a = y * width + x;
+          const b = a + width;
+          if (ocean[a] || ocean[b]) continue;
+          sum += Math.abs((climate.amplitude[b] ?? 0) - (climate.amplitude[a] ?? 0));
+          count++;
+        }
+        return count > 0 ? sum / count : 0;
+      });
+      const sorted = [...change].sort((a, b) => a - b);
+      const median = sorted[Math.floor(sorted.length / 2)] ?? 0;
+      for (const boundary of [1 / 3, 2 / 3]) {
+        for (const south of [false, true]) {
+          // La ligne où la latitude franchit la limite des vents.
+          const y = Math.round(
+            south ? height / 2 + (boundary * height) / 2 : (height / 2) * (1 - boundary),
+          );
+          for (let dy = -2; dy <= 2; dy++) {
+            expect(change[y + dy] ?? 0).toBeLessThan(4 * median + 0.05);
           }
-          return sum / height;
-        });
-        const seam = gaps[width - 1] ?? 0;
-        const others = gaps.slice(0, width - 1);
-        expect(seam).toBeGreaterThanOrEqual(Math.min(...others));
-        expect(seam).toBeLessThanOrEqual(Math.max(...others));
+        }
       }
     }
   });

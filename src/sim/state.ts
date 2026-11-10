@@ -1,7 +1,7 @@
 /**
  * État de la simulation : le monde généré, une couche par attribut en tableaux typés
- * (CLAUDE.md, « Performances » ; ADR 0009), le temps, le journal des commandes et le
- * générateur de la partie.
+ * (CLAUDE.md, « Performances » ; ADR 0009), la population et ses groupes (ADR 0011), le
+ * temps, le journal des commandes et le générateur de la partie.
  */
 import { wrapX } from '../core/cylinder';
 import type { ChunkPatch, GameCommand, LoggedCommand } from '../core/protocol';
@@ -14,6 +14,8 @@ import {
   type WorldSize,
 } from '../core/world';
 import type { WorldParams } from '../core/worldParams';
+import { Population } from './population';
+import { emptySociety, type Society } from './society';
 
 export interface SimState {
   /** Paramètres du monde : graine, taille, réglages de la création. */
@@ -23,6 +25,10 @@ export interface SimState {
   tick: number;
   /** Couches du monde. Le biome peut changer en cours de partie (pinceau). */
   readonly world: WorldLayers;
+  /** Individus vivants, en colonnes, et archive des morts. */
+  readonly people: Population;
+  /** Groupes nomades, cultures, langues et chronique. */
+  readonly society: Society;
   /** Commandes de jeu appliquées, dans l'ordre : rejouées depuis le monde, elles redonnent l'état. */
   readonly commandLog: LoggedCommand[];
   /**
@@ -49,6 +55,8 @@ export function createState(params: WorldParams, world: WorldLayers): SimState {
     size,
     tick: 0,
     world,
+    people: new Population(),
+    society: emptySociety(),
     commandLog: [],
     pending: [],
     rng: new Rng(params.seed),

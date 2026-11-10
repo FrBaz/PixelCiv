@@ -142,7 +142,9 @@ void main() {
     } else {
       float grey = dot(color, vec3(0.3, 0.59, 0.11));
       color = mix(vec3(grey), color, 0.35) * 0.8;
-      if (overlay.a > 0.5) color = overlay.rgb;
+      // Un gisement en plein ; une ressource du milieu teinte la carte pâlie (RES-05).
+      if (overlay.a > 0.75) color = overlay.rgb;
+      else if (overlay.a > 0.25) color = mix(color, overlay.rgb, 0.7);
     }
   }
   finalColor = vec4(color, 1.0);

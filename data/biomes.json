@@ -175,7 +175,7 @@
     "flora": {
       "trees": 0,
       "shrubs": 0.05,
-      "species": ["palm", "scrub"]
+      "species": ["scrub"]
     },
     "palette": {
       "shadow": "#b7af6d",
@@ -205,7 +205,7 @@
     "flora": {
       "trees": 0.02,
       "shrubs": 0.1,
-      "species": ["heather"]
+      "species": ["heather", "conifer"]
     },
     "palette": {
       "shadow": "#6d6b67",
@@ -293,7 +293,7 @@
     "disease": true,
     "resources": ["salt"],
     "flora": {
-      "trees": 0.05,
+      "trees": 0,
       "shrubs": 0.3,
       "species": ["reed"]
     },
@@ -899,7 +899,7 @@
     "flora": {
       "trees": 0.95,
       "shrubs": 0.5,
-      "species": ["tropical-hardwood", "palm"]
+      "species": ["tropical-hardwood", "palm", "berry-bush"]
     },
     "palette": {
       "shadow": "#17532b",

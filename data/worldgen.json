@@ -37,6 +37,17 @@
       "step": 0.05
     }
   },
+  "relief": {
+    "maxAltitude": 7000,
+    "maxDepth": 5500,
+    "altitudeExponent": 1.6,
+    "depthExponent": 1.4,
+    "medianDepth": 3500,
+    "mountainShare": {
+      "base": 0.005,
+      "perRelief": 0.08
+    }
+  },
   "ocean": {
     "minShare": 0.005
   },
@@ -51,11 +62,12 @@
     "lakeMinArea": 150,
     "lakeMinDepth": 60,
     "infill": 0.85,
-    "saltFlatRatio": 0.12,
+    "saltFlatRatio": 0.2,
     "saltFlatShare": 0.35,
     "lakeEvaporation": {
       "perDegree": 40,
-      "minimum": 150
+      "minimum": 150,
+      "humidity": { "reference": 1000, "strength": 0.35, "min": 0.5, "max": 1.35 }
     },
     "riverThreshold": 60000,
     "riverClasses": [4, 16]

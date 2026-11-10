@@ -1,8 +1,9 @@
 /**
  * Inspection d'une case (IHM-02, première version) : un appui bref sur la carte montre
- * son biome, son altitude et son niveau, son climat, sa rivière, son gisement et sa flore.
+ * son biome, son altitude et son niveau, son climat, sa rivière, son gisement, les
+ * ressources de son milieu et sa flore.
  */
-import { t, type MessageKey } from '../i18n';
+import { LOCALE, t, type MessageKey } from '../i18n';
 import { inspected } from './store';
 
 const RIVERS: readonly MessageKey[] = [
@@ -12,6 +13,9 @@ const RIVERS: readonly MessageKey[] = [
 ];
 
 const round = (value: number) => Math.round(value * 10) / 10;
+
+/** Énumération dans la langue du jeu : « roseaux, poisson et gibier d'eau ». */
+const list = new Intl.ListFormat(LOCALE, { style: 'long', type: 'conjunction' });
 
 export function CellInfo() {
   const cell = inspected.value;
@@ -36,11 +40,23 @@ export function CellInfo() {
         monthly: round(cell.monthly),
       }),
     ],
-    ['inspect.precipitation', t('unit.millimeters', { value: Math.round(cell.precipitation) })],
+    [
+      'inspect.precipitation',
+      t('inspect.precipitationValue', {
+        annual: Math.round(cell.precipitation),
+        monthly: Math.round(cell.monthlyPrecipitation),
+      }),
+    ],
     ...(river === undefined ? [] : ([['inspect.river', t(river)]] as [MessageKey, string][])),
     ...(cell.deposit === undefined
       ? []
       : ([['inspect.deposit', t(cell.deposit)]] as [MessageKey, string][])),
+    ...(cell.resources.length === 0
+      ? []
+      : ([['inspect.resources', list.format(cell.resources.map((name) => t(name)))]] as [
+          MessageKey,
+          string,
+        ][])),
     ['inspect.flora', t('inspect.floraValue', { trees: cell.trees, shrubs: cell.shrubs })],
   ];
   return (
