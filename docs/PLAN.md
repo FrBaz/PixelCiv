@@ -1,8 +1,8 @@
 # Plan de développement — Jeu de simulation de mondes et de vies
 
-Version 0.4 · 9 novembre 2026 · complète le PRD (`docs/PRD.md`, version 0.4)
+Version 0.5 · 9 novembre 2026 · complète le PRD (`docs/PRD.md`, version 0.5)
 
-Historique : 0.1, première version ; 0.2, intégration de la séance C1 sur le monde ; 0.3, générateurs de portraits et d'armoiries conçus à neuf, portraits d'environ 64×64 px ; 0.4, ADR de la phase 0 et dossier `src/worker/` (tâche 0.2).
+Historique : 0.1, première version ; 0.2, intégration de la séance C1 sur le monde ; 0.3, générateurs de portraits et d'armoiries conçus à neuf, portraits d'environ 64×64 px ; 0.4, ADR de la phase 0 et dossier `src/worker/` (tâche 0.2) ; 0.5, intégration de la séance C2 sur les peuples et les établissements.
 
 ## 1. Principes
 
@@ -234,31 +234,34 @@ Objectif : une population qui vit, se reproduit, transmet ses gènes et meurt, e
 | Génétique | Génome compact, allèles dominants et récessifs, traits polygéniques, mutations. | IND-05, IND-06 |
 | Cycle de vie | Âges, mortalité et fertilité par espèce, couples, naissances ; adaptations des sous-espèces humaines ; métissage. | IND-04, ESP-01 à ESP-04 |
 | Survie | Faim, cueillette, chasse, pêche, avec des rendements saisonniers et une mortalité hivernale (D9) ; faune chassable. | ECO-11, RES-03, RES-04, FAU-01, SAI-03 |
+| Groupes nomades | Les humains apparus sans civilisation forment des groupes, avec langue et culture embryonnaires dès leur apparition ; ils se déplacent au fil des saisons, à environ 30 cases par mois, et se scindent au-delà d'une trentaine de membres (C2, D4 et D13). | CIV-05, MON-16 |
 | Noms | Phonologie générée, prénoms et noms de famille. | LAN-01, IND-08 |
 | Visuels | Pipeline d'assets (sources éditables, atlas, recoloration) ; générateur de portraits d'environ 64×64 px, piloté par les gènes et l'âge ; mini-sprites, première version. | AST-03, AST-04, REN-07, REN-04 |
 | Outils | Apparition d'individus, panneau d'inspection, liens familiaux, chronique de base. | CRE-03, CRE-05, IHM-02, CHR-01 |
 | Mesures | Bancs d'essai à 10 000 et 50 000 individus, sur PC et sur téléphone ; calibrage mobile. | IND-03, NF-01 |
 
-**Jalon 2.** On fait apparaître un groupe d'humains. Ils survivent ou non, ont des enfants qui leur ressemblent, et on suit leurs lignées.
+**Jalon 2.** On fait apparaître un groupe d'humains. Il nomadise au fil des saisons, survit ou non, et ses enfants ressemblent à leurs parents. On suit les lignées.
 
 ### Phase 3 — Villages, civilisations et cultures
 
 Objectif : des peuples qui se sédentarisent, transforment le paysage et inventent leurs premières techniques.
 
-Séance préalable : C2, sur l'appartenance aux civilisations et aux cultures, et sur la fondation.
+Séance préalable : C2, tenue le 9 novembre 2026. Ses décisions D1 à D14 font foi pour cette phase (`docs/design/C2-peuples.md`), et `prototypes/c2/` en donne une implémentation de référence.
 
 | Lot | Contenu | Exigences |
 |---|---|---|
-| Peuples | Fondation des civilisations ; relation libre entre civilisations et cultures ; appartenance des individus et des villages ; cultures simples. | CIV-01, CIV-03, CIV-04, CUL-01 |
-| Villages | Emplacement, administration, bâtiments de base, croissance, extension case par case. | POL-01, TER-01 |
-| Terrain | Occupation du sol en couche distincte (D7) : grandes cultures, pâturages, coupes, friches et zones bâties, avec la succession écologique ; routes. | TER-01, TER-03, MON-09 |
-| Travail | Métiers et compétences ; production de subsistance, avec semailles et récoltes saisonnières (D9) ; stocks ; patrimoine individuel. | IND-07, ECO-01, ECO-02, ECO-09, SAI-03 |
-| Premiers savoirs | Graphe des savoirs en données ; invention par un spécialiste. | SAV-01, SAV-02, SAV-05 |
-| Architecture | Bâtiments selon les savoirs et la culture ; niveaux de détail intermédiaire et rapproché. | ARC-01, REN-03 |
-| Langues | Noms de lieux. | LAN-01 |
-| Carte et chronique | Modes de carte « politique » et « culture » ; fondations et inventions dans la chronique. | IHM-01, CHR-01 |
+| Peuples | Fondation des civilisations ; relation libre entre civilisations et cultures, dérivée des individus et des villages ; appartenance ; caractéristiques initiales et traits culturels. | CIV-01, CIV-03, CIV-04, CIV-06, CUL-01 |
+| Établissements | Score d'emplacement ; croissance d'abord et défrichement progressif ; tailles, de hameau à bourg ; abandon ; chef provisoire. | VIL-01, VIL-02, VIL-05, POL-01 |
+| Territoires | Territoires organiques par coût de déplacement depuis les bâtiments, recalculés localement ; sentiers tracés au moindre coût entre villages voisins. | VIL-03, MON-16 |
+| Colonies | Essaimage des villages saturés, à 22 à 40 cases, à pied ou en barque. | VIL-04 |
+| Terrain | Occupation du sol en couche distincte (C1, D7) : grandes cultures, pâturages, coupes, friches et zones bâties, avec la succession écologique. | TER-01, TER-03, MON-09 |
+| Travail | Métiers et compétences ; production de subsistance, avec semailles et récoltes saisonnières (C1, D9) ; stocks ; patrimoine individuel. | IND-07, ECO-01, ECO-02, ECO-09, SAI-03 |
+| Premiers savoirs | Les onze premiers savoirs en données, dont l'élevage ; invention par le métier qui porte chaque savoir ; savoirs de départ selon le milieu. | SAV-01, SAV-02, SAV-05, SAV-09 |
+| Architecture | Bâtiments selon les savoirs et la culture dominante ; niveaux de détail intermédiaire et rapproché. | ARC-01, REN-03 |
+| Langues et noms | Lexique de 30 racines pour les noms de lieux ; noms des civilisations et des cultures. | LAN-01, LAN-02, LAN-05 |
+| Carte et chronique | Modes de carte « politique », « civilisations » et « cultures » ; fondations, colonies, inventions et abandons dans la chronique. | IHM-01, CHR-01 |
 
-**Jalon 3.** Des villages naissent, grandissent, transforment le paysage et inventent leurs premières techniques.
+**Jalon 3.** Des groupes se fixent et fondent des civilisations. Leurs villages grandissent, défrichent, tracent des sentiers et essaiment quand ils sont à l'étroit. Ils transforment le paysage et inventent leurs premières techniques.
 
 ### Phase 4 — Gouvernements, armoiries et premières guerres : le MVP
 
@@ -268,7 +271,7 @@ Séance préalable : C3, sur les gouvernements (type et mode d'accès, dictature
 
 | Lot | Contenu | Exigences |
 |---|---|---|
-| Gouvernements | Type et mode d'accès ; niveaux 1 et 2 ; nomenclature en données ; monarchie et hérédité ; territoires et frontières ; vassalité de base. | POL-01 à POL-05 |
+| Gouvernements | Type et mode d'accès ; niveaux 1 et 2 ; nomenclature en données ; monarchie et hérédité ; territoires des gouvernements et frontières politiques, issus des territoires des établissements ; vassalité de base. | POL-01 à POL-05, POL-15 |
 | Maisons et armoiries | Maisons notables ; générateur d'armoiries, avec la nouvelle saisie des meubles ; règles héraldiques. | FAM-01, HER-01, HER-02, HER-05 |
 | Guerre | Déclaration, levée de vrais soldats, organisation simplifiée, déplacement des armées, résolution automatique, occupation, paix. | DIP-01, MIL-01, MIL-03, MIL-04, MIL-08 |
 | Créateur | Pinceaux de terrain, modification des entités. | MOD-02, CRE-02, CRE-04 |
@@ -405,8 +408,8 @@ Chaque séance a lieu dans la conversation de conception, avant la phase concern
 | Séance | Avant | Sujets | Questions du PRD (section 27) |
 |---|---|---|---|
 | C1 Monde | phase 1 | tenue le 8 novembre 2026 : eaux, côtes, zones humides, occupation du sol, saisons, relief, climat (`docs/design/C1-monde.md`) | 6, 7, 8 (closes) |
-| C2 Peuples | phase 3 | appartenance aux civilisations et aux cultures, fondation | 3 |
-| C3 Gouvernements | phase 4, compléments avant la phase 8 | dictature, anarchie, désignation, titres | 4, 5 |
+| C2 Peuples | phase 3 | tenue le 9 novembre 2026 : identités, appartenance, groupes nomades, fondation, établissements, colonies, territoires, échelle (`docs/design/C2-peuples.md`) | 3 (close) |
+| C3 Gouvernements | phase 4, compléments avant la phase 8 | forme politique des villages, lien entre colonie et village mère, frontières politiques, dictature, anarchie, désignation, titres | 4, 5, 18 |
 | C4 Saga | phase 5 | contrôle direct, carrières, format des événements | 9 |
 | C5 Savoirs | phase 6 | domaines, contenu de l'arbre, ordre des chaînes | 13, 16 |
 | C6 Économie | phase 7 | biens, formation des prix, banques, assurances | — |
@@ -452,4 +455,4 @@ Traite ensuite les tâches dans l'ordre, une branche et une PR par tâche, et
 arrête-toi après chaque PR pour que je relise.
 ```
 
-4. **Préparer la suite.** La séance C1 est faite : son document va dans `docs/design/`, ses images dans `docs/design/C1/` et ses scripts dans `prototypes/c1/`. La prochaine séance, C2, précède la phase 3.
+4. **Préparer la suite.** Les séances C1 et C2 sont faites : leurs documents vont dans `docs/design/`, leurs images dans `docs/design/C1/` et `docs/design/C2/`, et leurs scripts dans `prototypes/c1/` et `prototypes/c2/`. La prochaine séance, C3, précède la phase 4.

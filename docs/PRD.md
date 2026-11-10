@@ -1,8 +1,8 @@
 # PRD — Jeu de simulation de mondes et de vies
 
-Titre provisoire · version 0.4 · 8 novembre 2026
+Titre provisoire · version 0.5 · 9 novembre 2026
 
-Historique : 0.1, première version ; 0.2, corrections de relecture (civilisations et cultures, domaines des savoirs, type et mode d'accès des gouvernements, sprites, dépôt public) ; 0.3, décisions de la séance C1 sur le monde (`docs/design/C1-monde.md`) ; 0.4, retrait de l'état des lieux des prototypes, portraits d'environ 64×64 px.
+Historique : 0.1, première version ; 0.2, corrections de relecture (civilisations et cultures, domaines des savoirs, type et mode d'accès des gouvernements, sprites, dépôt public) ; 0.3, décisions de la séance C1 sur le monde (`docs/design/C1-monde.md`) ; 0.4, retrait de l'état des lieux des prototypes, portraits d'environ 64×64 px ; 0.5, décisions de la séance C2 sur les peuples et les établissements (`docs/design/C2-peuples.md`).
 
 ## 1. À propos de ce document
 
@@ -93,6 +93,7 @@ La séance C1 (`docs/design/C1-monde.md`) fixe les règles détaillées du monde
 | MON-13 | Zones humides : marais, tourbière et marécage, sur les terres plates, basses et humides proches de l'eau. Elles ralentissent les déplacements et favorisent les maladies. Le savoir « canaux » permet de les assécher ; elles reviennent si les canaux ne sont plus entretenus. | P0, puis P1 |
 | MON-14 | Relief : des chaînes de montagnes, formées par un bruit de crêtes et entrecoupées de cols. Cible : 3 à 6 % des terres au-dessus de la moyenne montagne. Un paramètre « relief », de plat à montagneux, s'ajoute à l'écran de création. | P0 |
 | MON-15 | Climat : températures recalibrées, avec environ 27 °C à l'équateur et −25 °C aux pôles en moyenne annuelle. Précipitations par bandes de latitude, vents dominants et ombre pluviométrique. | P0 |
+| MON-16 | Échelle abstraite : une case n'a pas de taille fixe en kilomètres, et l'interface exprime les distances en temps de trajet. On marche environ 30 cases par mois en plaine. L'espacement des établissements découle du budget de population : 25 à 30 cases sur un monde Grand (C2, D13). | P0 |
 
 Biomes naturels, fixés par la séance C1 :
 
@@ -140,7 +141,7 @@ La succession d'un biome forestier passe par la friche (0 à 5 ans), les broussa
 | RES-04 | Pêche en mer et en rivière. | P0 |
 | RES-05 | Ressources des milieux humides et salés : roseaux, tourbe et fer des marais ; sel des salars, des lacs salés et des salines. | P0, puis P1 |
 | FAU-01 | La faune apparaît selon le biome et ses populations varient ; le gibier est chassé. | P0 |
-| FAU-02 | Animaux dangereux (loups, ours…) et domestication débloquée par les savoirs (cheval pour la cavalerie, bétail). | P1 |
+| FAU-02 | Animaux dangereux (loups, ours…) et domestication du cheval pour la cavalerie, débloquée par les savoirs. Le bétail relève de l'élevage, dès le premier jalon (SAV-09). | P1 |
 | SAI-01 | Calendrier : années de 12 mois, saisons de 3 mois, calendrier universel « an du monde » pour le joueur. | P0 |
 | SAI-02 | Température mensuelle de chaque case. Les saisons sont inversées entre les deux hémisphères, et leur amplitude croît avec la latitude et la continentalité. Sous les tropiques, une saison sèche alterne avec une saison des pluies. La formule figure dans C1 (D8). | P0 |
 | SAI-03 | Effets saisonniers dès le premier jalon : semailles et récoltes selon la latitude, réserves pour l'hiver, rendements saisonniers de la cueillette, de la chasse et de la pêche, mortalité hivernale accrue des plus fragiles, neige et glace. | P0 |
@@ -199,7 +200,7 @@ Le modèle est hybride : tout le monde existe vraiment, mais seuls les notables 
 | ESP-05 | Nains (des collines, des montagnes), orques (des forêts, des collines) et elfes (des bois, hauts elfes, elfes noirs), avec de vraies différences de jeu ; hybrides demi-elfes et demi-orques. | P2 |
 | ESP-06 | Monstres (dragons…). | P2 |
 
-## 10. Civilisations et cultures
+## 10. Civilisations, cultures et établissements
 
 Civilisation et culture sont deux notions distinctes et indépendantes. Plusieurs cultures peuvent coexister au sein d'une civilisation, et une même culture peut exister dans plusieurs civilisations.
 
@@ -210,26 +211,39 @@ Civilisation et culture sont deux notions distinctes et indépendantes. Plusieur
 | Religion | Indépendante de la culture comme de la civilisation ; elle se diffuse à sa façon. |
 | Gouvernement | L'entité politique. |
 
-Un individu appartient à une civilisation et à une culture, parle une ou plusieurs langues, suit une religion et est sujet d'un gouvernement.
+La civilisation s'attache aux villages et la culture aux individus : la relation libre entre les deux en découle (C2, D1). Un individu appartient à une civilisation et à une culture, parle une ou plusieurs langues, suit une religion et est sujet d'un gouvernement. Civilisation et gouvernement sont indépendants : une civilisation peut se partager entre plusieurs royaumes, et un royaume gouverner des villages de plusieurs civilisations.
 
 | ID | Exigence | Prio |
 |---|---|---|
-| CIV-01 | Fondation : trois individus ou plus d'une même espèce, sans civilisation, sur un territoire assez vaste et sans village, fondent une civilisation. Ses caractéristiques initiales dépendent de l'espèce et du biome. Elle naît avec un village, une langue et une culture. | P0 |
-| CIV-02 | Une civilisation peut se scinder. | P1 |
-| CIV-03 | Relation libre entre civilisations et cultures : plusieurs cultures coexistent dans une civilisation, et une culture peut être présente dans plusieurs civilisations. Le modèle de données le permet dès le premier jalon. | P0 |
-| CIV-04 | Un individu ou un village appartient à une civilisation par la naissance, la fondation d'une colonie, la conquête ou l'assimilation. Les règles restent à concevoir. | P0, puis P1 |
-| CUL-01 | Une culture définit : règles de nommage, style architectural, style vestimentaire, valeurs (guerrière, marchande, pieuse, savante, artistique…), lois de succession et d'héritage, place des genres, règles matrimoniales et doctrines militaires privilégiées. | P0, puis P1 |
-| CUL-02 | Une culture se scinde avec la distance, l'isolement et le temps ; fusions et assimilations sont possibles. | P1 |
+| CIV-01 | Fondation : un groupe d'au moins trois individus de la même espèce, sans civilisation et comptant un couple fertile, fonde une civilisation. Il lui faut un site de score 0,5 au moins (VIL-01), aucun établissement à moins de 30 cases, et 60 % de cases habitables dans un rayon de 14 cases. Chaque mois où ces conditions sont réunies, le groupe se fixe avec une probabilité de 10 %. La civilisation naît avec un village, une langue et une culture (C2, D5). | P0 |
+| CIV-02 | Une civilisation se scinde quand un groupe de ses villages reste 100 ans sans contact régulier avec le reste. Elle s'éteint avec son dernier village, et ses savoirs avec elle, sauf chez les individus qui les portent ailleurs (C2, D10). | P1 |
+| CIV-03 | Relation libre entre civilisations et cultures : plusieurs cultures coexistent dans une civilisation, et une culture peut être présente dans plusieurs civilisations. Elle découle des individus (porteurs de la culture) et des villages (porteurs de la civilisation), sans table à entretenir (C2, D1). | P0 |
+| CIV-04 | Appartenance : un individu hérite sa culture de son foyer et appartient à la civilisation du village où il vit. Un village appartient à une civilisation par sa fondation ou comme colonie. La conquête change son gouvernement, pas sa civilisation. En version 1, l'assimilation peut la changer, selon une affinité dont la séance C7 fixe les poids (C2, D2 et D3). | P0, puis P1 |
+| CIV-05 | Avant toute civilisation, les humains vivent en groupes nomades, dotés dès leur apparition d'une langue et d'une culture embryonnaires. Ils vivent de cueillette, de chasse et de pêche, se scindent au-delà d'une trentaine de membres et peuvent rejoindre un village (C2, D4). | P0 |
+| CIV-06 | Caractéristiques initiales : la hutte et le bâton, plus jusqu'à deux savoirs selon le milieu, avec une maîtrise de 40 % ; traits culturels tirés à la fondation (C2, D6). | P0, puis P1 |
+| CUL-01 | Une culture définit : règles de nommage, style architectural, style vestimentaire, valeurs (guerrière, marchande, pieuse, savante, artistique…), lois de succession et d'héritage, place des genres, règles matrimoniales et doctrines militaires privilégiées. Au premier jalon : nommage, styles architectural et vestimentaire, valeurs, place des genres et succession (C2, D6). | P0, puis P1 |
+| CUL-02 | Une culture se scinde quand ses villages restent 150 ans sans contact régulier, et la culture fille reçoit une langue fille. Deux cultures longtemps mêlées peuvent fusionner. Une culture disparaît quand plus personne ne la porte (C2, D10). | P1 |
 | CUL-03 | La diffusion des cultures, des langues et des religions dépend de leur niveau (prestige, raffinement, savoirs) et de celui des individus en contact (éducation, charisme, rang, intensité et durée des échanges). Le modèle reste à concevoir. | P1 |
+
+Établissements (C2, D7 à D9 et D14) :
+
+| ID | Exigence | Prio |
+|---|---|---|
+| VIL-01 | Emplacement : chaque case constructible reçoit un score, fondé sur l'eau douce, la fertilité, le confort climatique, la côte et le bois. Les eaux, glaciers, salars, zones humides, falaises et terres au-dessus de 1 800 m ne sont pas constructibles. | P0 |
+| VIL-02 | Croissance : un établissement grandit et défriche autour de lui jusqu'à saturer son territoire. Sa zone bâtie compte une case pour 15 habitants environ. Il passe par cinq tailles : hameau, village, bourg, ville, cité. Au premier jalon, un village qui vit de ses champs plafonne vers 300 à 450 habitants ; villes et cités supposent le commerce de la version 1. Un établissement sans habitants devient des ruines. | P0, puis P1 |
+| VIL-03 | Territoire organique : l'influence d'un établissement se propage depuis ses bâtiments selon le coût de déplacement. Routes, bâtiments isolés et, en version 1, fortifications l'étendent ; relief, forêts, zones humides et rivières la freinent. Sa portée va de 6 à 14 cases de plaine pour un village. Une case revient à l'établissement qui l'atteint en dépensant la plus petite part de sa portée, et ne change de mains qu'avec un écart d'au moins 20 %. | P0, puis P1 |
+| VIL-04 | Colonies : un village n'essaime que lorsqu'il ne peut plus s'étendre et qu'il reste à 90 % de sa capacité pendant deux ans. Une quinzaine de colons, dont un couple fertile, partent entre 22 et 40 cases, à au moins 25 cases de tout établissement, à pied ou en barque. La colonie appartient à la civilisation du village mère. | P0 |
+| VIL-05 | Avant la séance C3, le chef d'un village est son fondateur, puis l'adulte le plus âgé de sa lignée. | P0 |
 
 ## 11. Langues
 
 | ID | Exigence | Prio |
 |---|---|---|
 | LAN-01 | Chaque langue a une phonologie générée (inventaire de sons, structure des syllabes, règles d'enchaînement) qui donne une identité sonore cohérente à tous ses noms. | P0 |
-| LAN-02 | Un lexique d'environ 200 racines (rivière, montagne, rouge, roi, loup…) sert à nommer les personnes, les lieux, les maisons, les religions et les œuvres. L'interface peut afficher le sens d'un nom, par exemple « la baie du loup ». | P1 |
+| LAN-02 | Un lexique de racines (rivière, montagne, rouge, roi, loup…) sert à nommer les personnes, les lieux, les maisons, les religions et les œuvres. L'interface peut afficher le sens d'un nom, par exemple « la baie du loup ». Il compte 30 racines dès le premier jalon, pour les noms de lieux (C2, D11), et environ 200 en version 1. | P0, puis P1 |
 | LAN-03 | Quand une culture se scinde, sa langue diverge par des mutations phonétiques régulières : les langues sœurs restent reconnaissables et forment des familles. | P1 |
 | LAN-04 | Emprunts entre langues en contact. | P2 |
+| LAN-05 | Noms des civilisations et des cultures : une racine de la langue fondatrice suivie d'un suffixe propre à la langue d'affichage, par exemple « les Kaltiens » et « la civilisation kaltienne » (C2, D11). | P0 |
 
 Il n'y a ni grammaire complète, ni traduction de phrases.
 
@@ -256,6 +270,7 @@ Il n'y a ni grammaire complète, ni traduction de phrases.
 | SAV-06 | Les régimes politiques se débloquent par les savoirs : la dictature d'abord, puis les autres régimes. Les institutions suivent la chaîne débat, conseil, parlement. | P1 |
 | SAV-07 | Le plafond technologique se situe vers le XIXe siècle (vapeur, carabine, bourse). | P1 |
 | SAV-08 | Un tronc commun à toutes les espèces, avec des branches propres à une espèce ou à une culture. | P2 |
+| SAV-09 | Les onze premiers savoirs : hutte, bâton, cabane, chemin, culture vivrière, élevage, coupe du bois, barque, ponton, fronde, armure de cuir. Chacun a un métier qui l'invente. Un inventeur doit avoir une intelligence de base d'au moins 0,6, et les prérequis doivent être maîtrisés à 50 %. Un village de 50 habitants fait sa première invention en 10 à 30 ans. Un savoir naît avec 10 % de maîtrise (C2, D12). | P0 |
 
 Chaînes initiales, reprises du brief et complétées :
 
@@ -264,7 +279,7 @@ Chaînes initiales, reprises du brief et complétées :
 | Politique | dictature → tous les régimes ; débat → conseil → parlement |
 | Économie | troc → monnaie → commerce → entrepreneuriat → bourse → spéculation (chaîne placée en politique dans le brief) ; banque et assurance à insérer |
 | Art | pictogramme → enluminure → peinture ; chant → théâtre → musique ; styles architecturaux à définir |
-| Artisanat et industrie | culture vivrière → canaux → moulin → culture intensive ; coupe du bois → menuiserie → charpenterie ; minage → forge → sidérurgie |
+| Artisanat et industrie | culture vivrière → canaux → moulin → culture intensive ; élevage ; coupe du bois → menuiserie → charpenterie ; minage → forge → sidérurgie |
 | Urbanisme | chemin → rue et pont → avenue et route ; mur → muraille → tour → citadelle ; hutte → cabane → maison → demeure → immeuble ; donjon → palais → ministère, académie, quartier général, beaux-arts ; techniques de construction à définir (charpente, maçonnerie, arc, voûte, coupole…) |
 | Militaire | bâton → tomahawk → marteau → épée → sabre ; fronde → arc → arbalète ; bombe → canon → fusée → mousquet → carabine ; armure de cuir → armure de fer → armure d'acier ; organisation → tactique → stratégie |
 | Langage | grammaire → poésie ; écriture → calligraphie |
@@ -315,6 +330,7 @@ Chaque village a son administration. Un gouvernement est toujours rattaché à u
 | POL-12 | Fiscalité : impôt plancher, impôt sur la production, sur les décès et les successions… | P1 |
 | POL-13 | Politiques publiques : favoriser la recherche, l'art, l'armée, le commerce et l'entrepreneuriat par des incitations financières ou des investissements. | P1 |
 | POL-14 | Institutions débloquées par les savoirs : débat, conseil, parlement ; ministère, académie, quartier général, beaux-arts. | P1 |
+| POL-15 | Le territoire d'un gouvernement réunit ceux de ses établissements (VIL-03), et ses frontières suivent leurs limites. Revendications, occupation, traités et tracé à l'écran sont conçus en séance C3. | P0, puis P1 |
 
 Niveaux de gouvernement :
 
@@ -438,7 +454,7 @@ Formes de bataille selon l'échelle :
 
 | ID | Exigence | Prio |
 |---|---|---|
-| IHM-01 | Modes de carte : relief, biomes, politique, culture, religion, langue, économie, ressources, densité de population. | P0, puis P1 |
+| IHM-01 | Modes de carte : relief, biomes, politique, civilisation, culture, religion, langue, économie, ressources, densité de population. | P0, puis P1 |
 | IHM-02 | Panneau d'inspection pour toute entité : individu, ville, gouvernement, maison, culture, langue, religion, armée, œuvre. | P0 |
 | IHM-03 | Arbre généalogique navigable. | P1 |
 | IHM-04 | Graphiques d'évolution. | P1 |
@@ -525,7 +541,7 @@ Le code vit dans un dépôt git public sur GitHub. Sans fichier de licence, il r
 |---|---|---|
 | 1 | Système de batailles : vue tactique (sur la carte à fort zoom ou dans un écran dédié), échelle de temps, moral, formations, doctrines, commandement par grade. | Séance de conception dédiée |
 | 2 | Modèle de diffusion des cultures, des langues et des religions (CUL-03). | À concevoir |
-| 3 | Règles d'appartenance d'un individu et d'un village à une civilisation et à une culture (CIV-04). | À concevoir |
+| 3 | Règles d'appartenance d'un individu et d'un village à une civilisation et à une culture (CIV-04). | Tranchée en C2 : CIV-04 |
 | 4 | Dictature et anarchie : descriptions ; mode d'accès « par désignation » (POL-03). | À concevoir |
 | 5 | Titres proposés : Tyrannie (dictature de niveau 4), doge (oligarchie de niveau 4), président (république de niveau 5) ; formes féminines des titres. | À valider |
 | 6 | Liste des biomes anthropiques (section 5). | Tranchée en C1 : occupation du sol (MON-09) |
@@ -540,6 +556,7 @@ Le code vit dans un dépôt git public sur GitHub. Sans fichier de licence, il r
 | 15 | Titre du jeu. | À trouver |
 | 16 | Domaines des savoirs : faut-il en ajouter (agriculture et élevage, aujourd'hui dans l'artisanat et l'industrie ; sciences et médecine ; philosophie et théologie) ? L'architecture se répartit-elle bien entre urbanisme (techniques) et art (styles) ? | À valider avec l'arbre |
 | 17 | Format des portraits : environ 64×64 px. | À confirmer en phase 2 |
+| 18 | Frontières politiques : revendications, occupation, traités, tracé à l'écran (POL-15). | Séance C3 |
 
 ## 28. Journal des décisions
 
@@ -612,6 +629,19 @@ Corrections de la version 0.4 :
 | Existant | Le PRD ne décrit plus les prototypes : ils ont servi à illustrer les idées et ne font pas foi. |
 | Portraits | Format visé : environ 64×64 px, à confirmer. |
 
+Séance C2 sur les peuples et les établissements (version 0.5), détaillée dans `docs/design/C2-peuples.md` :
+
+| Sujet | Décision |
+|---|---|
+| Identités | Civilisation attachée aux villages, culture aux individus ; la relation libre en découle. |
+| Appartenance | Culture héritée du foyer, civilisation du lieu de vie ; la conquête ne change pas la civilisation. |
+| Avant la civilisation | Groupes nomades, avec langue et culture embryonnaires. |
+| Fondation | Trois individus dont un couple fertile, site favorable, aucun établissement à moins de 30 cases. |
+| Établissements | Croissance d'abord ; colonies seulement quand le village ne peut plus s'étendre. |
+| Territoires | Organiques, par coût de déplacement depuis les bâtiments ; ils suivent les routes. |
+| Échelle | Abstraite ; distances en temps de trajet ; espacement tiré du budget de population. |
+| Noms et savoirs | 30 racines dès le premier jalon ; noms de peuples à suffixe ; onze premiers savoirs, dont l'élevage. |
+
 ## 29. Glossaire
 
 | Terme | Définition |
@@ -624,6 +654,8 @@ Corrections de la version 0.4 :
 | Civilisation | Peuple issu d'une fondation, porteur de la maîtrise des savoirs ; elle peut compter plusieurs cultures. |
 | Culture | Ensemble de coutumes, associé à une langue ; elle peut être présente dans plusieurs civilisations. |
 | Écartelé | Écu divisé en quatre quartiers, qui réunit plusieurs armoiries. |
+| Établissement | Lieu habité : hameau, village, bourg, ville ou cité. |
+| Groupe nomade | Bande d'individus sans civilisation, qui vit de cueillette, de chasse et de pêche. |
 | Maison | Lignée notable dotée d'un nom, d'armoiries et d'un chef ; le « clan » du brief. |
 | Maîtrise | Degré de connaissance d'un savoir par une civilisation, de 0 à 100 %. |
 | Métal, couleur | Or et argent sont des métaux ; gueules, azur, sinople, sable et pourpre sont des couleurs. On ne pose jamais métal sur métal ni couleur sur couleur. |
@@ -636,4 +668,5 @@ Corrections de la version 0.4 :
 | Pas de temps | Unité de temps de la simulation : un mois par défaut. |
 | Salar | Étendue de sel sèche, au fond d'un bassin fermé trop aride pour garder un lac. |
 | Succession écologique | Retour progressif d'une terre délaissée vers son biome naturel. |
+| Territoire | Zone qu'un établissement atteint pour un même effort ; elle se calcule par coût de déplacement, et non par un rayon. |
 | Type de gouvernement | Monarchie, république, oligarchie, dictature, théocratie ou anarchie ; il détermine la nomenclature. |

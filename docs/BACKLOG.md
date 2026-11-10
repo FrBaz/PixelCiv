@@ -131,5 +131,8 @@ Les dix tâches sont faites, chacune dans son commit (« 1.1 : … » à « 1.10
 | Scripts de la séance C1, dans `prototypes/c1/` | phase 1, dont ils sont l'implémentation de référence | PLAN, sections 6 et 12 (étape 4) | versés |
 | Images de la séance C1, dans `docs/design/C1/` : `avant-apres-tropiques.png`, `avant-apres-nord.png`, `saisons-nord.png` | phase 1 | PLAN, section 12, étape 4 | versées, converties depuis les pièces jointes (256 couleurs) |
 | Animation `docs/design/C1/saisons.gif`, à laquelle renvoie `C1-monde.md` | phase 1 | PLAN, section 12, étape 4 | seule sa première image est arrivée, versée sous `saisons-janvier.png` |
+| Document de la séance C2, `docs/design/C2-peuples.md` | phases 2 à 4, puis 9 | PLAN, section 12, étape 4 | versé ; transmis comme `docs/design/C2/C2-peuples.md`, il est rangé à côté de `C1-monde.md`, où le PRD, le plan et ses propres liens d'images l'attendent |
+| Scripts de la séance C2, dans `prototypes/c2/` : `villages.py`, `territoires.py` | phase 3, dont ils sont l'implémentation de référence | PLAN, sections 7 et 12 (étape 4) | versés |
+| Images de la séance C2, dans `docs/design/C2/` : `score.png`, `expansion.png`, `zoom.png`, `territoires.png` | phase 3 | PLAN, section 12, étape 4 | versées, converties depuis les pièces jointes (256 couleurs) |
 | Pack de sprites : « 2D Pixel Art Male and Female Character », de GandalfHardcore, version gratuite | phase 2 et suivantes | AST-01, AST-02 ; PRD, question 14 | auteur et lien reçus ; licence à vérifier, `itch.io` étant hors de portée de la session ; non versé |
 | Activation de GitHub Pages, avec « GitHub Actions » comme source | 0.3 | PLAN, section 12, étape 2 | faite : le déploiement de `main` a réussi |
