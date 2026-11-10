@@ -1,0 +1,10 @@
+# Mini-sprite d'une femme adulte, au pas, image 2 sur 2.
+..hh..
+.hssh.
+.hssh.
+.cxch.
+sccCcs
+.ccCc.
+.cccc.
+.s..s.
+.o..o.

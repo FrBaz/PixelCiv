@@ -1,0 +1,5 @@
+# Mini-sprite d’un nourrisson emmailloté, seconde image (identique).
+.s.
+ccc
+cCc
+.c.

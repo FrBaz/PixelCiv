@@ -5,15 +5,28 @@
  * restent visibles par-dessus, en haut, loin de ses boutons.
  */
 import { CellInfo } from './CellInfo';
+import { ChroniclePanel, ChronicleToggle } from './Chronicle';
 import { CreateWorld } from './CreateWorld';
+import { CreatorPanel, CreatorToggle } from './CreatorTools';
 import { DebugPanel, DebugToggle } from './DebugPanel';
 import { Legend, MapModes } from './MapModes';
 import { Notice } from './Notice';
 import { SaveMenu } from './SaveMenu';
-import { creationOpen, type CreationSetup, type UiActions } from './store';
+import { SheetPanel, type SheetContent } from './Sheet';
+import { creationOpen, type CreationSetup, type CreatorSetup, type UiActions } from './store';
 import { TimeControls } from './TimeControls';
 
-export function App({ actions, setup }: { actions: UiActions; setup: CreationSetup }) {
+export function App({
+  actions,
+  setup,
+  creator,
+  content,
+}: {
+  actions: UiActions;
+  setup: CreationSetup;
+  creator: CreatorSetup;
+  content: SheetContent;
+}) {
   const creating = creationOpen.value;
   return (
     <div class="hud">
@@ -32,6 +45,9 @@ export function App({ actions, setup }: { actions: UiActions; setup: CreationSet
             <DebugPanel />
           </div>
           <div class="hud-side">
+            <CreatorPanel setup={creator} />
+            <SheetPanel content={content} actions={actions} />
+            <ChroniclePanel actions={actions} />
             <CellInfo />
             <Legend />
           </div>
@@ -41,6 +57,10 @@ export function App({ actions, setup }: { actions: UiActions; setup: CreationSet
         <div class="hud-bar hud-bottom">
           <Notice />
           <MapModes actions={actions} />
+          <div class="panel hud-tools">
+            <CreatorToggle />
+            <ChronicleToggle />
+          </div>
           <SaveMenu actions={actions} />
         </div>
       )}

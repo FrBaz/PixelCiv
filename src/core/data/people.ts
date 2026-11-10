@@ -147,6 +147,23 @@ export const SpeciesSchema = z
     couple: z.object({ minAge: z.number().positive(), maxGap: z.number().positive() }).strict(),
     /** Besoin de nourriture d'un enfant, en part de celui d'un adulte. */
     childNeed: ShareSchema,
+    /**
+     * Rigueurs (SAI-03), en risque annuel de mort : un froid de 20 °C sous zéro, une
+     * chaleur de 10 °C au-delà de 30 °C, une faim complète. Le froid et la chaleur frappent
+     * les plus fragiles (avant `frail[0]` ans, après `frail[1]`) ; les autres n'en
+     * reçoivent que `adults`. L'adaptation de la sous-espèce tempère le froid et la chaleur.
+     */
+    hardship: z
+      .object({
+        cold: z.number().min(0),
+        heat: z.number().min(0),
+        famine: z.number().min(0),
+        frail: z.tuple([z.number().min(0), z.number().min(0)]),
+        adults: ShareSchema,
+      })
+      .strict(),
+    /** Probabilité mensuelle qu'une femme seule, en âge, trouve un conjoint dans son groupe. */
+    pairing: ShareSchema,
     /** Taille adulte, en centimètres, aux deux bouts du trait « taille ». */
     height: z.tuple([z.number().positive(), z.number().positive()]),
     subspecies: uniqueIds(SubspeciesSchema).min(1).max(MAX_SUBSPECIES),
@@ -159,3 +176,76 @@ export const SpeciesSchema = z
 export type Species = z.infer<typeof SpeciesSchema>;
 export type Subspecies = z.infer<typeof SubspeciesSchema>;
 export const SpeciesListSchema = uniqueIds(SpeciesSchema).min(1).max(255);
+
+/**
+ * Cultures embryonnaires (C2, D4) : fréquence de chaque règle de nommage (IND-08) parmi
+ * les cultures qui naissent avec un groupe.
+ */
+export const CulturesSchema = z
+  .object({
+    naming: z
+      .object({ father: ShareSchema, mother: ShareSchema, both: ShareSchema, none: ShareSchema })
+      .strict()
+      .refine((weights) => Object.values(weights).some((weight) => weight > 0), {
+        message: 'une règle de nommage au moins',
+      }),
+  })
+  .strict();
+
+export type Cultures = z.infer<typeof CulturesSchema>;
+
+/**
+ * Groupes nomades (C2, D4 et D13 ; tâches 2.4 et 2.5) : marche, scission, aire, recherche
+ * de nourriture, réserves et stocks de nourriture des cases.
+ */
+export const NomadsSchema = z
+  .object({
+    /** Cases de plaine parcourues à pied en un mois (C2, D13). */
+    walk: z.number().positive(),
+    /** Taille au-delà de laquelle un groupe se scinde (C2, D4). */
+    split: z.number().int().min(4),
+    /** Rayon de l'aire d'un groupe autour de son centre, en cases. */
+    range: z.number().positive(),
+    /**
+     * Distance, en cases, à laquelle un célibataire trouve un conjoint dans un autre groupe
+     * de sa culture, faute d'en trouver dans le sien : les bandes échangent leurs conjoints.
+     */
+    marriage: z.number().min(0),
+    /** Un groupe de moins de membres rejoint un groupe voisin, à la distance du mariage. */
+    merge: z.number().int().min(0),
+    /** Rayon, en cases, où le groupe cherche sa nourriture, et part des stocks qu'il prend. */
+    forage: z.object({ radius: z.number().int().min(1).max(8), share: ShareSchema }).strict(),
+    /** Réserves pour l'hiver (SAI-03) : en mois de besoin du groupe, et pertes par mois. */
+    reserve: z.object({ months: z.number().min(0), spoilage: ShareSchema }).strict(),
+    /** Stocks d'une case : leur plafond, en mois de rendement au sommet de la saison. */
+    stocks: z
+      .object({
+        plants: z.object({ capacity: z.number().positive() }).strict(),
+        game: z.object({ capacity: z.number().positive() }).strict(),
+        fish: z.object({ capacity: z.number().positive() }).strict(),
+      })
+      .strict(),
+    /** Pêche d'une rivière, par classe (aucune, ruisseau, rivière, fleuve), en part de celle du biome « rivière ». */
+    river: z.tuple([ShareSchema, ShareSchema, ShareSchema, ShareSchema]),
+  })
+  .strict();
+
+export type Nomads = z.infer<typeof NomadsSchema>;
+
+/**
+ * Couleurs des portraits et des mini-sprites (REN-07, REN-04, REN-09) : rampe des teints,
+ * du plus clair au plus foncé, que le trait « skin » parcourt ; cheveux gris ; contour,
+ * blanc des yeux, bouche ; habits des cultures embryonnaires, un par culture, à tour de rôle.
+ */
+export const AppearanceSchema = z
+  .object({
+    skin: z.array(ColorSchema).min(2),
+    grey: ColorSchema,
+    outline: ColorSchema,
+    white: ColorSchema,
+    mouth: ColorSchema,
+    clothing: z.array(ColorSchema).min(1),
+  })
+  .strict();
+
+export type Appearance = z.infer<typeof AppearanceSchema>;

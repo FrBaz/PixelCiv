@@ -14,6 +14,8 @@ import {
   type WorldSize,
 } from '../core/world';
 import type { WorldParams } from '../core/worldParams';
+import { emptyStocks, type FoodStocks } from './forage';
+import { terrainCosts, type GroupsContent } from './groups';
 import { Population } from './population';
 import { emptySociety, type Society } from './society';
 
@@ -29,6 +31,13 @@ export interface SimState {
   readonly people: Population;
   /** Groupes nomades, cultures, langues et chronique. */
   readonly society: Society;
+  /** Stocks de nourriture des cases entamées : cueillette, gibier, poisson. */
+  readonly food: FoodStocks;
+  /**
+   * Coût de marche de chaque case (Infinity si elle est infranchissable). Il découle du
+   * monde et du contenu : ni la sauvegarde ni l'empreinte n'en tiennent compte.
+   */
+  readonly cost: Float32Array<ArrayBuffer>;
   /** Commandes de jeu appliquées, dans l'ordre : rejouées depuis le monde, elles redonnent l'état. */
   readonly commandLog: LoggedCommand[];
   /**
@@ -47,7 +56,11 @@ export interface SimState {
 }
 
 /** Nouvel état, sur un monde qui vient d'être généré pour ces paramètres. */
-export function createState(params: WorldParams, world: WorldLayers): SimState {
+export function createState(
+  params: WorldParams,
+  world: WorldLayers,
+  content: Pick<GroupsContent, 'biomes' | 'altitudeLevels'>,
+): SimState {
   const size = WORLD_SIZES[params.size];
   const grid = chunkGrid(size);
   return {
@@ -57,6 +70,8 @@ export function createState(params: WorldParams, world: WorldLayers): SimState {
     world,
     people: new Population(),
     society: emptySociety(),
+    food: emptyStocks(world.biome.length),
+    cost: terrainCosts(world, content),
     commandLog: [],
     pending: [],
     rng: new Rng(params.seed),

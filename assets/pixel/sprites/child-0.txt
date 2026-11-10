@@ -1,0 +1,7 @@
+# Mini-sprite d'un enfant, au pas, image 1 sur 2.
+.hh.
+.ss.
+xccs
+.cc.
+.ss.
+.oo.

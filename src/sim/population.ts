@@ -30,7 +30,10 @@ export const NONE = 0;
 /** Pas de conception en cours, ou pas encore d'accouchement. */
 export const NEVER = -0x80000000;
 
-/** Causes de mort (IND-04), dans l'ordre de leur code dans l'archive. */
+/**
+ * Causes de mort (IND-04, SAI-03), dans l'ordre de leur code dans l'archive : une cause
+ * nouvelle s'ajoute à la fin.
+ */
 export const DEATH_CAUSES = [
   'natural',
   'disease',
@@ -38,6 +41,7 @@ export const DEATH_CAUSES = [
   'accident',
   'cold',
   'childbirth',
+  'heat',
 ] as const;
 export type DeathCause = (typeof DEATH_CAUSES)[number];
 
@@ -286,10 +290,11 @@ export class Population {
     const archived = this.archive.columns;
     for (const name of SHARED_COLUMNS) {
       const width = LIVING_COLUMNS[name].width;
-      archived[name].set(
-        this.columns[name].subarray(slot * width, slot * width + width),
-        row * width,
-      );
+      const from = this.columns[name];
+      const to = archived[name];
+      for (let index = 0; index < width; index++) {
+        to[row * width + index] = from[slot * width + index] ?? 0;
+      }
     }
     archived.death[row] = tick;
     archived.cause[row] = DEATH_CAUSES.indexOf(cause);

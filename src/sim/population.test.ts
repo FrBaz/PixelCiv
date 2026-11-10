@@ -41,6 +41,7 @@ function populated(): SimState {
     culture: 1,
     founded: 0,
     parent: NONE,
+    leader: 1,
     x: 10,
     y: 20,
     homeX: 10,
@@ -57,6 +58,8 @@ function populated(): SimState {
     y: 20,
     group: 1,
     other: NONE,
+    leader: 1,
+    otherLeader: NONE,
     count: 4,
   });
   const people = state.people;

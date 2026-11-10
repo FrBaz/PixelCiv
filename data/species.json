@@ -20,8 +20,8 @@
       "peak": 24,
       "to": 45,
       "maleTo": 70,
-      "monthly": 0.15,
-      "postpartum": 24,
+      "monthly": 0.08,
+      "postpartum": 30,
       "gestation": 9,
       "childbirthDeath": 0.01
     },
@@ -30,6 +30,14 @@
       "maxGap": 15
     },
     "childNeed": 0.5,
+    "hardship": {
+      "cold": 0.8,
+      "heat": 0.5,
+      "famine": 3,
+      "frail": [5, 60],
+      "adults": 0.15
+    },
+    "pairing": 0.15,
     "height": [145, 195],
     "subspecies": [
       {

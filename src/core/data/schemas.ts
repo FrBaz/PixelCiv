@@ -70,6 +70,13 @@ export const BiomeSchema = z
     disease: z.boolean(),
     /** Ressources du milieu (data/resources.json). */
     resources: z.array(IdSchema),
+    /**
+     * Rendement d'une case au sommet de la saison (RES-03, RES-04, FAU-01), en besoins
+     * mensuels d'un adulte : cueillette, chasse, pêche.
+     */
+    forage: z
+      .object({ plants: z.number().min(0), game: z.number().min(0), fish: z.number().min(0) })
+      .strict(),
     /** Flore : densités d'arbres et de buissons, de 0 à 1, et espèces (data/flora.json). */
     flora: z
       .object({ trees: ShareSchema, shrubs: ShareSchema, species: z.array(IdSchema) })

@@ -2,20 +2,26 @@
 // de simulation, puis les relie.
 import { h, render } from 'preact';
 import { loadGameData, type GameData } from '../core/data';
-import { PROTOCOL_VERSION } from '../core/protocol';
+import { PROTOCOL_VERSION, type InspectTarget } from '../core/protocol';
 import { WORLD_SIZES, type WorldLayers, type WorldSizeId } from '../core/world';
 import { defaultWorldParams, type WorldParams } from '../core/worldParams';
 import { determinismSelfTest } from '../core/selftest';
-import { t } from '../i18n';
+import { t, type MessageKey } from '../i18n';
 import { parseColor } from '../render/bake';
 import { CameraControls } from '../render/controls';
 import { cellAt, MapView } from '../render/map';
 import { legend, overlayTexels } from '../render/mapModes';
+import { TILE_PX } from '../render/camera';
+import { PeopleLayer } from '../render/people';
 import { previewPixels } from '../render/preview';
+import { SPAWN_COUNT } from '../sim/commands';
+import type { SheetContent } from '../ui/Sheet';
 import { createRenderer } from '../render/renderer';
 import { App } from '../ui/App';
 import {
-  content,
+  chronicle,
+  CHRONICLE_KEPT,
+  content as contentInfo,
   creationBusy,
   creationOpen,
   creationPending,
@@ -29,10 +35,14 @@ import {
   PREVIEW_COLUMNS,
   previewImage,
   previewKey,
+  sheet,
   showNotice,
+  spawnSettings,
   time,
+  tool,
   worldInfo,
   type CreationSetup,
+  type CreatorSetup,
   type MapModeId,
 } from '../ui/store';
 import { DebugSampler, usedMemoryMb } from './debug';
@@ -64,7 +74,7 @@ async function main(): Promise<void> {
   document.title = t('app.title');
   // Le contenu est validé au démarrage : une donnée invalide lève ici une DataError.
   const data = loadGameData();
-  content.value = { biomes: data.biomes.entries.length };
+  contentInfo.value = { biomes: data.biomes.entries.length };
   // Auto-test du déterminisme : ce moteur redonne-t-il les empreintes de référence ? Le
   // worker y ajoute celle du monde de référence, à la poignée de main.
   const determinism = determinismSelfTest();
@@ -73,6 +83,7 @@ async function main(): Promise<void> {
   const mapElement = element('map');
   const app = await createRenderer(mapElement);
   const map = new MapView(app, data.biomes.entries);
+  const people = new PeopleLayer(app, { genetics: data.genetics, appearance: data.appearance });
   const seasons = new SeasonClock();
   const modeData = {
     biomes: data.biomes.entries,
@@ -123,13 +134,19 @@ async function main(): Promise<void> {
     viewport: () => map.viewport,
     resolution: () => app.renderer.resolution,
     world: () => map.world,
-    // Appui long au doigt, clic ou appui bref : la case désignée s'inspecte (IHM-07).
+    // Appui long au doigt, clic ou appui bref : la case désignée s'inspecte (IHM-07), ou
+    // reçoit le groupe de l'outil d'apparition (CRE-03).
     onLongPress: (mapX, mapY) => {
       const cell = cellAt(mapX, mapY);
-      inspect(cell.x, cell.y);
+      if (tool.value === 'spawn') spawnAt(cell.x, cell.y);
+      else inspect(cell.x, cell.y);
     },
     onTap: (mapX, mapY) => {
       const cell = cellAt(mapX, mapY);
+      if (tool.value === 'spawn') {
+        spawnAt(cell.x, cell.y);
+        return;
+      }
       // Débogage : ?brush=desert peint la case touchée de ce biome, par une commande de jeu.
       if (brush !== null) {
         simulation.send({
@@ -143,9 +160,30 @@ async function main(): Promise<void> {
   });
   // Couches du monde affiché, pour l'inspection et les légendes.
   let worldLayers: WorldLayers | undefined;
+  // Fiches (IHM-02) : la dernière demande, et la cible de la fiche ouverte, qu'on rafraîchit.
+  let inspectRequest = 0;
+  let sheetTarget: InspectTarget | undefined;
+  const requestSheet = (target: InspectTarget) => {
+    inspectRequest++;
+    simulation.send({ type: 'inspect', requestId: inspectRequest, target });
+  };
+  /** Fait apparaître un groupe sur une case de terre ; un avis sinon. */
+  const spawnAt = (x: number, y: number) => {
+    const info = worldInfo.value;
+    if (worldLayers === undefined || info === undefined) return;
+    const biome = data.biomes.entries.at(worldLayers.biome[y * info.size.width + x] ?? 0);
+    if (biome === undefined || biome.movementCost === null) {
+      showNotice('creator.water');
+      return;
+    }
+    const settings = spawnSettings.value;
+    simulation.send({ type: 'game', command: { type: 'spawnGroup', x, y, ...settings } });
+  };
   const inspect = (x: number, y: number) => {
     const info = worldInfo.value;
     if (worldLayers === undefined || info === undefined) return;
+    // Un groupe tout près ouvre sa fiche ; la case s'inspecte toujours.
+    requestSheet({ kind: 'place', x, y });
     inspected.value = describeCell(
       worldLayers,
       info.size,
@@ -170,6 +208,7 @@ async function main(): Promise<void> {
     pausedForCreation = false;
   };
   const sampler = new DebugSampler();
+  let sheetRefresh = 0;
   // Au retour d'un onglet masqué, la première image couvre toute l'absence : elle ne
   // compte pas comme une image lente.
   let returning = false;
@@ -181,7 +220,9 @@ async function main(): Promise<void> {
     if (returning) returning = false;
     else sampler.frame(ticker.elapsedMS);
     map.setSeason(seasons.month(performance.now()));
-    map.draw(controls.update(ticker.deltaMS));
+    const camera = controls.update(ticker.deltaMS);
+    map.draw(camera);
+    people.draw(camera, map.viewport, map.world, performance.now());
   });
   setInterval(() => {
     const renderer = { name: app.renderer.name, resolution: app.renderer.resolution };
@@ -192,6 +233,8 @@ async function main(): Promise<void> {
       chunks: map.pendingChunks,
     };
     refreshInspected();
+    // La fiche ouverte suit la vie de l'individu ou du groupe, chaque seconde.
+    if (sheetTarget !== undefined && ++sheetRefresh % 4 === 0) requestSheet(sheetTarget);
   }, 250);
 
   simulation.subscribe((message) => {
@@ -225,6 +268,11 @@ async function main(): Promise<void> {
         const layers = message.layers;
         worldLayers = layers;
         inspected.value = undefined;
+        sheet.value = undefined;
+        sheetTarget = undefined;
+        people.clear();
+        people.setFrame(message.frame);
+        chronicle.value = message.chronicle.slice(-CHRONICLE_KEPT);
         const { width } = message.world.size;
         map.setWorld(message.world, layers, (mode) => overlayTexels(mode, layers, modeData, width));
         actions.setMapMode(mapMode.value);
@@ -236,6 +284,10 @@ async function main(): Promise<void> {
       }
       case 'delta':
         map.updateChunks(message.chunks);
+        people.setFrame(message.frame);
+        if (message.chronicle.length > 0) {
+          chronicle.value = [...chronicle.value, ...message.chronicle].slice(-CHRONICLE_KEPT);
+        }
         time.value = message.time;
         seasons.update(message.time, performance.now());
         break;
@@ -256,6 +308,24 @@ async function main(): Promise<void> {
       case 'previewReady':
         previews.ready(message);
         break;
+      case 'inspection': {
+        // Seule compte la réponse à la dernière demande.
+        if (message.requestId !== inspectRequest) break;
+        if (message.person !== undefined) {
+          sheet.value = { kind: 'person', view: message.person };
+          sheetTarget = { kind: 'person', id: message.person.id };
+        } else if (message.group !== undefined) {
+          sheet.value = { kind: 'group', view: message.group };
+          sheetTarget = { kind: 'group', id: message.group.id };
+          // Le groupe montré, sa case s'efface de l'inspection.
+          inspected.value = undefined;
+        } else if (sheetTarget?.kind === 'group') {
+          // Le groupe n'est plus : sa fiche se ferme.
+          sheet.value = undefined;
+          sheetTarget = undefined;
+        }
+        break;
+      }
       case 'error':
         console.error(`worker : ${message.code} (${message.detail})`);
         if (message.code === 'params' || message.code === 'internal') {
@@ -279,6 +349,23 @@ async function main(): Promise<void> {
   const actions = {
     send: (message: Parameters<SimulationClient['send']>[0]) => {
       simulation.send(message);
+    },
+    inspectPerson: (id: number) => {
+      requestSheet({ kind: 'person', id });
+    },
+    inspectGroup: (id: number) => {
+      requestSheet({ kind: 'group', id });
+    },
+    closeSheet: () => {
+      sheet.value = undefined;
+      sheetTarget = undefined;
+    },
+    focus: (x: number, y: number) => {
+      controls.camera = {
+        ...controls.camera,
+        x: x * TILE_PX + TILE_PX / 2,
+        y: y * TILE_PX + TILE_PX / 2,
+      };
     },
     setMapMode: (mode: MapModeId) => {
       mapMode.value = mode;
@@ -321,7 +408,24 @@ async function main(): Promise<void> {
       creationBusy.value = false;
     }
   }
-  render(h(App, { actions, setup }), element('ui'));
+  const creator: CreatorSetup = {
+    species: data.species.entries.map((species) => ({
+      id: species.id,
+      name: species.name as MessageKey,
+      subspecies: species.subspecies.map((entry) => ({
+        id: entry.id,
+        name: entry.name as MessageKey,
+      })),
+    })),
+    count: SPAWN_COUNT,
+  };
+  const content: SheetContent = {
+    species: data.species.entries,
+    loci: data.genetics.loci,
+    traits: data.genetics.traits,
+    appearance: data.appearance,
+  };
+  render(h(App, { actions, setup, creator, content }), element('ui'));
 
   // La poignée de main d'abord : le worker refuse tout message qui la précède.
   simulation.send({ type: 'hello', protocol: PROTOCOL_VERSION });

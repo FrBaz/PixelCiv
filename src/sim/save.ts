@@ -11,21 +11,64 @@
 import { z } from 'zod';
 import type { Catalog } from '../core/data/catalog';
 import type { Genetics, Species } from '../core/data/people';
-import type { Biome, Resource } from '../core/data/schemas';
+import type { AltitudeLevel, Biome, Resource } from '../core/data/schemas';
 import type { Worldgen } from '../core/data/worldgen';
 import { Rng } from '../core/rng';
 import { SaveError, type Migrations, type SaveData, type SavedArray } from '../core/save/format';
 import { chunkGrid, LAYER_NAMES, LAYER_TYPES, WORLD_SIZES, type WorldLayers } from '../core/world';
 import { worldParamsSchema } from '../core/worldParams';
 import { GameCommandSchema, LoggedCommandSchema } from './commands';
+import {
+  deplete,
+  depletedCells,
+  emptyStocks,
+  FOOD_STRIDE,
+  type FoodStocks,
+  type ForageContent,
+} from './forage';
+import { terrainCosts } from './groups';
 import { Population } from './population';
 import { restorePeople, savePeople } from './populationSave';
 import { emptySociety } from './society';
 import type { SimState } from './state';
 
+/**
+ * Stocks de nourriture d'une sauvegarde : la liste des cases entamées, sans doublon, et
+ * leurs trois stocks, positifs et finis. Une partie de la version 3 n'en a pas.
+ */
+function restoreFood(save: SaveData, count: number): FoodStocks {
+  const food = emptyStocks(count);
+  const cells: unknown = save.arrays.foodCells;
+  if (cells === undefined) return food;
+  if (!(cells instanceof Int32Array)) throw new SaveError('corrupt', 'stocks illisibles');
+  const layer = (name: string) => {
+    const array: unknown = save.arrays[name];
+    if (!(array instanceof Float32Array) || array.length !== cells.length) {
+      throw new SaveError('corrupt', `stocks ${name} absents ou de mauvaise taille`);
+    }
+    return array;
+  };
+  const plants = layer('foodPlants');
+  const game = layer('foodGame');
+  const fish = layer('foodFish');
+  cells.forEach((cell, index) => {
+    const values = [plants[index] ?? 0, game[index] ?? 0, fish[index] ?? 0];
+    if (cell < 0 || cell >= count || food.depleted[cell] === 1) {
+      throw new SaveError('corrupt', 'cases des stocks incohérentes');
+    }
+    if (!values.every((value) => value >= 0 && value < 1e6)) {
+      throw new SaveError('corrupt', 'stocks illisibles');
+    }
+    deplete(food, cell);
+    food.stocks.set(values, cell * FOOD_STRIDE);
+  });
+  return food;
+}
+
 /** Contenu dont la sauvegarde se sert : les catalogues et les bornes des paramètres. */
-export interface SaveContent {
+export interface SaveContent extends ForageContent {
   readonly biomes: Catalog<Biome>;
+  readonly altitudeLevels: Catalog<AltitudeLevel>;
   readonly resources: Catalog<Resource>;
   readonly species: Catalog<Species>;
   readonly genetics: Genetics;
@@ -123,6 +166,15 @@ export function saveState(state: SimState, generator: number, content: SaveConte
   for (const name of LAYER_NAMES) arrays[name] = state.world[name].slice();
   const people = savePeople(state.people, state.society, content);
   Object.assign(arrays, people.arrays);
+  // Les seules cases entamées, dans l'ordre des cases : les autres sont au plafond de la
+  // saison.
+  const list = depletedCells(state.food);
+  arrays.foodCells = Int32Array.from(list);
+  const stock = (kind: number) =>
+    Float32Array.from(list, (cell) => state.food.stocks[cell * FOOD_STRIDE + kind] ?? 0);
+  arrays.foodPlants = stock(0);
+  arrays.foodGame = stock(1);
+  arrays.foodFish = stock(2);
   return {
     meta: { seed: state.params.seed, tick: state.tick },
     json: {
@@ -239,6 +291,7 @@ export function restoreState(save: SaveData, content: SaveContent): SimState {
     if (deposit > 0) world.deposit[cell] = (resources[deposit - 1] ?? 0) + 1;
   }
   const { people, society } = restorePeople(save, parsed.data.people, content, size, tick);
+  const food = restoreFood(save, count);
   const grid = chunkGrid(size);
   return {
     params: params.data,
@@ -247,6 +300,8 @@ export function restoreState(save: SaveData, content: SaveContent): SimState {
     world,
     people,
     society,
+    food,
+    cost: terrainCosts(world, content),
     commandLog: [...commandLog],
     pending: [...pending],
     rng: new Rng(save.meta.seed, rng),

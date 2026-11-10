@@ -20,6 +20,9 @@ export const MONTH_KEYS = [
 
 export function formatDate(tick: number): string {
   const { year, month } = dateOfTick(tick);
+  const name = t(MONTH_KEYS[month] ?? MONTH_KEYS[0]);
+  // Avant l'an 1 : un individu apparu adulte est né avant le début de la partie.
+  if (year <= 0) return t('calendar.dateBefore', { month: name, count: 1 - year });
   // Une année s'écrit sans séparateur de milliers : l'an 2000, et non l'an 2 000.
-  return t('calendar.date', { month: t(MONTH_KEYS[month] ?? MONTH_KEYS[0]), year: String(year) });
+  return t('calendar.date', { month: name, year: String(year) });
 }

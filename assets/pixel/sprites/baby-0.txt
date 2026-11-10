@@ -1,0 +1,5 @@
+# Mini-sprite d'un nourrisson emmailloté.
+.s.
+ccc
+cCc
+.c.

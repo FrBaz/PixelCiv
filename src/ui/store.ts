@@ -4,7 +4,14 @@
  */
 import { signal } from '@preact/signals';
 import type { Worldgen } from '../core/data';
-import type { MainMessage, TimeInfo, WorldInfo } from '../core/protocol';
+import type {
+  ChronicleView,
+  GroupView,
+  MainMessage,
+  PersonView,
+  TimeInfo,
+  WorldInfo,
+} from '../core/protocol';
 import type { GenerationStage, WorldSizeId } from '../core/world';
 import type { WorldParams } from '../core/worldParams';
 import type { MessageKey } from '../i18n';
@@ -76,7 +83,51 @@ export interface UiActions {
   closeCreation(): void;
   preview(params: WorldParams): void;
   create(params: WorldParams): void;
+  /** Ouvre la fiche d'un individu ou d'un groupe (IHM-02), ou la referme. */
+  inspectPerson(id: number): void;
+  inspectGroup(id: number): void;
+  closeSheet(): void;
+  /** Centre la carte sur une case. */
+  focus(x: number, y: number): void;
 }
+
+/** Outil de la carte : inspecter (appui, clic), ou faire apparaître un groupe (CRE-03). */
+export type Tool = 'inspect' | 'spawn';
+export const tool = signal<Tool>('inspect');
+
+/** Réglages de l'outil d'apparition : la sous-espèce et le nombre de personnes. */
+export interface SpawnSettings {
+  readonly species: string;
+  readonly subspecies: string;
+  readonly count: number;
+}
+export const spawnSettings = signal<SpawnSettings>({
+  species: 'human',
+  subspecies: 'plains',
+  count: 20,
+});
+
+/** Ce que l'outil d'apparition propose : les sous-espèces de chaque espèce, nommées. */
+export interface CreatorSetup {
+  readonly species: readonly {
+    readonly id: string;
+    readonly name: MessageKey;
+    readonly subspecies: readonly { readonly id: string; readonly name: MessageKey }[];
+  }[];
+  /** Taille d'un groupe : au moins, au plus. */
+  readonly count: { readonly min: number; readonly max: number };
+}
+
+/** Fiche ouverte : un individu ou un groupe, tel que le worker l'a décrit. */
+export type Sheet =
+  | { readonly kind: 'person'; readonly view: PersonView }
+  | { readonly kind: 'group'; readonly view: GroupView };
+export const sheet = signal<Sheet | undefined>(undefined);
+
+/** Faits de la chronique reçus, du plus ancien au plus récent ; les derniers seulement. */
+export const CHRONICLE_KEPT = 300;
+export const chronicle = signal<readonly ChronicleView[]>([]);
+export const chronicleOpen = signal(false);
 
 /** Ce que l'écran de création propose : bornes des paramètres, tailles, taille par défaut. */
 export interface CreationSetup {

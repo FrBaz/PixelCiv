@@ -15,6 +15,7 @@ import type { GameData } from '../core/data';
 import {
   PROTOCOL_VERSION,
   transferablesOf,
+  type GameCommand,
   type MainMessage,
   type TimeInfo,
   type WorkerMessage,
@@ -35,6 +36,7 @@ import { GameCommandSchema } from '../sim/commands';
 import { MIGRATIONS, restoreState, saveState } from '../sim/save';
 import { createState, takeDirtyChunks, type SimState } from '../sim/state';
 import { step } from '../sim/step';
+import { chronicleView, groupsFrame, inspect } from '../sim/views';
 import { GENERATOR_VERSION, type GenerationParams } from '../worldgen/generate';
 
 export interface HostEnvironment {
@@ -50,6 +52,9 @@ export type WorldGenerator = (
   params: GenerationParams,
   onStage: (stage: GenerationStage) => void,
 ) => WorldLayers;
+
+/** Faits de la chronique envoyés avec l'instantané d'une partie. */
+const CHRONICLE_SNAPSHOT = 200;
 
 /** Largeur d'un aperçu de l'écran de création, en colonnes : bornes et parité. */
 export const PREVIEW_WIDTH = { min: 32, max: 512 } as const;
@@ -72,6 +77,8 @@ export class SimulationHost {
   private stepCost = 0;
   /** File des opérations sur la partie entière. */
   private operations: Promise<void> = Promise.resolve();
+  /** Faits de la chronique déjà envoyés au fil principal. */
+  private chronicleSent = 0;
 
   constructor(env: HostEnvironment, data: GameData, generate: WorldGenerator) {
     this.env = env;
@@ -103,6 +110,12 @@ export class SimulationHost {
       case 'game':
         this.command(message.command);
         break;
+      case 'inspect': {
+        const state = this.state;
+        const result = state === undefined ? {} : inspect(state, this.data, message.target);
+        this.send({ type: 'inspection', requestId: message.requestId, ...result });
+        break;
+      }
       case 'setSpeed':
         this.setSpeed(message.speed);
         break;
@@ -189,7 +202,7 @@ export class SimulationHost {
       this.send({ type: 'progress', stage, step: GENERATION_STAGES.indexOf(stage), steps });
     });
     this.send({ type: 'generated', milliseconds: this.env.now() - start });
-    this.start(createState(params, world));
+    this.start(createState(params, world, this.data));
   }
 
   /**
@@ -233,11 +246,24 @@ export class SimulationHost {
       return;
     }
     const parsed = GameCommandSchema.safeParse(command);
-    if (!parsed.success || this.data.biomes.indexOf(parsed.data.biome) === undefined) {
+    if (!parsed.success || !this.knownContent(parsed.data)) {
       this.send({ type: 'error', code: 'command', detail: 'commande invalide' });
       return;
     }
     this.state.pending.push(parsed.data);
+  }
+
+  /** Les identifiants de contenu d'une commande existent-ils ? */
+  private knownContent(command: GameCommand): boolean {
+    switch (command.type) {
+      case 'paintBiome':
+        return this.data.biomes.indexOf(command.biome) !== undefined;
+      case 'spawnGroup': {
+        const index = this.data.species.indexOf(command.species);
+        const species = index === undefined ? undefined : this.data.species.entries[index];
+        return species?.subspecies.some((entry) => entry.id === command.subspecies) === true;
+      }
+    }
   }
 
   /**
@@ -319,12 +345,19 @@ export class SimulationHost {
    */
   private start(state: SimState): void {
     const layers = copyLayers(state.world);
+    const frame = groupsFrame(state, this.data);
+    // Les derniers faits de la chronique ; les suivants viendront avec chaque pas.
+    const recent = state.society.chronicle.slice(-CHRONICLE_SNAPSHOT);
+    const chronicle = recent.map((entry) => chronicleView(state, entry));
     this.state = state;
+    this.chronicleSent = state.society.chronicle.length;
     this.send({
       type: 'snapshot',
       world: { params: state.params, size: state.size },
       time: this.time(state),
       layers,
+      frame,
+      chronicle,
     });
     const duration = monthDuration(this.speed);
     this.nextStepAt = this.env.now() + duration;
@@ -363,7 +396,7 @@ export class SimulationHost {
     if (state === undefined) return;
     const start = this.env.now();
     // Les commandes en attente s'appliquent au début du pas, qui les horodate.
-    step(state, state.pending.splice(0), this.data);
+    const members = step(state, state.pending.splice(0), this.data);
     if (this.stepCost > 0) {
       const end = start + this.stepCost;
       while (this.env.now() < end) {
@@ -371,7 +404,15 @@ export class SimulationHost {
       }
     }
     const stepMs = this.env.now() - start;
-    this.send({ type: 'delta', time: this.time(state), chunks: takeDirtyChunks(state) });
+    const fresh = state.society.chronicle.slice(this.chronicleSent);
+    this.chronicleSent = state.society.chronicle.length;
+    this.send({
+      type: 'delta',
+      time: this.time(state),
+      chunks: takeDirtyChunks(state),
+      frame: groupsFrame(state, this.data, members),
+      chronicle: fresh.map((entry) => chronicleView(state, entry)),
+    });
     this.send({ type: 'stats', stats: { stepMs } });
   }
 
