@@ -125,6 +125,26 @@ Les dix tâches sont réalisées, chacune dans son commit (« 1.1 : … » à «
 
 **Interface.** L'inspection d'une case se fait d'un clic, d'un appui bref ou d'un appui long (IHM-07). Sans sauvegarde automatique, le jeu s'ouvre sur l'écran de création ; on peut y charger la sauvegarde manuelle ou importer un fichier. L'adresse peut encore nommer un monde pour le débogage (`?seed=abc&size=large`), qui commence alors directement.
 
+## Phase 2 — Individus et démographie
+
+Objectif : une population qui vit, se reproduit, transmet ses gènes et meurt, et qu'on peut observer (PLAN, section 7). Les groupes nomades suivent la séance C2 (D4, D13), et les saisons C1 (D9). Aucune exigence de la phase n'est marquée « à concevoir » dans le PRD. Décisions : ADR 0011.
+
+**Jalon 2.** On fait apparaître un groupe d'humains. Il nomadise au fil des saisons, survit ou non, et ses enfants ressemblent à leurs parents. On suit les lignées.
+
+| # | Tâche | Exigences | Critère d'acceptation | État |
+|---|---|---|---|---|
+| 2.1 | Population : une colonne en tableau typé par attribut, emplacements recyclés, identifiants stables, archive des morts ; sauvegarde 4 et empreinte de l'état. | IND-01, IND-03 | 50 000 vivants sans objet par individu ; les morts restent consultables ; une partie rechargée se poursuit à l'identique. | fait |
+| 2.2 | Espèces et génétique : humains en trois sous-espèces décrits par des données (`data/species.json`) ; génome compact, allèles dominants et récessifs, traits continus par moyenne des parents et variation, mutations rares ; métissage. | IND-05, IND-06, ESP-01 à ESP-04 | Proportions mendéliennes retrouvées sur de grands croisements ; les enfants ressemblent à leurs parents ; ajouter une sous-espèce ne touche pas au code. | fait |
+| 2.3 | Cycle de vie : âges, mortalité et fertilité par espèce, couples sans inceste, grossesses et naissances, causes de mort, surmortalité hivernale des plus fragiles. | IND-04, ESP-03, SAI-03 | Espérance de vie et fécondité plausibles pour des chasseurs-cueilleurs ; une population nourrie se maintient sur des siècles. | à faire |
+| 2.4 | Survie : cueillette, chasse et pêche par biome, rendements saisonniers, gibier et ressources qui s'épuisent et se régénèrent, faim et famine. | ECO-11, RES-03, RES-04, FAU-01, SAI-03 | Un groupe vit mieux en forêt tempérée qu'en toundra ; l'hiver et la surexploitation se font sentir. | à faire |
+| 2.5 | Groupes nomades : langue et culture embryonnaires dès l'apparition ; déplacements saisonniers vers les meilleurs terrains de leur aire, à environ 30 cases de plaine par mois ; scission au-delà d'une trentaine de membres. | CIV-05, MON-16 | Un groupe se déplace, se scinde en deux groupes de même culture, et ne traverse ni la mer ni les lacs. | à faire |
+| 2.6 | Noms : phonologie générée par langue (sons, syllabes, enchaînements), prénoms et noms de famille, règle de nommage de la culture. | LAN-01, IND-08 | Les noms d'une même langue se ressemblent, ceux de deux langues diffèrent ; une graine redonne les mêmes noms. | en cours |
+| 2.7 | Pipeline d'assets : sources éditables en grilles de texte, par rôle de teinte ; atlas générés à la compilation ; recoloration à l'exécution. | AST-03, AST-04, REN-09 | Une source modifiée change l'atlas au build suivant ; un même motif sert à toutes les teintes. | à faire |
+| 2.8 | Portraits de face de 64 × 64 px, générés à partir des gènes (teinte, couleurs, formes) et de l'âge (rides, cheveux gris, calvitie). | REN-07 | Un enfant ressemble à ses parents ; un même individu vieillit ; pixel art net, sans mélange de densités. | à faire |
+| 2.9 | Mini-sprites, première version : de 6 à 10 px de haut, tirés de l'individu (teinte, cheveux, âge, sexe), autour de leur groupe, en vue rapprochée ; une icône de groupe de loin. | REN-04, REN-03, REN-08 | Les sprites suivent leur groupe, à la densité de pixels de la carte, sans faire tomber les images par seconde. | à faire |
+| 2.10 | Outils : faire apparaître un groupe (espèce, sous-espèce, nombre) ; inspection d'un individu et d'un groupe ; liens familiaux navigables ; chronique de base. | CRE-03, CRE-05, IHM-02, CHR-01 | On fait apparaître un groupe au doigt comme à la souris, on suit ses lignées et on lit sa chronique. | à faire |
+| 2.11 | Mesures : bancs d'essai à 10 000 et 50 000 individus ; calibrage pour le téléphone. | IND-03, NF-01 | Un pas mensuel de 50 000 individus tient dans le budget de la vitesse la plus rapide sur PC ; la mesure sur téléphone est consignée. | à faire |
+
 ## À fournir par l'auteur
 
 | Quoi | Pour | Référence | État |

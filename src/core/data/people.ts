@@ -1,0 +1,161 @@
+/**
+ * Schémas des espèces et de la génétique (tâche 2.2 ; IND-05, IND-06, ESP-01 à ESP-04,
+ * ADR 0011) : data/species.json et data/genetics.json.
+ *
+ * Le génome d'un individu tient en GENOME_WORDS mots de 32 bits : huit locus discrets à
+ * deux allèles de 4 bits (dominants ou récessifs), puis huit traits continus de 8 bits
+ * (moyenne des parents et variation). Les données ne peuvent donc pas décrire plus de
+ * huit locus, de seize allèles chacun, ni plus de huit traits.
+ */
+import { z } from 'zod';
+import { IdSchema, MessageKeySchema, ShareSchema, uniqueIds } from './schemas';
+
+export const MAX_LOCI = 8;
+export const MAX_ALLELES = 16;
+export const MAX_TRAITS = 8;
+/** Sous-espèces d'une espèce, au plus : autant que de parts d'ascendance. */
+export const MAX_SUBSPECIES = 4;
+
+const ColorSchema = z.string().regex(/^#[0-9a-f]{6}$/, 'couleur #rrggbb');
+
+/** Allèle d'un locus discret : le plus dominant des deux s'exprime. */
+const AlleleSchema = z
+  .object({
+    id: IdSchema,
+    name: MessageKeySchema,
+    /** Rang de dominance : à rang égal, l'allèle qui vient d'abord dans la liste l'emporte. */
+    dominance: z.number().int().min(0),
+    /** Couleur qu'il donne, pour les yeux et les cheveux ; aucune pour les formes. */
+    color: ColorSchema.optional(),
+  })
+  .strict();
+
+const LocusSchema = z
+  .object({
+    id: IdSchema,
+    name: MessageKeySchema,
+    alleles: uniqueIds(AlleleSchema).min(2).max(MAX_ALLELES),
+  })
+  .strict();
+
+/** Trait continu, de 0 à 1, stocké sur 8 bits. */
+const TraitSchema = z
+  .object({
+    id: IdSchema,
+    name: MessageKeySchema,
+    /** Écart type de la variation autour de la moyenne des parents. */
+    variation: ShareSchema,
+  })
+  .strict();
+
+export const GeneticsSchema = z
+  .object({
+    loci: uniqueIds(LocusSchema).max(MAX_LOCI),
+    traits: uniqueIds(TraitSchema).max(MAX_TRAITS),
+    mutation: z
+      .object({
+        /** Probabilité, par locus et par naissance, qu'un allèle transmis en devienne un autre. */
+        allele: ShareSchema,
+        /** Probabilité, par trait et par naissance, d'un écart tiré au sort, et sa largeur. */
+        trait: ShareSchema,
+        jump: ShareSchema,
+      })
+      .strict(),
+  })
+  .strict();
+
+export type Genetics = z.infer<typeof GeneticsSchema>;
+export type Locus = z.infer<typeof LocusSchema>;
+export type Trait = z.infer<typeof TraitSchema>;
+
+/** Répartition d'un trait continu dans une sous-espèce : moyenne et écart type. */
+const DistributionSchema = z.object({ mean: ShareSchema, sd: ShareSchema }).strict();
+
+/** Adaptations d'une sous-espèce (ESP-02), de 0 à 1 : jamais ses capacités mentales. */
+const AdaptationSchema = z
+  .object({
+    /** Résistance au froid et à la chaleur : elle tempère la surmortalité des mois extrêmes. */
+    cold: ShareSchema,
+    heat: ShareSchema,
+    /** Endurance : elle allonge la marche et la recherche de nourriture. */
+    endurance: ShareSchema,
+  })
+  .strict();
+
+const SubspeciesSchema = z
+  .object({
+    id: IdSchema,
+    name: MessageKeySchema,
+    adaptation: AdaptationSchema,
+    /** Biomes de prédilection, où la cueillette et la chasse rendent davantage. */
+    biomes: z.array(IdSchema),
+    /** Apparence : fréquence de chaque allèle par locus, répartition de chaque trait. */
+    appearance: z
+      .object({
+        alleles: z.record(IdSchema, z.record(IdSchema, z.number().min(0))),
+        traits: z.record(IdSchema, DistributionSchema),
+      })
+      .strict(),
+  })
+  .strict();
+
+/**
+ * Mortalité de Siler, par an, à l'âge x en années : infant.level × e^(−infant.decay × x)
+ * + background + senescence.level × e^(senescence.growth × x).
+ */
+const MortalitySchema = z
+  .object({
+    infant: z.object({ level: z.number().min(0), decay: z.number().positive() }).strict(),
+    background: z.number().min(0),
+    senescence: z.object({ level: z.number().min(0), growth: z.number().positive() }).strict(),
+  })
+  .strict();
+
+const FertilitySchema = z
+  .object({
+    /** Âges de la fécondité féminine, en années : début, sommet, fin. */
+    from: z.number().positive(),
+    peak: z.number().positive(),
+    to: z.number().positive(),
+    /** Âge au-delà duquel un homme n'a plus d'enfant. */
+    maleTo: z.number().positive(),
+    /** Probabilité mensuelle de conception au sommet, pour une femme en couple, nourrie. */
+    monthly: ShareSchema,
+    /** Mois sans conception après un accouchement (allaitement). */
+    postpartum: z.number().int().min(0),
+    /** Durée de la grossesse, en mois. */
+    gestation: z.number().int().positive(),
+    /** Probabilité, par accouchement, que la mère en meure. */
+    childbirthDeath: ShareSchema,
+  })
+  .strict()
+  .refine((fertility) => fertility.from < fertility.peak && fertility.peak < fertility.to, {
+    message: 'la fécondité commence, culmine puis cesse',
+  });
+
+export const SpeciesSchema = z
+  .object({
+    id: IdSchema,
+    name: MessageKeySchema,
+    /** Âge adulte, en années : couple, travail, besoin entier de nourriture. */
+    maturity: z.number().positive(),
+    /** Âge au-delà duquel nul ne survit, en années. */
+    longevity: z.number().positive(),
+    mortality: MortalitySchema,
+    fertility: FertilitySchema,
+    /** Couple : âge minimal et plus grand écart d'âge, en années. */
+    couple: z.object({ minAge: z.number().positive(), maxGap: z.number().positive() }).strict(),
+    /** Besoin de nourriture d'un enfant, en part de celui d'un adulte. */
+    childNeed: ShareSchema,
+    /** Taille adulte, en centimètres, aux deux bouts du trait « taille ». */
+    height: z.tuple([z.number().positive(), z.number().positive()]),
+    subspecies: uniqueIds(SubspeciesSchema).min(1).max(MAX_SUBSPECIES),
+  })
+  .strict()
+  .refine((species) => species.maturity < species.longevity, {
+    message: "l'âge adulte précède la longévité",
+  });
+
+export type Species = z.infer<typeof SpeciesSchema>;
+export type Subspecies = z.infer<typeof SubspeciesSchema>;
+export const SpeciesListSchema = uniqueIds(SpeciesSchema).min(1).max(255);

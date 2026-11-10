@@ -1,6 +1,7 @@
 /**
- * Sauvegarde de l'état de la simulation (ADR 0007) : couches du monde en binaire, le
- * reste en JSON. Une partie rechargée se poursuit à l'identique (NF-09).
+ * Sauvegarde de l'état de la simulation (ADR 0007) : couches du monde et colonnes de la
+ * population en binaire, le reste en JSON. Une partie rechargée se poursuit à
+ * l'identique (NF-09).
  *
  * La sauvegarde garde le monde lui-même, et non sa seule graine : elle reste lisible
  * quand le générateur change. Elle nomme aussi les biomes et les ressources dont ses
@@ -9,6 +10,7 @@
  */
 import { z } from 'zod';
 import type { Catalog } from '../core/data/catalog';
+import type { Genetics, Species } from '../core/data/people';
 import type { Biome, Resource } from '../core/data/schemas';
 import type { Worldgen } from '../core/data/worldgen';
 import { Rng } from '../core/rng';
@@ -16,12 +18,17 @@ import { SaveError, type Migrations, type SaveData, type SavedArray } from '../c
 import { chunkGrid, LAYER_NAMES, LAYER_TYPES, WORLD_SIZES, type WorldLayers } from '../core/world';
 import { worldParamsSchema } from '../core/worldParams';
 import { GameCommandSchema, LoggedCommandSchema } from './commands';
+import { Population } from './population';
+import { restorePeople, savePeople } from './populationSave';
+import { emptySociety } from './society';
 import type { SimState } from './state';
 
 /** Contenu dont la sauvegarde se sert : les catalogues et les bornes des paramètres. */
 export interface SaveContent {
   readonly biomes: Catalog<Biome>;
   readonly resources: Catalog<Resource>;
+  readonly species: Catalog<Species>;
+  readonly genetics: Genetics;
   readonly worldgen: Pick<Worldgen, 'parameters'>;
 }
 
@@ -63,6 +70,7 @@ const SimJsonSchema = z
     content: z.object({ biomes: ContentIdsSchema, resources: ContentIdsSchema }).strict(),
     commandLog: z.array(z.unknown()),
     pending: z.array(z.unknown()),
+    people: z.unknown(),
     rng: z.custom<Readonly<Record<string, unknown>>>(
       (value) =>
         typeof value === 'object' &&
@@ -82,17 +90,39 @@ function each<T>(items: readonly unknown[], schema: z.ZodType<T>, name: string):
   });
 }
 
+/** Population vide d'une sauvegarde : ce que la version 4 ajoute à une partie de la 3. */
+function emptyPeople(): { json: unknown; arrays: SaveData['arrays'] } {
+  const empty = savePeople(new Population(), emptySociety(), {
+    species: { entries: [], indexOf: () => undefined },
+    genetics: { loci: [], traits: [], mutation: { allele: 0, trait: 0, jump: 0 } },
+  });
+  return empty;
+}
+
 /**
  * Migrations des sauvegardes (ADR 0007) : celle de la clé v mène de la version v à
  * v + 1. Une version sans migration est refusée comme trop ancienne : c'est le cas des
- * versions 1 et 2, parties de test de la phase 0, sans monde à reprendre.
+ * versions 1 et 2, parties de test de la phase 0, sans monde à reprendre. La version 4
+ * ajoute la population (phase 2) : une partie de la 3 n'en a pas encore.
  */
-export const MIGRATIONS: Migrations = {};
+export const MIGRATIONS: Migrations = {
+  3: (save) => {
+    const people = emptyPeople();
+    const json = typeof save.json === 'object' && save.json !== null ? save.json : {};
+    return {
+      meta: save.meta,
+      json: { ...json, people: people.json },
+      arrays: { ...save.arrays, ...people.arrays },
+    };
+  },
+};
 
 /** Copie de l'état, prise d'un coup : la simulation peut repartir aussitôt. */
 export function saveState(state: SimState, generator: number, content: SaveContent): SaveData {
   const arrays: Record<string, SavedArray> = {};
   for (const name of LAYER_NAMES) arrays[name] = state.world[name].slice();
+  const people = savePeople(state.people, state.society, content);
+  Object.assign(arrays, people.arrays);
   return {
     meta: { seed: state.params.seed, tick: state.tick },
     json: {
@@ -105,6 +135,7 @@ export function saveState(state: SimState, generator: number, content: SaveConte
       // Les entrées du journal ne changent plus une fois écrites : copier la liste suffit.
       commandLog: [...state.commandLog],
       pending: [...state.pending],
+      people: people.json,
       rng: state.rng.states(),
     },
     arrays,
@@ -207,12 +238,15 @@ export function restoreState(save: SaveData, content: SaveContent): SimState {
     world.biome[cell] = biomes[biome] ?? 0;
     if (deposit > 0) world.deposit[cell] = (resources[deposit - 1] ?? 0) + 1;
   }
+  const { people, society } = restorePeople(save, parsed.data.people, content, size, tick);
   const grid = chunkGrid(size);
   return {
     params: params.data,
     size,
     tick,
     world,
+    people,
+    society,
     commandLog: [...commandLog],
     pending: [...pending],
     rng: new Rng(save.meta.seed, rng),

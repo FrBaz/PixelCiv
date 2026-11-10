@@ -20,9 +20,10 @@ export const SAVE_MAGIC = 'PXCV';
 /**
  * Version courante du format et de son contenu. Historique : 1, première version ;
  * 2, commandes en attente du prochain pas ; 3, le monde généré de la phase 1, à la
- * place de la grille de test.
+ * place de la grille de test ; 4, la population de la phase 2 (individus, archive des
+ * morts, groupes, cultures, langues, chronique).
  */
-export const SAVE_FORMAT_VERSION = 3;
+export const SAVE_FORMAT_VERSION = 4;
 
 /**
  * Taille maximale d'une sauvegarde, compressée ou non, en octets. Elle borne la mémoire

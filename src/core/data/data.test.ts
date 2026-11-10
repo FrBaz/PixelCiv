@@ -179,3 +179,69 @@ describe('cohérence du contenu', () => {
     );
   });
 });
+
+describe('data/species.json et data/genetics.json', () => {
+  const { species, genetics } = loadGameData();
+
+  it('compte les humains en trois sous-espèces : nordiques, des plaines, des sables (ESP-01)', () => {
+    expect(species.entries.map((entry) => entry.id)).toEqual(['human']);
+    expect(species.entries[0]?.subspecies.map((entry) => entry.id)).toEqual([
+      'nordic',
+      'plains',
+      'sands',
+    ]);
+  });
+
+  it('ne distingue pas les sous-espèces par leurs capacités mentales (ESP-02)', () => {
+    for (const entry of species.entries) {
+      const mind = (id: string) =>
+        entry.subspecies.map((subspecies) => subspecies.appearance.traits[id]);
+      for (const id of ['intelligence', 'ambition']) {
+        const distributions = mind(id);
+        expect(distributions[0]).toBeDefined();
+        for (const distribution of distributions) expect(distribution).toEqual(distributions[0]);
+      }
+    }
+  });
+
+  it('a un nom traduit pour chaque espèce, sous-espèce, locus, allèle et trait', () => {
+    const names = [
+      ...species.entries.flatMap((entry) => [
+        entry.name,
+        ...entry.subspecies.map((subspecies) => subspecies.name),
+      ]),
+      ...genetics.loci.flatMap((locus) => [locus.name, ...locus.alleles.map((a) => a.name)]),
+      ...genetics.traits.map((trait) => trait.name),
+    ];
+    expect(names.filter((name) => typeof messages[name] !== 'string')).toEqual([]);
+  });
+
+  it('relève une apparence qui renvoie à un allèle ou à un trait inconnu', () => {
+    const data = loadGameData();
+    const human = data.species.entries.at(0);
+    if (human === undefined) throw new Error('pas d’espèce');
+    const broken = {
+      ...human,
+      subspecies: human.subspecies.map((subspecies, index) =>
+        index === 0
+          ? {
+              ...subspecies,
+              appearance: {
+                alleles: { ...subspecies.appearance.alleles, eyes: { violet: 1 } },
+                traits: { ...subspecies.appearance.traits, charm: { mean: 0.5, sd: 0.1 } },
+              },
+            }
+          : subspecies,
+      ),
+    };
+    const problems = checkContent({
+      ...data,
+      species: { ...data.species, entries: [broken] },
+    });
+    expect(problems).toEqual([
+      'data/species.json (human, nordic) : allèles inconnus : violet',
+      "data/species.json (human, nordic) : aucun allèle du locus eyes n'a de fréquence",
+      'data/species.json (human, nordic) : traits inconnus : charm',
+    ]);
+  });
+});
