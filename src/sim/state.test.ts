@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import { CHUNK_SIZE } from '../core/world';
-import { cellIndex, takeDirtyChunks } from './state';
+import { CHUNK_SIZE, emptyLayers, WORLD_SIZES } from '../core/world';
+import { cellIndex, createState, takeDirtyChunks } from './state';
 import { applyCommand, fingerprint, step } from './step';
-import { firstCellOf, testData, testState } from './testing';
+import { firstCellOf, testData, testParams, testState } from './testing';
 
 const land = (family: string) => family !== 'water';
 
@@ -79,5 +79,17 @@ describe('pas', () => {
     }
     expect(fingerprint(a)).toBe(fingerprint(b));
     expect(fingerprint(testState('autre'))).not.toBe(fingerprint(testState('graine')));
+  });
+
+  it("redonnent l'empreinte de référence d'un an de jeu (ADR 0003)", () => {
+    // Un monde fixe, sans génération : l'empreinte ne dépend que de la simulation.
+    const world = emptyLayers(WORLD_SIZES.small);
+    world.biome.fill(testData.biomes.indexOf('steppe') ?? 0);
+    world.elevation.fill(120);
+    const state = createState(testParams('référence'), world);
+    step(state, [{ type: 'paintBiome', x: 10, y: 20, biome: 'desert' }], testData);
+    for (let tick = 1; tick < 12; tick++) step(state, [], testData);
+    expect(state.tick).toBe(12);
+    expect(fingerprint(state)).toBe('541192c5');
   });
 });

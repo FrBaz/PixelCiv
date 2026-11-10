@@ -278,9 +278,10 @@ export class SimulationHost {
       this.send({ type: 'saveFailed', requestId, reason: 'noGame' });
       return;
     }
-    const save = saveState(this.state, GENERATOR_VERSION, this.data);
+    let save: ReturnType<typeof saveState>;
     let file: Uint8Array<ArrayBuffer>;
     try {
+      save = saveState(this.state, GENERATOR_VERSION, this.data);
       file = await writeSave(save);
     } catch (error) {
       // La requête reçoit sa réponse ; un défaut imprévu est signalé à part.
@@ -292,10 +293,11 @@ export class SimulationHost {
   }
 
   private async load(requestId: number, data: ArrayBuffer): Promise<void> {
-    let state: SimState;
     try {
-      state = restoreState(await readSave(new Uint8Array(data), MIGRATIONS), this.data);
+      const state = restoreState(await readSave(new Uint8Array(data), MIGRATIONS), this.data);
+      this.start(state);
     } catch (error) {
+      // La requête reçoit sa réponse ; un défaut imprévu est signalé à part.
       this.send({
         type: 'loadFailed',
         requestId,
@@ -304,7 +306,6 @@ export class SimulationHost {
       if (!(error instanceof SaveError)) throw error;
       return;
     }
-    this.start(state);
     this.send({ type: 'loaded', requestId });
   }
 
@@ -312,13 +313,18 @@ export class SimulationHost {
     return { tick: state.tick, paused: this.paused, speed: this.speed };
   }
 
+  /**
+   * Commence la partie `state`. La copie de ses couches pour l'instantané se fait
+   * d'abord : si elle échoue, la partie en cours continue, et rien n'a changé.
+   */
   private start(state: SimState): void {
+    const layers = copyLayers(state.world);
     this.state = state;
     this.send({
       type: 'snapshot',
       world: { params: state.params, size: state.size },
       time: this.time(state),
-      layers: copyLayers(state.world),
+      layers,
     });
     const duration = monthDuration(this.speed);
     this.nextStepAt = this.env.now() + duration;

@@ -39,8 +39,12 @@ class FakeEnvironment implements HostEnvironment {
   private readonly timers = new Map<number, { at: number; callback: () => void }>();
   private nextHandle = 1;
 
+  /**
+   * Comme un vrai worker, un message posté est cloné et ses tampons transférés : ceux
+   * de l'hôte sont détachés, et une couche envoyée sans copie le trahirait.
+   */
   post(message: WorkerMessage, transfer: Transferable[]): void {
-    this.sent.push({ message, transfer });
+    this.sent.push({ message: structuredClone(message, { transfer }), transfer });
   }
 
   now(): number {
