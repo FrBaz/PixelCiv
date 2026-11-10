@@ -11,10 +11,10 @@ const cell = z.number().int();
 
 export const GameCommandSchema = z
   .object({
-    type: z.literal('paint'),
+    type: z.literal('paintBiome'),
     x: cell,
     y: cell,
-    value: z.number().int().min(0).max(255),
+    biome: z.string().regex(/^[a-z]+(-[a-z]+)*$/),
   })
   .strict() satisfies z.ZodType<GameCommand>;
 

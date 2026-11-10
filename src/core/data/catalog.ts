@@ -33,3 +33,15 @@ export function loadCatalog<T extends { readonly id: string }>(
   const indices = new Map(entries.map((entry, index) => [entry.id, index]));
   return { entries, indexOf: (id) => indices.get(id) };
 }
+
+/** Valide un fichier de réglages (un objet, et non une liste) ; lève une DataError sinon. */
+export function loadSettings<T>(file: string, schema: z.ZodType<T>, raw: unknown): T {
+  const result = schema.safeParse(raw);
+  if (!result.success) {
+    const problems = result.error.issues.map(
+      (issue) => `${issue.path.join('.')} : ${issue.message}`,
+    );
+    throw new DataError(`${file} invalide\n${problems.join('\n')}`);
+  }
+  return result.data;
+}

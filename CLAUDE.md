@@ -12,6 +12,7 @@ Jeu de simulation de mondes et de vies en pixel art, à la croisée de WorldBox,
 
 - `npm run dev` : serveur de développement, accessible depuis un téléphone du réseau local
 - `npm test` : tests (Vitest)
+- `npm run bench` : banc d'essai de la génération, durée par taille de monde (hors des tests)
 - `npm run typecheck` et `npm run lint`
 - `npm run format` : mise en forme par Prettier
 - `npm run build` : build de production, déployé sur GitHub Pages depuis `main`
@@ -35,6 +36,7 @@ Jeu de simulation de mondes et de vies en pixel art, à la croisée de WorldBox,
 - **Pixel art.** Rends en échantillonnage au plus proche, avec des positions entières à l'écran. Ne mélange jamais deux densités de pixels dans une même vue.
 - **Modèle.** Civilisation et culture sont distinctes, en relation libre (plusieurs à plusieurs). Un gouvernement a un type et un mode d'accès au pouvoir, deux attributs indépendants. Chaque case porte un biome naturel et, à part, une occupation du sol (champ, coupe, friche, zone bâtie…).
 - **Saisons.** Ne recuis jamais les blocs de carte pour une saison : elles passent par la texture de données et le shader.
+- **Espace.** L'échelle est abstraite : aucune distance en kilomètres, seulement des cases et des temps de trajet. Un territoire n'est jamais un cercle : il se calcule par coût de déplacement depuis les bâtiments (C2, D13 et D14).
 - **Qualité.**
   - TypeScript strict, sans `any`.
   - Identifiants en anglais, commentaires et documentation en français.

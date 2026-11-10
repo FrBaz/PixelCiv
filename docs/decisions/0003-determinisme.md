@@ -1,6 +1,6 @@
 # ADR 0003 — Déterminisme
 
-Statut : accepté · 9 novembre 2026 · tâche 0.2
+Statut : accepté · 9 novembre 2026 · tâche 0.2, complété en 1.10
 
 ## Contexte
 
@@ -14,7 +14,7 @@ Une même graine et les mêmes paramètres doivent donner le même monde sur tou
 - **Interdits.** Dans `src/core`, `src/sim`, `src/worldgen` et `src/gen`, ESLint refuse `Math.random`, `crypto`, `Date`, `performance`, les fonctions de Math approchées, l'opérateur `**`, `Intl` et les méthodes qui dépendent de la langue de l'appareil, y compris par `globalThis` ou `self`. `Math`, `globalThis` et `self` ne s'y emploient que devant une propriété écrite en clair (`Math.sqrt`, `Math['sqrt']`) : un alias (`const M = Math`), un détour (`globalThis.self`) ou une clé calculée (`Math[op]`) échapperait à ces interdictions. Les requêtes de type, comme `typeof Math.sin`, restent admises.
 - **Temps.** La simulation compte ses pas et ne lit jamais l'horloge. Seul l'hôte du worker (`src/worker`, ADR 0004) la lit, pour cadencer les pas.
 - **Commandes.** Une commande qui modifie l'état est horodatée du pas où elle s'applique, appliquée au début de ce pas, puis journalisée. Rejouer une partie revient à rejouer son journal à partir de la même graine.
-- **Contrôle.** Des tests comparent l'empreinte de l'état (FNV-1a sur 32 bits) après N pas à une valeur de référence. Au démarrage, le jeu recalcule aussi les valeurs de référence du générateur et de `dmath` dans le navigateur, et le panneau de débogage indique si elles concordent.
+- **Contrôle.** Des tests comparent l'empreinte de l'état (FNV-1a sur 32 bits) après N pas à une valeur de référence, et celles de mondes générés, couche par couche, aux empreintes de référence de la génération (`src/worldgen/reference.test.ts`, tâche 1.10). Au démarrage, le jeu recalcule aussi dans le navigateur les valeurs de référence du générateur pseudo-aléatoire et de `dmath`, et le worker celle d'un monde de 64 × 32 cases, généré en quelques dizaines de millisecondes à la poignée de main ; le panneau de débogage indique si elles concordent.
 
 ## Conséquences
 

@@ -1,19 +1,22 @@
 /**
- * Rejeu d'une partie (ADR 0003) : la même graine et le même journal de commandes
+ * Rejeu d'une partie (ADR 0003) : le même monde et le même journal de commandes
  * redonnent le même état, pas pour pas.
  */
 import type { GameCommand, LoggedCommand } from '../core/protocol';
-import type { WorldSize } from '../core/world';
+import { copyLayers, type WorldLayers } from '../core/world';
+import type { WorldParams } from '../core/worldParams';
 import { createState, type SimState } from './state';
-import { step } from './step';
+import { step, type SimContent } from './step';
 
+/** Rejoue `log` sur une copie du monde `world`, généré pour `params`, jusqu'au pas `ticks`. */
 export function replay(
-  seed: string,
-  size: WorldSize,
+  params: WorldParams,
+  world: WorldLayers,
   log: readonly LoggedCommand[],
   ticks: number,
+  content: SimContent,
 ): SimState {
-  const state = createState(seed, size);
+  const state = createState(params, copyLayers(world));
   let next = 0;
   while (state.tick < ticks) {
     const commands: GameCommand[] = [];
@@ -22,7 +25,7 @@ export function replay(
       if (entry?.tick !== state.tick) break;
       commands.push(entry.command);
     }
-    step(state, commands);
+    step(state, commands, content);
   }
   return state;
 }

@@ -1,7 +1,8 @@
 /**
  * Commandes de la caméra (IHM-07) : glisser et pincer, au doigt comme à la souris
  * (événements de pointeur, bouton principal seulement), molette, flèches ou ZQSD et
- * touches + et −. Un appui bref, sans glissement, désigne un point de la carte.
+ * touches + et −. Un appui bref, sans glissement, désigne un point de la carte ; un appui
+ * long, aussi, au doigt surtout, pour l'inspecter.
  */
 import {
   constrain,
@@ -24,13 +25,18 @@ export interface ControlsOptions {
   readonly world: () => Extent | undefined;
   /** Appui bref sur la carte, au point (mapX, mapY) en pixels de carte. */
   readonly onTap: (mapX: number, mapY: number) => void;
+  /** Appui long, sans glissement, au point (mapX, mapY) en pixels de carte. */
+  readonly onLongPress: (mapX: number, mapY: number) => void;
 }
 
 /** Vitesse du déplacement au clavier, en pixels physiques par seconde. */
 const KEY_SPEED = 900;
 /** Facteur de zoom d'un appui sur + ou −. */
 const KEY_ZOOM = 1.25;
-/** Un appui reste bref s'il bouge de moins de 8 pixels CSS et dure moins de 500 ms. */
+/**
+ * Un appui reste bref s'il bouge de moins de 8 pixels CSS et dure moins de 500 ms ; il
+ * devient long s'il reste en place au-delà.
+ */
 const TAP_DISTANCE = 8;
 const TAP_DURATION = 500;
 
@@ -56,6 +62,7 @@ export class CameraControls {
   private readonly options: ControlsOptions;
   private readonly pointers = new Map<number, Point>();
   private tap: { id: number; start: Point; time: number } | undefined;
+  private longPress: number | undefined;
   private readonly keys = new Set<string>();
 
   constructor(options: ControlsOptions) {
@@ -136,7 +143,26 @@ export class CameraControls {
       this.pointers.size === 1
         ? { id: event.pointerId, start: point, time: event.timeStamp }
         : undefined;
+    this.cancelLongPress();
+    if (this.tap !== undefined) {
+      const tap = this.tap;
+      this.longPress = window.setTimeout(() => {
+        this.longPress = undefined;
+        if (this.tap !== tap) return;
+        // L'appui long consomme le geste : le relâcher ne fera pas d'appui bref. Le point
+        // visé est celui du doigt maintenant : la carte a pu le suivre de quelques pixels.
+        this.tap = undefined;
+        const point = this.pointers.get(tap.id) ?? tap.start;
+        const target = screenToMap(this.camera, this.options.viewport(), point.x, point.y);
+        this.options.onLongPress(target.x, target.y);
+      }, TAP_DURATION);
+    }
   };
+
+  private cancelLongPress(): void {
+    if (this.longPress !== undefined) window.clearTimeout(this.longPress);
+    this.longPress = undefined;
+  }
 
   private readonly onPointerMove = (event: PointerEvent): void => {
     const previous = this.pointers.get(event.pointerId);
@@ -144,7 +170,10 @@ export class CameraControls {
     const point = this.point(event);
     if (this.tap !== undefined) {
       const moved = Math.hypot(point.x - this.tap.start.x, point.y - this.tap.start.y);
-      if (moved > TAP_DISTANCE * this.options.resolution()) this.tap = undefined;
+      if (moved > TAP_DISTANCE * this.options.resolution()) {
+        this.tap = undefined;
+        this.cancelLongPress();
+      }
     }
     if (this.pointers.size === 1) {
       this.camera = pan(this.camera, point.x - previous.x, point.y - previous.y);
@@ -169,17 +198,23 @@ export class CameraControls {
   private readonly onPointerUp = (event: PointerEvent): void => {
     const tap = this.tap;
     this.pointers.delete(event.pointerId);
-    if (tap?.id === event.pointerId && event.timeStamp - tap.time < TAP_DURATION) {
+    if (tap?.id === event.pointerId) {
+      // Un geste encore en cours est bref, ou long si son minuteur n'a pas encore sonné.
       const point = this.point(event);
       const target = screenToMap(this.camera, this.options.viewport(), point.x, point.y);
-      this.options.onTap(target.x, target.y);
+      if (event.timeStamp - tap.time < TAP_DURATION) this.options.onTap(target.x, target.y);
+      else this.options.onLongPress(target.x, target.y);
     }
     this.tap = undefined;
+    this.cancelLongPress();
   };
 
   private readonly onPointerCancel = (event: PointerEvent): void => {
     this.pointers.delete(event.pointerId);
-    if (this.tap?.id === event.pointerId) this.tap = undefined;
+    if (this.tap?.id === event.pointerId) {
+      this.tap = undefined;
+      this.cancelLongPress();
+    }
   };
 
   private readonly onWheel = (event: WheelEvent): void => {

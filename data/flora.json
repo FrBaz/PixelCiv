@@ -1,0 +1,72 @@
+[
+  {
+    "id": "conifer",
+    "kind": "tree",
+    "name": "flora.conifer"
+  },
+  {
+    "id": "broadleaf",
+    "kind": "tree",
+    "name": "flora.broadleaf"
+  },
+  {
+    "id": "birch",
+    "kind": "tree",
+    "name": "flora.birch"
+  },
+  {
+    "id": "larch",
+    "kind": "tree",
+    "name": "flora.larch"
+  },
+  {
+    "id": "palm",
+    "kind": "tree",
+    "name": "flora.palm"
+  },
+  {
+    "id": "tropical-hardwood",
+    "kind": "tree",
+    "name": "flora.tropical-hardwood"
+  },
+  {
+    "id": "acacia",
+    "kind": "tree",
+    "name": "flora.acacia"
+  },
+  {
+    "id": "mangrove-tree",
+    "kind": "tree",
+    "name": "flora.mangrove-tree"
+  },
+  {
+    "id": "heather",
+    "kind": "shrub",
+    "name": "flora.heather"
+  },
+  {
+    "id": "scrub",
+    "kind": "shrub",
+    "name": "flora.scrub"
+  },
+  {
+    "id": "cactus",
+    "kind": "shrub",
+    "name": "flora.cactus"
+  },
+  {
+    "id": "berry-bush",
+    "kind": "shrub",
+    "name": "flora.berry-bush"
+  },
+  {
+    "id": "reed",
+    "kind": "shrub",
+    "name": "flora.reed"
+  },
+  {
+    "id": "dwarf-willow",
+    "kind": "shrub",
+    "name": "flora.dwarf-willow"
+  }
+]

@@ -1,66 +1,59 @@
 /**
  * Avancée de la simulation : un pas vaut un mois. Les commandes de jeu s'appliquent
- * au début du pas, puis les systèmes s'exécutent dans un ordre fixe (ADR 0003).
+ * au début du pas, puis les systèmes s'exécutent dans un ordre fixe (ADR 0003). La
+ * phase 1 n'a pas encore de système : le temps passe, et avec lui les saisons, que le
+ * rendu tire du numéro du mois.
  */
-import { wrapX } from '../core/cylinder';
+import type { Catalog } from '../core/data/catalog';
+import type { Biome } from '../core/data/schemas';
 import { Fingerprint } from '../core/hash';
 import type { GameCommand } from '../core/protocol';
-import { setTestCell, WALKER_COUNT, WALKER_STREAM, type SimState } from './state';
+import { LAYER_NAMES } from '../core/world';
+import { PARAMETER_NAMES } from '../core/data/worldgen';
+import { cellIndex, markDirty, type SimState } from './state';
 
-/** Pas possibles d'un promeneur : est, ouest, sud, nord. */
-const DIRECTIONS: readonly (readonly [number, number])[] = [
-  [1, 0],
-  [-1, 0],
-  [0, 1],
-  [0, -1],
-];
-
-/**
- * Système de test : chaque promeneur fait un pas au hasard et peint la case atteinte,
- * de la valeur 1 à 7 selon son rang. Il boucle d'est en ouest et bute sur les pôles.
- */
-function moveWalkers(state: SimState): void {
-  const random = state.rng.stream(WALKER_STREAM);
-  const { width, height } = state.size;
-  for (let walker = 0; walker < WALKER_COUNT; walker++) {
-    const [dx, dy] = random.pick(DIRECTIONS);
-    const x = wrapX((state.walkerX[walker] ?? 0) + dx, width);
-    const y = Math.min(height - 1, Math.max(0, (state.walkerY[walker] ?? 0) + dy));
-    state.walkerX[walker] = x;
-    state.walkerY[walker] = y;
-    setTestCell(state, x, y, (walker % 7) + 1);
-  }
+/** Contenu dont la simulation se sert. */
+export interface SimContent {
+  readonly biomes: Catalog<Biome>;
 }
 
-export function applyCommand(state: SimState, command: GameCommand): void {
-  // Une seule commande pour l'instant : la peinture de la couche de test.
-  setTestCell(state, command.x, command.y, command.value);
+/**
+ * Applique une commande. Le pinceau ne change que le biome d'une case de terre en un
+ * autre biome de terre : la mer et les lacs, qui ont une profondeur, restent ce qu'ils
+ * sont. Une commande sans effet est sans danger.
+ */
+export function applyCommand(state: SimState, command: GameCommand, content: SimContent): void {
+  const index = cellIndex(state.size, command.x, command.y);
+  const target = content.biomes.indexOf(command.biome);
+  if (index === undefined || target === undefined) return;
+  const water = (biome: number) => content.biomes.entries.at(biome)?.family === 'water';
+  const current = state.world.biome[index] ?? 0;
+  if (current === target || water(current) || water(target)) return;
+  state.world.biome[index] = target;
+  markDirty(state, index);
 }
 
 /**
  * Fait avancer l'état d'un pas. Les commandes reçues s'appliquent d'abord, et sont
  * journalisées avec le pas au début duquel elles s'appliquent.
  */
-export function step(state: SimState, commands: readonly GameCommand[]): void {
+export function step(state: SimState, commands: readonly GameCommand[], content: SimContent): void {
   for (const command of commands) {
     state.commandLog.push({ tick: state.tick, command });
-    applyCommand(state, command);
+    applyCommand(state, command, content);
   }
-  // Systèmes, dans un ordre fixe.
-  moveWalkers(state);
+  // Systèmes, dans un ordre fixe : aucun encore.
   state.tick++;
 }
 
 /** Empreinte de l'état du monde, pour les tests de déterminisme. */
 export function fingerprint(state: SimState): string {
   const fingerprint = new Fingerprint()
-    .string(state.seed)
-    .uint32(state.size.width)
-    .uint32(state.size.height)
-    .uint32(state.tick)
-    .typedArray(state.testLayer)
-    .typedArray(state.walkerX)
-    .typedArray(state.walkerY);
+    .string(state.params.seed)
+    .string(state.params.size)
+    .uint32(state.tick);
+  for (const name of PARAMETER_NAMES) fingerprint.string(name).float64(state.params[name]);
+  for (const name of LAYER_NAMES) fingerprint.string(name).typedArray(state.world[name]);
   for (const [name, words] of Object.entries(state.rng.states())) {
     fingerprint.string(name);
     for (const word of words) fingerprint.uint32(word);

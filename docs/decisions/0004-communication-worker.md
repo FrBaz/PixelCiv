@@ -15,8 +15,9 @@ La simulation tourne dans un fil séparé et ne bloque jamais l'interface (NF-02
   - les commandes de jeu, qui modifient l'état : vérifiées à leur réception, elles attendent dans l'état le prochain pas, qui les horodate et les journalise (ADR 0003).
 
   Les opérations sur la partie entière (nouvelle partie, sauvegarde, chargement) passent dans une file, chacune après la fin de la précédente : la dernière partie demandée est celle qui reste. Toute requête de sauvegarde ou de chargement reçoit une réponse qui porte son numéro, même sans partie en cours ou quand l'écriture échoue. Changer de vitesse ou faire une pause garde l'avancée du mois en cours.
-- **Vers le fil principal.** Un instantané complet au démarrage et après un chargement ; puis des deltas, qui portent les blocs de carte modifiés et le temps de la partie ; enfin des mesures, comme la durée des pas.
-- **Transferts.** Les gros volumes, couches de carte par bloc et sauvegardes, voyagent en `ArrayBuffer` transférés, sans copie.
+- **Vers le fil principal.** Un instantané complet au démarrage et après un chargement : les paramètres du monde et ses dix couches (ADR 0009). Puis des deltas, qui portent les blocs de carte modifiés et le temps de la partie ; enfin des mesures, comme la durée des pas. Pendant la génération d'un monde, le worker annonce chaque étape commencée, puis la durée totale.
+- **Aperçu.** L'écran de création demande des aperçus : le même monde, sur une carte réduite, dont le worker renvoie le biome et l'altitude. Un aperçu ne touche pas à la partie et passe hors de la file des opérations.
+- **Transferts.** Les gros volumes, couches du monde, blocs modifiés, aperçus et sauvegardes, voyagent en `ArrayBuffer` transférés, sans copie : le worker envoie des copies de ses couches, qu'il garde.
 - **Hôte et simulation.** `src/worker/` héberge la simulation : il reçoit les messages, cadence les pas selon la vitesse et l'horloge, mesure leur durée et envoie les résultats. `src/sim/` ne connaît ni l'horloge ni les messages : il fait avancer l'état d'un pas.
 - **Client.** Côté fil principal, `src/app/simulation.ts` enveloppe le worker dans un client typé.
 

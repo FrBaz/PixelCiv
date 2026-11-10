@@ -1,4 +1,6 @@
 import { describe, expect, it } from 'vitest';
+import { loadCatalog } from '../core/data/catalog';
+import { BiomesSchema } from '../core/data/schemas';
 import {
   encodeSave,
   readSave,
@@ -6,165 +8,215 @@ import {
   SaveError,
   writeSave,
 } from '../core/save/format';
-import { WORLD_SIZES } from '../core/world';
+import { LAYER_NAMES } from '../core/world';
+import { GENERATOR_VERSION } from '../worldgen/generate';
 import { MIGRATIONS, restoreState, saveState } from './save';
-import { createState, WALKER_STREAM } from './state';
+import type { SimState } from './state';
 import { fingerprint, step } from './step';
+import { cellsOf, firstCellOf, testData, testState } from './testing';
+import biomesJson from '../../data/biomes.json';
 
-function played(ticks: number) {
-  const state = createState('graine', WORLD_SIZES.small);
+const land = (family: string) => family !== 'water';
+
+function played(ticks: number): SimState {
+  const state = testState();
+  const cells = cellsOf(state, land, ticks);
   for (let tick = 0; tick < ticks; tick++) {
-    step(state, tick % 5 === 0 ? [{ type: 'paint', x: tick * 7, y: tick, value: 8 }] : []);
+    const cell = cells.at(tick);
+    step(
+      state,
+      tick % 5 === 0 && cell !== undefined
+        ? [{ type: 'paintBiome', ...cell, biome: 'desert' }]
+        : [],
+      testData,
+    );
   }
   return state;
 }
 
+const save = (state: SimState) => saveState(state, GENERATOR_VERSION, testData);
+const restore = (data: Parameters<typeof restoreState>[0]) => restoreState(data, testData);
+
 describe('sauvegarde de la simulation', () => {
-  it("redonne exactement l'état sauvegardé", async () => {
+  it("redonne exactement l'état sauvegardé, monde compris", async () => {
     const state = played(30);
-    const restored = restoreState(await readSave(await writeSave(saveState(state)), MIGRATIONS));
+    const restored = restore(await readSave(await writeSave(save(state)), MIGRATIONS));
     expect(fingerprint(restored)).toBe(fingerprint(state));
     expect(restored.commandLog).toEqual(state.commandLog);
+    expect(restored.params).toEqual(state.params);
   });
 
   it("se poursuit à l'identique après rechargement", async () => {
     const original = played(30);
-    const restored = restoreState(await readSave(await writeSave(saveState(original)), MIGRATIONS));
-    for (let tick = 0; tick < 50; tick++) {
-      step(original, []);
-      step(restored, []);
+    const restored = restore(await readSave(await writeSave(save(original)), MIGRATIONS));
+    const cell = firstCellOf(original, land);
+    for (let tick = 0; tick < 20; tick++) {
+      const commands = tick === 3 ? [{ type: 'paintBiome' as const, ...cell, biome: 'taiga' }] : [];
+      step(original, commands, testData);
+      step(restored, commands, testData);
     }
     expect(fingerprint(restored)).toBe(fingerprint(original));
   });
 
+  it('garde toutes les couches du monde, sous un fichier de taille raisonnable', async () => {
+    const data = save(played(2));
+    for (const name of LAYER_NAMES) expect(data.arrays[name]).toBeDefined();
+    const file = await writeSave(data);
+    // Un monde Petit tient en quelques centaines de kilo-octets compressés.
+    expect(file.byteLength).toBeLessThan(1_500_000);
+  });
+
   it("n'est pas modifiée par la suite de la partie", () => {
     const state = played(3);
-    state.pending.push({ type: 'paint', x: 5, y: 5, value: 4 });
-    const save = saveState(state);
-    const before = JSON.stringify({ json: save.json, layer: Array.from(save.arrays.testLayer) });
-    step(state, state.pending.splice(0));
-    step(state, [{ type: 'paint', x: 0, y: 0, value: 9 }]);
-    expect(JSON.stringify({ json: save.json, layer: Array.from(save.arrays.testLayer) })).toBe(
-      before,
-    );
+    const data = save(state);
+    const before = JSON.stringify({ json: data.json, biome: Array.from(data.arrays.biome) });
+    const cell = firstCellOf(state, land);
+    state.pending.push({ type: 'paintBiome', ...cell, biome: 'glacier' });
+    step(state, state.pending.splice(0), testData);
+    expect(JSON.stringify({ json: data.json, biome: Array.from(data.arrays.biome) })).toBe(before);
   });
 
   it("garde les commandes en attente, qui s'appliquent après rechargement", async () => {
     const original = played(4);
-    original.pending.push({ type: 'paint', x: 9, y: 9, value: 6 });
-    const restored = restoreState(await readSave(await writeSave(saveState(original)), MIGRATIONS));
+    const cell = firstCellOf(original, land);
+    original.pending.push({ type: 'paintBiome', ...cell, biome: 'savanna' });
+    const restored = restore(await readSave(await writeSave(save(original)), MIGRATIONS));
     expect(restored.pending).toEqual(original.pending);
-    step(original, original.pending.splice(0));
-    step(restored, restored.pending.splice(0));
+    step(original, original.pending.splice(0), testData);
+    step(restored, restored.pending.splice(0), testData);
     expect(fingerprint(restored)).toBe(fingerprint(original));
   });
 
-  it('migre une sauvegarde de la version 1, sans commandes en attente', async () => {
-    const current = saveState(played(6));
-    const { pending: _pending, ...json } = current.json as Record<string, unknown>;
-    const old = encodeSave({ ...current, json }, 1);
-    const restored = restoreState(await readSave(old, MIGRATIONS));
-    expect(restored.pending).toEqual([]);
-    expect(fingerprint(restored)).toBe(fingerprint(played(6)));
+  it('se relit après un changement du contenu, en suivant les identifiants', () => {
+    const state = played(2);
+    // Le contenu de demain : les mêmes biomes, dans l'ordre inverse.
+    const reversed = loadCatalog('biomes.json', BiomesSchema, [...biomesJson].reverse());
+    const data = saveState(state, GENERATOR_VERSION, { ...testData, biomes: reversed });
+    const restored = restoreState(data, { ...testData, biomes: reversed });
+    expect(restored.world.biome).toEqual(state.world.biome);
+    // Relue avec le contenu d'aujourd'hui, chaque case garde son biome, sous son nouvel indice.
+    const today = restoreState(data, testData);
+    const id = (index: number, catalog: typeof reversed) => catalog.entries.at(index)?.id;
+    for (let cell = 0; cell < state.world.biome.length; cell += 997) {
+      expect(id(today.world.biome[cell] ?? 0, testData.biomes)).toBe(
+        id(restored.world.biome[cell] ?? 0, reversed),
+      );
+    }
+  });
+
+  it('refuse une sauvegarde dont un biome a disparu du contenu', () => {
+    const data = save(played(1));
+    const json = data.json as { content: { biomes: string[] } };
+    const forged = {
+      ...data,
+      json: {
+        ...json,
+        content: { ...json.content, biomes: ['volcan', ...json.content.biomes.slice(1)] },
+      },
+    };
+    expect(() => restore(forged)).toThrow(SaveError);
+    try {
+      restore(forged);
+    } catch (error) {
+      expect((error as SaveError).code).toBe('obsolete');
+    }
+  });
+
+  it('refuse les sauvegardes de la phase 0, sans monde à reprendre', async () => {
+    expect(Object.keys(MIGRATIONS)).toEqual([]);
+    for (let version = 1; version < SAVE_FORMAT_VERSION; version++) {
+      const old = encodeSave(save(played(1)), version);
+      await expect(readSave(old, MIGRATIONS)).rejects.toMatchObject({ code: 'obsolete' });
+    }
   });
 
   it('refuse vite, sans épuiser la mémoire, un journal forgé de millions de commandes', () => {
-    const save = saveState(played(3));
+    const data = save(played(3));
     const forged = {
-      ...save,
-      json: { ...(save.json as object), commandLog: new Array(2_000_000).fill({}) },
+      ...data,
+      json: { ...(data.json as object), commandLog: new Array(2_000_000).fill({}) },
     };
     const start = performance.now();
-    expect(() => restoreState(forged)).toThrow(SaveError);
-    // Une validation de la liste entière relèverait 4 millions d'erreurs : plusieurs secondes.
+    expect(() => restore(forged)).toThrow(SaveError);
     expect(performance.now() - start).toBeLessThan(3000);
   });
 
   it('refuse vite des flux forgés, trop nombreux ou illisibles', () => {
-    const save = saveState(played(3));
-    const json = save.json as Record<string, unknown>;
+    const data = save(played(3));
+    const json = data.json as Record<string, unknown>;
     const invalid = Object.fromEntries(
       Array.from({ length: 300_000 }, (_, i) => [`K${String(i)}`, [{}, {}, {}, {}]]),
     );
-    const many = {
-      ...Object.fromEntries(
-        Array.from({ length: 1025 }, (_, i) => [`flux${String(i)}`, [1, 2, 3, 4]]),
-      ),
-      [WALKER_STREAM]: [1, 2, 3, 4],
-    };
+    const many = Object.fromEntries(
+      Array.from({ length: 1025 }, (_, i) => [`flux${String(i)}`, [1, 2, 3, 4]]),
+    );
     for (const rng of [invalid, many]) {
       const start = performance.now();
-      expect(() => restoreState({ ...save, json: { ...json, rng } })).toThrow(SaveError);
+      expect(() => restore({ ...data, json: { ...json, rng } })).toThrow(SaveError);
       expect(performance.now() - start).toBeLessThan(3000);
     }
   });
 
   it('rend un état qui ne partage rien avec la sauvegarde', () => {
-    const save = saveState(played(5));
-    const first = restoreState(save);
-    const second = restoreState(save);
-    expect(first.walkerX).not.toBe(second.walkerX);
+    const data = save(played(5));
+    const first = restore(data);
+    const second = restore(data);
+    expect(first.world.biome).not.toBe(second.world.biome);
+    expect(first.world.biome).not.toBe(data.arrays.biome);
     const before = fingerprint(second);
-    for (let tick = 0; tick < 3; tick++) step(first, []);
+    const cell = firstCellOf(first, land);
+    step(first, [{ type: 'paintBiome', ...cell, biome: 'glacier' }], testData);
     expect(fingerprint(second)).toBe(before);
   });
 
-  it('a une migration pour chaque version antérieure', () => {
-    for (let version = 1; version < SAVE_FORMAT_VERSION; version++) {
-      expect(MIGRATIONS[version], `version ${version}`).toBeTypeOf('function');
-    }
-  });
-
   it('refuse un état incohérent', () => {
-    const save = saveState(played(3));
-    const broken = (patch: object) => () => restoreState({ ...save, ...patch });
-    expect(
-      broken({ json: { ...(save.json as object), size: { width: 500, height: 256 } } }),
-    ).toThrow(SaveError);
-    expect(broken({ arrays: { ...save.arrays, walkerX: new Uint16Array(3) } })).toThrow(/walkerX/);
-    expect(broken({ arrays: { ...save.arrays, testLayer: new Uint16Array(512 * 256) } })).toThrow(
-      /testLayer/,
-    );
-    expect(
-      broken({
-        json: { ...(save.json as object), commandLog: [{ tick: 0, command: { type: 'feu' } }] },
-      }),
-    ).toThrow(SaveError);
-  });
-
-  it('refuse des champs incohérents entre eux', () => {
-    const save = saveState(played(12));
-    const json = save.json as Record<string, unknown>;
-    const paint = { type: 'paint', x: 1, y: 1, value: 2 };
-    const rng = json.rng as Record<string, unknown>;
+    const data = save(played(3));
+    const json = data.json as Record<string, unknown>;
+    const params = json.params as Record<string, unknown>;
+    const paint = { type: 'paintBiome', x: 1, y: 1, biome: 'desert' };
+    const count = 512 * 256;
     const cases: [string, object][] = [
-      ['taille inconnue', { json: { ...json, size: { width: 16384, height: 8192 } } }],
+      ['taille inconnue', { json: { ...json, params: { ...params, size: 'géante' } } }],
+      ['paramètre hors bornes', { json: { ...json, params: { ...params, relief: 7 } } }],
+      ['graine différente', { json: { ...json, params: { ...params, seed: 'autre' } } }],
+      ['couche absente', { arrays: { ...data.arrays, biome: undefined } }],
+      ['couche trop courte', { arrays: { ...data.arrays, elevation: new Int16Array(3) } }],
+      ['couche de mauvais type', { arrays: { ...data.arrays, elevation: new Uint16Array(count) } }],
       [
-        'promeneur hors du monde',
-        { arrays: { ...save.arrays, walkerY: new Uint16Array(12).fill(60000) } },
+        'biome hors de la liste',
+        { arrays: { ...data.arrays, biome: new Uint8Array(count).fill(200) } },
       ],
-      ['commande future', { json: { ...json, commandLog: [{ tick: 12, command: paint }] } }],
+      [
+        'gisement hors de la liste',
+        { arrays: { ...data.arrays, deposit: new Uint8Array(count).fill(99) } },
+      ],
+      [
+        'écoulement illisible',
+        { arrays: { ...data.arrays, drainage: new Uint8Array(count).fill(9) } },
+      ],
+      ['commande future', { json: { ...json, commandLog: [{ tick: 3, command: paint }] } }],
       [
         'journal désordonné',
         {
           json: {
             ...json,
             commandLog: [
-              { tick: 5, command: paint },
               { tick: 2, command: paint },
+              { tick: 1, command: paint },
             ],
           },
         },
       ],
       [
-        'état du générateur nul',
-        { json: { ...json, rng: { ...rng, [WALKER_STREAM]: [0, 0, 0, 0] } } },
+        'commande inconnue',
+        { json: { ...json, commandLog: [{ tick: 0, command: { type: 'feu' } }] } },
       ],
-      ['flux des promeneurs absent', { json: { ...json, rng: {} } }],
+      ['état du générateur nul', { json: { ...json, rng: { flux: [0, 0, 0, 0] } } }],
       ['commande en attente invalide', { json: { ...json, pending: [{ ...paint, x: 0.5 }] } }],
+      ['version du générateur absente', { json: { ...json, generator: undefined } }],
     ];
     for (const [label, patch] of cases) {
-      expect(() => restoreState({ ...save, ...patch }), label).toThrow(SaveError);
+      expect(() => restore({ ...data, ...patch }), label).toThrow(SaveError);
     }
   });
 });

@@ -65,25 +65,33 @@ body {
 
 .hud {
   position: relative;
+  box-sizing: border-box;
   height: 100%;
+  display: grid;
+  /* Barre du haut, colonne de droite, barre du bas : la colonne prend ce qui reste. */
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 0.5rem;
+  padding: 0.5rem;
 }
 
 .hud-bar {
-  position: absolute;
-  left: 0.5rem;
-  right: 0.5rem;
+  /* Au-dessus de l'écran de création, positionné. */
+  position: relative;
+  z-index: 1;
   display: flex;
   align-items: center;
   gap: 0.5rem;
   flex-wrap: wrap;
+  min-width: 0;
 }
 
 .hud-top {
-  top: 0.5rem;
+  grid-row: 1;
 }
 
 .hud-bottom {
-  bottom: 0.5rem;
+  grid-row: 3;
 }
 
 .panel {
@@ -187,4 +195,349 @@ button:disabled {
   margin: 0;
   font-variant-numeric: tabular-nums;
   text-align: right;
+}
+
+.map-modes {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem;
+}
+
+.map-modes button {
+  padding: 0 0.75rem;
+}
+
+/* Colonne de droite : inspection d'une case et légende, entre les deux barres.
+   L'inspection passe d'abord, jusqu'à 60 % de la colonne, au-delà de quoi elle défile ;
+   la légende prend le reste et fait défiler ses entrées. */
+.hud-side {
+  grid-row: 2;
+  justify-self: end;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  width: min(20rem, 100%);
+  min-height: 0;
+}
+
+.cell-info,
+.legend {
+  font-size: 0.875rem;
+  width: 100%;
+}
+
+.cell-info {
+  flex: 0 0 auto;
+  max-height: 60%;
+  overflow-y: auto;
+}
+
+.cell-info dl {
+  margin: 0;
+}
+
+.cell-info-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+
+.legend {
+  display: flex;
+  flex-direction: column;
+  flex: 0 1 auto;
+  min-height: 4.5rem;
+}
+
+.legend-toggle {
+  align-self: flex-end;
+  padding: 0 0.75rem;
+}
+
+.legend-entries {
+  margin: 0.25rem 0 0;
+  padding: 0;
+  list-style: none;
+  overflow-y: auto;
+  min-height: 0;
+}
+
+.legend-entries li {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.125rem 0;
+}
+
+.legend-swatch {
+  flex: none;
+  width: 1rem;
+  height: 1rem;
+  border: 1px solid var(--parchment-dim);
+}
+
+/* Téléphone en portrait : la colonne de droite se fait plus étroite. */
+@media (max-width: 34rem) {
+  .hud-side {
+    width: min(13rem, 100%);
+  }
+}
+
+/* Écran de création (tâche 1.9) : il recouvre la carte et défile verticalement au doigt. */
+.create-screen {
+  position: absolute;
+  inset: 0;
+  box-sizing: border-box;
+  display: flex;
+  justify-content: center;
+  align-items: flex-start;
+  padding: 0.5rem;
+  overflow-y: auto;
+  /* Une barre de défilement qui apparaît ne change pas la largeur, ni l'échelle de l'aperçu. */
+  scrollbar-gutter: stable;
+  overscroll-behavior: contain;
+  touch-action: pan-y;
+  pointer-events: auto;
+  background: color-mix(in srgb, var(--ink) 75%, transparent);
+  outline: none;
+}
+
+.create-card {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  width: min(60rem, 100%);
+  margin: auto 0;
+  padding: 0.75rem 1rem 1rem;
+}
+
+.create-card h1 {
+  margin: 0;
+  color: var(--gold);
+  font-size: 1.5rem;
+  font-weight: normal;
+  letter-spacing: 0.04em;
+}
+
+.create-body {
+  display: grid;
+  grid-template-columns: minmax(0, 3fr) minmax(16rem, 2fr);
+  gap: 1rem;
+  align-items: start;
+}
+
+.create-world {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  min-width: 0;
+}
+
+.create-frame {
+  position: relative;
+  display: flex;
+  justify-content: center;
+  width: 100%;
+}
+
+.create-frame canvas {
+  display: block;
+  max-width: 100%;
+  aspect-ratio: 2 / 1;
+  background: var(--ink-soft);
+  border: 1px solid var(--gold);
+  image-rendering: pixelated;
+}
+
+.create-busy {
+  position: absolute;
+  top: 0.5rem;
+  left: 50%;
+  translate: -50% 0;
+  padding: 0.125rem 0.5rem;
+  border-radius: 0.25rem;
+  background: color-mix(in srgb, var(--ink) 80%, transparent);
+  font-size: 0.875rem;
+  white-space: nowrap;
+}
+
+.create-seed {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.create-seed-row {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.create-seed-row button {
+  flex: none;
+  padding: 0 1rem;
+}
+
+.create-seed input {
+  box-sizing: border-box;
+  flex: 1;
+  min-width: 0;
+  min-height: 2.75rem;
+  padding: 0 0.75rem;
+  border: 1px solid var(--gold);
+  border-radius: 0.25rem;
+  background: var(--ink-soft);
+  color: var(--parchment);
+  /* 16 px au moins : sinon Safari zoome la page au focus. */
+  font: inherit;
+  font-size: max(1rem, 16px);
+  /* Le corps de la page refuse la sélection ; un champ de texte doit la permettre. */
+  -webkit-user-select: text;
+  user-select: text;
+}
+
+.create-card fieldset {
+  margin: 0;
+  padding: 0.5rem 0.75rem 0.75rem;
+  border: 1px solid color-mix(in srgb, var(--gold) 55%, transparent);
+  border-radius: 0.25rem;
+}
+
+.create-card legend {
+  padding: 0 0.25rem;
+  color: var(--parchment-dim);
+}
+
+.create-sizes {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.25rem;
+}
+
+.create-sizes button {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 0.25rem;
+}
+
+.create-sizes small {
+  color: var(--parchment-dim);
+  font-size: 0.75rem;
+}
+
+.create-sizes button[aria-pressed='true'] small {
+  color: var(--parchment);
+}
+
+.create-params {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.create-param {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  column-gap: 0.5rem;
+}
+
+.create-param output {
+  font-variant-numeric: tabular-nums;
+}
+
+/* Un curseur à la hauteur d'un doigt. */
+.create-param input[type='range'] {
+  grid-column: 1 / -1;
+  width: 100%;
+  height: 2.75rem;
+  margin: 0;
+  accent-color: var(--gold);
+  cursor: pointer;
+}
+
+.create-params > button {
+  align-self: flex-end;
+  margin-top: 0.25rem;
+  padding: 0 0.75rem;
+}
+
+.create-warning {
+  margin: 0;
+  color: var(--parchment-dim);
+}
+
+.create-progress {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.create-progress progress {
+  width: 100%;
+  height: 0.75rem;
+  accent-color: var(--gold);
+}
+
+.create-footer {
+  position: sticky;
+  bottom: -0.5rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  margin: 0 -1rem -1rem;
+  padding: 0.5rem 1rem 1rem;
+  border-top: 1px solid color-mix(in srgb, var(--gold) 55%, transparent);
+  border-radius: 0 0 0.25rem 0.25rem;
+  background: var(--ink);
+}
+
+.create-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 0.5rem;
+}
+
+.create-actions button {
+  padding: 0 1rem;
+}
+
+.create-saves {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-right: auto;
+}
+
+.create-start {
+  background: var(--madder);
+}
+
+/* Téléphone en portrait, ou fenêtre étroite : une seule colonne, l'aperçu en tête. */
+@media (max-width: 48rem) {
+  .create-body {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .create-sizes {
+    grid-template-columns: repeat(auto-fit, minmax(6rem, 1fr));
+  }
+}
+
+/* Téléphone en paysage : deux colonnes, et l'aperçu reste en vue quand les réglages
+   défilent. */
+@media (orientation: landscape) and (min-width: 34rem) {
+  .create-body {
+    grid-template-columns: minmax(0, 1fr) minmax(14rem, 1fr);
+  }
+}
+
+@media (orientation: landscape) and (max-height: 32rem) {
+  .create-world {
+    position: sticky;
+    top: 0;
+  }
 }
