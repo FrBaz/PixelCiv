@@ -3,7 +3,7 @@ import { loadGameData } from '../core/data';
 import { CHUNK_SIZE, riverClass, WORLD_SIZES } from '../core/world';
 import { defaultWorldParams } from '../core/worldParams';
 import { generateWorld } from '../worldgen/generate';
-import { bakeBiomes, bakeChunk, bakeRegion, CHUNK_PX, type BakeWorld } from './bake';
+import { bakeBiomes, bakeChunk, bakeRegion, CHUNK_PX, pixelData, type BakeWorld } from './bake';
 
 const data = loadGameData();
 const size = WORLD_SIZES.small;
@@ -12,10 +12,15 @@ const layers = generateWorld(
   data,
 );
 const biomes = bakeBiomes(data.biomes.entries);
-const river = biomes.at(data.biomes.indexOf('river') ?? -1);
-if (river === undefined) throw new Error('biome « rivière » absent');
-const world: BakeWorld = { size, layers, biomes, river };
+const riverBiome = data.biomes.indexOf('river') ?? -1;
+const world: BakeWorld = { size, layers, biomes, riverBiome };
 const columns = size.width / CHUNK_SIZE;
+
+/** Biome de la case, en données. */
+const biomeOf = (cell: number) => data.biomes.entries.at(layers.biome[cell] ?? 0);
+/** Une case de mer ou de lac (le lit d'un fleuve garde ses rives de terre). */
+const isWater = (cell: number) =>
+  biomeOf(cell)?.family === 'water' && layers.biome[cell] !== riverBiome;
 
 /** Bande de `height` lignes de pixels, de la colonne de pixels `from` à `to` exclue. */
 function slice(pixels: Uint8Array, width: number, from: number, to: number, height: number) {
@@ -48,44 +53,46 @@ describe('cuisson des blocs', () => {
     expect(bakeRegion(world, -128, 2 * CHUNK_PX, 256, CHUNK_PX)).toEqual(across);
   });
 
-  it("code dans l'alpha la terre et l'ombrage, et l'eau des mers, des lacs et des rivières", () => {
+  it("code la terre dans le rouge, les ruisseaux dans le vert et l'ombrage dans l'alpha", () => {
     let land = 0;
+    let landOk = 0;
     let water = 0;
+    let waterOk = 0;
     for (let row = 0; row < size.height / CHUNK_SIZE; row++) {
       const pixels = bakeChunk(world, 5, row);
       for (let cy = 0; cy < CHUNK_SIZE; cy++) {
         for (let cx = 0; cx < CHUNK_SIZE; cx++) {
           const cell = (row * CHUNK_SIZE + cy) * size.width + 5 * CHUNK_SIZE + cx;
-          const family = data.biomes.entries.at(layers.biome[cell] ?? 0)?.family;
-          // Une rivière en diagonale coupe le coin des cases d'à côté : on écarte aussi
-          // les voisines des rivières.
-          let hasRiver = false;
+          let nearRiver = false;
           for (let dy = -1; dy <= 1; dy++) {
             for (let dx = -1; dx <= 1; dx++) {
               if (riverClass(layers.drainage[cell + dy * size.width + dx] ?? 0) > 0)
-                hasRiver = true;
+                nearRiver = true;
             }
           }
-          // Le pixel du milieu de la case : ni débordement, ni bord.
-          const alpha = pixels[((cy * 4 + 1) * CHUNK_PX + cx * 4 + 1) * 4 + 3] ?? 0;
-          if (family === 'water') {
+          // Un pixel intérieur de la case : seules les plus hautes falaises y débordent.
+          const pixel = pixelData(pixels, (cy * 4 + 1) * CHUNK_PX + cx * 4 + 1);
+          if (isWater(cell)) {
             water++;
-            expect(alpha & 128).toBe(0);
-            expect(alpha & 127).toBe(64);
-          } else if (!hasRiver) {
+            if (!pixel.land && !pixel.stream && Math.abs(pixel.shade - 1) < 0.01) waterOk++;
+          } else if (!nearRiver && layers.biome[cell] !== riverBiome) {
             land++;
-            expect(alpha & 128).toBe(128);
+            if (pixel.land && !pixel.stream) landOk++;
           }
         }
       }
     }
     expect(land).toBeGreaterThan(100);
     expect(water).toBeGreaterThan(100);
+    expect(landOk / land).toBeGreaterThan(0.98);
+    expect(waterOk / water).toBeGreaterThan(0.98);
   });
 
-  it('fait déborder les terres sur le bord des cases d’eau voisines', () => {
+  it('fait déborder les terres sur le bord des cases d’eau, et les hautes terres plus loin', () => {
     let edges = 0;
     let overflowed = 0;
+    let inner = 0;
+    let innerOverflowed = 0;
     for (let row = 0; row < size.height / CHUNK_SIZE; row++) {
       for (let column = 0; column < columns; column += 3) {
         const pixels = bakeChunk(world, column, row);
@@ -93,53 +100,144 @@ describe('cuisson des blocs', () => {
           for (let cx = 1; cx < CHUNK_SIZE - 1; cx++) {
             const cell = (row * CHUNK_SIZE + cy) * size.width + column * CHUNK_SIZE + cx;
             const west = cell - 1;
-            const isWater = (index: number) =>
-              data.biomes.entries.at(layers.biome[index] ?? 0)?.family === 'water';
             if (!isWater(cell) || isWater(west)) continue;
             // Le pixel ouest d'une case d'eau dont la voisine de l'ouest est une terre.
             edges++;
-            const alpha = pixels[((cy * 4 + 1) * CHUNK_PX + cx * 4) * 4 + 3] ?? 0;
-            if (alpha & 128) overflowed++;
+            if (pixelData(pixels, (cy * 4 + 1) * CHUNK_PX + cx * 4).land) overflowed++;
+            if ((layers.elevation[west] ?? 0) > 1200) {
+              inner++;
+              if (pixelData(pixels, (cy * 4 + 1) * CHUNK_PX + cx * 4 + 1).land) innerOverflowed++;
+            }
           }
         }
       }
     }
     expect(edges).toBeGreaterThan(50);
-    // Une fois sur deux, au hasard du pixel.
-    expect(overflowed / edges).toBeGreaterThan(0.35);
+    // Le bord d'une côte se découpe : un pixel sur trois environ prend la terre.
+    expect(overflowed / edges).toBeGreaterThan(0.2);
     expect(overflowed / edges).toBeLessThan(0.65);
+    // Une côte de plus de 1 200 m déborde parfois d'un second pixel.
+    if (inner > 0) expect(innerOverflowed).toBeGreaterThan(0);
   });
 
-  it('dessine les rivières en eau, au milieu de leurs cases', () => {
+  it('arrondit les limites : une case isolée perd ses coins au profit de ses voisines', () => {
+    // Des cases de forêt isolées, une toutes les quatre, sur une prairie plate.
+    const tiny = { width: 64, height: 32 };
+    const count = tiny.width * tiny.height;
+    const grassland = data.biomes.indexOf('grassland') ?? 0;
+    const forest = data.biomes.indexOf('temperate-forest') ?? 0;
+    const flat = {
+      ...layers,
+      biome: new Uint8Array(count).fill(grassland),
+      elevation: new Int16Array(count).fill(100),
+      waterDepth: new Uint16Array(count),
+      drainage: new Uint8Array(count).fill(8),
+      temperature: new Int16Array(count).fill(150),
+      amplitude: new Uint8Array(count),
+      precipitation: new Uint16Array(count),
+      deposit: new Uint8Array(count),
+      trees: new Uint8Array(count),
+      shrubs: new Uint8Array(count),
+    };
+    const spots: [number, number][] = [];
+    for (let y = 4; y < 28; y += 4) {
+      for (let x = 4; x < 60; x += 4) {
+        flat.biome[y * tiny.width + x] = forest;
+        spots.push([x, y]);
+      }
+    }
+    const bake = (biome: Uint8Array<ArrayBuffer>) =>
+      bakeRegion({ size: tiny, layers: { ...flat, biome }, biomes, riverBiome }, 0, 0, 256, 128);
+    const pixels = bake(flat.biome);
+    const plain = bake(new Uint8Array(count).fill(grassland));
+    const differs = (x: number, y: number) => {
+      const offset = (y * 256 + x) * 4;
+      return [0, 1, 2].some((k) => pixels[offset + k] !== plain[offset + k]);
+    };
+    let core = 0;
+    let corners = 0;
+    for (const [cx, cy] of spots) {
+      for (let y = 1; y <= 2; y++)
+        for (let x = 1; x <= 2; x++) if (differs(cx * 4 + x, cy * 4 + y)) core++;
+      for (const [x, y] of [
+        [0, 0],
+        [3, 0],
+        [0, 3],
+        [3, 3],
+      ] as const)
+        if (!differs(cx * 4 + x, cy * 4 + y)) corners++;
+    }
+    // Le cœur de la case reste à la forêt ; ses coins passent presque tous à la prairie.
+    expect(core).toBe(spots.length * 4);
+    expect(corners / (spots.length * 4)).toBeGreaterThan(0.8);
+  });
+
+  it('trace les rivières dans leurs cases, et marque les ruisseaux sans les peindre', () => {
     let rivers = 0;
     let wet = 0;
+    let streams = 0;
+    let marked = 0;
+    let wrongStream = 0;
     for (let row = 0; row < size.height / CHUNK_SIZE; row++) {
       for (let column = 0; column < columns; column += 2) {
         const pixels = bakeChunk(world, column, row);
         for (let cy = 0; cy < CHUNK_SIZE; cy++) {
           for (let cx = 0; cx < CHUNK_SIZE; cx++) {
             const cell = (row * CHUNK_SIZE + cy) * size.width + column * CHUNK_SIZE + cx;
-            if (riverClass(layers.drainage[cell] ?? 0) === 0) continue;
-            if (data.biomes.entries.at(layers.biome[cell] ?? 0)?.family === 'water') continue;
-            rivers++;
-            // L'un des quatre pixels du centre de la case porte la rivière.
-            const center = (
-              [
-                [1, 1],
-                [2, 1],
-                [1, 2],
-                [2, 2],
-              ] as const
-            ).some(
-              ([dx, dy]) =>
-                ((pixels[((cy * 4 + dy) * CHUNK_PX + cx * 4 + dx) * 4 + 3] ?? 0) & 128) === 0,
-            );
-            if (center) wet++;
+            const river = riverClass(layers.drainage[cell] ?? 0);
+            if (river === 0 || isWater(cell)) continue;
+            let water = false;
+            let stream = false;
+            for (let dy = 0; dy < 4; dy++) {
+              for (let dx = 0; dx < 4; dx++) {
+                const pixel = pixelData(pixels, (cy * 4 + dy) * CHUNK_PX + cx * 4 + dx);
+                if (!pixel.land) water = true;
+                if (pixel.stream) {
+                  stream = true;
+                  // Un ruisseau reste un pixel de terre : le shader le peint de près.
+                  if (!pixel.land) wrongStream++;
+                }
+              }
+            }
+            if (river >= 2) {
+              rivers++;
+              if (water) wet++;
+            } else {
+              streams++;
+              if (stream || water) marked++;
+            }
           }
         }
       }
     }
     expect(rivers).toBeGreaterThan(50);
-    expect(wet).toBe(rivers);
+    expect(streams).toBeGreaterThan(50);
+    expect(wet / rivers).toBeGreaterThan(0.99);
+    expect(marked / streams).toBeGreaterThan(0.99);
+    expect(wrongStream).toBe(0);
+  });
+
+  it("garde les terres des rives dans le lit d'un fleuve, l'eau au milieu", () => {
+    let beds = 0;
+    let mixed = 0;
+    for (let row = 0; row < size.height / CHUNK_SIZE; row++) {
+      for (let column = 0; column < columns; column++) {
+        const pixels = bakeChunk(world, column, row);
+        for (let cy = 0; cy < CHUNK_SIZE; cy++) {
+          for (let cx = 0; cx < CHUNK_SIZE; cx++) {
+            const cell = (row * CHUNK_SIZE + cy) * size.width + column * CHUNK_SIZE + cx;
+            if (layers.biome[cell] !== riverBiome) continue;
+            beds++;
+            let landPixels = 0;
+            for (let dy = 0; dy < 4; dy++)
+              for (let dx = 0; dx < 4; dx++)
+                if (pixelData(pixels, (cy * 4 + dy) * CHUNK_PX + cx * 4 + dx).land) landPixels++;
+            if (landPixels > 0 && landPixels < 16) mixed++;
+          }
+        }
+      }
+    }
+    expect(beds).toBeGreaterThan(20);
+    expect(mixed / beds).toBeGreaterThan(0.9);
   });
 });

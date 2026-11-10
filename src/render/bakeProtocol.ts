@@ -13,7 +13,7 @@ export type BakeRequest =
       readonly size: WorldSize;
       readonly layers: WorldLayers;
       readonly biomes: readonly BakeBiome[];
-      readonly river: BakeBiome;
+      readonly riverBiome: number;
     }
   /** Biome d'un bloc changé par la simulation. */
   | {
@@ -23,12 +23,13 @@ export type BakeRequest =
       readonly row: number;
       readonly biome: Uint8Array<ArrayBuffer>;
     }
-  /** Cuisson d'un bloc. */
+  /** Cuisson d'un bloc, dans sa version courante. */
   | {
       readonly type: 'bake';
       readonly generation: number;
       readonly column: number;
       readonly row: number;
+      readonly version: number;
     };
 
 export type BakeReply =
@@ -37,6 +38,7 @@ export type BakeReply =
       readonly generation: number;
       readonly column: number;
       readonly row: number;
+      readonly version: number;
       readonly pixels: Uint8Array<ArrayBuffer>;
     }
   /** Demande devenue sans objet : le monde a changé entre-temps. */
@@ -45,4 +47,5 @@ export type BakeReply =
       readonly generation: number;
       readonly column: number;
       readonly row: number;
+      readonly version: number;
     };

@@ -38,6 +38,18 @@ describe("aperçu de l'écran de création", () => {
     expect(east[3]).toBe(255);
   });
 
+  it("laisse plats les lacs d'altitude, ombrés ni par leur fond ni par leurs rives", () => {
+    const size = { width: 4, height: 1 };
+    const biome = new Uint8Array([1, 0, 0, 1]);
+    // Un lac (biome 0) à 800 m dont le fond descend : il reste de sa couleur.
+    const pixels = previewPixels(size, biome, new Int16Array([900, 700, 300, 900]), colors, [
+      true,
+      false,
+    ]);
+    expect(pixel(pixels, 4, 1, 0)).toEqual([20, 40, 120, 255]);
+    expect(pixel(pixels, 4, 2, 0)).toEqual([20, 40, 120, 255]);
+  });
+
   it('boucle à la couture : la colonne 0 voit la dernière comme voisine', () => {
     const size = { width: 4, height: 1 };
     const biome = new Uint8Array(4).fill(1);

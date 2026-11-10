@@ -7,7 +7,8 @@
  * - R : température annuelle, par demi-degré, de −64 °C (0) à 63,5 °C (255) ;
  * - G : demi-amplitude saisonnière, par huitième de degré, jusqu'à 31,9 °C ;
  * - B : hémisphère (bit 0, 1 au sud), végétation (bits 1 à 3), couverture (bits 4 et 5 :
- *   rien, neige, glace d'eau douce, banquise) ;
+ *   rien, neige, glace d'eau douce, banquise), eau (bit 6 : mer ou lac, le lit d'un
+ *   fleuve gardant ses rives), forêt (bit 7 : tuile de forêt, qui garde moins de neige) ;
  * - A : indice du biome, qui désigne sa palette de saison.
  *
  * Et une texture de palettes : une ligne par biome, trois texels (ombre, base, lumière)
@@ -28,17 +29,34 @@ export function encodeAmplitude(celsius: number): number {
   return Math.min(255, Math.max(0, Math.round(celsius * 8)));
 }
 
-/** Code du canal B : hémisphère, végétation, couverture. */
-export function encodeFlags(south: boolean, vegetation: number, cover: number): number {
-  return (south ? 1 : 0) | ((vegetation & 7) << 1) | ((cover & 3) << 4);
+/** Ce que le canal B dit d'une case. */
+export interface CellFlags {
+  readonly south: boolean;
+  readonly vegetation: number;
+  readonly cover: number;
+  readonly water: boolean;
+  readonly forest: boolean;
 }
 
-/** Codes de végétation et de couverture de chaque biome. */
-function biomeCodes(biomes: readonly Biome[]): { vegetation: number[]; cover: number[] } {
-  return {
-    vegetation: biomes.map((biome) => VEGETATION_TYPES.indexOf(biome.vegetation)),
-    cover: biomes.map((biome) => SEASON_COVERS.indexOf(biome.seasons.cover)),
-  };
+/** Code du canal B : hémisphère, végétation, couverture, eau, forêt. */
+export function encodeFlags(flags: CellFlags): number {
+  return (
+    (flags.south ? 1 : 0) |
+    ((flags.vegetation & 7) << 1) |
+    ((flags.cover & 3) << 4) |
+    (flags.water ? 64 : 0) |
+    (flags.forest ? 128 : 0)
+  );
+}
+
+/** Codes de chaque biome : végétation, couverture, eau (hors lit des fleuves), forêt. */
+function biomeCodes(biomes: readonly Biome[]) {
+  return biomes.map((biome) => ({
+    vegetation: VEGETATION_TYPES.indexOf(biome.vegetation),
+    cover: SEASON_COVERS.indexOf(biome.seasons.cover),
+    water: biome.tile === 'water' && biome.id !== 'river',
+    forest: biome.tile === 'forest',
+  }));
 }
 
 /**
@@ -54,7 +72,7 @@ export function seasonTexels(
   columns = size.width,
   rows = size.height,
 ): Uint8Array<ArrayBuffer> {
-  const { vegetation, cover } = biomeCodes(biomes);
+  const codes = biomeCodes(biomes);
   const texels = new Uint8Array(columns * rows * 4);
   for (let line = 0; line < rows; line++) {
     const y = top + line;
@@ -66,7 +84,14 @@ export function seasonTexels(
       const offset = (line * columns + column) * 4;
       texels[offset] = encodeTemperature((layers.temperature[cell] ?? 0) / 10);
       texels[offset + 1] = encodeAmplitude((layers.amplitude[cell] ?? 0) / 10);
-      texels[offset + 2] = encodeFlags(south, vegetation.at(biome) ?? 0, cover.at(biome) ?? 0);
+      const code = codes.at(biome);
+      texels[offset + 2] = encodeFlags({
+        south,
+        vegetation: code?.vegetation ?? 0,
+        cover: code?.cover ?? 0,
+        water: code?.water ?? false,
+        forest: code?.forest ?? false,
+      });
       texels[offset + 3] = biome;
     }
   }

@@ -23,11 +23,16 @@ describe('texture des saisons', () => {
     expect(encodeAmplitude(40)).toBe(255);
   });
 
-  it("range l'hémisphère, la végétation et la couverture dans le canal bleu", () => {
-    const flags = encodeFlags(true, 5, 3);
+  it("range l'hémisphère, la végétation, la couverture, l'eau et la forêt dans le canal bleu", () => {
+    const flags = encodeFlags({ south: true, vegetation: 5, cover: 3, water: true, forest: false });
     expect(flags & 1).toBe(1);
     expect((flags >> 1) & 7).toBe(5);
     expect((flags >> 4) & 3).toBe(3);
+    expect((flags >> 6) & 1).toBe(1);
+    expect(flags >> 7).toBe(0);
+    expect(encodeFlags({ south: false, vegetation: 0, cover: 0, water: false, forest: true })).toBe(
+      128,
+    );
   });
 
   it('décrit chaque case : climat, hémisphère, végétation, couverture, biome', () => {
@@ -44,11 +49,25 @@ describe('texture des saisons', () => {
     expect(Array.from(texels.subarray(4, 8))).toEqual([
       encodeTemperature(-3.5),
       encodeAmplitude(15),
-      encodeFlags(false, VEGETATION_TYPES.indexOf('evergreen'), SEASON_COVERS.indexOf('snow')),
+      encodeFlags({
+        south: false,
+        vegetation: VEGETATION_TYPES.indexOf('evergreen'),
+        cover: SEASON_COVERS.indexOf('snow'),
+        water: false,
+        forest: true,
+      }),
       taiga,
     ]);
     // Case (1, 3), au sud, de lac : de la glace.
-    expect(texels[13 * 4 + 2]).toBe(encodeFlags(true, 0, SEASON_COVERS.indexOf('ice')));
+    expect(texels[13 * 4 + 2]).toBe(
+      encodeFlags({
+        south: true,
+        vegetation: 0,
+        cover: SEASON_COVERS.indexOf('ice'),
+        water: true,
+        forest: false,
+      }),
+    );
     expect(texels[13 * 4 + 3]).toBe(lake);
     // Un rectangle de cases redonne les mêmes texels.
     expect(Array.from(seasonTexels(size, layers, biomes.entries, 1, 3, 2, 1))).toEqual(

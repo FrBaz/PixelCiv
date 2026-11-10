@@ -88,6 +88,7 @@ async function main(): Promise<void> {
   };
   const simulation = new SimulationClient();
   const biomeColors = data.biomes.entries.map((biome) => parseColor(biome.palette.base));
+  const biomeWater = data.biomes.entries.map((biome) => biome.tile === 'water');
   const previews = new PreviewScheduler(
     (requestId, params) => {
       simulation.send({ type: 'preview', requestId, params, width: PREVIEW_COLUMNS });
@@ -96,7 +97,13 @@ async function main(): Promise<void> {
       previewImage.value = {
         width: preview.size.width,
         height: preview.size.height,
-        pixels: previewPixels(preview.size, preview.biome, preview.elevation, biomeColors),
+        pixels: previewPixels(
+          preview.size,
+          preview.biome,
+          preview.elevation,
+          biomeColors,
+          biomeWater,
+        ),
         key: previewKey(params),
       };
     },

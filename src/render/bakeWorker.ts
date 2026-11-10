@@ -23,7 +23,7 @@ self.addEventListener('message', (event: MessageEvent<BakeRequest>) => {
         size: message.size,
         layers: message.layers,
         biomes: message.biomes,
-        river: message.river,
+        riverBiome: message.riverBiome,
       };
       break;
     case 'patch': {
@@ -47,15 +47,24 @@ self.addEventListener('message', (event: MessageEvent<BakeRequest>) => {
             generation: message.generation,
             column: message.column,
             row: message.row,
+            version: message.version,
           },
           [],
         );
         break;
       }
       const pixels = bakeChunk(world, message.column, message.row);
-      reply({ type: 'baked', generation, column: message.column, row: message.row, pixels }, [
-        pixels.buffer,
-      ]);
+      reply(
+        {
+          type: 'baked',
+          generation,
+          column: message.column,
+          row: message.row,
+          version: message.version,
+          pixels,
+        },
+        [pixels.buffer],
+      );
       break;
     }
   }

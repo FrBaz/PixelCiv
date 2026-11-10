@@ -35,6 +35,12 @@ import { displayScale, TILE_PX, visibleChunks, type Camera, type Extent } from '
 import { MAP_FRAGMENT, MAP_VERTEX } from './mapShader';
 import { seasonPalettes, seasonTexels } from './seasons';
 
+/**
+ * Échelle d'affichage, en pixels CSS par pixel de carte, à partir de laquelle les
+ * ruisseaux paraissent : de loin, ils chargeraient la carte.
+ */
+export const STREAMS_SCALE = 2;
+
 /** Modes de carte (IHM-01) : naturel, puis les superpositions. */
 export const MAP_MODES = ['natural', 'relief', 'biomes', 'resources'] as const;
 export type MapMode = (typeof MAP_MODES)[number];
@@ -75,7 +81,8 @@ export class MapView {
   private readonly layer = new Container();
   private readonly biomes: readonly Biome[];
   private readonly bake: readonly BakeBiome[];
-  private readonly river: BakeBiome;
+  /** Indice du biome « rivière ». */
+  private readonly riverBiome: number;
   private readonly geometry = new MeshGeometry({
     positions: new Float32Array([0, 0, CHUNK_PX, 0, CHUNK_PX, CHUNK_PX, 0, CHUNK_PX]),
     uvs: new Float32Array([0, 0, 1, 0, 1, 1, 0, 1]),
@@ -91,6 +98,7 @@ export class MapView {
     uMode: { value: 0, type: 'f32' },
     uRiverColor: { value: new Float32Array([0, 0, 1]), type: 'vec3<f32>' },
     uFine: { value: 1, type: 'f32' },
+    uStreams: { value: 0, type: 'f32' },
   });
   private readonly palettes: BufferImageSource;
   private readonly baker: Baker;
@@ -107,13 +115,13 @@ export class MapView {
     this.app = app;
     this.biomes = biomes;
     this.bake = bakeBiomes(biomes);
-    const river = this.bake.at(biomes.findIndex((biome) => biome.id === 'river'));
+    this.riverBiome = biomes.findIndex((biome) => biome.id === 'river');
+    const river = this.bake.at(this.riverBiome);
     if (river === undefined) throw new Error('biome « rivière » absent de data/biomes.json');
-    this.river = river;
     this.globals.uniforms.uRiverColor = new Float32Array(river.base.map((value) => value / 255));
     this.palettes = dataSource(seasonPalettes(biomes), 3, biomes.length);
     this.globals.uniforms.uBiomes = biomes.length;
-    this.globals.uniforms.uRiver = biomes.findIndex((biome) => biome.id === 'river');
+    this.globals.uniforms.uRiver = this.riverBiome;
     this.globals.uniforms.uSnow = Math.max(
       0,
       biomes.findIndex((biome) => biome.seasons.cover === 'snow'),
@@ -146,8 +154,11 @@ export class MapView {
 
   /** Nouveau monde : textures neuves, cuisson de tous les blocs, visibles d'abord. */
   setWorld(info: WorldInfo, layers: WorldLayers, overlays: OverlayBuilder): void {
+    // Les shaders d'abord : un shader vivant garderait ses textures détruites, et Pixi
+    // s'en plaindrait à chaque bloc.
     for (const chunk of this.chunks) {
       chunk.mesh.destroy();
+      chunk.shader.destroy();
       chunk.source.destroy();
     }
     for (const mesh of this.copies) mesh.destroy();
@@ -171,7 +182,7 @@ export class MapView {
       this.chunkView(index % grid.columns, Math.floor(index / grid.columns)),
     );
     this.setMode(this.mode);
-    this.baker.setWorld(size, layers, this.bake, this.river);
+    this.baker.setWorld(size, layers, this.bake, this.riverBiome);
   }
 
   /** Reporte les blocs modifiés dans les couches et la texture des saisons, puis les recuit. */
@@ -221,6 +232,8 @@ export class MapView {
     const scale = displayScale(camera.zoom);
     // De près, la trame suit les pixels ; de loin, les cases, pour ne pas scintiller.
     this.globals.uniforms.uFine = scale >= 1 ? 1 : 0;
+    // Les ruisseaux ne paraissent qu'à partir de 2 pixels de l'écran (CSS) par pixel de carte.
+    this.globals.uniforms.uStreams = scale / resolution >= STREAMS_SCALE ? 1 : 0;
     const placements = visibleChunks(camera, this.viewport, grid, CHUNK_PX);
     for (const chunk of this.chunks) chunk.mesh.visible = false;
     const shown = new Set<ChunkMesh>();

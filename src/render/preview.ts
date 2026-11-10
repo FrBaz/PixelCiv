@@ -12,36 +12,43 @@ const SHADE_STRENGTH = 1.6;
 const SHADE_MIN = 0.62;
 const SHADE_MAX = 1.38;
 
-/** Relief ombré : altitude des terres en kilomètres, à la puissance 0,6 ; la mer est plate. */
+/** Relief ombré : altitude des terres en kilomètres, à la puissance 0,6. */
 function relief(elevation: number): number {
   return elevation > 0 ? (elevation / 1000) ** 0.6 : 0;
 }
 
 /**
  * Pixels RGBA de l'aperçu, ligne par ligne : la couleur de base du biome de chaque case,
- * ombrée sur les terres. Les colonnes bouclent : la pente de la couture suit l'autre bord.
+ * ombrée sur les terres. L'eau (`water`, par biome) reste plate, comme sur la carte : un
+ * lac n'est pas ombré par son fond. Les colonnes bouclent : la pente de la couture suit
+ * l'autre bord.
  */
 export function previewPixels(
   size: WorldSize,
   biome: Uint8Array,
   elevation: Int16Array,
   colors: readonly Rgb[],
+  water: readonly boolean[] = [],
 ): Uint8ClampedArray<ArrayBuffer> {
   const { width, height } = size;
   const pixels = new Uint8ClampedArray(width * height * 4);
-  const at = (x: number, y: number) => {
+  const flat = (cell: number) => water.at(biome[cell] ?? 0) === true;
+  // Une eau voisine ne fait pas de pente : elle compte à la hauteur de la case ombrée.
+  const at = (x: number, y: number, own: number) => {
     const column = (x + width) % width;
     const row = Math.min(height - 1, Math.max(0, y));
-    return relief(elevation[row * width + column] ?? 0);
+    const cell = row * width + column;
+    return flat(cell) ? own : relief(elevation[cell] ?? 0);
   };
   for (let y = 0; y < height; y++) {
     for (let x = 0; x < width; x++) {
       const cell = y * width + x;
       const color = colors.at(biome[cell] ?? 0) ?? [0, 0, 0];
       let shade = 1;
-      if ((elevation[cell] ?? 0) > 0) {
-        const gx = (at(x + 1, y) - at(x - 1, y)) / 2;
-        const gy = (at(x, y + 1) - at(x, y - 1)) / 2;
+      if ((elevation[cell] ?? 0) > 0 && !flat(cell)) {
+        const own = relief(elevation[cell] ?? 0);
+        const gx = (at(x + 1, y, own) - at(x - 1, y, own)) / 2;
+        const gy = (at(x, y + 1, own) - at(x, y - 1, own)) / 2;
         const lit = (gy - gx) * Math.SQRT1_2;
         shade = Math.min(SHADE_MAX, Math.max(SHADE_MIN, 1 + SHADE_STRENGTH * lit));
       }

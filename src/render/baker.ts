@@ -2,7 +2,8 @@
  * Répartiteur de la cuisson (tâche 1.7 ; ADR 0010) : il confie les blocs à un ou deux
  * workers de cuisson, les blocs visibles d'abord, et remet leurs pixels à la vue de la
  * carte. Un bloc modifié par la simulation est recuit, avec ses voisins : le débordement
- * et les rivières passent d'un bloc à l'autre.
+ * et les rivières passent d'un bloc à l'autre. Chaque bloc a sa version, que chaque
+ * modification augmente : une cuisson commencée avant la modification est ignorée.
  */
 import type { ChunkPatch } from '../core/protocol';
 import { chunkGrid, type ChunkGrid, type WorldLayers, type WorldSize } from '../core/world';
@@ -24,9 +25,11 @@ export class Baker {
   private readonly onBaked: BakedListener;
   private generation = 0;
   private grid: ChunkGrid | undefined;
-  /** Blocs à cuire, et ceux confiés à un worker. */
+  /** Blocs à cuire, et le nombre de cuissons de chaque bloc confiées à un worker. */
   private pending = new Set<number>();
-  private readonly inFlight = new Set<number>();
+  private readonly inFlight = new Map<number, number>();
+  /** Version de chaque bloc : une cuisson d'une version dépassée est ignorée. */
+  private versions = new Uint32Array(0);
   /** Blocs visibles, dans l'ordre où les cuire. */
   private visible: number[] = [];
 
@@ -47,17 +50,24 @@ export class Baker {
     size: WorldSize,
     layers: WorldLayers,
     biomes: readonly BakeBiome[],
-    river: BakeBiome,
+    riverBiome: number,
   ): void {
     this.generation++;
     this.grid = chunkGrid(size);
-    this.pending = new Set(
-      Array.from({ length: this.grid.columns * this.grid.rows }, (_, index) => index),
-    );
+    const count = this.grid.columns * this.grid.rows;
+    this.pending = new Set(Array.from({ length: count }, (_, index) => index));
     this.inFlight.clear();
+    this.versions = new Uint32Array(count);
     for (const entry of this.workers) {
       entry.busy = 0;
-      this.post(entry, { type: 'world', generation: this.generation, size, layers, biomes, river });
+      this.post(entry, {
+        type: 'world',
+        generation: this.generation,
+        size,
+        layers,
+        biomes,
+        riverBiome,
+      });
     }
     this.pump();
   }
@@ -79,7 +89,9 @@ export class Baker {
       if (row < 0 || row >= grid.rows) continue;
       for (let dx = -1; dx <= 1; dx++) {
         const column = (patch.column + dx + grid.columns) % grid.columns;
-        this.pending.add(row * grid.columns + column);
+        const index = row * grid.columns + column;
+        this.versions[index] = (this.versions[index] ?? 0) + 1;
+        this.pending.add(index);
       }
     }
     this.pump();
@@ -116,13 +128,14 @@ export class Baker {
         const index = this.next();
         if (index === undefined) return;
         this.pending.delete(index);
-        this.inFlight.add(index);
+        this.inFlight.set(index, (this.inFlight.get(index) ?? 0) + 1);
         entry.busy++;
         this.post(entry, {
           type: 'bake',
           generation: this.generation,
           column: index % grid.columns,
           row: Math.floor(index / grid.columns),
+          version: this.versions[index] ?? 0,
         });
       }
     }
@@ -132,8 +145,15 @@ export class Baker {
     if (reply.generation !== this.generation) return;
     entry.busy = Math.max(0, entry.busy - 1);
     const grid = this.grid;
-    if (grid !== undefined) this.inFlight.delete(reply.row * grid.columns + reply.column);
-    if (reply.type === 'baked') this.onBaked(reply.column, reply.row, reply.pixels);
+    if (grid === undefined) return;
+    const index = reply.row * grid.columns + reply.column;
+    const flying = (this.inFlight.get(index) ?? 1) - 1;
+    if (flying > 0) this.inFlight.set(index, flying);
+    else this.inFlight.delete(index);
+    // Une cuisson d'avant une modification du bloc : la suivante, en attente, la remplace.
+    if (reply.type === 'baked' && reply.version === this.versions[index]) {
+      this.onBaked(reply.column, reply.row, reply.pixels);
+    }
     this.pump();
   }
 

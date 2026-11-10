@@ -90,9 +90,9 @@
       "species": []
     },
     "palette": {
-      "shadow": "#4380b6",
-      "base": "#56a0d4",
-      "light": "#6abae9"
+      "shadow": "#2f6699",
+      "base": "#3b79ae",
+      "light": "#4f8fc2"
     },
     "tile": "water",
     "vegetation": "none",
