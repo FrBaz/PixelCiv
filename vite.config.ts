@@ -1,5 +1,7 @@
+import { fileURLToPath } from 'node:url';
 import { defineConfig } from 'vitest/config';
 import { bundleLicenses } from './tools/bundle-licenses.ts';
+import { pixelAtlas } from './tools/pixel-atlas.ts';
 
 // Licences et crédits des paquets distribués, contrôlés au build (ADR 0008).
 const licenses = bundleLicenses();
@@ -11,7 +13,8 @@ export default defineConfig(({ mode }) => ({
   base: './',
   // JSX de l'interface, compilé pour Preact.
   oxc: { jsx: { runtime: 'automatic', importSource: 'preact' } },
-  plugins: [licenses.main],
+  // Atlas des sources pixel art (assets/pixel/), rangé au build (AST-04).
+  plugins: [licenses.main, pixelAtlas(fileURLToPath(new URL('assets/pixel', import.meta.url)))],
   worker: {
     format: 'es',
     plugins: () => [licenses.worker()],

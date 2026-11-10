@@ -12,7 +12,7 @@ import type { RandomStream } from '../core/rng';
 import { inheritGenome, pureAncestry, randomGenome } from './genetics';
 import { FEMALE, GENOME_WORDS, MALE, NONE, NEVER, type Population } from './population';
 import { MONTHS_PER_YEAR } from './people';
-import { NAMING_RULES, type NamingRule } from './society';
+import { NAMING_RULES, type Group, type NamingRule } from './society';
 import { cellIndex, type SimState } from './state';
 import type { SimContent } from './step';
 
@@ -69,11 +69,12 @@ export function spawnGroup(state: SimState, command: SpawnGroupCommand, content:
     founded: tick,
   };
   society.cultures.push(culture);
-  const group = {
+  const group: Group = {
     id: society.nextGroupId++,
     culture: culture.id,
     founded: tick,
     parent: NONE,
+    leader: NONE,
     x,
     y,
     homeX: x,
@@ -164,6 +165,13 @@ export function spawnGroup(state: SimState, command: SpawnGroupCommand, content:
     people.set('lastBirth', mother, youngest);
     remaining -= 2 + children;
   }
+  // Le meneur : l'aîné du groupe.
+  const members = membersOf(people, group.id);
+  const eldest = members.reduce(
+    (best, slot) => (people.get('birth', slot) < people.get('birth', best) ? slot : best),
+    members[0] ?? 0,
+  );
+  Object.assign(group, { leader: people.get('id', eldest) });
   society.chronicle.push({
     tick,
     kind: 'groupAppeared',
@@ -171,6 +179,8 @@ export function spawnGroup(state: SimState, command: SpawnGroupCommand, content:
     y,
     group: group.id,
     other: NONE,
+    leader: group.leader,
+    otherLeader: NONE,
     count: command.count,
   });
 }

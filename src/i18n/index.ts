@@ -26,3 +26,13 @@ export function t(key: MessageKey, params?: MessageParams): string {
 export function tKey(key: string, params?: MessageParams): string {
   return translate(key, params);
 }
+
+/**
+ * « de Kalvar », « d'Ataru » : le complément de nom d'un nom propre, élidé devant une
+ * voyelle, comme le veut le français. Une autre langue aura sa propre règle.
+ */
+export function ofName(name: string): string {
+  return /^[aeiouyhAEIOUYHàâéèêëîïôöûüÀÂÉÈÊËÎÏÔÖÛÜ]/.test(name)
+    ? t('grammar.ofElided', { name })
+    : t('grammar.of', { name });
+}

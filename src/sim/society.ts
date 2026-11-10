@@ -32,6 +32,11 @@ export interface Group {
   /** Pas de sa formation, et groupe dont il s'est détaché (NONE pour le premier). */
   readonly founded: number;
   readonly parent: number;
+  /**
+   * Meneur : l'aîné des adultes à sa formation. Le groupe porte son nom (« le groupe
+   * d'Ataru »), même après sa mort : une bande n'a pas d'autre nom avant la fondation.
+   */
+  readonly leader: number;
   /** Case du groupe : x boucle, y reste dans le monde. */
   x: number;
   y: number;
@@ -67,8 +72,11 @@ export interface ChronicleEntry {
   readonly x: number;
   readonly y: number;
   readonly group: number;
-  /** Autre groupe en cause (scission), NONE sinon. */
+  /** Autre groupe en cause (scission, réunion), NONE sinon. */
   readonly other: number;
+  /** Meneurs des deux groupes, qui leur donnent leur nom, même disparus ; NONE sinon. */
+  readonly leader: number;
+  readonly otherLeader: number;
   /** Nombre de personnes en cause. */
   readonly count: number;
 }

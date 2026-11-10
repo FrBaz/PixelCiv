@@ -13,8 +13,10 @@ export interface GameDate {
   readonly month: number;
 }
 
+/** Date d'un pas ; un pas négatif tombe avant l'an 1 (un individu apparu adulte y est né). */
 export function dateOfTick(tick: number): GameDate {
-  return { year: Math.floor(tick / MONTHS_PER_YEAR) + 1, month: tick % MONTHS_PER_YEAR };
+  const month = ((tick % MONTHS_PER_YEAR) + MONTHS_PER_YEAR) % MONTHS_PER_YEAR;
+  return { year: Math.floor(tick / MONTHS_PER_YEAR) + 1, month };
 }
 
 /** Vitesses de la simulation, de la plus lente à la plus rapide. */

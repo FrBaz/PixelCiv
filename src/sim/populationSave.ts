@@ -54,6 +54,7 @@ const GroupSchema = z
     culture: z.number().int().min(1),
     founded: int32,
     parent: z.number().int().min(0),
+    leader: z.number().int().min(0),
     x: z.number().int().min(0),
     y: z.number().int().min(0),
     homeX: z.number().int().min(0),
@@ -85,6 +86,8 @@ const ChronicleSchema = z
     y: z.number().int().min(0),
     group: z.number().int().min(0),
     other: z.number().int().min(0),
+    leader: z.number().int().min(0),
+    otherLeader: z.number().int().min(0),
     count: z.number().int().min(0),
   })
   .strict() satisfies z.ZodType<ChronicleEntry>;
@@ -294,6 +297,7 @@ export function restorePeople(
     ) {
       throw new SaveError('corrupt', 'groupes incohérents');
     }
+    if (group.leader >= json.nextId) throw new SaveError('corrupt', 'meneur inconnu');
     groupMap.set(group.id, group);
   }
   let previous = 0;
@@ -441,6 +445,7 @@ export function fingerprintPeople(
       group.culture,
       group.founded,
       group.parent,
+      group.leader,
       group.x,
       group.y,
       group.homeX,
@@ -459,7 +464,15 @@ export function fingerprintPeople(
   for (const language of society.languages) fingerprint.uint32(language.id).uint32(language.seed);
   for (const entry of society.chronicle) {
     fingerprint.uint32(entry.tick).string(entry.kind);
-    for (const value of [entry.x, entry.y, entry.group, entry.other, entry.count]) {
+    for (const value of [
+      entry.x,
+      entry.y,
+      entry.group,
+      entry.other,
+      entry.leader,
+      entry.otherLeader,
+      entry.count,
+    ]) {
       fingerprint.uint32(value);
     }
   }

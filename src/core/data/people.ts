@@ -231,3 +231,21 @@ export const NomadsSchema = z
   .strict();
 
 export type Nomads = z.infer<typeof NomadsSchema>;
+
+/**
+ * Couleurs des portraits et des mini-sprites (REN-07, REN-04, REN-09) : rampe des teints,
+ * du plus clair au plus foncé, que le trait « skin » parcourt ; cheveux gris ; contour,
+ * blanc des yeux, bouche ; habits des cultures embryonnaires, un par culture, à tour de rôle.
+ */
+export const AppearanceSchema = z
+  .object({
+    skin: z.array(ColorSchema).min(2),
+    grey: ColorSchema,
+    outline: ColorSchema,
+    white: ColorSchema,
+    mouth: ColorSchema,
+    clothing: z.array(ColorSchema).min(1),
+  })
+  .strict();
+
+export type Appearance = z.infer<typeof AppearanceSchema>;

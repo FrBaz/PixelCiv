@@ -1,0 +1,10 @@
+# Mini-sprite d'un homme adulte, au pas, image 2 sur 2.
+..hh..
+.hssh.
+..ss..
+.cxcc.
+sccCcs
+..cC..
+..cc..
+.s..s.
+.o..o.

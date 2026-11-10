@@ -322,7 +322,15 @@ export function lifeCycle(state: SimState, content: SimContent): void {
   });
   for (const group of [...society.groups.values()]) {
     const lost = famine.get(group.id) ?? 0;
-    const entry = { tick, x: group.x, y: group.y, group: group.id, other: NONE };
+    const entry = {
+      tick,
+      x: group.x,
+      y: group.y,
+      group: group.id,
+      other: NONE,
+      leader: group.leader,
+      otherLeader: NONE,
+    };
     if (lost >= FAMINE_DEATHS) society.chronicle.push({ ...entry, kind: 'famine', count: lost });
     if ((members.get(group.id) ?? 0) === 0) {
       society.chronicle.push({ ...entry, kind: 'groupExtinct', count: 0 });

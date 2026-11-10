@@ -1,0 +1,10 @@
+# Mini-sprite d'un homme adulte, au pas, image 1 sur 2 (REN-04).
+..hh..
+.hssh.
+..ss..
+.cxcc.
+sccCcs
+..cC..
+..cc..
+..s.s.
+..o.o.

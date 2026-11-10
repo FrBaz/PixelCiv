@@ -309,11 +309,17 @@ export function splitGroup(
   const homeY = Math.min(size.height - 1, Math.max(0, group.homeY + Math.round(oy * reach)));
   const homeX = (((group.homeX + Math.round(ox * reach)) % size.width) + size.width) % size.width;
   const share = leaving.length / members.length;
+  // Le meneur du nouveau groupe : l'aîné de ceux qui partent.
+  const eldest = leaving.reduce(
+    (best, slot) => (people.get('birth', slot) < people.get('birth', best) ? slot : best),
+    leaving[0] ?? 0,
+  );
   const child: Group = {
     id: society.nextGroupId++,
     culture: group.culture,
     founded: tick,
     parent: group.id,
+    leader: people.get('id', eldest),
     x: group.x,
     y: group.y,
     homeX,
@@ -332,6 +338,8 @@ export function splitGroup(
     y: group.y,
     group: group.id,
     other: child.id,
+    leader: group.leader,
+    otherLeader: child.leader,
     count: leaving.length,
   });
   // Le nouveau groupe se met en route aussitôt.
@@ -381,6 +389,8 @@ export function mergeGroup(
     y: group.y,
     group: group.id,
     other: best.id,
+    leader: group.leader,
+    otherLeader: best.leader,
     count: members.length,
   });
   return true;

@@ -168,7 +168,8 @@ describe('partie', () => {
     expect(snapshot?.world).toEqual({ params: testParams(), size: { width: 512, height: 256 } });
     expect(snapshot?.layers.biome).toEqual(testWorld().biome);
     const entry = env.sent.find((sent) => sent.message.type === 'snapshot');
-    expect(entry?.transfer).toHaveLength(LAYER_NAMES.length);
+    // Les couches du monde, plus les deux tableaux de l'image des groupes.
+    expect(entry?.transfer).toHaveLength(LAYER_NAMES.length + 2);
     expect(entry?.transfer.every((buffer) => buffer instanceof ArrayBuffer)).toBe(true);
   });
 

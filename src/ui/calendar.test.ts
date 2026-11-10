@@ -13,3 +13,10 @@ describe('formatDate', () => {
     expect(MONTH_KEYS).toHaveLength(12);
   });
 });
+
+describe('formatDate avant l’an 1', () => {
+  it('compte les années avant le début de la partie', () => {
+    expect(formatDate(-1)).toBe("décembre, 1 an avant l'an 1");
+    expect(formatDate(-12 * 34 - 4)).toBe("septembre, 35 ans avant l'an 1");
+  });
+});
