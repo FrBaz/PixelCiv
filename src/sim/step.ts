@@ -13,7 +13,7 @@ import { Fingerprint } from '../core/hash';
 import type { GameCommand, PaintBiomeCommand } from '../core/protocol';
 import { LAYER_NAMES } from '../core/world';
 import { PARAMETER_NAMES } from '../core/data/worldgen';
-import { feedGroup, regrowFood } from './forage';
+import { depletedCells, feedGroup, FOOD_STRIDE, regrowFood } from './forage';
 import { groupMembers, mergeGroup, moveGroup, splitGroup, walkCost } from './groups';
 import { lifeCycle } from './lifecycle';
 import { fingerprintPeople } from './populationSave';
@@ -62,7 +62,15 @@ function paintBiome(state: SimState, command: PaintBiomeCommand, content: SimCon
  * Fait avancer l'état d'un pas. Les commandes reçues s'appliquent d'abord, et sont
  * journalisées avec le pas au début duquel elles s'appliquent.
  */
-export function step(state: SimState, commands: readonly GameCommand[], content: SimContent): void {
+/**
+ * Fait passer un mois. Renvoie les membres de chaque groupe à la fin du mois, dans l'ordre
+ * des emplacements, tels que les donnerait groupMembers.
+ */
+export function step(
+  state: SimState,
+  commands: readonly GameCommand[],
+  content: SimContent,
+): ReadonlyMap<number, readonly number[]> {
   for (const command of commands) {
     state.commandLog.push({ tick: state.tick, command });
     applyCommand(state, command, content);
@@ -75,20 +83,57 @@ export function step(state: SimState, commands: readonly GameCommand[], content:
     feedGroup(group, members.get(group.id) ?? [], people, food, world, size, tick, content);
   }
   lifeCycle(state, content);
+  // Les fusions se décident toutes sur les membres d'après le cycle de vie ; les listes
+  // se mettent à jour ensuite, dans l'ordre des emplacements, comme si on les recomptait.
   members = groupMembers(people);
+  const merges: [from: number, into: number][] = [];
   for (const group of [...society.groups.values()]) {
-    mergeGroup(state, group, members, content);
+    const into = mergeGroup(state, group, members, content);
+    if (into !== undefined) merges.push([group.id, into.id]);
   }
-  members = groupMembers(people);
+  for (const [from, into] of merges) {
+    members.set(into, mergeSlots(members.get(into) ?? [], members.get(from) ?? []));
+    members.delete(from);
+  }
   const random = state.rng.stream('sim.groups');
+  const groupOf = people.columns.group;
   for (const group of [...society.groups.values()]) {
-    splitGroup(state, group, members.get(group.id) ?? [], content, random);
+    const list = members.get(group.id) ?? [];
+    const child = splitGroup(state, group, list, content, random);
+    if (child === undefined) continue;
+    members.set(
+      group.id,
+      list.filter((slot) => groupOf[slot] === group.id),
+    );
+    members.set(
+      child.id,
+      list.filter((slot) => groupOf[slot] === child.id),
+    );
   }
-  members = groupMembers(people);
   for (const group of society.groups.values()) {
     moveGroup(state, group, members.get(group.id) ?? [], content, random);
   }
   state.tick++;
+  return members;
+}
+
+/** Réunion de deux listes d'emplacements croissantes et disjointes, croissante. */
+function mergeSlots(a: readonly number[], b: readonly number[]): number[] {
+  const merged: number[] = [];
+  let i = 0;
+  let j = 0;
+  while (i < a.length || j < b.length) {
+    const left = a[i] ?? Number.POSITIVE_INFINITY;
+    const right = b[j] ?? Number.POSITIVE_INFINITY;
+    if (left < right) {
+      merged.push(left);
+      i++;
+    } else {
+      merged.push(right);
+      j++;
+    }
+  }
+  return merged;
 }
 
 /** Empreinte de l'état du monde, pour les tests de déterminisme. */
@@ -100,12 +145,12 @@ export function fingerprint(state: SimState): string {
   for (const name of PARAMETER_NAMES) fingerprint.string(name).float64(state.params[name]);
   for (const name of LAYER_NAMES) fingerprint.string(name).typedArray(state.world[name]);
   fingerprintPeople(fingerprint, state.people, state.society);
-  for (const cell of state.food.list) {
+  for (const cell of depletedCells(state.food)) {
     fingerprint
       .uint32(cell)
-      .float64(state.food.plants[cell] ?? 0)
-      .float64(state.food.game[cell] ?? 0)
-      .float64(state.food.fish[cell] ?? 0);
+      .float64(state.food.stocks[cell * FOOD_STRIDE] ?? 0)
+      .float64(state.food.stocks[cell * FOOD_STRIDE + 1] ?? 0)
+      .float64(state.food.stocks[cell * FOOD_STRIDE + 2] ?? 0);
   }
   for (const [name, words] of Object.entries(state.rng.states())) {
     fingerprint.string(name);

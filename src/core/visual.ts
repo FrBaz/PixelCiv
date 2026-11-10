@@ -24,12 +24,19 @@ export interface Visual {
 export const SKIN_TONES = 16;
 
 export function encodeVisual(visual: Visual): number {
+  return visualCode(visual.sex, visual.age, visual.skin, visual.hair, visual.grey);
+}
+
+/** Code d'apparence, des mêmes valeurs qu'encodeVisual, sans objet intermédiaire. */
+export function visualCode(
+  sex: number,
+  age: number,
+  skin: number,
+  hair: number,
+  grey: boolean,
+): number {
   return (
-    (visual.sex & 1) |
-    ((visual.age & 3) << 1) |
-    ((visual.skin & 15) << 3) |
-    ((visual.hair & 7) << 7) |
-    ((visual.grey ? 1 : 0) << 10)
+    (sex & 1) | ((age & 3) << 1) | ((skin & 15) << 3) | ((hair & 7) << 7) | ((grey ? 1 : 0) << 10)
   );
 }
 

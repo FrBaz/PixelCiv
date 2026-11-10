@@ -290,10 +290,11 @@ export class Population {
     const archived = this.archive.columns;
     for (const name of SHARED_COLUMNS) {
       const width = LIVING_COLUMNS[name].width;
-      archived[name].set(
-        this.columns[name].subarray(slot * width, slot * width + width),
-        row * width,
-      );
+      const from = this.columns[name];
+      const to = archived[name];
+      for (let index = 0; index < width; index++) {
+        to[row * width + index] = from[slot * width + index] ?? 0;
+      }
     }
     archived.death[row] = tick;
     archived.cause[row] = DEATH_CAUSES.indexOf(cause);

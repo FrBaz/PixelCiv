@@ -18,6 +18,15 @@ export function wrapX(x: number, width: number): number {
   return wrapped < width ? wrapped : 0;
 }
 
+/**
+ * wrapX d'une colonne entière à moins d'une largeur du monde (de -width à 2 width) : sans
+ * division, pour les boucles chaudes de la simulation ; même résultat que wrapX.
+ */
+export function wrapNearX(x: number, width: number): number {
+  if (x < 0) return x + width;
+  return x >= width ? x - width : x;
+}
+
 /** Écart horizontal signé le plus court de `from` vers `to`, dans [-width/2, width/2). */
 export function deltaX(from: number, to: number, width: number): number {
   const delta = wrapX(to - from, width);

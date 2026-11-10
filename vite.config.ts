@@ -22,6 +22,8 @@ export default defineConfig(({ mode }) => ({
   test: {
     // Composants compris : leurs tests s'écrivent en .test.tsx.
     include: mode === 'bench' ? ['tools/**/*.bench.ts'] : ['{src,tools}/**/*.test.{ts,tsx}'],
+    // Les bancs d'essai mesurent des durées : l'un après l'autre, pour ne pas se gêner.
+    fileParallelism: mode !== 'bench',
     // Les tests de la génération du monde produisent des cartes entières.
     testTimeout: 30_000,
   },

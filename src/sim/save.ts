@@ -18,7 +18,14 @@ import { SaveError, type Migrations, type SaveData, type SavedArray } from '../c
 import { chunkGrid, LAYER_NAMES, LAYER_TYPES, WORLD_SIZES, type WorldLayers } from '../core/world';
 import { worldParamsSchema } from '../core/worldParams';
 import { GameCommandSchema, LoggedCommandSchema } from './commands';
-import { emptyStocks, type FoodStocks, type ForageContent } from './forage';
+import {
+  deplete,
+  depletedCells,
+  emptyStocks,
+  FOOD_STRIDE,
+  type FoodStocks,
+  type ForageContent,
+} from './forage';
 import { terrainCosts } from './groups';
 import { Population } from './population';
 import { restorePeople, savePeople } from './populationSave';
@@ -52,11 +59,8 @@ function restoreFood(save: SaveData, count: number): FoodStocks {
     if (!values.every((value) => value >= 0 && value < 1e6)) {
       throw new SaveError('corrupt', 'stocks illisibles');
     }
-    food.depleted[cell] = 1;
-    food.list.push(cell);
-    food.plants[cell] = values[0] ?? 0;
-    food.game[cell] = values[1] ?? 0;
-    food.fish[cell] = values[2] ?? 0;
+    deplete(food, cell);
+    food.stocks.set(values, cell * FOOD_STRIDE);
   });
   return food;
 }
@@ -162,12 +166,15 @@ export function saveState(state: SimState, generator: number, content: SaveConte
   for (const name of LAYER_NAMES) arrays[name] = state.world[name].slice();
   const people = savePeople(state.people, state.society, content);
   Object.assign(arrays, people.arrays);
-  // Les seules cases entamées : les autres sont au plafond de la saison.
-  const { list } = state.food;
+  // Les seules cases entamées, dans l'ordre des cases : les autres sont au plafond de la
+  // saison.
+  const list = depletedCells(state.food);
   arrays.foodCells = Int32Array.from(list);
-  arrays.foodPlants = Float32Array.from(list, (cell) => state.food.plants[cell] ?? 0);
-  arrays.foodGame = Float32Array.from(list, (cell) => state.food.game[cell] ?? 0);
-  arrays.foodFish = Float32Array.from(list, (cell) => state.food.fish[cell] ?? 0);
+  const stock = (kind: number) =>
+    Float32Array.from(list, (cell) => state.food.stocks[cell * FOOD_STRIDE + kind] ?? 0);
+  arrays.foodPlants = stock(0);
+  arrays.foodGame = stock(1);
+  arrays.foodFish = stock(2);
   return {
     meta: { seed: state.params.seed, tick: state.tick },
     json: {

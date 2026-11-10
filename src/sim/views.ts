@@ -15,10 +15,10 @@ import {
   type PersonSummary,
   type PersonView,
 } from '../core/protocol';
-import { encodeVisual, SKIN_TONES } from '../core/visual';
+import { SKIN_TONES, visualCode } from '../core/visual';
 import { expressed, trait } from './genetics';
 import { cellDistance, groupMembers } from './groups';
-import { DEATH_CAUSES, GENOME_WORDS, NEVER, NONE } from './population';
+import { DEATH_CAUSES, GENOME_WORDS, NEVER, NONE, type Population } from './population';
 import { MONTHS_PER_YEAR } from './people';
 import { childrenOf, field, heredity, personName, recordOf, type PersonRecord } from './records';
 import { cultureOf, type ChronicleEntry } from './society';
@@ -212,20 +212,58 @@ export function chronicleView(state: SimState, entry: ChronicleEntry): Chronicle
   };
 }
 
-/** Image des groupes pour la carte, et un code d'apparence par membre. */
+/**
+ * Teint et couleur des cheveux de chaque emplacement, tirés du génome, qui ne change pas :
+ * on les garde d'une image à l'autre, avec l'identifiant de l'individu pour qui ils valent.
+ */
+interface Looks {
+  ids: Uint32Array;
+  skin: Uint8Array;
+  hair: Uint8Array;
+}
+
+const looksOf = new WeakMap<Population, Looks>();
+
+function looks(people: Population): Looks {
+  let cache = looksOf.get(people);
+  const capacity = people.columns.id.length;
+  if (cache === undefined || cache.ids.length < capacity) {
+    const grown: Looks = {
+      ids: new Uint32Array(capacity),
+      skin: new Uint8Array(capacity),
+      hair: new Uint8Array(capacity),
+    };
+    if (cache !== undefined) {
+      grown.ids.set(cache.ids);
+      grown.skin.set(cache.skin);
+      grown.hair.set(cache.hair);
+    }
+    cache = grown;
+    looksOf.set(people, cache);
+  }
+  return cache;
+}
+
+/**
+ * Image des groupes pour la carte, et un code d'apparence par membre ; `members` évite de
+ * recompter les membres que le pas vient de donner.
+ */
 export function groupsFrame(
   state: SimState,
   content: SimContent,
+  members: ReadonlyMap<number, readonly number[]> = groupMembers(state.people),
 ): { groups: Uint32Array<ArrayBuffer>; sprites: Uint16Array<ArrayBuffer> } {
   const { people, tick } = state;
-  const members = groupMembers(people);
   const groups = new Uint32Array(state.society.groups.size * GROUP_STRIDE);
   let total = 0;
   for (const group of state.society.groups.values()) total += members.get(group.id)?.length ?? 0;
   const sprites = new Uint16Array(total);
   const { genetics } = content;
-  const hair = genetics.loci.findIndex((locus) => locus.id === 'hair');
-  const skin = genetics.traits.findIndex((entry) => entry.id === 'skin');
+  const hairLocus = genetics.loci.findIndex((locus) => locus.id === 'hair');
+  const skinTrait = genetics.traits.findIndex((entry) => entry.id === 'skin');
+  const cache = looks(people);
+  const { id: ids, sex, birth, species: kinds, genome } = people.columns;
+  const entries = content.species.entries;
   let index = 0;
   let sprite = 0;
   for (const group of state.society.groups.values()) {
@@ -233,21 +271,26 @@ export function groupsFrame(
     groups.set([group.id, group.x, group.y, list.length, group.culture], index * GROUP_STRIDE);
     index++;
     for (const slot of list) {
-      const species = content.species.entries.at(people.get('species', slot));
-      const years = people.age(slot, tick) / MONTHS_PER_YEAR;
-      const maturity = species?.maturity ?? 15;
-      const age = years < 3 ? 0 : years < maturity ? 1 : years < 55 ? 2 : 3;
-      const offset = slot * GENOME_WORDS;
-      sprites[sprite++] = encodeVisual({
-        sex: people.get('sex', slot),
-        age,
-        skin: Math.min(
+      const id = ids[slot] ?? 0;
+      if (cache.ids[slot] !== id) {
+        const offset = slot * GENOME_WORDS;
+        cache.ids[slot] = id;
+        cache.skin[slot] = Math.min(
           SKIN_TONES - 1,
-          Math.floor(trait(people.columns.genome, offset, Math.max(0, skin)) * SKIN_TONES),
-        ),
-        hair: hair < 0 ? 0 : expressed(genetics, people.columns.genome, offset, hair),
-        grey: years >= 50,
-      });
+          Math.floor(trait(genome, offset, Math.max(0, skinTrait)) * SKIN_TONES),
+        );
+        cache.hair[slot] = hairLocus < 0 ? 0 : expressed(genetics, genome, offset, hairLocus);
+      }
+      const years = (tick - (birth[slot] ?? 0)) / MONTHS_PER_YEAR;
+      const maturity = entries.at(kinds[slot] ?? 0)?.maturity ?? 15;
+      const age = years < 3 ? 0 : years < maturity ? 1 : years < 55 ? 2 : 3;
+      sprites[sprite++] = visualCode(
+        sex[slot] ?? 0,
+        age,
+        cache.skin[slot] ?? 0,
+        cache.hair[slot] ?? 0,
+        years >= 50,
+      );
     }
   }
   return { groups, sprites };

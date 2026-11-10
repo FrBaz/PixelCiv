@@ -85,24 +85,32 @@ export function spawnGroup(state: SimState, command: SpawnGroupCommand, content:
   };
   society.groups.set(group.id, group);
 
+  // Emplacements des membres, au fil de leur apparition.
+  const slots: number[] = [];
+  const added = (slot: number): number => {
+    slots.push(slot);
+    return slot;
+  };
   const ancestry = pureAncestry(subspeciesIndex);
   const years = (value: number) => Math.round(value * MONTHS_PER_YEAR);
   const adult = (sex: number, age: number, familyName: number): number => {
     const genome = new Uint32Array(GENOME_WORDS);
     randomGenome(content.genetics, subspecies, random, genome);
-    return people.add({
-      sex,
-      birth: tick - years(age) - random.nextInt(MONTHS_PER_YEAR),
-      species: speciesIndex,
-      ancestry,
-      genome,
-      mother: NONE,
-      father: NONE,
-      group: group.id,
-      culture: culture.id,
-      givenName: random.nextUint32(),
-      familyName,
-    });
+    return added(
+      people.add({
+        sex,
+        birth: tick - years(age) - random.nextInt(MONTHS_PER_YEAR),
+        species: speciesIndex,
+        ancestry,
+        genome,
+        mother: NONE,
+        father: NONE,
+        group: group.id,
+        culture: culture.id,
+        givenName: random.nextUint32(),
+        familyName,
+      }),
+    );
   };
   const { fertility, couple } = species;
   let remaining = command.count;
@@ -143,30 +151,32 @@ export function spawnGroup(state: SimState, command: SpawnGroupCommand, content:
         random,
         genome,
       );
-      people.add({
-        sex: random.nextInt(2) === 0 ? FEMALE : MALE,
-        birth,
-        species: speciesIndex,
-        ancestry,
-        genome,
-        mother: motherId,
-        father: fatherId,
-        group: group.id,
-        culture: culture.id,
-        givenName: random.nextUint32(),
-        familyName: inheritedFamilyName(
-          culture.naming,
-          people.get('familyName', mother),
-          people.get('familyName', father),
-        ),
-      });
+      added(
+        people.add({
+          sex: random.nextInt(2) === 0 ? FEMALE : MALE,
+          birth,
+          species: speciesIndex,
+          ancestry,
+          genome,
+          mother: motherId,
+          father: fatherId,
+          group: group.id,
+          culture: culture.id,
+          givenName: random.nextUint32(),
+          familyName: inheritedFamilyName(
+            culture.naming,
+            people.get('familyName', mother),
+            people.get('familyName', father),
+          ),
+        }),
+      );
       youngest = Math.max(youngest, birth);
     }
     people.set('lastBirth', mother, youngest);
     remaining -= 2 + children;
   }
-  // Le meneur : l'aîné du groupe.
-  const members = membersOf(people, group.id);
+  // Le meneur : l'aîné du groupe ; à âge égal, le premier dans l'ordre des emplacements.
+  const members = slots.sort((a, b) => a - b);
   const eldest = members.reduce(
     (best, slot) => (people.get('birth', slot) < people.get('birth', best) ? slot : best),
     members[0] ?? 0,

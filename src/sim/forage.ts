@@ -10,8 +10,10 @@
  * reconstitue (FAU-01) ; plus rare dans le grand froid, il repousse moins vite.
  *
  * Une case que personne n'a entamée tient ses stocks au plafond de la saison : rien à y
- * calculer. Seules les cases entamées sont suivies, dans une liste : elles repoussent
- * chaque mois, au rythme de leur rendement, jusqu'à retrouver leur plafond.
+ * calculer. Seules les cases entamées sont suivies, marquées une à une : elles repoussent
+ * chaque mois, dans l'ordre des cases, au rythme de leur rendement, jusqu'à retrouver
+ * leur plafond. Chaque case repousse pour elle seule : l'ordre ne change rien aux stocks,
+ * et le parcours dans l'ordre des cases lit la mémoire d'un trait.
  *
  * Chaque groupe cueille, chasse et pêche autour de lui, dans un rayon de quelques cases,
  * une part des stocks : de quoi nourrir ses membres, et remplir sa réserve pour l'hiver.
@@ -19,6 +21,7 @@
  * (cycle de vie).
  */
 import type { Biome, Catalog, Nomads, Species } from '../core/data';
+import { wrapNearX } from '../core/cylinder';
 import { rainSeasonality, seasonFactor } from '../core/seasons';
 import { riverClass, type WorldLayers, type WorldSize } from '../core/world';
 import { dominantSubspecies, monthOf, MONTHS_PER_YEAR } from './people';
@@ -27,14 +30,15 @@ import type { Group } from './society';
 
 /** Stocks de nourriture : ceux des cases entamées, les autres étant au plafond. */
 export interface FoodStocks {
-  /** Stocks des cases entamées ; sans valeur ailleurs. */
-  readonly plants: Float32Array<ArrayBuffer>;
-  readonly game: Float32Array<ArrayBuffer>;
-  readonly fish: Float32Array<ArrayBuffer>;
+  /**
+   * Stocks des cases entamées, trois par case, côte à côte (FOOD_STRIDE) : plantes,
+   * gibier, poisson ; sans valeur ailleurs.
+   */
+  readonly stocks: Float32Array<ArrayBuffer>;
   /** 1 pour une case entamée. */
   readonly depleted: Uint8Array<ArrayBuffer>;
-  /** Cases entamées, dans l'ordre où elles l'ont été (l'ordre fait partie de l'état). */
-  readonly list: number[];
+  /** Nombre de cases entamées. */
+  count: number;
 }
 
 export interface ForageContent {
@@ -43,15 +47,31 @@ export interface ForageContent {
   readonly nomads: Nomads;
 }
 
+/** Valeurs par case dans FoodStocks.stocks : plantes, gibier, poisson. */
+export const FOOD_STRIDE = 3;
+
 /** Stocks d'un monde de `count` cases, toutes au plafond. */
 export function emptyStocks(count: number): FoodStocks {
   return {
-    plants: new Float32Array(count),
-    game: new Float32Array(count),
-    fish: new Float32Array(count),
+    stocks: new Float32Array(count * FOOD_STRIDE),
     depleted: new Uint8Array(count),
-    list: [],
+    count: 0,
   };
+}
+
+/** Cases entamées, dans l'ordre des cases. */
+export function depletedCells(food: FoodStocks): number[] {
+  const cells: number[] = [];
+  const { depleted } = food;
+  for (let cell = 0; cell < depleted.length; cell++) if (depleted[cell] === 1) cells.push(cell);
+  return cells;
+}
+
+/** Marque une case entamée. */
+export function deplete(food: FoodStocks, cell: number): void {
+  if (food.depleted[cell] === 1) return;
+  food.depleted[cell] = 1;
+  food.count++;
 }
 
 /** Rendements par biome, en tableaux. */
@@ -147,9 +167,21 @@ export function cellFood(
   content: ForageContent,
 ): Float64Array {
   const table = biomeTable(content.biomes);
-  const { stocks, river } = content.nomads;
   const climate = monthClimate(size.height, tick);
-  const y = Math.floor(cell / size.width);
+  return cellFoodWith(table, climate, content.nomads, world, size.width, cell);
+}
+
+/** cellFood, la table des biomes et le climat du mois déjà en main. */
+function cellFoodWith(
+  table: BiomeTable,
+  climate: MonthClimate,
+  nomads: Nomads,
+  world: WorldLayers,
+  width: number,
+  cell: number,
+): Float64Array {
+  const { stocks, river } = nomads;
+  const y = Math.floor(cell / width);
   const season = climate.season[y] ?? 0;
   const temperature = ((world.temperature[cell] ?? 0) + (world.amplitude[cell] ?? 0) * season) / 10;
   const biome = world.biome[cell] ?? 0;
@@ -177,7 +209,8 @@ export function totalStock(
   content: ForageContent,
 ): number {
   if (food.depleted[cell] === 1) {
-    return (food.plants[cell] ?? 0) + (food.game[cell] ?? 0) + (food.fish[cell] ?? 0);
+    const at = cell * FOOD_STRIDE;
+    return (food.stocks[at] ?? 0) + (food.stocks[at + 1] ?? 0) + (food.stocks[at + 2] ?? 0);
   }
   const values = cellFood(world, size, cell, tick, content);
   return values[3] + values[4] + values[5];
@@ -195,9 +228,10 @@ export function stocksInto(
   at: number,
 ): void {
   if (food.depleted[cell] === 1) {
-    out[at] = food.plants[cell] ?? 0;
-    out[at + 1] = food.game[cell] ?? 0;
-    out[at + 2] = food.fish[cell] ?? 0;
+    const from = cell * FOOD_STRIDE;
+    out[at] = food.stocks[from] ?? 0;
+    out[at + 1] = food.stocks[from + 1] ?? 0;
+    out[at + 2] = food.stocks[from + 2] ?? 0;
     return;
   }
   const values = cellFood(world, size, cell, tick, content);
@@ -217,27 +251,36 @@ export function regrowFood(
   tick: number,
   content: ForageContent,
 ): void {
-  const { list } = food;
-  for (let index = 0; index < list.length;) {
-    const cell = list[index] ?? 0;
-    const values = cellFood(world, size, cell, tick, content);
+  if (food.count === 0) return;
+  const table = biomeTable(content.biomes);
+  const climate = monthClimate(size.height, tick);
+  const { depleted, stocks } = food;
+  // Quatre cases à la fois : la plupart sont au plafond, et on les saute d'un coup.
+  const words = new Uint32Array(depleted.buffer, 0, depleted.length >> 2);
+  const regrow = (cell: number) => {
+    const values = cellFoodWith(table, climate, content.nomads, world, size.width, cell);
     const plantsCap = values[3];
     const gameCap = values[4];
     const fishCap = values[5];
-    const plants = Math.min(plantsCap, (food.plants[cell] ?? 0) + values[0]);
-    const game = Math.min(gameCap, (food.game[cell] ?? 0) + values[1]);
-    const fish = Math.min(fishCap, (food.fish[cell] ?? 0) + values[2]);
-    food.plants[cell] = plants;
-    food.game[cell] = game;
-    food.fish[cell] = fish;
+    const at = cell * FOOD_STRIDE;
+    const plants = Math.min(plantsCap, (stocks[at] ?? 0) + values[0]);
+    const game = Math.min(gameCap, (stocks[at + 1] ?? 0) + values[1]);
+    const fish = Math.min(fishCap, (stocks[at + 2] ?? 0) + values[2]);
+    stocks[at] = plants;
+    stocks[at + 1] = game;
+    stocks[at + 2] = fish;
     if (plants >= plantsCap * FULL && game >= gameCap * FULL && fish >= fishCap * FULL) {
-      // Revenue au plafond : la dernière case de la liste prend sa place.
-      food.depleted[cell] = 0;
-      const last = list.pop() ?? cell;
-      if (index < list.length) list[index] = last;
-    } else {
-      index++;
+      // Revenue au plafond.
+      depleted[cell] = 0;
+      food.count--;
     }
+  };
+  for (let word = 0; word < words.length; word++) {
+    if (words[word] === 0) continue;
+    for (let cell = word * 4; cell < word * 4 + 4; cell++) if (depleted[cell] === 1) regrow(cell);
+  }
+  for (let cell = words.length * 4; cell < depleted.length; cell++) {
+    if (depleted[cell] === 1) regrow(cell);
   }
 }
 
@@ -267,13 +310,52 @@ export function groupNeed(
   content: ForageContent,
 ): number {
   let need = 0;
+  const { birth, species: kinds } = people.columns;
+  const entries = content.species.entries;
   for (const slot of members) {
-    const species = content.species.entries.at(people.get('species', slot));
-    const years = people.age(slot, tick) / MONTHS_PER_YEAR;
+    const species = entries.at(kinds[slot] ?? 0);
+    const years = (tick - (birth[slot] ?? 0)) / MONTHS_PER_YEAR;
     need += species === undefined || years >= species.maturity ? 1 : species.childNeed;
   }
   return need;
 }
+
+/** Décalages (dx, dy) d'un disque de rayon donné, gardés d'un appel à l'autre. */
+const disks = new Map<number, Int32Array>();
+
+function diskOffsets(radius: number): Int32Array {
+  let offsets = disks.get(radius);
+  if (offsets === undefined) {
+    const list: number[] = [];
+    for (let dy = -radius; dy <= radius; dy++) {
+      for (let dx = -radius; dx <= radius; dx++) {
+        if (dx * dx + dy * dy <= radius * radius) list.push(dx, dy);
+      }
+    }
+    offsets = Int32Array.from(list);
+    disks.set(radius, offsets);
+  }
+  return offsets;
+}
+
+/** Biomes de prédilection de chaque sous-espèce, en masque par biome (ESP-02). */
+const preferences = new WeakMap<Species, Uint8Array[]>();
+
+function preferredBiomes(species: Species, subspecies: number, biomes: Catalog<Biome>) {
+  let masks = preferences.get(species);
+  if (masks === undefined) {
+    masks = species.subspecies.map((entry) => {
+      const wanted = new Set(entry.biomes);
+      return Uint8Array.from(biomes.entries, (biome) => (wanted.has(biome.id) ? 1 : 0));
+    });
+    preferences.set(species, masks);
+  }
+  return masks[subspecies];
+}
+
+/** Cases et stocks du disque de cueillette d'un groupe, dans des tampons réutilisés. */
+let diskCells = new Int32Array(64);
+let diskStocks = new Float64Array(64 * 3);
 
 /**
  * Nourrit un groupe un mois : il prend autour de lui la part des stocks qu'il lui faut
@@ -298,37 +380,52 @@ export function feedGroup(
   // de mieux pour un groupe mêlé.
   const first = members[0] ?? 0;
   const species = content.species.entries.at(people.get('species', first));
-  const preferred = new Set(
-    species?.subspecies.at(dominantSubspecies(people, first).index)?.biomes ?? [],
-  );
-  const cells = disk(size, group.x, group.y, nomads.forage.radius);
-  const stocks = new Float64Array(cells.length * 3);
+  const preferred =
+    species === undefined
+      ? undefined
+      : preferredBiomes(species, dominantSubspecies(people, first).index, content.biomes);
+  // Les cases du disque, dans l'ordre de disk() : x boucle, y reste dans le monde.
+  const offsets = diskOffsets(nomads.forage.radius);
+  if (diskCells.length < offsets.length / 2) {
+    diskCells = new Int32Array(offsets.length / 2);
+    diskStocks = new Float64Array((offsets.length / 2) * 3);
+  }
+  const cells = diskCells;
+  const stocks = diskStocks;
+  const { width, height } = size;
+  let count = 0;
+  for (let index = 0; index < offsets.length; index += 2) {
+    const row = group.y + (offsets[index + 1] ?? 0);
+    if (row < 0 || row >= height) continue;
+    const column = wrapNearX(group.x + (offsets[index] ?? 0), width);
+    cells[count++] = row * width + column;
+  }
   let available = 0;
-  cells.forEach((cell, index) => {
+  for (let index = 0; index < count; index++) {
+    const cell = cells[index] ?? 0;
     stocksInto(food, world, size, cell, tick, content, stocks, index * 3);
-    const id = content.biomes.entries.at(world.biome[cell] ?? 0)?.id ?? '';
+    const bonus = preferred?.[world.biome[cell] ?? 0] === 1 ? PREFERRED : 1;
     const total =
       (stocks[index * 3] ?? 0) + (stocks[index * 3 + 1] ?? 0) + (stocks[index * 3 + 2] ?? 0);
-    available += total * nomads.forage.share * (preferred.has(id) ? PREFERRED : 1);
-  });
+    available += total * nomads.forage.share * bonus;
+  }
   const wanted = need + Math.max(0, cap - group.food);
   const harvest = Math.min(wanted, available);
   if (harvest > 0) {
     // Chaque stock perd la même part de ce qui y était pris.
     const kept = 1 - (harvest / available) * nomads.forage.share;
-    cells.forEach((cell, index) => {
+    for (let index = 0; index < count; index++) {
+      const cell = cells[index] ?? 0;
       const plants = stocks[index * 3] ?? 0;
       const game = stocks[index * 3 + 1] ?? 0;
       const fish = stocks[index * 3 + 2] ?? 0;
-      if (plants + game + fish <= 0) return;
-      food.plants[cell] = plants * kept;
-      food.game[cell] = game * kept;
-      food.fish[cell] = fish * kept;
-      if (food.depleted[cell] !== 1) {
-        food.depleted[cell] = 1;
-        food.list.push(cell);
-      }
-    });
+      if (plants + game + fish <= 0) continue;
+      const at = cell * FOOD_STRIDE;
+      food.stocks[at] = plants * kept;
+      food.stocks[at + 1] = game * kept;
+      food.stocks[at + 2] = fish * kept;
+      deplete(food, cell);
+    }
   }
   const eaten = Math.min(need, harvest + group.food);
   group.food = Math.min(
@@ -337,9 +434,9 @@ export function feedGroup(
   );
   const fed = need > 0 ? eaten / need : 1;
   // La nutrition suit, d'un mois à l'autre, la part du besoin couverte.
+  const nutrition = people.columns.nutrition;
   for (const slot of members) {
-    const nutrition = people.get('nutrition', slot);
-    people.set('nutrition', slot, Math.round(nutrition * 0.4 + 255 * fed * 0.6));
+    nutrition[slot] = Math.round((nutrition[slot] ?? 0) * 0.4 + 255 * fed * 0.6);
   }
   return fed;
 }

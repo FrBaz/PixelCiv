@@ -143,7 +143,35 @@ Objectif : une population qui vit, se reproduit, transmet ses gènes et meurt, e
 | 2.8 | Portraits de face de 64 × 64 px, générés à partir des gènes (teinte, couleurs, formes) et de l'âge (rides, cheveux gris, calvitie). | REN-07 | Un enfant ressemble à ses parents ; un même individu vieillit ; pixel art net, sans mélange de densités. | fait |
 | 2.9 | Mini-sprites, première version : de 6 à 10 px de haut, tirés de l'individu (teinte, cheveux, âge, sexe), autour de leur groupe, en vue rapprochée ; une icône de groupe de loin. | REN-04, REN-03, REN-08 | Les sprites suivent leur groupe, à la densité de pixels de la carte, sans faire tomber les images par seconde. | fait |
 | 2.10 | Outils : faire apparaître un groupe (espèce, sous-espèce, nombre) ; inspection d'un individu et d'un groupe ; liens familiaux navigables ; chronique de base. | CRE-03, CRE-05, IHM-02, CHR-01 | On fait apparaître un groupe au doigt comme à la souris, on suit ses lignées et on lit sa chronique. | fait |
-| 2.11 | Mesures : bancs d'essai à 10 000 et 50 000 individus ; calibrage pour le téléphone. | IND-03, NF-01 | Un pas mensuel de 50 000 individus tient dans le budget de la vitesse la plus rapide sur PC ; la mesure sur téléphone est consignée. | à faire |
+| 2.11 | Mesures : bancs d'essai à 10 000 et 50 000 individus ; calibrage pour le téléphone. | IND-03, NF-01 | Un pas mensuel de 50 000 individus tient dans le budget de la vitesse la plus rapide sur PC ; la mesure sur téléphone est consignée. | à relire : mesures sur un vrai PC et un vrai téléphone |
+
+### Notes
+
+Les onze tâches sont réalisées, dans les commits « 2.1 … » à « 2.11 … ». Décisions : ADR 0011. Comme en phase 1, le critère de 2.11 demande des appareils réels, hors de portée du conteneur : la tâche reste « à relire » jusqu'à ces mesures.
+
+**Démographie** (tâches 2.3 à 2.5, mesurées en cours de réalisation). Table de Siler des humains : espérance de vie à la naissance 36,5 ans, survie à 15 ans 58,8 %, descendance finale 5,5 enfants par femme, des valeurs de chasseurs-cueilleurs. Seize groupes nomades sur un monde Petit deviennent 108 groupes en trois siècles, d'une taille médiane de 14 membres, soit une croissance d'environ 0,65 % par an.
+
+**Mesures de la tâche 2.11** (`npm run bench`, Node 22, conteneur de développement : processeur de serveur à 2,1 GHz, partagé, dont les durées varient de ±25 % d'un passage à l'autre). Un pas compte le mois de la simulation et l'image des groupes que le worker envoie à chaque pas ; le budget d'un mois à la vitesse la plus rapide (×16) est de 52 ms.
+
+| Scénario | Groupes | Pas mensuel moyen | Budget à ×16 |
+|---|---|---|---|
+| 10 000 individus, monde Immense, population qui se maintient | 660 | 16 à 26 ms | tenu |
+| 50 000 individus, monde Immense, population qui se maintient (de 49 300 à 54 500 en deux ans) | 3 300 | 61 à 87 ms | dépassé de 20 à 65 % |
+| 50 000 individus serrés sur un monde Moyen, en famine (avant optimisation : 104 ms) | 1 900 | 35 à 41 ms | tenu |
+
+Un monde Grand ne nourrit pas 50 000 chasseurs-cueilleurs : semés à cette densité, ils retombent vers 37 000 en deux ans. Le coût croît surtout avec le nombre de groupes, une quinzaine de membres chacun après les scissions. Les optimisations (colonnes lues directement, sans objet par individu ; listes de membres tenues à jour après les fusions et les scissions ; cases entamées marquées et parcourues dans l'ordre des cases ; stocks d'une case côte à côte ; colonnes bouclées sans division) ont été vérifiées par empreinte : à 10 000 et 50 000 individus, les mêmes 30 mois redonnent le même état qu'avant elles. Une même partie de 10 000 et de 20 000 individus donne aussi la même empreinte dans Node et dans Chromium. **À mesurer sur un vrai PC**, plus rapide que ce conteneur : le panneau de débogage donne la durée des pas.
+
+**Téléphone, en émulation seulement** (Chromium, fil principal d'une page, monde Moyen, populations qui se maintiennent) :
+
+| Processeur | 10 000 individus | 20 000 individus |
+|---|---|---|
+| sans ralentissement | 17 ms | 22 ms |
+| ralenti 4 fois (milieu de gamme, selon Lighthouse) | 85 ms | 120 ms |
+| ralenti 6 fois | 108 ms | 154 ms |
+
+Calibrage proposé pour IND-03 : sur un téléphone de milieu de gamme, de 10 000 à 20 000 individus tiennent la vitesse ×4 (208 ms par mois) ; à ×16, la simulation tourne alors aussi vite qu'elle le peut, sans bloquer l'interface (NF-02). **À confirmer sur un vrai téléphone.**
+
+**Sprites et portraits.** Les mini-sprites, la bannière de groupe et les portraits sont dessinés pour le jeu (sources en grilles de texte dans `assets/pixel/`, portraits générés) : le pack de GandalfHardcore n'est pas versé, sa licence restant à vérifier (voir ci-dessous).
 
 ## À fournir par l'auteur
 

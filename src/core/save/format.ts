@@ -244,7 +244,7 @@ async function inflate(file: Uint8Array<ArrayBuffer>): Promise<Uint8Array<ArrayB
   let checked = false;
   try {
     for (;;) {
-      let chunk: ReadableStreamReadResult<Uint8Array>;
+      let chunk: Awaited<ReturnType<typeof reader.read>>;
       try {
         chunk = await reader.read();
       } catch {

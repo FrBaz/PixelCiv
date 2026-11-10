@@ -396,7 +396,7 @@ export class SimulationHost {
     if (state === undefined) return;
     const start = this.env.now();
     // Les commandes en attente s'appliquent au début du pas, qui les horodate.
-    step(state, state.pending.splice(0), this.data);
+    const members = step(state, state.pending.splice(0), this.data);
     if (this.stepCost > 0) {
       const end = start + this.stepCost;
       while (this.env.now() < end) {
@@ -410,7 +410,7 @@ export class SimulationHost {
       type: 'delta',
       time: this.time(state),
       chunks: takeDirtyChunks(state),
-      frame: groupsFrame(state, this.data),
+      frame: groupsFrame(state, this.data, members),
       chronicle: fresh.map((entry) => chronicleView(state, entry)),
     });
     this.send({ type: 'stats', stats: { stepMs } });

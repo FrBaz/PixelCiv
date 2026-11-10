@@ -28,7 +28,7 @@ import {
   type DeathCause,
   type Population,
 } from './population';
-import { cellDistance } from './groups';
+import { cellDistance, groupMembers } from './groups';
 import { adaptationOf, cellTemperature, closeKin, monthOf, MONTHS_PER_YEAR } from './people';
 import { inheritedFamilyName } from './spawn';
 import { cultureOf } from './society';
@@ -108,33 +108,37 @@ function mortalityTable(species: Species): MortalityTable {
 
 /** Ce qui menace un individu ce mois-ci, en plus de son âge. */
 interface Hardship {
-  readonly cold: number;
-  readonly heat: number;
-  readonly famine: number;
+  cold: number;
+  heat: number;
+  famine: number;
 }
 
-function hardshipOf(
+/**
+ * Rigueurs du mois pour l'emplacement `slot`, écrites dans `out` : le froid et la chaleur
+ * extrêmes (NaN : pas de climat connu), surtout pour les plus fragiles, et la faim.
+ */
+function hardshipInto(
   species: Species,
   people: Population,
   slot: number,
   years: number,
-  temperature: number | undefined,
-): Hardship {
+  temperature: number,
+  out: Hardship,
+): void {
   const { hardship } = species;
-  const nutrition = people.get('nutrition', slot) / 255;
-  const famine = nutrition < 1 ? hardship.famine * (1 - nutrition) * (1 - nutrition) : 0;
-  if (temperature === undefined || (temperature >= 0 && temperature <= 30)) {
-    return { cold: 0, heat: 0, famine };
+  const nutrition = (people.columns.nutrition[slot] ?? 0) / 255;
+  out.famine = nutrition < 1 ? hardship.famine * (1 - nutrition) * (1 - nutrition) : 0;
+  if (Number.isNaN(temperature) || (temperature >= 0 && temperature <= 30)) {
+    out.cold = 0;
+    out.heat = 0;
+    return;
   }
   const frail = years < hardship.frail[0] || years >= hardship.frail[1] ? 1 : hardship.adults;
   const adaptation = adaptationOf(people, slot, species);
   const cold = Math.min(1, Math.max(0, -temperature / 20));
   const heat = Math.min(1, Math.max(0, (temperature - 30) / 10));
-  return {
-    cold: frail * hardship.cold * cold * (1 - adaptation.cold),
-    heat: frail * hardship.heat * heat * (1 - adaptation.heat),
-    famine,
-  };
+  out.cold = frail * hardship.cold * cold * (1 - adaptation.cold);
+  out.heat = frail * hardship.heat * heat * (1 - adaptation.heat);
 }
 
 /** Cause d'une mort, tirée selon la part de chaque risque. */
@@ -235,93 +239,114 @@ function giveBirth(
   return species === undefined || random.nextFloat() >= species.fertility.childbirthDeath;
 }
 
+/** Emplacements des vivants du début du mois, dans un tampon réutilisé. */
+let livingScratch = new Int32Array(1024);
+
+function livingSlots(people: Population): Int32Array {
+  if (livingScratch.length < people.count) livingScratch = new Int32Array(people.count * 2);
+  const { alive, end } = people;
+  let count = 0;
+  for (let slot = 0; slot < end; slot++) if (alive[slot] === 1) livingScratch[count++] = slot;
+  return livingScratch.subarray(0, count);
+}
+
 /** Fait vivre la population un mois. */
 export function lifeCycle(state: SimState, content: SimContent): void {
   const { people, society, tick } = state;
   const month = monthOf(tick);
   const deaths = state.rng.stream('sim.deaths');
   const births = state.rng.stream('sim.births');
-  // Température du mois sur la case de chaque groupe.
-  const climate = new Map<number, number>();
+  // Température du mois sur la case de chaque groupe, par identifiant ; NaN hors groupe.
+  const groupCount = society.nextGroupId;
+  const climate = new Float64Array(groupCount).fill(Number.NaN);
   for (const group of society.groups.values()) {
-    climate.set(group.id, cellTemperature(state.world, state.size, group.x, group.y, month));
+    climate[group.id] = cellTemperature(state.world, state.size, group.x, group.y, month);
   }
-  const famine = new Map<number, number>();
+  const famine = new Int32Array(groupCount);
+  const species = content.species.entries;
+  const mortality = species.map((entry) => mortalityTable(entry));
+  const hardship: Hardship = { cold: 0, heat: 0, famine: 0 };
 
-  // Les vivants du début du mois : les nouveau-nés attendront le mois prochain.
-  const living: number[] = [];
-  people.forEach((slot) => living.push(slot));
+  // Les vivants du début du mois : les nouveau-nés attendront le mois prochain. Une
+  // naissance peut agrandir les colonnes : on les relit après chacune.
+  const living = livingSlots(people);
+  let columns = people.columns;
   for (const slot of living) {
     if (people.alive[slot] !== 1) continue;
-    const species = content.species.entries.at(people.get('species', slot));
-    if (species === undefined) continue;
-    const table = mortalityTable(species);
-    const age = people.age(slot, tick);
+    const kind = columns.species[slot] ?? 0;
+    const entry = species.at(kind);
+    const table = mortality.at(kind);
+    if (entry === undefined || table === undefined) continue;
+    const age = tick - (columns.birth[slot] ?? 0);
     const years = age / MONTHS_PER_YEAR;
-    const group = people.get('group', slot);
+    const group = columns.group[slot] ?? NONE;
 
     // Mort.
     if (age >= table.base.length - 1) {
       people.remove(slot, tick, 'natural');
       continue;
     }
-    const hardship = hardshipOf(species, people, slot, years, climate.get(group));
+    hardshipInto(entry, people, slot, years, climate[group] ?? Number.NaN, hardship);
     const orphan =
-      age < NURSLING && people.slotOf(people.get('mother', slot)) === undefined ? ORPHAN_FACTOR : 1;
+      age < NURSLING && people.slotOf(columns.mother[slot] ?? NONE) === undefined
+        ? ORPHAN_FACTOR
+        : 1;
     const extra = hardship.cold + hardship.heat + hardship.famine;
     const ageIndex = Math.max(0, age);
     const infant = table.infant[ageIndex] ?? 0;
+    const senescence = table.senescence[ageIndex] ?? 0;
     const probability =
       extra === 0 && orphan === 1
         ? (table.base[ageIndex] ?? 0)
-        : monthlyProbability(
-            infant * orphan + table.background + (table.senescence[ageIndex] ?? 0) + extra,
-          );
+        : monthlyProbability(infant * orphan + table.background + senescence + extra);
     if (deaths.nextFloat() < probability) {
-      const hazards = {
-        infant,
-        background: table.background,
-        senescence: table.senescence[ageIndex] ?? 0,
-      };
+      const hazards = { infant, background: table.background, senescence };
       const cause = causeOf(hazards, hardship, orphan, deaths);
-      if (cause === 'famine') famine.set(group, (famine.get(group) ?? 0) + 1);
+      if (cause === 'famine') famine[group] = (famine[group] ?? 0) + 1;
       people.remove(slot, tick, cause);
       continue;
     }
 
-    if (people.get('sex', slot) !== FEMALE) continue;
+    if (columns.sex[slot] !== FEMALE) continue;
     // Accouchement d'une grossesse arrivée à terme.
-    const conceived = people.get('conceived', slot);
-    if (conceived !== NEVER && tick - conceived >= species.fertility.gestation) {
-      if (!giveBirth(state, content, slot, births)) {
+    const conceived = columns.conceived[slot] ?? NEVER;
+    if (conceived !== NEVER && tick - conceived >= entry.fertility.gestation) {
+      const survived = giveBirth(state, content, slot, births);
+      columns = people.columns;
+      if (!survived) {
         people.remove(slot, tick, 'childbirth');
         continue;
       }
     }
     // Conception.
-    const partner = people.slotOf(people.get('partner', slot));
-    if (partner === undefined || people.get('conceived', slot) !== NEVER) continue;
-    const lastBirth = people.get('lastBirth', slot);
-    if (lastBirth !== NEVER && tick - lastBirth < species.fertility.postpartum) continue;
-    if (ageInYearsOf(people, partner, tick) >= species.fertility.maleTo) continue;
-    const nutrition = people.get('nutrition', slot) / 255;
-    const chance = species.fertility.monthly * fertilityAt(species, years) * nutrition * nutrition;
+    const partner = people.slotOf(columns.partner[slot] ?? NONE);
+    if (partner === undefined || columns.conceived[slot] !== NEVER) continue;
+    const lastBirth = columns.lastBirth[slot] ?? NEVER;
+    if (lastBirth !== NEVER && tick - lastBirth < entry.fertility.postpartum) continue;
+    if ((tick - (columns.birth[partner] ?? 0)) / MONTHS_PER_YEAR >= entry.fertility.maleTo) {
+      continue;
+    }
+    const nutrition = (columns.nutrition[slot] ?? 0) / 255;
+    const chance = entry.fertility.monthly * fertilityAt(entry, years) * nutrition * nutrition;
     if (chance > 0 && births.nextFloat() < chance) {
-      people.set('conceived', slot, tick);
-      people.set('pregnantBy', slot, people.get('id', partner));
+      columns.conceived[slot] = tick;
+      columns.pregnantBy[slot] = columns.id[partner] ?? NONE;
     }
   }
 
   formCouples(state, content);
 
   // Groupes éteints, et famines de la chronique.
-  const members = new Map<number, number>();
-  people.forEach((slot) => {
-    const group = people.get('group', slot);
-    members.set(group, (members.get(group) ?? 0) + 1);
-  });
+  const members = new Int32Array(groupCount);
+  const { alive, end } = people;
+  const groups = people.columns.group;
+  for (let slot = 0; slot < end; slot++) {
+    if (alive[slot] !== 1) continue;
+    const group = groups[slot] ?? NONE;
+    members[group] = (members[group] ?? 0) + 1;
+  }
   for (const group of [...society.groups.values()]) {
-    const lost = famine.get(group.id) ?? 0;
+    const lost = famine[group.id] ?? 0;
     const entry = {
       tick,
       x: group.x,
@@ -332,15 +357,11 @@ export function lifeCycle(state: SimState, content: SimContent): void {
       otherLeader: NONE,
     };
     if (lost >= FAMINE_DEATHS) society.chronicle.push({ ...entry, kind: 'famine', count: lost });
-    if ((members.get(group.id) ?? 0) === 0) {
+    if ((members[group.id] ?? 0) === 0) {
       society.chronicle.push({ ...entry, kind: 'groupExtinct', count: 0 });
       society.groups.delete(group.id);
     }
   }
-}
-
-function ageInYearsOf(people: Population, slot: number, tick: number): number {
-  return people.age(slot, tick) / MONTHS_PER_YEAR;
 }
 
 /**
@@ -355,20 +376,26 @@ function formCouples(state: SimState, content: SimContent): void {
   const random = state.rng.stream('sim.couples');
   const women = new Map<number, number[]>();
   const men = new Map<number, number[]>();
-  const sizes = new Map<number, number>();
-  people.forEach((slot) => {
-    const group = people.get('group', slot);
-    sizes.set(group, (sizes.get(group) ?? 0) + 1);
-    if (group === NONE || people.get('partner', slot) !== NONE) return;
-    const species = content.species.entries.at(people.get('species', slot));
-    if (species === undefined || ageInYearsOf(people, slot, tick) < species.couple.minAge) return;
-    const lists = people.get('sex', slot) === FEMALE ? women : men;
+  // Nombre de membres de chaque groupe.
+  const sizes = new Int32Array(society.nextGroupId);
+  const { alive, end } = people;
+  const columns = people.columns;
+  const entries = content.species.entries;
+  for (let slot = 0; slot < end; slot++) {
+    if (alive[slot] !== 1) continue;
+    const group = columns.group[slot] ?? NONE;
+    sizes[group] = (sizes[group] ?? 0) + 1;
+    if (group === NONE || columns.partner[slot] !== NONE) continue;
+    const species = entries.at(columns.species[slot] ?? 0);
+    const years = (tick - (columns.birth[slot] ?? 0)) / MONTHS_PER_YEAR;
+    if (species === undefined || years < species.couple.minAge) continue;
+    const lists = columns.sex[slot] === FEMALE ? women : men;
     const list = lists.get(group);
     if (list === undefined) lists.set(group, [slot]);
     else list.push(slot);
-  });
+  }
   const compatibleMen = (woman: number, candidates: readonly number[]) => {
-    const species = content.species.entries.at(people.get('species', woman));
+    const species = entries.at(columns.species[woman] ?? 0);
     const gap = (species?.couple.maxGap ?? 0) * MONTHS_PER_YEAR;
     const age = people.age(woman, tick);
     return candidates.filter(
@@ -387,56 +414,79 @@ function formCouples(state: SimState, content: SimContent): void {
   for (const [group, list] of women) {
     const candidates = men.get(group) ?? [];
     for (const woman of list) {
-      const species = content.species.entries.at(people.get('species', woman));
+      const species = entries.at(columns.species[woman] ?? 0);
       if (species === undefined || random.nextFloat() >= species.pairing) continue;
       const man = random.pickOrUndefined(compatibleMen(woman, candidates));
       if (man === undefined) unmatched.push(woman);
       else marry(woman, man);
     }
   }
-  // Dans un groupe voisin de la même culture.
+  if (unmatched.length === 0) return;
+  // Dans un groupe voisin de la même culture : les groupes de chaque culture, dans
+  // l'ordre où leurs célibataires ont été comptés.
+  const byCulture = new Map<number, number[]>();
+  for (const group of men.keys()) {
+    const other = society.groups.get(group);
+    if (other === undefined) continue;
+    const list = byCulture.get(other.culture);
+    if (list === undefined) byCulture.set(other.culture, [group]);
+    else list.push(group);
+  }
   const distance = content.nomads.marriage;
+  // Membres de chaque groupe, de quoi retrouver les enfants de qui change de groupe sans
+  // parcourir toute la population ; on le dresse au premier changement.
+  let inGroup: Map<number, number[]> | undefined;
   for (const woman of unmatched) {
     const home = society.groups.get(people.get('group', woman));
     if (home === undefined) continue;
     const candidates: number[] = [];
-    for (const [group, list] of men) {
+    for (const group of byCulture.get(home.culture) ?? []) {
       const other = society.groups.get(group);
-      if (other === undefined || other.id === home.id || other.culture !== home.culture) continue;
+      if (other === undefined || other.id === home.id) continue;
       if (cellDistance(state.size.width, home.x, home.y, other.x, other.y) > distance) continue;
-      candidates.push(...list);
+      candidates.push(...(men.get(group) ?? []));
     }
     const man = random.pickOrUndefined(compatibleMen(woman, candidates));
     if (man === undefined) continue;
     marry(woman, man);
     const womanGroup = people.get('group', woman);
     const manGroup = people.get('group', man);
-    if ((sizes.get(womanGroup) ?? 0) > (sizes.get(manGroup) ?? 0)) {
-      joinGroup(people, man, womanGroup, tick, content);
+    inGroup ??= groupMembers(people);
+    if ((sizes[womanGroup] ?? 0) > (sizes[manGroup] ?? 0)) {
+      joinGroup(people, man, womanGroup, tick, content, inGroup);
     } else {
-      joinGroup(people, woman, manGroup, tick, content);
+      joinGroup(people, woman, manGroup, tick, content, inGroup);
     }
   }
 }
 
-/** Fait passer un individu dans le groupe `group`, avec ses enfants qui vivaient avec lui. */
-export function joinGroup(
+/**
+ * Fait passer un individu dans le groupe `group`, avec ses enfants qui vivaient avec lui.
+ * `inGroup` donne, pour chaque groupe, au moins tous ses membres : il se tient à jour.
+ */
+function joinGroup(
   people: Population,
   slot: number,
   group: number,
   tick: number,
   content: SimContent,
+  inGroup: Map<number, number[]>,
 ): void {
   const id = people.get('id', slot);
   const from = people.get('group', slot);
-  people.forEach((other) => {
-    if (people.get('group', other) !== from) return;
-    if (people.get('mother', other) !== id && people.get('father', other) !== id) return;
+  const moved: number[] = [];
+  for (const other of inGroup.get(from) ?? []) {
+    if (people.alive[other] !== 1 || people.get('group', other) !== from) continue;
+    if (people.get('mother', other) !== id && people.get('father', other) !== id) continue;
     const species = content.species.entries.at(people.get('species', other));
     if (species === undefined || people.age(other, tick) >= species.maturity * MONTHS_PER_YEAR) {
-      return;
+      continue;
     }
-    people.set('group', other, group);
-  });
-  people.set('group', slot, group);
+    moved.push(other);
+  }
+  moved.push(slot);
+  for (const other of moved) people.set('group', other, group);
+  const list = inGroup.get(group);
+  if (list === undefined) inGroup.set(group, moved);
+  else list.push(...moved);
 }

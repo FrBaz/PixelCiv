@@ -94,4 +94,23 @@ describe('pas', () => {
     // flux des systèmes, qui tournent chaque mois.
     expect(fingerprint(state)).toBe('a3d12685');
   });
+
+  it("redonnent l'empreinte de référence de vingt ans d'une population (ADR 0003)", () => {
+    // Le même monde fixe, et trois groupes : naissances, morts, couples, faim, marches,
+    // scissions et fusions entrent dans l'empreinte, que les optimisations ne changent pas.
+    const world = emptyLayers(WORLD_SIZES.small);
+    world.biome.fill(testData.biomes.indexOf('steppe') ?? 0);
+    world.elevation.fill(120);
+    const state = createState(testParams('référence'), world, testData);
+    const spawn = (x: number, y: number, subspecies: string) =>
+      ({ type: 'spawnGroup', x, y, species: 'human', subspecies, count: 30 }) as const;
+    step(
+      state,
+      [spawn(10, 60, 'plains'), spawn(30, 64, 'nordic'), spawn(505, 70, 'sands')],
+      testData,
+    );
+    for (let tick = 1; tick < 240; tick++) step(state, [], testData);
+    expect(state.people.count).toBeGreaterThan(40);
+    expect(fingerprint(state)).toBe('fe229c9e');
+  });
 });

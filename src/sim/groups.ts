@@ -12,14 +12,15 @@
  *   même culture (C2, D4) ; les familles restent ensemble, et le nouveau groupe part
  *   fonder son aire plus loin.
  */
-import type { Biome, Catalog } from '../core/data';
+import type { Biome, Catalog, Species } from '../core/data';
 import type { AltitudeLevel } from '../core/data/schemas';
 import { altitudeLevelIndex } from '../core/altitude';
+import { wrapNearX } from '../core/cylinder';
 import type { RandomStream } from '../core/rng';
 import type { WorldLayers, WorldSize } from '../core/world';
 import { totalStock, type ForageContent } from './forage';
-import { adaptationOf, MONTHS_PER_YEAR } from './people';
-import { NONE, type Population } from './population';
+import { MONTHS_PER_YEAR } from './people';
+import { ANCESTRY_SLOTS, ANCESTRY_TOTAL, NONE, type Population } from './population';
 import type { Group } from './society';
 import type { SimState } from './state';
 
@@ -40,13 +41,16 @@ const SPLIT_SPREAD = 4;
 /** Membres de chaque groupe, dans l'ordre des emplacements. */
 export function groupMembers(people: Population): Map<number, number[]> {
   const members = new Map<number, number[]>();
-  people.forEach((slot) => {
-    const group = people.get('group', slot);
-    if (group === NONE) return;
+  const { alive, end } = people;
+  const groups = people.columns.group;
+  for (let slot = 0; slot < end; slot++) {
+    if (alive[slot] !== 1) continue;
+    const group = groups[slot] ?? NONE;
+    if (group === NONE) continue;
     const list = members.get(group);
     if (list === undefined) members.set(group, [slot]);
     else list.push(slot);
-  });
+  }
   return members;
 }
 
@@ -89,19 +93,25 @@ export function cellDistance(width: number, ax: number, ay: number, bx: number, 
   return Math.sqrt(dx * dx + dy * dy);
 }
 
+/** Points du voisinage d'une case qu'on regarde pour juger de sa nourriture : (dx, dy). */
+const PROSPECT = [0, 0, 2, 1, -2, -1] as const;
+
 /** Nourriture qu'on trouverait autour d'une case : quelques points de son voisinage. */
 function prospect(state: SimState, content: GroupsContent, x: number, y: number): number {
   const { size } = state;
   let total = 0;
-  for (const [dx, dy] of [
-    [0, 0],
-    [2, 1],
-    [-2, -1],
-  ] as const) {
-    const row = y + dy;
+  for (let index = 0; index < PROSPECT.length; index += 2) {
+    const row = y + (PROSPECT[index + 1] ?? 0);
     if (row < 0 || row >= size.height) continue;
-    const cell = row * size.width + ((((x + dx) % size.width) + size.width) % size.width);
-    total += totalStock(state.food, state.world, size, cell, state.tick, content);
+    const column = wrapNearX(x + (PROSPECT[index] ?? 0), size.width);
+    total += totalStock(
+      state.food,
+      state.world,
+      size,
+      row * size.width + column,
+      state.tick,
+      content,
+    );
   }
   return total;
 }
@@ -131,7 +141,7 @@ export function walk(
       if (ny < 0 || ny >= height) continue;
       for (let dx = -1; dx <= 1; dx++) {
         if (dx === 0 && dy === 0) continue;
-        const nx = (x + dx + width) % width;
+        const nx = wrapNearX(x + dx, width);
         const step =
           (cost[ny * width + nx] ?? Number.POSITIVE_INFINITY) *
           (dx !== 0 && dy !== 0 ? Math.SQRT2 : 1);
@@ -168,12 +178,28 @@ function randomCell(
     const dy = random.nextRange(-radius, radius + 1);
     const ny = y + dy;
     if (ny < 0 || ny >= size.height) continue;
-    const nx = (((x + dx) % size.width) + size.width) % size.width;
+    const nx = wrapNearX(x + dx, size.width);
     if (Number.isFinite(cost[ny * size.width + nx] ?? Number.POSITIVE_INFINITY)) {
       return { x: nx, y: ny };
     }
   }
   return undefined;
+}
+
+/** Endurance de chaque sous-espèce d'une espèce, dans l'ordre de l'ascendance. */
+const enduranceTables = new WeakMap<Species, Float64Array>();
+
+function endurances(species: Species): Float64Array {
+  let table = enduranceTables.get(species);
+  if (table === undefined) {
+    const count = Math.min(ANCESTRY_SLOTS, species.subspecies.length);
+    table = Float64Array.from(
+      species.subspecies.slice(0, count),
+      (entry) => entry.adaptation.endurance,
+    );
+    enduranceTables.set(species, table);
+  }
+  return table;
 }
 
 /** Endurance moyenne des adultes d'un groupe, de 0 à 1. */
@@ -185,11 +211,22 @@ function endurance(
 ): number {
   let sum = 0;
   let count = 0;
+  const { birth, species: kinds, ancestry } = people.columns;
+  const entries = content.species.entries;
   for (const slot of members) {
-    const species = content.species.entries.at(people.get('species', slot));
-    if (species === undefined || people.age(slot, tick) < species.maturity * MONTHS_PER_YEAR)
+    const species = entries.at(kinds[slot] ?? 0);
+    if (species === undefined || tick - (birth[slot] ?? 0) < species.maturity * MONTHS_PER_YEAR) {
       continue;
-    sum += adaptationOf(people, slot, species).endurance;
+    }
+    // Endurance de l'ascendance (voir adaptationOf), sans objet par membre.
+    const table = endurances(species);
+    let endurance = 0;
+    for (let index = 0; index < table.length; index++) {
+      const share = (ancestry[slot * ANCESTRY_SLOTS + index] ?? 0) / ANCESTRY_TOTAL;
+      if (share === 0) continue;
+      endurance += share * (table[index] ?? 0);
+    }
+    sum += endurance;
     count++;
   }
   return count === 0 ? 0.5 : sum / count;
@@ -353,17 +390,17 @@ export function splitGroup(
  * Un groupe tombé sous le seuil de data/nomads.json rejoint le groupe le plus proche, à la
  * distance du mariage au plus, de sa culture de préférence ; ses membres gardent la leur.
  * Le groupe qui l'accueille n'est pas lui-même sous le seuil : il ne partira pas à son
- * tour. Renvoie vrai si le groupe a disparu.
+ * tour. Renvoie le groupe qui l'a accueilli, ou undefined s'il reste seul.
  */
 export function mergeGroup(
   state: SimState,
   group: Group,
   membersOf: ReadonlyMap<number, readonly number[]>,
   content: GroupsContent,
-): boolean {
+): Group | undefined {
   const { nomads } = content;
   const members = membersOf.get(group.id) ?? [];
-  if (members.length === 0 || members.length >= nomads.merge) return false;
+  if (members.length === 0 || members.length >= nomads.merge) return undefined;
   const { society, people, size, tick } = state;
   let best: Group | undefined;
   let bestScore = Number.POSITIVE_INFINITY;
@@ -378,7 +415,7 @@ export function mergeGroup(
       bestScore = score;
     }
   }
-  if (best === undefined) return false;
+  if (best === undefined) return undefined;
   for (const slot of members) people.set('group', slot, best.id);
   best.food += group.food;
   society.groups.delete(group.id);
@@ -393,5 +430,5 @@ export function mergeGroup(
     otherLeader: best.leader,
     count: members.length,
   });
-  return true;
+  return best;
 }

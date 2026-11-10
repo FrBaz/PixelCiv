@@ -1,6 +1,15 @@
 import { describe, expect, it } from 'vitest';
 import { DEATH_CAUSES } from './population';
-import { cellFood, feedGroup, plantSeason, regrowFood, totalStock } from './forage';
+import {
+  cellFood,
+  deplete,
+  depletedCells,
+  feedGroup,
+  FOOD_STRIDE,
+  plantSeason,
+  regrowFood,
+  totalStock,
+} from './forage';
 import { groupMembers } from './groups';
 import type { SimState } from './state';
 import { step } from './step';
@@ -38,16 +47,15 @@ describe('survie (tâche 2.4)', () => {
     const july = 6;
     const full = totalStock(state.food, state.world, state.size, cell, july, testData);
     expect(full).toBeGreaterThan(0);
-    state.food.plants[cell] = 0;
-    state.food.game[cell] = 0;
-    state.food.fish[cell] = 0;
-    state.food.depleted[cell] = 1;
-    state.food.list.push(cell);
+    state.food.stocks.fill(0, cell * FOOD_STRIDE, cell * FOOD_STRIDE + FOOD_STRIDE);
+    deplete(state.food, cell);
+    expect(state.food.count).toBe(1);
     expect(totalStock(state.food, state.world, state.size, cell, july, testData)).toBe(0);
-    for (let month = 0; month < 48 && state.food.list.length > 0; month++) {
+    for (let month = 0; month < 48 && state.food.count > 0; month++) {
       regrowFood(state.food, state.world, state.size, july, testData);
     }
-    expect(state.food.list).toEqual([]);
+    expect(depletedCells(state.food)).toEqual([]);
+    expect(state.food.count).toBe(0);
     expect(state.food.depleted[cell]).toBe(0);
   });
 

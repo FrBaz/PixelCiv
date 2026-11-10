@@ -85,7 +85,7 @@ describe('groupes nomades (tâche 2.5)', () => {
     const big = spawn(state, at, 20);
     const small = spawn(state, at, 2);
     const merged = mergeGroup(state, small, groupMembers(state.people), testData);
-    expect(merged).toBe(true);
+    expect(merged?.id).toBe(big.id);
     expect(state.society.groups.has(small.id)).toBe(false);
     expect(groupMembers(state.people).get(big.id)?.length ?? 0).toBeGreaterThanOrEqual(21);
   });
@@ -128,7 +128,7 @@ describe('groupes nomades (tâche 2.5)', () => {
     const state = testState();
     spawn(state, cellOf(state, 'temperate-forest'));
     for (let month = 0; month < 30; month++) step(state, [], testData);
-    expect(state.food.list.length).toBeGreaterThan(0);
+    expect(state.food.count).toBeGreaterThan(0);
     const restored = restoreState(
       await readSave(await writeSave(saveState(state, GENERATOR_VERSION, testData)), MIGRATIONS),
       testData,
