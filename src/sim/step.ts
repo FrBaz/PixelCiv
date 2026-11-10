@@ -1,29 +1,45 @@
 /**
  * Avancée de la simulation : un pas vaut un mois. Les commandes de jeu s'appliquent
- * au début du pas, puis les systèmes s'exécutent dans un ordre fixe (ADR 0003). La
- * phase 1 n'a pas encore de système : le temps passe, et avec lui les saisons, que le
- * rendu tire du numéro du mois.
+ * au début du pas, puis les systèmes s'exécutent dans un ordre fixe (ADR 0003, ADR 0011) :
+ * le cycle de vie de la population, pour l'instant.
  */
+import type { Cultures, Genetics, Species } from '../core/data';
 import type { Catalog } from '../core/data/catalog';
 import type { Biome } from '../core/data/schemas';
 import { Fingerprint } from '../core/hash';
-import type { GameCommand } from '../core/protocol';
+import type { GameCommand, PaintBiomeCommand } from '../core/protocol';
 import { LAYER_NAMES } from '../core/world';
 import { PARAMETER_NAMES } from '../core/data/worldgen';
+import { lifeCycle } from './lifecycle';
 import { fingerprintPeople } from './populationSave';
+import { spawnGroup } from './spawn';
 import { cellIndex, markDirty, type SimState } from './state';
 
 /** Contenu dont la simulation se sert. */
 export interface SimContent {
   readonly biomes: Catalog<Biome>;
+  readonly species: Catalog<Species>;
+  readonly genetics: Genetics;
+  readonly cultures: Cultures;
+}
+
+/** Applique une commande ; une commande sans effet est sans danger. */
+export function applyCommand(state: SimState, command: GameCommand, content: SimContent): void {
+  switch (command.type) {
+    case 'paintBiome':
+      paintBiome(state, command, content);
+      break;
+    case 'spawnGroup':
+      spawnGroup(state, command, content);
+      break;
+  }
 }
 
 /**
- * Applique une commande. Le pinceau ne change que le biome d'une case de terre en un
- * autre biome de terre : la mer et les lacs, qui ont une profondeur, restent ce qu'ils
- * sont. Une commande sans effet est sans danger.
+ * Le pinceau ne change que le biome d'une case de terre en un autre biome de terre : la
+ * mer et les lacs, qui ont une profondeur, restent ce qu'ils sont.
  */
-export function applyCommand(state: SimState, command: GameCommand, content: SimContent): void {
+function paintBiome(state: SimState, command: PaintBiomeCommand, content: SimContent): void {
   const index = cellIndex(state.size, command.x, command.y);
   const target = content.biomes.indexOf(command.biome);
   if (index === undefined || target === undefined) return;
@@ -43,7 +59,8 @@ export function step(state: SimState, commands: readonly GameCommand[], content:
     state.commandLog.push({ tick: state.tick, command });
     applyCommand(state, command, content);
   }
-  // Systèmes, dans un ordre fixe : aucun encore.
+  // Systèmes, dans un ordre fixe.
+  lifeCycle(state, content);
   state.tick++;
 }
 

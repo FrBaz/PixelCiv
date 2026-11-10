@@ -9,14 +9,24 @@ import type { GameCommand, LoggedCommand } from '../core/protocol';
 /** Coordonnée d'une case : un entier sûr, que l'état normalise ensuite (x boucle). */
 const cell = z.number().int();
 
-export const GameCommandSchema = z
-  .object({
-    type: z.literal('paintBiome'),
-    x: cell,
-    y: cell,
-    biome: z.string().regex(/^[a-z]+(-[a-z]+)*$/),
-  })
-  .strict() satisfies z.ZodType<GameCommand>;
+const id = z.string().regex(/^[a-z]+(-[a-z]+)*$/);
+
+/** Taille d'un groupe qu'on fait apparaître : de deux à une cinquantaine d'individus. */
+export const SPAWN_COUNT = { min: 2, max: 50 } as const;
+
+export const GameCommandSchema = z.discriminatedUnion('type', [
+  z.object({ type: z.literal('paintBiome'), x: cell, y: cell, biome: id }).strict(),
+  z
+    .object({
+      type: z.literal('spawnGroup'),
+      x: cell,
+      y: cell,
+      species: id,
+      subspecies: id,
+      count: z.number().int().min(SPAWN_COUNT.min).max(SPAWN_COUNT.max),
+    })
+    .strict(),
+]) satisfies z.ZodType<GameCommand>;
 
 export const LoggedCommandSchema = z
   .object({ tick: z.number().int().nonnegative(), command: GameCommandSchema })

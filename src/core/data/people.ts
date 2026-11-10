@@ -147,6 +147,23 @@ export const SpeciesSchema = z
     couple: z.object({ minAge: z.number().positive(), maxGap: z.number().positive() }).strict(),
     /** Besoin de nourriture d'un enfant, en part de celui d'un adulte. */
     childNeed: ShareSchema,
+    /**
+     * Rigueurs (SAI-03), en risque annuel de mort : un froid de 20 °C sous zéro, une
+     * chaleur de 10 °C au-delà de 30 °C, une faim complète. Le froid et la chaleur frappent
+     * les plus fragiles (avant `frail[0]` ans, après `frail[1]`) ; les autres n'en
+     * reçoivent que `adults`. L'adaptation de la sous-espèce tempère le froid et la chaleur.
+     */
+    hardship: z
+      .object({
+        cold: z.number().min(0),
+        heat: z.number().min(0),
+        famine: z.number().min(0),
+        frail: z.tuple([z.number().min(0), z.number().min(0)]),
+        adults: ShareSchema,
+      })
+      .strict(),
+    /** Probabilité mensuelle qu'une femme seule, en âge, trouve un conjoint dans son groupe. */
+    pairing: ShareSchema,
     /** Taille adulte, en centimètres, aux deux bouts du trait « taille ». */
     height: z.tuple([z.number().positive(), z.number().positive()]),
     subspecies: uniqueIds(SubspeciesSchema).min(1).max(MAX_SUBSPECIES),
@@ -159,3 +176,20 @@ export const SpeciesSchema = z
 export type Species = z.infer<typeof SpeciesSchema>;
 export type Subspecies = z.infer<typeof SubspeciesSchema>;
 export const SpeciesListSchema = uniqueIds(SpeciesSchema).min(1).max(255);
+
+/**
+ * Cultures embryonnaires (C2, D4) : fréquence de chaque règle de nommage (IND-08) parmi
+ * les cultures qui naissent avec un groupe.
+ */
+export const CulturesSchema = z
+  .object({
+    naming: z
+      .object({ father: ShareSchema, mother: ShareSchema, both: ShareSchema, none: ShareSchema })
+      .strict()
+      .refine((weights) => Object.values(weights).some((weight) => weight > 0), {
+        message: 'une règle de nommage au moins',
+      }),
+  })
+  .strict();
+
+export type Cultures = z.infer<typeof CulturesSchema>;

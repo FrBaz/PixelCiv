@@ -90,7 +90,8 @@ describe('pas', () => {
     step(state, [{ type: 'paintBiome', x: 10, y: 20, biome: 'desert' }], testData);
     for (let tick = 1; tick < 12; tick++) step(state, [], testData);
     expect(state.tick).toBe(12);
-    // Empreinte de la phase 2 : l'état compte désormais la population, vide ici.
-    expect(fingerprint(state)).toBe('2b5cf198');
+    // Empreinte de la phase 2 : l'état compte désormais la population, vide ici, et les
+    // flux du cycle de vie, qui tournent chaque mois.
+    expect(fingerprint(state)).toBe('09987cc0');
   });
 });

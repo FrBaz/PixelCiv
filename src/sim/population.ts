@@ -30,7 +30,10 @@ export const NONE = 0;
 /** Pas de conception en cours, ou pas encore d'accouchement. */
 export const NEVER = -0x80000000;
 
-/** Causes de mort (IND-04), dans l'ordre de leur code dans l'archive. */
+/**
+ * Causes de mort (IND-04, SAI-03), dans l'ordre de leur code dans l'archive : une cause
+ * nouvelle s'ajoute à la fin.
+ */
 export const DEATH_CAUSES = [
   'natural',
   'disease',
@@ -38,6 +41,7 @@ export const DEATH_CAUSES = [
   'accident',
   'cold',
   'childbirth',
+  'heat',
 ] as const;
 export type DeathCause = (typeof DEATH_CAUSES)[number];
 

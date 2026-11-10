@@ -24,8 +24,22 @@ export interface PaintBiomeCommand {
   readonly biome: string;
 }
 
+/**
+ * Apparition d'un groupe nomade, outil du Créateur (CRE-03) : `count` individus d'une
+ * sous-espèce, désignés par leurs identifiants, sur la case (x, y). Ils reçoivent une
+ * langue et une culture embryonnaires (C2, D4).
+ */
+export interface SpawnGroupCommand {
+  readonly type: 'spawnGroup';
+  readonly x: number;
+  readonly y: number;
+  readonly species: string;
+  readonly subspecies: string;
+  readonly count: number;
+}
+
 /** Commande de jeu : elle modifie l'état, et s'applique au début d'un pas (ADR 0003). */
-export type GameCommand = PaintBiomeCommand;
+export type GameCommand = PaintBiomeCommand | SpawnGroupCommand;
 
 /** Commande de jeu journalisée : `tick` est le pas au début duquel elle s'est appliquée. */
 export interface LoggedCommand {

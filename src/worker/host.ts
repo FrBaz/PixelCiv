@@ -15,6 +15,7 @@ import type { GameData } from '../core/data';
 import {
   PROTOCOL_VERSION,
   transferablesOf,
+  type GameCommand,
   type MainMessage,
   type TimeInfo,
   type WorkerMessage,
@@ -233,11 +234,24 @@ export class SimulationHost {
       return;
     }
     const parsed = GameCommandSchema.safeParse(command);
-    if (!parsed.success || this.data.biomes.indexOf(parsed.data.biome) === undefined) {
+    if (!parsed.success || !this.knownContent(parsed.data)) {
       this.send({ type: 'error', code: 'command', detail: 'commande invalide' });
       return;
     }
     this.state.pending.push(parsed.data);
+  }
+
+  /** Les identifiants de contenu d'une commande existent-ils ? */
+  private knownContent(command: GameCommand): boolean {
+    switch (command.type) {
+      case 'paintBiome':
+        return this.data.biomes.indexOf(command.biome) !== undefined;
+      case 'spawnGroup': {
+        const index = this.data.species.indexOf(command.species);
+        const species = index === undefined ? undefined : this.data.species.entries[index];
+        return species?.subspecies.some((entry) => entry.id === command.subspecies) === true;
+      }
+    }
   }
 
   /**
