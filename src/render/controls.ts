@@ -149,9 +149,11 @@ export class CameraControls {
       this.longPress = window.setTimeout(() => {
         this.longPress = undefined;
         if (this.tap !== tap) return;
-        // L'appui long consomme le geste : le relâcher ne fera pas d'appui bref.
+        // L'appui long consomme le geste : le relâcher ne fera pas d'appui bref. Le point
+        // visé est celui du doigt maintenant : la carte a pu le suivre de quelques pixels.
         this.tap = undefined;
-        const target = screenToMap(this.camera, this.options.viewport(), tap.start.x, tap.start.y);
+        const point = this.pointers.get(tap.id) ?? tap.start;
+        const target = screenToMap(this.camera, this.options.viewport(), point.x, point.y);
         this.options.onLongPress(target.x, target.y);
       }, TAP_DURATION);
     }
@@ -196,10 +198,12 @@ export class CameraControls {
   private readonly onPointerUp = (event: PointerEvent): void => {
     const tap = this.tap;
     this.pointers.delete(event.pointerId);
-    if (tap?.id === event.pointerId && event.timeStamp - tap.time < TAP_DURATION) {
+    if (tap?.id === event.pointerId) {
+      // Un geste encore en cours est bref, ou long si son minuteur n'a pas encore sonné.
       const point = this.point(event);
       const target = screenToMap(this.camera, this.options.viewport(), point.x, point.y);
-      this.options.onTap(target.x, target.y);
+      if (event.timeStamp - tap.time < TAP_DURATION) this.options.onTap(target.x, target.y);
+      else this.options.onLongPress(target.x, target.y);
     }
     this.tap = undefined;
     this.cancelLongPress();

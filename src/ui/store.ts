@@ -94,6 +94,9 @@ export const creationOpen = signal(false);
 /** Monde demandé à l'écran de création, en cours de génération. */
 export const creationPending = signal(false);
 
+/** Partie chargée ou importée depuis l'écran de création, en cours de chargement. */
+export const creationBusy = signal(false);
+
 /** Aperçu de l'écran de création : ses pixels, et la clé des paramètres qui l'ont donné. */
 export interface PreviewImage {
   readonly width: number;

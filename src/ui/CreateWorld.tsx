@@ -13,6 +13,7 @@ import { LOCALE, t, type MessageKey } from '../i18n';
 import { ImportButton } from './SaveMenu';
 import { randomSeed } from './seed';
 import {
+  creationBusy,
   creationPending,
   generation,
   PREVIEW_COLUMNS,
@@ -47,6 +48,9 @@ const STAGE_LABELS: Readonly<Record<GenerationStage, MessageKey>> = {
   resources: 'create.stage.resources',
 };
 
+/** Part de la hauteur de l'écran que l'aperçu peut occuper. */
+const PREVIEW_HEIGHT = 0.38;
+
 const signed = new Intl.NumberFormat(LOCALE, {
   signDisplay: 'exceptZero',
   maximumFractionDigits: 1,
@@ -69,12 +73,15 @@ export function CreateWorld({ actions, setup }: { actions: UiActions; setup: Cre
   const [params, setParams] = useState<WorldParams>(() => {
     const current = worldInfo.value?.params;
     const seed = randomSeed();
-    return current === undefined
-      ? defaultWorldParams(setup.parameters, seed, setup.defaultSize)
-      : { ...current, seed };
+    if (current === undefined) return defaultWorldParams(setup.parameters, seed, setup.defaultSize);
+    // Une taille que l'appareil ne propose pas (un Immense importé sur un téléphone) revient
+    // à la taille par défaut.
+    const size = setup.sizes.includes(current.size) ? current.size : setup.defaultSize;
+    return { ...current, seed, size };
   });
   const dialog = useRef<HTMLElement>(null);
-  const pending = creationPending.value;
+  // Génération ou chargement en cours : l'écran attend.
+  const pending = creationPending.value || creationBusy.value;
   const playing = worldInfo.value !== undefined;
   const valid = params.seed.length > 0;
   const key = previewKey(params);
@@ -244,19 +251,25 @@ function Preview({ stale }: { stale: boolean }) {
   const columns = image?.width ?? PREVIEW_COLUMNS;
   const rows = image?.height ?? PREVIEW_COLUMNS / 2;
 
+  // L'échelle tient dans la largeur du cadre et dans 38 % de la hauteur de l'écran : en
+  // paysage, sur un téléphone, l'aperçu reste visible à côté des réglages.
   useEffect(() => {
     const element = frame.current;
     if (element === null) return;
     const measure = () => {
-      setScale(Math.max(1, Math.floor((element.clientWidth * devicePixelRatio) / columns)));
+      const byWidth = Math.floor((element.clientWidth * devicePixelRatio) / columns);
+      const byHeight = Math.floor((window.innerHeight * PREVIEW_HEIGHT * devicePixelRatio) / rows);
+      setScale(Math.max(1, Math.min(byWidth, byHeight)));
     };
     measure();
     const observer = new ResizeObserver(measure);
     observer.observe(element);
+    window.addEventListener('resize', measure);
     return () => {
       observer.disconnect();
+      window.removeEventListener('resize', measure);
     };
-  }, [columns]);
+  }, [columns, rows]);
 
   useEffect(() => {
     const element = canvas.current;

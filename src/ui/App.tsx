@@ -1,7 +1,8 @@
 /**
- * Racine de l'interface, superposée à la carte. Les barres du haut et du bas
- * accueillent les panneaux ; elles respectent les zones de sécurité (style.css).
- * L'écran de création recouvre la carte ; seuls les avis restent visibles par-dessus.
+ * Racine de l'interface, superposée à la carte : une grille de trois rangées, la barre
+ * du haut, la colonne de droite (inspection, légende), la barre du bas. Elle respecte les
+ * zones de sécurité (style.css). L'écran de création recouvre la carte ; seuls les avis
+ * restent visibles par-dessus, en haut, loin de ses boutons.
  */
 import { CellInfo } from './CellInfo';
 import { CreateWorld } from './CreateWorld';
@@ -17,7 +18,12 @@ export function App({ actions, setup }: { actions: UiActions; setup: CreationSet
   return (
     <div class="hud">
       {creating ? (
-        <CreateWorld actions={actions} setup={setup} />
+        <>
+          <CreateWorld actions={actions} setup={setup} />
+          <div class="hud-bar hud-top">
+            <Notice />
+          </div>
+        </>
       ) : (
         <>
           <div class="hud-bar hud-top">
@@ -31,11 +37,13 @@ export function App({ actions, setup }: { actions: UiActions; setup: CreationSet
           </div>
         </>
       )}
-      <div class="hud-bar hud-bottom">
-        <Notice />
-        {!creating && <MapModes actions={actions} />}
-        {!creating && <SaveMenu actions={actions} />}
-      </div>
+      {!creating && (
+        <div class="hud-bar hud-bottom">
+          <Notice />
+          <MapModes actions={actions} />
+          <SaveMenu actions={actions} />
+        </div>
+      )}
     </div>
   );
 }

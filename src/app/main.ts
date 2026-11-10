@@ -16,6 +16,7 @@ import { createRenderer } from '../render/renderer';
 import { App } from '../ui/App';
 import {
   content,
+  creationBusy,
   creationOpen,
   creationPending,
   debugInfo,
@@ -154,6 +155,20 @@ async function main(): Promise<void> {
       data,
     );
   };
+  // La température du mois de la case inspectée suit le temps qui passe.
+  const refreshInspected = () => {
+    const cell = inspected.value;
+    if (cell !== undefined) inspect(cell.x, cell.y);
+  };
+  // Le jeu se met en pause pendant l'écran de création, et reprend à sa fermeture s'il
+  // tournait.
+  let pausedForCreation = false;
+  const leaveCreation = () => {
+    creationOpen.value = false;
+    previews.cancel();
+    if (pausedForCreation) simulation.send({ type: 'setPaused', paused: false });
+    pausedForCreation = false;
+  };
   const sampler = new DebugSampler();
   // Au retour d'un onglet masqué, la première image couvre toute l'absence : elle ne
   // compte pas comme une image lente.
@@ -176,6 +191,7 @@ async function main(): Promise<void> {
       renderer,
       chunks: map.pendingChunks,
     };
+    refreshInspected();
   }, 250);
 
   simulation.subscribe((message) => {
@@ -201,10 +217,10 @@ async function main(): Promise<void> {
           });
         break;
       case 'snapshot': {
-        // Une partie commence (nouveau monde, chargement) : l'écran de création se ferme.
-        creationOpen.value = false;
+        // Une partie commence : l'écran de création se ferme s'il l'a demandée (nouveau
+        // monde, chargement), et reste ouvert sinon (reprise arrivée après son ouverture).
+        if (creationPending.value || creationBusy.value) leaveCreation();
         creationPending.value = false;
-        previews.cancel();
         worldInfo.value = message.world;
         const layers = message.layers;
         worldLayers = layers;
@@ -270,16 +286,18 @@ async function main(): Promise<void> {
         mode === 'natural' || worldLayers === undefined ? [] : legend(mode, worldLayers, modeData);
     },
     save: () => saves.save(),
-    load: () => saves.load(),
+    load: () => fromCreation(() => saves.load()),
     exportFile: () => saves.exportFile(),
-    importFile: (file: File) => saves.importFile(file),
+    importFile: (file: File) => fromCreation(() => saves.importFile(file)),
     openCreation: () => {
       creationOpen.value = true;
+      const current = time.value;
+      if (current !== undefined && !current.paused) {
+        pausedForCreation = true;
+        simulation.send({ type: 'setPaused', paused: true });
+      }
     },
-    closeCreation: () => {
-      creationOpen.value = false;
-      previews.cancel();
-    },
+    closeCreation: leaveCreation,
     preview: (params: WorldParams) => {
       previews.request(params);
     },
@@ -289,6 +307,19 @@ async function main(): Promise<void> {
       simulation.send({ type: 'newGame', params });
     },
   };
+  /** Un chargement demandé depuis l'écran de création l'occupe jusqu'à la réponse. */
+  async function fromCreation(load: () => Promise<void>): Promise<void> {
+    if (!creationOpen.value) {
+      await load();
+      return;
+    }
+    creationBusy.value = true;
+    try {
+      await load();
+    } finally {
+      creationBusy.value = false;
+    }
+  }
   render(h(App, { actions, setup }), element('ui'));
 
   // La poignée de main d'abord : le worker refuse tout message qui la précède.

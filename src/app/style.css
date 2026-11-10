@@ -65,25 +65,33 @@ body {
 
 .hud {
   position: relative;
+  box-sizing: border-box;
   height: 100%;
+  display: grid;
+  /* Barre du haut, colonne de droite, barre du bas : la colonne prend ce qui reste. */
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 0.5rem;
+  padding: 0.5rem;
 }
 
 .hud-bar {
-  position: absolute;
-  left: 0.5rem;
-  right: 0.5rem;
+  /* Au-dessus de l'écran de création, positionné. */
+  position: relative;
+  z-index: 1;
   display: flex;
   align-items: center;
   gap: 0.5rem;
   flex-wrap: wrap;
+  min-width: 0;
 }
 
 .hud-top {
-  top: 0.5rem;
+  grid-row: 1;
 }
 
 .hud-bottom {
-  bottom: 0.5rem;
+  grid-row: 3;
 }
 
 .panel {
@@ -199,23 +207,29 @@ button:disabled {
   padding: 0 0.75rem;
 }
 
-/* Colonne de droite : inspection d'une case et légende, sous la barre du haut. */
+/* Colonne de droite : inspection d'une case et légende, entre les deux barres.
+   L'inspection passe d'abord, jusqu'à 60 % de la colonne, au-delà de quoi elle défile ;
+   la légende prend le reste et fait défiler ses entrées. */
 .hud-side {
-  position: absolute;
-  top: 4rem;
-  right: 0.5rem;
+  grid-row: 2;
+  justify-self: end;
   display: flex;
   flex-direction: column;
-  align-items: flex-end;
   gap: 0.5rem;
-  max-width: min(20rem, calc(100% - 1rem));
-  max-height: calc(100% - 13rem);
+  width: min(20rem, 100%);
+  min-height: 0;
 }
 
 .cell-info,
 .legend {
   font-size: 0.875rem;
   width: 100%;
+}
+
+.cell-info {
+  flex: 0 0 auto;
+  max-height: 60%;
+  overflow-y: auto;
 }
 
 .cell-info dl {
@@ -232,7 +246,8 @@ button:disabled {
 .legend {
   display: flex;
   flex-direction: column;
-  min-height: 0;
+  flex: 0 1 auto;
+  min-height: 4.5rem;
 }
 
 .legend-toggle {
@@ -265,9 +280,7 @@ button:disabled {
 /* Téléphone en portrait : la colonne de droite se fait plus étroite. */
 @media (max-width: 34rem) {
   .hud-side {
-    top: 7rem;
-    max-width: 13rem;
-    max-height: calc(100% - 17rem);
+    width: min(13rem, 100%);
   }
 }
 
@@ -281,6 +294,8 @@ button:disabled {
   align-items: flex-start;
   padding: 0.5rem;
   overflow-y: auto;
+  /* Une barre de défilement qui apparaît ne change pas la largeur, ni l'échelle de l'aperçu. */
+  scrollbar-gutter: stable;
   overscroll-behavior: contain;
   touch-action: pan-y;
   pointer-events: auto;
@@ -501,7 +516,7 @@ button:disabled {
   background: var(--madder);
 }
 
-/* Téléphone, ou fenêtre étroite : une seule colonne, l'aperçu en tête. */
+/* Téléphone en portrait, ou fenêtre étroite : une seule colonne, l'aperçu en tête. */
 @media (max-width: 48rem) {
   .create-body {
     grid-template-columns: minmax(0, 1fr);
@@ -509,5 +524,20 @@ button:disabled {
 
   .create-sizes {
     grid-template-columns: repeat(auto-fit, minmax(6rem, 1fr));
+  }
+}
+
+/* Téléphone en paysage : deux colonnes, et l'aperçu reste en vue quand les réglages
+   défilent. */
+@media (orientation: landscape) and (min-width: 34rem) {
+  .create-body {
+    grid-template-columns: minmax(0, 1fr) minmax(14rem, 1fr);
+  }
+}
+
+@media (orientation: landscape) and (max-height: 32rem) {
+  .create-world {
+    position: sticky;
+    top: 0;
   }
 }
