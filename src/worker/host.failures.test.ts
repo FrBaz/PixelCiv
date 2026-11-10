@@ -1,14 +1,16 @@
 /**
- * Défaillances imprévues de l'hôte (ADR 0004) : une copie de couches qui échoue, faute de
- * mémoire par exemple. Chaque requête de sauvegarde ou de chargement reçoit tout de même
- * sa réponse, et la partie en cours continue.
+ * Défaillances de l'hôte (ADR 0004) : une copie de couches qui échoue, faute de mémoire
+ * par exemple, ou une partie devenue trop grande pour le format. Chaque requête de
+ * sauvegarde ou de chargement reçoit tout de même sa réponse, et la partie en cours
+ * continue.
  */
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { PROTOCOL_VERSION, type WorkerMessage } from '../core/protocol';
+import { MAX_SAVE_BYTES } from '../core/save/format';
 import { testData, testParams, testWorld } from '../sim/testing';
 import { SimulationHost, type HostEnvironment } from './host';
 
-const failures = vi.hoisted(() => ({ copy: false, save: false }));
+const failures = vi.hoisted(() => ({ copy: false, save: false, huge: false }));
 
 vi.mock('../core/world', async (importOriginal) => {
   const original = await importOriginal<typeof import('../core/world')>();
@@ -27,7 +29,13 @@ vi.mock('../sim/save', async (importOriginal) => {
     ...original,
     saveState: (...args: Parameters<typeof original.saveState>) => {
       if (failures.save) throw new RangeError('mémoire épuisée');
-      return original.saveState(...args);
+      const save = original.saveState(...args);
+      // Une partie dont les tableaux dépassent ce que la lecture admet : des zéros, que le
+      // système ne réserve vraiment qu'une fois écrits, et le format refuse d'écrire.
+      if (failures.huge) {
+        return { ...save, arrays: { ...save.arrays, filler: new Uint8Array(MAX_SAVE_BYTES) } };
+      }
+      return save;
     },
   };
 });
@@ -68,6 +76,23 @@ describe("défaillances de l'hôte", () => {
   afterEach(() => {
     failures.copy = false;
     failures.save = false;
+    failures.huge = false;
+  });
+
+  it("refuse d'écrire une partie que la lecture refuserait, et le dit", async () => {
+    const { env, host } = await playing();
+    failures.huge = true;
+    host.receive({ type: 'save', requestId: 5 });
+    await host.idle();
+    // Jamais « saved » suivi d'un chargement impossible : la requête échoue, avec sa raison.
+    expect(env.of('saved')).toEqual([]);
+    expect(env.of('saveFailed')).toEqual([{ type: 'saveFailed', requestId: 5, reason: 'size' }]);
+    expect(env.of('error')).toEqual([]);
+    // La partie continue, et se sauvegarde de nouveau une fois revenue dans les bornes.
+    failures.huge = false;
+    host.receive({ type: 'save', requestId: 6 });
+    await host.idle();
+    expect(env.of('saved').map((saved) => saved.requestId)).toEqual([6]);
   });
 
   it('répond à une sauvegarde dont la capture échoue', async () => {

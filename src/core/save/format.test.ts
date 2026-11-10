@@ -204,6 +204,14 @@ describe('taille', () => {
     expect(() => encodeSave(big)).toThrow(expect.objectContaining({ code: 'size' }) as Error);
   });
 
+  it("refuse d'écrire, avant d'allouer le conteneur, des tableaux que la lecture refuserait", async () => {
+    // Des zéros, que le système ne réserve vraiment qu'une fois écrits : le conteneur, lui,
+    // les écrirait. Avec l'en-tête, il dépasse la borne.
+    const big = { ...sample, arrays: { big: new Uint8Array(MAX_SAVE_BYTES) } };
+    expect(() => encodeSave(big)).toThrow(expect.objectContaining({ code: 'size' }) as Error);
+    expect((await rejection(writeSave(big))).code).toBe('size');
+  });
+
   it("refuse un en-tête trop grand avant de l'analyser", () => {
     const filler = '[],'.repeat(Math.ceil(MAX_HEADER_BYTES / 3));
     const header = { meta: { seed: 'graine', tick: 1 }, json: `[${filler}[]]`, arrays: [] };

@@ -489,7 +489,7 @@ describe('file des opérations', () => {
     expect(env.messages('error').map((error) => error.code)).toEqual(['internal']);
   });
 
-  it('répond sans signaler de défaut à une sauvegarde que le format refuse', async () => {
+  it('répond, avec sa raison et sans signaler de défaut, à une sauvegarde trop grande', async () => {
     const { env, host } = await startedHost();
     const original = globalThis.CompressionStream;
     // Un refus du format, comme un en-tête trop grand.
@@ -503,7 +503,7 @@ describe('file des opérations', () => {
       globalThis.CompressionStream = original;
     }
     expect(env.messages('saveFailed')).toEqual([
-      { type: 'saveFailed', requestId: 43, reason: 'failed' },
+      { type: 'saveFailed', requestId: 43, reason: 'size' },
     ]);
     expect(env.messages('error')).toEqual([]);
   });

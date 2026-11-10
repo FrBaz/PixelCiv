@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { loadCatalog } from '../core/data/catalog';
 import { BiomesSchema } from '../core/data/schemas';
-import { encodeSave, readSave, SaveError, writeSave } from '../core/save/format';
+import { encodeSave, readSave, SaveError, writeSave, type SaveData } from '../core/save/format';
 import { LAYER_NAMES } from '../core/world';
 import { GENERATOR_VERSION } from '../worldgen/generate';
 import { MIGRATIONS, restoreState, saveState } from './save';
@@ -113,6 +113,58 @@ describe('sauvegarde de la simulation', () => {
       restore(forged);
     } catch (error) {
       expect((error as SaveError).code).toBe('obsolete');
+    }
+  });
+
+  it('relit les stocks des cases entamées, et refuse des stocks forgés', () => {
+    const data = save(played(1));
+    const count = 512 * 256;
+    const stocks = (
+      cells: SaveData['arrays'][string],
+      plants: number[],
+      arrays: SaveData['arrays'] = {},
+    ): SaveData => ({
+      ...data,
+      arrays: {
+        ...data.arrays,
+        foodCells: cells,
+        foodPlants: Float32Array.from(plants),
+        foodGame: Float32Array.of(2, 0),
+        foodFish: Float32Array.of(0, 0.5),
+        ...arrays,
+      },
+    });
+    const valid = stocks(Int32Array.of(5, 9), [1, 3]);
+    const noFish = Object.fromEntries(
+      Object.entries(valid.arrays).filter(([name]) => name !== 'foodFish'),
+    );
+    // Témoin : deux cases entamées, relues à leur place.
+    const restored = restore(valid);
+    expect(restored.food.count).toBe(2);
+    expect(Array.from(restored.food.stocks.subarray(9 * 3, 9 * 3 + 3))).toEqual([3, 0, 0.5]);
+    const cases: [string, SaveData][] = [
+      ['case en double', stocks(Int32Array.of(5, 5), [1, 3])],
+      ['case négative', stocks(Int32Array.of(-1, 9), [1, 3])],
+      ['case hors du monde', stocks(Int32Array.of(5, count), [1, 3])],
+      ['stock NaN', stocks(Int32Array.of(5, 9), [Number.NaN, 3])],
+      ['stock infini', stocks(Int32Array.of(5, 9), [Number.POSITIVE_INFINITY, 3])],
+      ['stock négatif', stocks(Int32Array.of(5, 9), [-1, 3])],
+      ['stock démesuré', stocks(Int32Array.of(5, 9), [1e7, 3])],
+      ['gibier trop court', stocks(Int32Array.of(5, 9), [1, 3], { foodGame: Float32Array.of(2) })],
+      ['poisson absent', { ...valid, arrays: noFish }],
+      [
+        'plantes de mauvais type',
+        stocks(Int32Array.of(5, 9), [1, 3], { foodPlants: Float64Array.of(1, 3) }),
+      ],
+      [
+        'cases de mauvais type',
+        stocks(Int32Array.of(5, 9), [1, 3], { foodCells: Uint32Array.of(5, 9) }),
+      ],
+    ];
+    for (const [label, forged] of cases) {
+      expect(() => restore(forged), label).toThrow(
+        expect.objectContaining({ code: 'corrupt' }) as Error,
+      );
     }
   });
 

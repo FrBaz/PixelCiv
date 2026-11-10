@@ -310,8 +310,10 @@ export class SimulationHost {
       save = saveState(this.state, GENERATOR_VERSION, this.data);
       file = await writeSave(save);
     } catch (error) {
-      // La requête reçoit sa réponse ; un défaut imprévu est signalé à part.
-      this.send({ type: 'saveFailed', requestId, reason: 'failed' });
+      // La requête reçoit sa réponse : une partie trop grande pour le format a sa raison,
+      // que le joueur apprend ; un défaut imprévu est signalé à part.
+      const size = error instanceof SaveError && error.code === 'size';
+      this.send({ type: 'saveFailed', requestId, reason: size ? 'size' : 'failed' });
       if (!(error instanceof SaveError)) throw error;
       return;
     }

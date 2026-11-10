@@ -1,7 +1,7 @@
 /**
- * Sauvegarde de l'état de la simulation (ADR 0007) : couches du monde et colonnes de la
- * population en binaire, le reste en JSON. Une partie rechargée se poursuit à
- * l'identique (NF-09).
+ * Sauvegarde de l'état de la simulation (ADR 0007) : couches du monde, colonnes de la
+ * population, chronique et stocks entamés en binaire, le reste en JSON. Une partie
+ * rechargée se poursuit à l'identique (NF-09).
  *
  * La sauvegarde garde le monde lui-même, et non sa seule graine : elle reste lisible
  * quand le générateur change. Elle nomme aussi les biomes et les ressources dont ses
@@ -28,7 +28,7 @@ import {
 } from './forage';
 import { terrainCosts } from './groups';
 import { Population } from './population';
-import { restorePeople, savePeople } from './populationSave';
+import { migrateChronicle, restorePeople, savePeople } from './populationSave';
 import { emptySociety } from './society';
 import type { SimState } from './state';
 
@@ -191,7 +191,10 @@ function migrateFamilyNames(save: SaveData): SaveData {
  * v + 1. Une version sans migration est refusée comme trop ancienne : c'est le cas des
  * versions 1 et 2, parties de test de la phase 0, sans monde à reprendre. La version 4
  * ajoute la population (phase 2) : une partie de la 3 n'en a pas encore. La version 5
- * suit la relecture de la phase 2 (migrateFamilyNames).
+ * suit la relecture de la phase 2 : la langue des noms de famille (migrateFamilyNames),
+ * la chronique en colonnes (migrateChronicle). Elle nomme aussi les sous-espèces de
+ * chaque espèce ; une partie de la 4 ne les nommait pas, et suivait l'ordre des données,
+ * qui n'a pas changé depuis : la relecture le reprend.
  */
 export const MIGRATIONS: Migrations = {
   3: (save) => {
@@ -203,7 +206,7 @@ export const MIGRATIONS: Migrations = {
       arrays: { ...save.arrays, ...people.arrays },
     };
   },
-  4: (save) => migrateFamilyNames(save),
+  4: (save) => migrateChronicle(migrateFamilyNames(save)),
 };
 
 /** Copie de l'état, prise d'un coup : la simulation peut repartir aussitôt. */

@@ -125,6 +125,7 @@
   "save.error.read": "Ce fichier n'a pas pu être lu.",
   "save.error.noGame": "Aucune partie en cours à sauvegarder.",
   "save.error.failed": "La sauvegarde a échoué.",
+  "save.error.tooBig": "La partie est trop grande pour être sauvegardée ; l'ancienne sauvegarde reste intacte.",
   "save.error.timeout": "La simulation n'a pas répondu à temps.",
   "save.error.resume": "La dernière partie n'a pas pu être reprise.",
   "save.error.storage": "Le stockage local est indisponible.",

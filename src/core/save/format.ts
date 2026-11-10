@@ -10,8 +10,10 @@
  *
  * Les nombres sont petit-boutistes. Une version plus ancienne est migrée à la
  * lecture, par les migrations que fournit le propriétaire des données (src/sim/save.ts) ;
- * une version plus récente est refusée. Un fichier ne dépasse jamais MAX_SAVE_BYTES,
- * décompressé ou non : la lecture s'arrête dès que la limite est franchie.
+ * une version plus récente est refusée. Ni le conteneur ni le fichier compressé ne
+ * dépassent MAX_SAVE_BYTES : la lecture refuse ce qui les dépasse, en s'arrêtant dès que la
+ * limite est franchie, et l'écriture échoue plutôt que de produire un fichier qu'elle ne
+ * relirait pas ; la sauvegarde précédente reste alors intacte.
  */
 import { z } from 'zod';
 
@@ -22,22 +24,26 @@ export const SAVE_MAGIC = 'PXCV';
  * 2, commandes en attente du prochain pas ; 3, le monde généré de la phase 1, à la
  * place de la grille de test ; 4, la population de la phase 2 (individus, archive des
  * morts, groupes, cultures, langues, chronique) ; 5, les corrections de la relecture de
- * la phase 2, dont la langue du nom de famille de chacun.
+ * la phase 2 : la langue du nom de famille de chacun, la chronique en colonnes plutôt que
+ * dans l'en-tête, l'ordre des sous-espèces de chaque espèce.
  */
 export const SAVE_FORMAT_VERSION = 5;
 
 /**
  * Taille maximale d'une sauvegarde, compressée ou non, en octets. Elle borne la mémoire
- * qu'un fichier forgé peut faire allouer ; la plus grande partie de la phase 0 en est
- * loin (2 Mo pour le plus grand monde). À relever quand l'état grossira.
+ * qu'un fichier piégé peut faire allouer à la lecture, non les vraies parties : un monde
+ * Immense y compte 28 Mio de couches, chaque vivant 76 octets, chaque mort 67 et chaque
+ * fait de la chronique 33 ; 50 000 vivants et un million de morts y tiennent en 100 Mio
+ * environ. Relire un conteneur à la borne coûte en pointe environ trois fois sa taille.
  */
-export const MAX_SAVE_BYTES = 64 * 1024 * 1024;
+export const MAX_SAVE_BYTES = 256 * 1024 * 1024;
 
 /**
  * Taille maximale de l'en-tête JSON, en octets. JSON.parse le lit avant toute
  * vérification de forme, et son analyse coûte bien plus de mémoire que ses octets :
- * une borne propre l'empêche d'occuper tout MAX_SAVE_BYTES. Le journal des commandes
- * d'une longue partie de la phase 0 tient largement dedans.
+ * une borne propre l'empêche d'occuper tout MAX_SAVE_BYTES. Ce qui grandit avec la partie
+ * (individus, archive, chronique) part donc en tableaux ; l'en-tête garde le journal des
+ * commandes, les groupes, les cultures et les langues.
  */
 export const MAX_HEADER_BYTES = 8 * 1024 * 1024;
 
@@ -149,9 +155,11 @@ export function encodeSave(save: SaveData, version = SAVE_FORMAT_VERSION): Uint8
   });
   const header: Header = { meta: save.meta, json: save.json, arrays: layout };
   const headerBytes = new TextEncoder().encode(JSON.stringify(header));
-  // Ce que la lecture refuserait ne s'écrit pas : la sauvegarde échoue tout de suite.
+  // Ce que la lecture refuserait ne s'écrit pas : la sauvegarde échoue tout de suite, avant
+  // d'allouer le conteneur.
   if (headerBytes.length > MAX_HEADER_BYTES) throw new SaveError('size', 'en-tête trop grand');
   const dataStart = align(PREFIX_BYTES + headerBytes.length);
+  if (dataStart + offset > MAX_SAVE_BYTES) throw new SaveError('size', 'sauvegarde trop grande');
   const bytes = new Uint8Array(dataStart + offset);
   const view = new DataView(bytes.buffer);
   bytes.set(new TextEncoder().encode(SAVE_MAGIC), 0);
@@ -227,10 +235,17 @@ export function decodeSave(bytes: Uint8Array, migrations: Migrations): SaveData 
   return save;
 }
 
-/** Fichier de sauvegarde : le conteneur, compressé en gzip. */
+/**
+ * Fichier de sauvegarde : le conteneur, compressé en gzip. SaveError('size') si le
+ * conteneur, ou le fichier compressé, dépasse ce que la lecture admet.
+ */
 export async function writeSave(save: SaveData): Promise<Uint8Array<ArrayBuffer>> {
   const output = new Blob([encodeSave(save)]).stream().pipeThrough(new CompressionStream('gzip'));
-  return new Uint8Array(await new Response(output).arrayBuffer());
+  const file = new Uint8Array(await new Response(output).arrayBuffer());
+  // Des données qui ne se compressent pas grossissent un peu : la lecture refuserait le
+  // fichier, même si son conteneur tient dans la borne.
+  if (file.length > MAX_SAVE_BYTES) throw new SaveError('size', 'fichier trop grand');
+  return file;
 }
 
 /**

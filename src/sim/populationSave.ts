@@ -3,13 +3,18 @@
  *
  * Les colonnes des vivants et de l'archive partent en binaire, telles quelles, avec la
  * pile des emplacements libres et l'index par identifiant : une partie rechargée
- * parcourt ses vivants dans le même ordre et se poursuit à l'identique (NF-09). Groupes,
- * cultures, langues et chronique partent en JSON.
+ * parcourt ses vivants dans le même ordre et se poursuit à l'identique (NF-09). La
+ * chronique, qui grandit avec la partie, part en colonnes elle aussi, un fait par ligne ;
+ * groupes, cultures et langues partent en JSON, dans l'en-tête.
  *
- * La relecture vérifie tout ce qu'un fichier forgé pourrait fausser : longueurs, index
- * cohérent avec les emplacements et l'archive, identifiants connus, indices du contenu.
- * Les espèces sont nommées, et les génomes réécrits si data/genetics.json a changé
- * l'ordre de ses locus, de ses allèles ou de ses traits (ADR 0006).
+ * La relecture vérifie tout ce qu'un fichier forgé pourrait fausser. D'abord chaque
+ * tableau, présent, de son type et de sa longueur, avant de rien allouer : un petit
+ * fichier ne fait pas réserver beaucoup de mémoire. Puis l'index, cohérent avec les
+ * emplacements et l'archive ; les identifiants, connus ; les indices du contenu et les
+ * gènes, lisibles. Espèces et sous-espèces sont nommées : indices d'espèce et parts
+ * d'ascendance suivent l'ordre actuel de data/species.json, et les génomes celui des
+ * locus, des allèles et des traits de data/genetics.json (ADR 0006). L'écriture, elle,
+ * refuse ce que la relecture refuserait.
  */
 import { z } from 'zod';
 import type { Catalog } from '../core/data/catalog';
@@ -17,6 +22,7 @@ import type { Genetics, Species } from '../core/data';
 import { Fingerprint } from '../core/hash';
 import { SaveError, type SaveData, type SavedArray } from '../core/save/format';
 import {
+  ANCESTRY_SLOTS,
   Archive,
   ARCHIVE_COLUMN_NAMES,
   ARCHIVE_COLUMNS,
@@ -26,8 +32,10 @@ import {
   LIVING_COLUMNS,
   NONE,
   Population,
+  type ArchiveColumn,
   type Column,
   type ColumnConstructor,
+  type LivingColumn,
 } from './population';
 import {
   CHRONICLE_KINDS,
@@ -42,8 +50,13 @@ import {
 /** Bornes d'une sauvegarde : bien au-delà de ce qu'une partie atteint, en deçà d'un abus. */
 export const MAX_SLOTS = 1 << 21;
 export const MAX_IDS = 1 << 24;
-const MAX_GROUPS = 1 << 16;
-const MAX_CHRONICLE = 1 << 20;
+/** Groupes vivants, cultures et langues, chacun. */
+export const MAX_GROUPS = 1 << 16;
+/**
+ * Faits de la chronique : 33 octets chacun dans la sauvegarde, davantage en mémoire, où
+ * chacun est un objet. La borne protège aussi la relecture d'un fichier forgé.
+ */
+export const MAX_CHRONICLE = 1 << 20;
 
 const uint32 = z.number().int().min(0).max(0xffffffff);
 const int32 = z.number().int().min(-0x80000000).max(0x7fffffff);
@@ -78,6 +91,7 @@ const LanguageSchema = z
   .object({ id: z.number().int().min(1), seed: uint32 })
   .strict() satisfies z.ZodType<Language>;
 
+/** Fait de la chronique d'une sauvegarde de la version 4, où elle partait en JSON. */
 const ChronicleSchema = z
   .object({
     tick: z.number().int().min(0),
@@ -102,17 +116,43 @@ const GenomeLayoutSchema = z
   })
   .strict();
 
+/**
+ * Colonnes de la chronique dans la sauvegarde, un fait par ligne. Le genre d'un fait y
+ * est son indice dans CHRONICLE_KINDS, où un genre nouveau s'ajoute à la fin.
+ */
+const CHRONICLE_COLUMNS = {
+  tick: Uint32Array,
+  kind: Uint8Array,
+  x: Uint32Array,
+  y: Uint32Array,
+  group: Uint32Array,
+  other: Uint32Array,
+  leader: Uint32Array,
+  otherLeader: Uint32Array,
+  count: Uint32Array,
+} as const satisfies Record<keyof ChronicleEntry, ColumnConstructor>;
+
+type ChronicleColumn = keyof typeof CHRONICLE_COLUMNS;
+const CHRONICLE_COLUMN_NAMES = Object.keys(CHRONICLE_COLUMNS) as ChronicleColumn[];
+
 export const PeopleJsonSchema = z
   .object({
     end: z.number().int().min(0).max(MAX_SLOTS),
     nextId: z.number().int().min(1).max(MAX_IDS),
     archived: z.number().int().min(0).max(MAX_IDS),
     species: z.array(z.string()).max(255),
+    /**
+     * Sous-espèces de chaque espèce, dans l'ordre de `species` : les parts d'ascendance
+     * suivent leur ordre. Une sauvegarde de la version 4 ne les nommait pas ; elle suivait
+     * l'ordre des données, qui n'a pas changé depuis.
+     */
+    subspecies: z.array(z.array(z.string()).max(ANCESTRY_SLOTS)).max(255).optional(),
     genome: GenomeLayoutSchema,
     groups: z.array(z.unknown()).max(MAX_GROUPS),
     cultures: z.array(z.unknown()).max(MAX_GROUPS),
     languages: z.array(z.unknown()).max(MAX_GROUPS),
-    chronicle: z.array(z.unknown()).max(MAX_CHRONICLE),
+    /** Nombre de faits de la chronique, rangés dans ses colonnes. */
+    chronicle: z.number().int().min(0).max(MAX_CHRONICLE),
     nextGroupId: z.number().int().min(1).max(MAX_IDS),
   })
   .strict();
@@ -125,9 +165,12 @@ export interface PeopleContent {
   readonly genetics: Genetics;
 }
 
-/** Nom d'un tableau de la sauvegarde : « people » ou « archive », puis la colonne. */
-const livingArray = (name: string) => `people${name.charAt(0).toUpperCase()}${name.slice(1)}`;
-const archiveArray = (name: string) => `archive${name.charAt(0).toUpperCase()}${name.slice(1)}`;
+/** Nom d'un tableau de la sauvegarde : « people », « archive » ou « chronicle », puis la colonne. */
+const arrayName = (prefix: string, name: string) =>
+  `${prefix}${name.charAt(0).toUpperCase()}${name.slice(1)}`;
+const livingArray = (name: string) => arrayName('people', name);
+const archiveArray = (name: string) => arrayName('archive', name);
+const chronicleArray = (name: string) => arrayName('chronicle', name);
 
 function layout(genetics: Genetics): PeopleJson['genome'] {
   return {
@@ -139,12 +182,44 @@ function layout(genetics: Genetics): PeopleJson['genome'] {
   };
 }
 
-/** Copie de la population et de la société, prête à sauvegarder. */
+/** La chronique en colonnes. */
+function chronicleArrays(chronicle: readonly ChronicleEntry[]): Record<string, SavedArray> {
+  const arrays: Record<string, SavedArray> = {};
+  for (const name of CHRONICLE_COLUMN_NAMES) {
+    const column = new CHRONICLE_COLUMNS[name](chronicle.length);
+    chronicle.forEach((entry, index) => {
+      column[index] = name === 'kind' ? CHRONICLE_KINDS.indexOf(entry.kind) : entry[name];
+    });
+    arrays[chronicleArray(name)] = column;
+  }
+  return arrays;
+}
+
+/**
+ * Ce que la relecture refuserait ne s'écrit pas (ADR 0007) : une population au-delà des
+ * bornes du format fait échouer la sauvegarde, et la précédente reste intacte.
+ */
+function checkBounds(people: Population, society: Society): void {
+  if (
+    people.end > MAX_SLOTS ||
+    people.nextId > MAX_IDS ||
+    society.nextGroupId > MAX_IDS ||
+    society.groups.size > MAX_GROUPS ||
+    society.cultures.length > MAX_GROUPS ||
+    society.languages.length > MAX_GROUPS ||
+    society.chronicle.length > MAX_CHRONICLE
+  ) {
+    throw new SaveError('size', 'population trop grande pour la sauvegarde');
+  }
+}
+
+/** Copie de la population et de la société, prête à sauvegarder ; SaveError hors des bornes. */
 export function savePeople(
   people: Population,
   society: Society,
   content: PeopleContent,
 ): { json: PeopleJson; arrays: Record<string, SavedArray> } {
+  checkBounds(people, society);
   const arrays: Record<string, SavedArray> = {};
   for (const name of LIVING_COLUMN_NAMES) {
     arrays[livingArray(name)] = people.columns[name].slice(
@@ -162,30 +237,63 @@ export function savePeople(
       rows * ARCHIVE_COLUMNS[name].width,
     );
   }
+  Object.assign(arrays, chronicleArrays(society.chronicle));
   return {
     json: {
       end: people.end,
       nextId: people.nextId,
       archived: rows,
       species: content.species.entries.map((entry) => entry.id),
+      subspecies: content.species.entries.map((entry) => entry.subspecies.map(({ id }) => id)),
       genome: layout(content.genetics),
       groups: [...society.groups.values()].map((group) => ({ ...group })),
       cultures: society.cultures.map((culture) => ({ ...culture })),
       languages: society.languages.map((language) => ({ ...language })),
-      chronicle: [...society.chronicle],
+      chronicle: society.chronicle.length,
       nextGroupId: society.nextGroupId,
     },
     arrays,
   };
 }
 
-/** Tableau d'une sauvegarde, de son type et de sa longueur, copié ; SaveError sinon. */
+/**
+ * Version 5 : la chronique quitte l'en-tête JSON, que ses faits finissaient par remplir,
+ * pour des colonnes. Les faits d'une partie de la version 4 se lisent un à un : au
+ * premier qui ne convient pas, la chronique reste telle quelle, et la relecture la
+ * refusera. Une chronique déjà en colonnes (la population vide qu'une partie de la
+ * version 3 reçoit) ne change pas.
+ */
+export function migrateChronicle(save: SaveData): SaveData {
+  const json: unknown = save.json;
+  if (typeof json !== 'object' || json === null) return save;
+  const people: unknown = (json as { people?: unknown }).people;
+  if (typeof people !== 'object' || people === null) return save;
+  const list: unknown = (people as { chronicle?: unknown }).chronicle;
+  if (!Array.isArray(list)) return save;
+  const entries: ChronicleEntry[] = [];
+  for (const item of list as unknown[]) {
+    const parsed = ChronicleSchema.safeParse(item);
+    if (!parsed.success) return save;
+    entries.push(parsed.data);
+  }
+  return {
+    meta: save.meta,
+    json: { ...json, people: { ...people, chronicle: entries.length } },
+    arrays: { ...save.arrays, ...chronicleArrays(entries) },
+  };
+}
+
+/**
+ * Tableau d'une sauvegarde, vérifié dans son type et sa longueur, sans copie ; SaveError
+ * sinon. Qui le garde le copie : l'état ne partage rien avec la sauvegarde.
+ */
 function savedArray(save: SaveData, name: string, type: ColumnConstructor, length: number): Column {
-  const array: unknown = save.arrays[name];
+  // Un nom absent donne undefined, que instanceof écarte.
+  const array: SavedArray | undefined = save.arrays[name];
   if (!(array instanceof type) || array.length !== length) {
     throw new SaveError('corrupt', `tableau ${name} absent ou de mauvaise taille`);
   }
-  return array.slice();
+  return array;
 }
 
 function each<T>(items: readonly unknown[], schema: z.ZodType<T>, name: string): T[] {
@@ -197,13 +305,20 @@ function each<T>(items: readonly unknown[], schema: z.ZodType<T>, name: string):
 }
 
 /**
- * Table de réécriture d'un génome sauvegardé vers l'ordre actuel des locus, allèles et
- * traits ; undefined si l'ordre n'a pas changé. Un locus, un allèle ou un trait disparu
- * rend la sauvegarde trop ancienne.
+ * Réécriture d'un génome sauvegardé vers l'ordre actuel : pour chaque locus sauvegardé,
+ * son indice actuel et celui de chacun de ses allèles ; pour chaque trait, son indice.
  */
-function genomeRemap(saved: PeopleJson['genome'], genetics: Genetics) {
+interface GenomeRemap {
+  readonly loci: readonly { readonly index: number; readonly alleles: readonly number[] }[];
+  readonly traits: readonly number[];
+}
+
+/**
+ * Table de réécriture des génomes sauvegardés vers l'ordre actuel des locus, des allèles
+ * et des traits. Un locus, un allèle ou un trait disparu rend la sauvegarde trop ancienne.
+ */
+function genomeRemap(saved: PeopleJson['genome'], genetics: Genetics): GenomeRemap {
   const current = layout(genetics);
-  if (JSON.stringify(saved) === JSON.stringify(current)) return undefined;
   const loci = saved.loci.map((locus) => {
     const index = current.loci.findIndex((entry) => entry.id === locus.id);
     const target = index < 0 ? undefined : current.loci[index];
@@ -223,40 +338,157 @@ function genomeRemap(saved: PeopleJson['genome'], genetics: Genetics) {
   return { loci, traits };
 }
 
-function rewriteGenomes(
-  genomes: Column,
-  count: number,
-  remap: NonNullable<ReturnType<typeof genomeRemap>>,
-): void {
-  const byte = (offset: number, index: number, base: number) =>
-    ((genomes[offset + base + (index >> 2)] ?? 0) >>> ((index & 3) * 8)) & 0xff;
+/** Octet du premier trait dans un génome : les traits suivent les huit locus (genetics.ts). */
+const FIRST_TRAIT = 8;
+
+/**
+ * Réécrit les `count` premiers génomes d'une colonne dans l'ordre actuel des données, que
+ * cet ordre ait changé ou non : un code d'allèle hors de la liste sauvegardée ne désigne
+ * aucun allèle, et rend la sauvegarde illisible.
+ */
+function rewriteGenomes(genomes: Column, count: number, remap: GenomeRemap): void {
   const words = new Uint32Array(GENOME_WORDS);
+  // Octet `place` du génome commençant à `offset` ; place = locus, ou FIRST_TRAIT + trait.
+  const byte = (offset: number, place: number) =>
+    ((genomes[offset + (place >> 2)] ?? 0) >>> ((place & 3) * 8)) & 0xff;
+  const write = (place: number, value: number) => {
+    const word = place >> 2;
+    words[word] = ((words[word] ?? 0) | (value << ((place & 3) * 8))) >>> 0;
+  };
   for (let person = 0; person < count; person++) {
     const offset = person * GENOME_WORDS;
     words.fill(0);
-    const write = (index: number, base: number, value: number) => {
-      const word = base + (index >> 2);
-      words[word] = ((words[word] ?? 0) | ((value & 0xff) << ((index & 3) * 8))) >>> 0;
-    };
     remap.loci.forEach(({ index, alleles }, saved) => {
-      const value = byte(offset, saved, 0);
+      const value = byte(offset, saved);
       const maternal = alleles.at(value & 0x0f);
       const paternal = alleles.at(value >> 4);
       if (maternal === undefined || paternal === undefined) {
         throw new SaveError('corrupt', 'génome illisible');
       }
-      write(index, 0, maternal | (paternal << 4));
+      write(index, maternal | (paternal << 4));
     });
     remap.traits.forEach((index, saved) => {
-      write(index, 2, byte(offset, saved, 2));
+      write(FIRST_TRAIT + index, byte(offset, FIRST_TRAIT + saved));
     });
     genomes.set(words, offset);
   }
 }
 
 /**
+ * Pour chaque espèce de la sauvegarde, l'indice actuel de chacune de ses sous-espèces,
+ * dans l'ordre où la sauvegarde les range. Une sous-espèce disparue rend la sauvegarde
+ * trop ancienne ; sans liste (version 4), les sous-espèces suivent l'ordre des données.
+ */
+function lineageRemap(
+  saved: PeopleJson['subspecies'],
+  species: readonly number[],
+  catalog: Catalog<Species>,
+): number[][] {
+  if (saved !== undefined && saved.length !== species.length) {
+    throw new SaveError('corrupt', 'sous-espèces mal rangées');
+  }
+  return species.map((current, index) => {
+    const ids = catalog.entries.at(current)?.subspecies.map((entry) => entry.id) ?? [];
+    const lineage = (saved?.at(index) ?? ids).map((id) => {
+      const target = ids.indexOf(id);
+      if (target < 0) throw new SaveError('obsolete', `sous-espèce inconnue : ${id}`);
+      return target;
+    });
+    if (new Set(lineage).size !== lineage.length) {
+      throw new SaveError('corrupt', 'sous-espèces mal rangées');
+    }
+    return lineage;
+  });
+}
+
+/**
+ * Ramène les parts d'ascendance d'un individu de l'ordre des sous-espèces de la
+ * sauvegarde (`lineage`) à celui des données. Une part au-delà des sous-espèces
+ * sauvegardées ne désigne personne : la sauvegarde est illisible.
+ */
+function rewriteAncestry(
+  column: Column,
+  offset: number,
+  lineage: readonly number[],
+  shares: Uint8Array,
+): void {
+  shares.fill(0);
+  for (let part = 0; part < ANCESTRY_SLOTS; part++) {
+    const share = column[offset + part] ?? 0;
+    if (share === 0) continue;
+    const target = lineage.at(part);
+    if (target === undefined) throw new SaveError('corrupt', 'ascendance illisible');
+    shares[target] = share;
+  }
+  column.set(shares, offset);
+}
+
+/**
+ * Chronique d'une sauvegarde, lue de ses colonnes ; SaveError si elle est incohérente.
+ * Ses faits se suivent dans le temps jusqu'au pas courant, ont lieu dans le monde, et
+ * nomment des groupes et des meneurs connus. Chaque groupe formé y a le sien, apparition
+ * ou scission, dans l'ordre des identifiants : le prochain identifiant de groupe doit
+ * suivre le dernier. Un nombre forgé ferait allouer chaque mois des tableaux démesurés,
+ * indexés par groupe (lifecycle.ts).
+ */
+function restoreChronicle(
+  save: SaveData,
+  json: PeopleJson,
+  size: { readonly width: number; readonly height: number },
+  tick: number,
+): ChronicleEntry[] {
+  const length = json.chronicle;
+  const columns = {} as Record<ChronicleColumn, Column>;
+  for (const name of CHRONICLE_COLUMN_NAMES) {
+    columns[name] = savedArray(save, chronicleArray(name), CHRONICLE_COLUMNS[name], length);
+  }
+  const chronicle: ChronicleEntry[] = [];
+  let previous = 0;
+  // Groupes formés : chacun a son fait, et le n-ième formé porte l'identifiant n.
+  let formed = 0;
+  for (let index = 0; index < length; index++) {
+    const value = (name: ChronicleColumn) => columns[name][index] ?? 0;
+    const kind = CHRONICLE_KINDS.at(value('kind'));
+    if (kind === undefined) throw new SaveError('corrupt', 'chronique illisible');
+    const entry: ChronicleEntry = {
+      tick: value('tick'),
+      kind,
+      x: value('x'),
+      y: value('y'),
+      group: value('group'),
+      other: value('other'),
+      leader: value('leader'),
+      otherLeader: value('otherLeader'),
+      count: value('count'),
+    };
+    const created =
+      kind === 'groupAppeared' ? entry.group : kind === 'groupSplit' ? entry.other : undefined;
+    if (
+      entry.tick < previous ||
+      entry.tick > tick ||
+      entry.x >= size.width ||
+      entry.y >= size.height ||
+      entry.group === NONE ||
+      entry.group >= json.nextGroupId ||
+      entry.other >= json.nextGroupId ||
+      entry.leader >= json.nextId ||
+      entry.otherLeader >= json.nextId ||
+      (created !== undefined && created !== ++formed)
+    ) {
+      throw new SaveError('corrupt', 'chronique incohérente');
+    }
+    previous = entry.tick;
+    chronicle.push(entry);
+  }
+  if (formed + 1 !== json.nextGroupId) {
+    throw new SaveError('corrupt', 'identifiants de groupe incohérents');
+  }
+  return chronicle;
+}
+
+/**
  * Population et société d'une sauvegarde ; SaveError si elles sont incohérentes. `size`
- * borne les cases des groupes.
+ * borne les cases des groupes et de la chronique.
  */
 export function restorePeople(
   save: SaveData,
@@ -269,13 +501,38 @@ export function restorePeople(
   if (!parsed.success) throw new SaveError('corrupt', 'population illisible');
   const json = parsed.data;
   const { end, nextId, archived } = json;
-  if (archived >= nextId) throw new SaveError('corrupt', 'archive incohérente');
 
-  // Société d'abord : les colonnes renvoient à ses identifiants.
+  // Tableaux d'abord, présents, de leur type et de leur longueur : ce qui s'alloue ensuite
+  // est borné par la taille du fichier, et non par les seuls nombres de l'en-tête.
+  const living = {} as Record<LivingColumn, Column>;
+  for (const name of LIVING_COLUMN_NAMES) {
+    const spec = LIVING_COLUMNS[name];
+    living[name] = savedArray(save, livingArray(name), spec.type, end * spec.width);
+  }
+  const alive = savedArray(save, 'peopleAlive', Uint8Array, end);
+  const free = save.arrays.peopleFree;
+  if (!(free instanceof Int32Array) || free.length > end) {
+    throw new SaveError('corrupt', 'emplacements libres illisibles');
+  }
+  const where = savedArray(save, 'peopleWhere', Int32Array, nextId);
+  const dead = {} as Record<ArchiveColumn, Column>;
+  for (const name of ARCHIVE_COLUMN_NAMES) {
+    const spec = ARCHIVE_COLUMNS[name];
+    dead[name] = savedArray(save, archiveArray(name), spec.type, archived * spec.width);
+  }
+  // Un identifiant ne resert jamais : chacun de ceux déjà donnés désigne un vivant ou un mort.
+  let count = 0;
+  for (let slot = 0; slot < end; slot++) {
+    const flag = alive[slot] ?? 0;
+    if (flag > 1) throw new SaveError('corrupt', 'emplacement illisible');
+    count += flag;
+  }
+  if (count + archived !== nextId - 1) throw new SaveError('corrupt', 'identifiants incohérents');
+
+  // Société : les colonnes renvoient à ses identifiants.
   const languages = each(json.languages, LanguageSchema, 'langue');
   const cultures = each(json.cultures, CultureSchema, 'culture');
   const groups = each(json.groups, GroupSchema, 'groupe');
-  const chronicle = each(json.chronicle, ChronicleSchema, 'chronique');
   languages.forEach((language, index) => {
     if (language.id !== index + 1) throw new SaveError('corrupt', 'langues mal rangées');
   });
@@ -300,58 +557,43 @@ export function restorePeople(
     if (group.leader >= json.nextId) throw new SaveError('corrupt', 'meneur inconnu');
     groupMap.set(group.id, group);
   }
-  let previous = 0;
-  for (const entry of chronicle) {
-    if (entry.tick < previous || entry.tick > tick) {
-      throw new SaveError('corrupt', 'chronique incohérente');
-    }
-    previous = entry.tick;
-  }
+  const chronicle = restoreChronicle(save, json, size, tick);
 
-  // Colonnes.
+  // Colonnes, copiées : l'état ne partage rien avec la sauvegarde.
   const people = new Population(Math.max(1, end));
-  for (const name of LIVING_COLUMN_NAMES) {
-    const spec = LIVING_COLUMNS[name];
-    const array = savedArray(save, livingArray(name), spec.type, end * spec.width);
-    people.columns[name].set(array);
-  }
-  people.alive.set(savedArray(save, 'peopleAlive', Uint8Array, end));
-  const free = save.arrays.peopleFree;
-  if (!(free instanceof Int32Array) || free.length > end) {
-    throw new SaveError('corrupt', 'emplacements libres illisibles');
-  }
-  const where = savedArray(save, 'peopleWhere', Int32Array, nextId) as Int32Array<ArrayBuffer>;
+  for (const name of LIVING_COLUMN_NAMES) people.columns[name].set(living[name]);
+  people.alive.set(alive);
   const archive = new Archive(Math.max(1, archived));
-  for (const name of ARCHIVE_COLUMN_NAMES) {
-    const spec = ARCHIVE_COLUMNS[name];
-    archive.columns[name].set(
-      savedArray(save, archiveArray(name), spec.type, archived * spec.width),
-    );
-  }
+  for (const name of ARCHIVE_COLUMN_NAMES) archive.columns[name].set(dead[name]);
   archive.rows = archived;
 
-  // Index : chaque vivant et chaque mort y figure une fois, à sa place.
-  const seen = new Uint8Array(nextId);
-  const known = (id: number) => id === NONE || (id >= 1 && id < nextId);
+  // Espèces et sous-espèces ramenées à l'ordre des données.
   const species = json.species.map((id) => {
     const index = content.species.indexOf(id);
     if (index === undefined) throw new SaveError('obsolete', `espèce inconnue : ${id}`);
     return index;
   });
-  let count = 0;
+  const lineages = lineageRemap(json.subspecies, species, content.species);
+  const shares = new Uint8Array(ANCESTRY_SLOTS);
+
+  // Index : chaque vivant et chaque mort y figure une fois, à sa place.
+  const seen = new Uint8Array(nextId);
+  const known = (id: number) => id === NONE || (id >= 1 && id < nextId);
   for (let slot = 0; slot < end; slot++) {
-    const alive = people.alive[slot] ?? 0;
-    if (alive > 1) throw new SaveError('corrupt', 'emplacement illisible');
-    if (alive === 0) continue;
-    count++;
+    if (people.alive[slot] === 0) continue;
     const id = people.get('id', slot);
     if (id < 1 || id >= nextId || seen[id] === 1 || where[id] !== slot) {
       throw new SaveError('corrupt', 'index des vivants incohérent');
     }
     seen[id] = 1;
-    const kind = species.at(people.get('species', slot));
-    if (kind === undefined) throw new SaveError('corrupt', 'espèce hors de la liste');
+    const saved = people.get('species', slot);
+    const kind = species.at(saved);
+    const lineage = lineages.at(saved);
+    if (kind === undefined || lineage === undefined) {
+      throw new SaveError('corrupt', 'espèce hors de la liste');
+    }
     people.set('species', slot, kind);
+    rewriteAncestry(people.columns.ancestry, slot * ANCESTRY_SLOTS, lineage, shares);
     const group = people.get('group', slot);
     if (
       (group !== NONE && !groupMap.has(group)) ||
@@ -381,27 +623,27 @@ export function restorePeople(
       throw new SaveError('corrupt', "index de l'archive incohérent");
     }
     seen[id] = 1;
-    const kind = species.at(archive.columns.species[row] ?? 0);
+    const saved = archive.columns.species[row] ?? 0;
+    const kind = species.at(saved);
+    const lineage = lineages.at(saved);
     const cause = archive.columns.cause[row] ?? 0;
     if (
       kind === undefined ||
+      lineage === undefined ||
       cause >= DEATH_CAUSES.length ||
       (archive.columns.familyLanguage[row] ?? 0) > languages.length
     ) {
       throw new SaveError('corrupt', 'mort incohérent');
     }
     archive.columns.species[row] = kind;
+    rewriteAncestry(archive.columns.ancestry, row * ANCESTRY_SLOTS, lineage, shares);
   }
-  for (let id = 1; id < nextId; id++) {
-    if (seen[id] !== 1 && where[id] !== -1) throw new SaveError('corrupt', 'index incohérent');
-  }
+  // Les nextId - 1 identifiants vus, chacun une fois, à sa place : l'index est complet.
 
-  // Génomes : réécrits si l'ordre des données a changé.
+  // Génomes : vérifiés, et réécrits dans l'ordre actuel des données.
   const remap = genomeRemap(json.genome, content.genetics);
-  if (remap !== undefined) {
-    rewriteGenomes(people.columns.genome, end, remap);
-    rewriteGenomes(archive.columns.genome, archived, remap);
-  }
+  rewriteGenomes(people.columns.genome, end, remap);
+  rewriteGenomes(archive.columns.genome, archived, remap);
 
   people.end = end;
   people.count = count;

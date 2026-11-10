@@ -56,7 +56,12 @@ export interface Group {
   food: number;
 }
 
-/** Faits de la chronique de base (CHR-01). */
+/**
+ * Faits de la chronique de base (CHR-01), dans l'ordre de leur code dans la sauvegarde :
+ * un genre nouveau s'ajoute à la fin. Chaque groupe formé a le sien, apparition ou
+ * scission : la relecture en déduit le prochain identifiant de groupe (populationSave.ts),
+ * et la chronique ne s'abrège donc pas sans revoir ce contrôle.
+ */
 export const CHRONICLE_KINDS = [
   /** Un groupe apparaît, par l'outil du Créateur (CRE-03). */
   'groupAppeared',

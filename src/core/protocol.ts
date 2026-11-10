@@ -262,11 +262,14 @@ export type WorkerMessage =
       readonly meta: SaveMeta;
       readonly data: ArrayBuffer;
     }
-  /** Sauvegarde impossible : aucune partie n'est en cours, ou l'écriture a échoué. */
+  /**
+   * Sauvegarde impossible : aucune partie n'est en cours, la partie dépasse ce que le
+   * format admet (`size`, la lecture la refuserait), ou l'écriture a échoué.
+   */
   | {
       readonly type: 'saveFailed';
       readonly requestId: number;
-      readonly reason: 'noGame' | 'failed';
+      readonly reason: 'noGame' | 'size' | 'failed';
     }
   /** Partie chargée ; l'instantané de la nouvelle partie l'a précédé. */
   | { readonly type: 'loaded'; readonly requestId: number }
