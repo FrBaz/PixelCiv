@@ -8,9 +8,43 @@
  * - Pluie du mois : la pluie annuelle se répartit sur l'année, avec une saison sèche en
  *   hiver et une saison des pluies en été sous les tropiques (C1, D8).
  *
+ * - Couvertures du mois (C1, D9 et D10) : neige des terres, glace de l'eau douce, banquise
+ *   de la mer côtière, selon la température du mois.
+ *
  * Fonctions de dmath : elles servent aussi aux calculs qui influencent l'état.
  */
+import type { SEASON_COVERS } from './data/schemas';
 import { cos, exp, TAU } from './dmath';
+
+export type SeasonCover = (typeof SEASON_COVERS)[number];
+
+/**
+ * Rampe d'une couverture saisonnière : la part de la case couverte croît de 0 à `full`
+ * quand la température du mois descend de `onset` à `onset − span` (°C).
+ */
+export interface CoverRamp {
+  readonly onset: number;
+  readonly span: number;
+  readonly full: number;
+}
+
+/**
+ * Rampes des couvertures saisonnières (data/biomes.json, `seasons.cover`). Le shader de la
+ * carte les trame (render/mapShader.ts), et la simulation en tient compte : sous la glace
+ * et la neige, la pêche rend moins (sim/forage.ts). L'un et l'autre les lisent ici. Une
+ * rivière ou un ruisseau qui traverse une case de terre gèle comme l'eau douce (`ice`).
+ */
+export const COVER_RAMPS: Readonly<Record<SeasonCover, CoverRamp>> = {
+  none: { onset: 0, span: 1, full: 0 },
+  snow: { onset: 0.5, span: 3, full: 1 },
+  ice: { onset: -1, span: 3, full: 0.9 },
+  'sea-ice': { onset: -6, span: 4, full: 0.85 },
+};
+
+/** Part de la case que couvre une couverture saisonnière au mois de température `celsius`. */
+export function coverShare(ramp: CoverRamp, celsius: number): number {
+  return Math.min(1, Math.max(0, (ramp.onset - celsius) / ramp.span)) * ramp.full;
+}
 
 /** Latitude de la ligne y d'une carte de `height` lignes : 0 à l'équateur, 1 aux pôles. */
 export function latitude(y: number, height: number): number {

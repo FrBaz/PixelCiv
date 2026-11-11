@@ -39,8 +39,10 @@ export interface Group {
   readonly founded: number;
   readonly parent: number;
   /**
-   * Meneur : l'aîné des adultes à sa formation. Le groupe porte son nom (« le groupe
-   * d'Ataru »), même après sa mort : une bande n'a pas d'autre nom avant la fondation.
+   * Meneur : l'aîné de ses membres à sa formation, hors de qui mène déjà un groupe vivant,
+   * si bien que deux groupes vivants n'ont jamais le même. Le groupe porte son nom (« le
+   * groupe d'Ataru »), même après sa mort : une bande n'a pas d'autre nom avant la
+   * fondation.
    */
   readonly leader: number;
   /** Case du groupe : x boucle, y reste dans le monde. */

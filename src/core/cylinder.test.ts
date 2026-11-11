@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { deltaX, distance, wrapX } from './cylinder';
+import { deltaX, distance, wrapNearX, wrapX } from './cylinder';
 import { CHUNK_SIZE, chunkGrid, WORLD_SIZES } from './world';
 
 describe('wrapX', () => {
@@ -36,6 +36,16 @@ describe('wrapX', () => {
     expect(wrapX(-1e-14, 512)).toBe(0);
     expect(wrapX(-Number.MIN_VALUE, 512)).toBe(0);
     expect(wrapX(-1e-14, 512)).toBeLessThan(512);
+  });
+});
+
+describe('wrapNearX', () => {
+  it('donne le même résultat que wrapX à moins d’une largeur du monde (F-11)', () => {
+    for (const width of [512, 768, 7]) {
+      for (let x = -width; x < 2 * width; x++) {
+        expect(wrapNearX(x, width)).toBe(wrapX(x, width));
+      }
+    }
   });
 });
 

@@ -275,16 +275,48 @@ export const NomadsSchema = z
     forage: z.object({ radius: z.number().int().min(1).max(8), share: ShareSchema }).strict(),
     /** Réserves pour l'hiver (SAI-03) : en mois de besoin du groupe, et pertes par mois. */
     reserve: z.object({ months: z.number().min(0), spoilage: ShareSchema }).strict(),
-    /** Stocks d'une case : leur plafond, en mois de rendement au sommet de la saison. */
+    /**
+     * Stocks d'une case : leur plafond (`capacity`), en mois de son rendement du moment ;
+     * plafond et repousse suivent tous deux la saison.
+     */
     stocks: z
       .object({
         plants: z.object({ capacity: z.number().positive() }).strict(),
-        game: z.object({ capacity: z.number().positive() }).strict(),
-        fish: z.object({ capacity: z.number().positive() }).strict(),
+        game: z
+          .object({
+            capacity: z.number().positive(),
+            /**
+             * Le gibier se raréfie dans le froid (SAI-03) : sa part, entière jusqu'à `from`
+             * °C au mois, décroît d'un trait jusqu'à `share` à `to` °C, et reste à `share`
+             * au-dessous.
+             */
+            cold: z
+              .object({ from: z.number(), to: z.number(), share: ShareSchema })
+              .strict()
+              .refine((cold) => cold.to < cold.from, {
+                message: 'le froid du gibier va de `from` à `to`, plus froid',
+              }),
+          })
+          .strict(),
+        fish: z
+          .object({
+            capacity: z.number().positive(),
+            /**
+             * Part de la pêche qui reste sous une couverture pleine : glace, banquise ou
+             * neige, qui couvrent la case comme sur la carte (core/seasons.ts).
+             */
+            covered: ShareSchema,
+          })
+          .strict(),
       })
       .strict(),
-    /** Pêche d'une rivière, par classe (aucune, ruisseau, rivière, fleuve), en part de celle du biome « rivière ». */
-    river: z.tuple([ShareSchema, ShareSchema, ShareSchema, ShareSchema]),
+    /**
+     * Pêche qu'une rivière ajoute à la case de terre qu'elle traverse, par classe (aucune,
+     * ruisseau, rivière, fleuve), en besoins mensuels d'un adulte au sommet de la saison,
+     * comme `forage.fish` des biomes ; elle gèle comme l'eau douce. Une eau, dont le lit
+     * d'un fleuve, ne porte que la pêche de son biome.
+     */
+    river: z.tuple([z.number().min(0), z.number().min(0), z.number().min(0), z.number().min(0)]),
   })
   .strict();
 

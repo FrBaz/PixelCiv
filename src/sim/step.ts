@@ -2,8 +2,9 @@
  * Avancée de la simulation : un pas vaut un mois. Les commandes de jeu s'appliquent
  * au début du pas, puis les systèmes s'exécutent dans un ordre fixe (ADR 0003, ADR 0011) :
  * la nourriture repousse, les groupes cherchent leur nourriture et mangent, la
- * population vit (morts, naissances, couples), puis les groupes trop grands se scindent
- * et tous se déplacent.
+ * population vit (morts, naissances, couples), les groupes trop petits rejoignent un
+ * voisin, les groupes trop grands se scindent, et tous se déplacent, sauf ceux qui
+ * viennent de naître d'une scission, déjà partis vers leur aire.
  */
 import type { Cultures, Genetics, Nomads, Species } from '../core/data';
 import type { AltitudeLevel } from '../core/data/schemas';
@@ -16,6 +17,7 @@ import { PARAMETER_NAMES } from '../core/data/worldgen';
 import { depletedCells, feedGroup, FOOD_STRIDE, regrowFood } from './forage';
 import { groupMembers, mergeGroup, moveGroup, splitGroup, walkCost } from './groups';
 import { lifeCycle } from './lifecycle';
+import { NONE } from './population';
 import { fingerprintPeople } from './populationSave';
 import { spawnGroup } from './spawn';
 import { cellIndex, markDirty, type SimState } from './state';
@@ -59,12 +61,9 @@ function paintBiome(state: SimState, command: PaintBiomeCommand, content: SimCon
 }
 
 /**
- * Fait avancer l'état d'un pas. Les commandes reçues s'appliquent d'abord, et sont
- * journalisées avec le pas au début duquel elles s'appliquent.
- */
-/**
- * Fait passer un mois. Renvoie les membres de chaque groupe à la fin du mois, dans l'ordre
- * des emplacements, tels que les donnerait groupMembers.
+ * Fait passer un mois. Les commandes reçues s'appliquent d'abord, et sont journalisées
+ * avec le pas au début duquel elles s'appliquent. Renvoie les membres de chaque groupe à
+ * la fin du mois, dans l'ordre des emplacements, tels que les donnerait groupMembers.
  */
 export function step(
   state: SimState,
@@ -111,6 +110,8 @@ export function step(
     );
   }
   for (const group of society.groups.values()) {
+    // Un groupe né d'une scission ce mois-ci a déjà fait sa marche du mois (splitGroup).
+    if (group.founded === tick && group.parent !== NONE) continue;
     moveGroup(state, group, members.get(group.id) ?? [], content, random);
   }
   state.tick++;

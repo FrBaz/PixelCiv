@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { Species } from '../core/data';
 import type { SpawnGroupCommand } from '../core/protocol';
+import { log } from '../core/dmath';
 import { RandomStream, streamSeed } from '../core/rng';
 import { pureAncestry } from './genetics';
 import {
@@ -28,7 +29,15 @@ import { membersOf } from './spawn';
 import type { NamingRule } from './society';
 import type { SimState } from './state';
 import { fingerprint, step, type SimContent } from './step';
-import { flatState, testData, testHuman as human, testState, withHuman } from './testing';
+import { groupMembers } from './groups';
+import {
+  flatState,
+  scatteredGroups,
+  testData,
+  testHuman as human,
+  testState,
+  withHuman,
+} from './testing';
 
 /** Cases de terre des biomes voulus, espacées. */
 function cells(state: SimState, biomes: readonly string[], count: number) {
@@ -291,6 +300,49 @@ describe('cycle de vie (tâche 2.3)', () => {
     );
     expect(atBirth / births).toBeGreaterThan(firstMonth * 0.5);
     expect(atBirth / births).toBeLessThan(firstMonth * 2);
+  });
+
+  it('maintient trois siècles durant une population nourrie, qui croît sans exploser (D-8)', () => {
+    // La mesure de docs/BACKLOG.md : seize groupes de trente répartis sur le monde des
+    // tests (scatteredGroups), trois cents ans de nomadisme, d'hivers et de famines.
+    const state = testState();
+    step(state, scatteredGroups(state, 16), testData);
+    const start = state.people.count;
+    for (let century = 1; century <= 3; century++) {
+      run(state, 100 * MONTHS_PER_YEAR - (century === 1 ? 1 : 0));
+      expect(state.people.count).toBeGreaterThan(start);
+    }
+    // Croissance annuelle moyenne : de l'ordre de 0,5 % par an (0,1 à 1,5 %).
+    const growth = log(state.people.count / start) / 300;
+    expect(growth).toBeGreaterThan(0.001);
+    expect(growth).toBeLessThan(0.015);
+    // Les groupes se scindent, et restent des bandes d'une quinzaine de membres.
+    const sizes = [...groupMembers(state.people).values()].map((list) => list.length);
+    sizes.sort((a, b) => a - b);
+    expect(sizes.length).toBeGreaterThan(48);
+    const median = sizes[Math.floor(sizes.length / 2)] ?? 0;
+    expect(median).toBeGreaterThanOrEqual(8);
+    expect(median).toBeLessThanOrEqual(testData.nomads.split);
+    // Descendance finale des femmes nées entre les ans 50 et 200, mortes après leur période
+    // féconde : celle de chasseurs-cueilleurs, de quatre à sept enfants.
+    const children = new Map<number, number>();
+    const { archive } = state.people;
+    const count = (mother: number) => children.set(mother, (children.get(mother) ?? 0) + 1);
+    for (let row = 0; row < archive.rows; row++) count(archive.columns.mother[row] ?? NONE);
+    state.people.forEach((slot) => count(state.people.get('mother', slot)));
+    let women = 0;
+    let born = 0;
+    for (let row = 0; row < archive.rows; row++) {
+      const birth = archive.columns.birth[row] ?? 0;
+      const age = ((archive.columns.death[row] ?? 0) - birth) / MONTHS_PER_YEAR;
+      if (archive.columns.sex[row] !== FEMALE || age < human.fertility.to) continue;
+      if (birth < 50 * MONTHS_PER_YEAR || birth > 200 * MONTHS_PER_YEAR) continue;
+      women++;
+      born += children.get(archive.columns.id[row] ?? NONE) ?? 0;
+    }
+    expect(women).toBeGreaterThan(100);
+    expect(born / women).toBeGreaterThan(4);
+    expect(born / women).toBeLessThan(7);
   });
 
   it("tue davantage de froid les fragiles d'une sous-espèce des sables que les nordiques", () => {

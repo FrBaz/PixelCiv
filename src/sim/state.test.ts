@@ -113,7 +113,9 @@ describe('pas', () => {
     for (let tick = 1; tick < 240; tick++) step(state, [], testData);
     expect(state.people.count).toBeGreaterThan(40);
     // Relecture de la phase 2 : familles des groupes apparus, culture et nom à la
-    // naissance (C2, D2), premier mois de vie, proches parents, mariages entre cultures.
-    expect(fingerprint(state)).toBe('cbf85b43');
+    // naissance (C2, D2), premier mois de vie, proches parents, mariages entre cultures ;
+    // puis gibier plus rare dans le froid, pêche gelée comme sur la carte, marche sans
+    // coin coupé, scissions (meneur, fratries, aire, une seule marche).
+    expect(fingerprint(state)).toBe('c955a80d');
   });
 });
