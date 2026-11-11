@@ -15,12 +15,11 @@
  *   compris, le meneur reste dans son groupe, et le nouveau groupe, mené par un autre,
  *   part fonder son aire plus loin, autour d'une case franchissable.
  */
-import type { Biome, Catalog, Species } from '../core/data';
+import type { Catalog, Species } from '../core/data';
 import type { AltitudeLevel } from '../core/data/schemas';
-import { altitudeLevelIndex } from '../core/altitude';
-import { wrapNearX } from '../core/cylinder';
+import { deltaX, wrapNearX } from '../core/cylinder';
 import type { RandomStream } from '../core/rng';
-import type { WorldLayers, WorldSize } from '../core/world';
+import type { WorldSize } from '../core/world';
 import { totalStock, type ForageContent } from './forage';
 import { MONTHS_PER_YEAR } from './people';
 import { ANCESTRY_SLOTS, ANCESTRY_TOTAL, NONE, type Population } from './population';
@@ -57,41 +56,12 @@ export function groupMembers(people: Population): Map<number, number[]> {
   return members;
 }
 
-const costs = new WeakMap<Catalog<Biome>, Float64Array>();
-
-/** Coût de marche de chaque case du monde (voir walkCost). */
-export function terrainCosts(
-  world: WorldLayers,
-  content: Pick<GroupsContent, 'biomes' | 'altitudeLevels'>,
-): Float32Array<ArrayBuffer> {
-  return Float32Array.from(world.biome, (_, cell) => walkCost(world, cell, content));
-}
-
-/** Coût de marche d'une case : son biome, fois son étage ; Infinity s'il est infranchissable. */
-export function walkCost(
-  world: WorldLayers,
-  cell: number,
-  content: Pick<GroupsContent, 'biomes' | 'altitudeLevels'>,
-): number {
-  let table = costs.get(content.biomes);
-  if (table === undefined) {
-    table = Float64Array.from(
-      content.biomes.entries,
-      (biome) => biome.movementCost ?? Number.POSITIVE_INFINITY,
-    );
-    costs.set(content.biomes, table);
-  }
-  const biome = table[world.biome[cell] ?? 0] ?? Number.POSITIVE_INFINITY;
-  const levels = content.altitudeLevels.entries;
-  const level = levels.at(altitudeLevelIndex(levels, world.elevation[cell] ?? 0));
-  const movement = level?.movement ?? null;
-  return movement === null ? Number.POSITIVE_INFINITY : biome * movement;
-}
-
-/** Distance entre deux cases, au plus court à travers la couture (CLAUDE.md). */
+/**
+ * Distance entre deux cases, au plus court à travers la couture (CLAUDE.md), quelles que
+ * soient leurs colonnes : deltaX les ramène d'abord dans le monde.
+ */
 export function cellDistance(width: number, ax: number, ay: number, bx: number, by: number) {
-  const raw = Math.abs(ax - bx);
-  const dx = Math.min(raw, width - raw);
+  const dx = deltaX(ax, bx, width);
   const dy = ay - by;
   return Math.sqrt(dx * dx + dy * dy);
 }

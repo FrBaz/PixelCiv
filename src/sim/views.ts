@@ -7,6 +7,7 @@
  * principal reçoit des textes prêts, que la traduction n'a pas à toucher.
  */
 import {
+  CHRONICLE_PAGE,
   GROUP_STRIDE,
   type ChronicleView,
   type GroupSummary,
@@ -17,7 +18,7 @@ import {
 } from '../core/protocol';
 import { SKIN_TONES, visualCode } from '../core/visual';
 import { expressed, trait } from './genetics';
-import { cellDistance, groupMembers } from './groups';
+import { groupMembers } from './groups';
 import { DEATH_CAUSES, GENOME_WORDS, NEVER, NONE, type Population } from './population';
 import { MONTHS_PER_YEAR } from './people';
 import { childrenOf, field, heredity, personName, recordOf, type PersonRecord } from './records';
@@ -158,23 +159,6 @@ export function groupView(state: SimState, id: number): GroupView | undefined {
   };
 }
 
-/** Rayon, en cases, où l'on cherche le groupe le plus proche d'un lieu touché. */
-const PICK_RADIUS = 4;
-
-/** Le groupe le plus proche d'une case, à quelques cases au plus. */
-export function groupNear(state: SimState, x: number, y: number): number | undefined {
-  let best: number | undefined;
-  let bestDistance = PICK_RADIUS;
-  for (const group of state.society.groups.values()) {
-    const distance = cellDistance(state.size.width, x, y, group.x, group.y);
-    if (distance <= bestDistance) {
-      best = group.id;
-      bestDistance = distance;
-    }
-  }
-  return best;
-}
-
 /** Réponse à une demande d'inspection. */
 export function inspect(
   state: SimState,
@@ -190,17 +174,20 @@ export function inspect(
       const group = groupView(state, target.id);
       return group === undefined ? {} : { group };
     }
-    case 'place': {
-      const near = groupNear(state, target.x, target.y);
-      const group = near === undefined ? undefined : groupView(state, near);
-      return group === undefined ? {} : { group };
-    }
   }
 }
 
-/** Fait de la chronique, prêt à afficher : les groupes y sont nommés d'après leurs meneurs. */
-export function chronicleView(state: SimState, entry: ChronicleEntry): ChronicleView {
+/**
+ * Fait de la chronique, prêt à afficher, de rang `index` : les groupes y sont nommés
+ * d'après leurs meneurs.
+ */
+export function chronicleView(
+  state: SimState,
+  entry: ChronicleEntry,
+  index: number,
+): ChronicleView {
   return {
+    index,
     tick: entry.tick,
     kind: entry.kind,
     groupId: entry.group,
@@ -210,6 +197,26 @@ export function chronicleView(state: SimState, entry: ChronicleEntry): Chronicle
     other: entry.otherLeader === NONE ? '' : groupName(state, entry.otherLeader),
     count: entry.count,
   };
+}
+
+/** Faits de la chronique de rang `from` (compris) à `to` (exclu), prêts à afficher. */
+export function chronicleViews(state: SimState, from: number, to: number): ChronicleView[] {
+  const { chronicle } = state.society;
+  const start = Math.max(0, from);
+  return chronicle
+    .slice(start, Math.max(start, to))
+    .map((entry, offset) => chronicleView(state, entry, start + offset));
+}
+
+/**
+ * Page de la chronique : les CHRONICLE_PAGE faits, au plus, qui précèdent le rang
+ * `before`, du plus ancien au plus récent. Un rang qui n'est pas un entier positif n'en
+ * donne aucun ; au-delà du dernier fait, la page finit avec lui.
+ */
+export function chroniclePage(state: SimState, before: number): ChronicleView[] {
+  if (!Number.isSafeInteger(before) || before <= 0) return [];
+  const end = Math.min(before, state.society.chronicle.length);
+  return chronicleViews(state, end - CHRONICLE_PAGE, end);
 }
 
 /**

@@ -1,9 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import {
+  cellAt,
   constrain,
   displayScale,
   pan,
   screenToMap,
+  TILE_PX,
   visibleChunks,
   zoomAt,
   type Camera,
@@ -51,6 +53,26 @@ describe('gestes', () => {
     const after = screenToMap(zoomed, viewport, 800, 100);
     expect(after.x).toBeCloseTo(before.x, 9);
     expect(after.y).toBeCloseTo(before.y, 9);
+  });
+});
+
+describe('cellAt', () => {
+  it('ramène dans le monde la colonne touchée dans une copie voisine du monde (W-3, U-2)', () => {
+    const columns = 512;
+    const width = columns * TILE_PX;
+    for (let copy = -2; copy <= 2; copy++) {
+      // Le milieu de la case (5, 60), puis celui de la dernière colonne, dans chaque copie.
+      expect(cellAt(copy * width + 5.5 * TILE_PX, 60.5 * TILE_PX, columns)).toEqual({
+        x: 5,
+        y: 60,
+      });
+      expect(cellAt(copy * width - 0.5 * TILE_PX, 60.5 * TILE_PX, columns)).toEqual({
+        x: columns - 1,
+        y: 60,
+      });
+    }
+    // Au-delà des pôles, la ligne sort du monde : c'est à l'appelant de la refuser.
+    expect(cellAt(5.5 * TILE_PX, -0.5 * TILE_PX, columns).y).toBe(-1);
   });
 });
 

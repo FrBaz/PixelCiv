@@ -23,10 +23,13 @@ export interface ControlsOptions {
   readonly resolution: () => number;
   /** Taille du monde, en pixels de carte, ou undefined avant la partie. */
   readonly world: () => Extent | undefined;
-  /** Appui bref sur la carte, au point (mapX, mapY) en pixels de carte. */
-  readonly onTap: (mapX: number, mapY: number) => void;
-  /** Appui long, sans glissement, au point (mapX, mapY) en pixels de carte. */
-  readonly onLongPress: (mapX: number, mapY: number) => void;
+  /**
+   * Appui bref sur la carte, au point (mapX, mapY) en pixels de carte, qui est le point
+   * (screenX, screenY) de l'écran, en pixels physiques.
+   */
+  readonly onTap: (mapX: number, mapY: number, screenX: number, screenY: number) => void;
+  /** Appui long, sans glissement, aux mêmes points. */
+  readonly onLongPress: (mapX: number, mapY: number, screenX: number, screenY: number) => void;
 }
 
 /** Vitesse du déplacement au clavier, en pixels physiques par seconde. */
@@ -154,7 +157,7 @@ export class CameraControls {
         this.tap = undefined;
         const point = this.pointers.get(tap.id) ?? tap.start;
         const target = screenToMap(this.camera, this.options.viewport(), point.x, point.y);
-        this.options.onLongPress(target.x, target.y);
+        this.options.onLongPress(target.x, target.y, point.x, point.y);
       }, TAP_DURATION);
     }
   };
@@ -202,8 +205,11 @@ export class CameraControls {
       // Un geste encore en cours est bref, ou long si son minuteur n'a pas encore sonné.
       const point = this.point(event);
       const target = screenToMap(this.camera, this.options.viewport(), point.x, point.y);
-      if (event.timeStamp - tap.time < TAP_DURATION) this.options.onTap(target.x, target.y);
-      else this.options.onLongPress(target.x, target.y);
+      if (event.timeStamp - tap.time < TAP_DURATION) {
+        this.options.onTap(target.x, target.y, point.x, point.y);
+      } else {
+        this.options.onLongPress(target.x, target.y, point.x, point.y);
+      }
     }
     this.tap = undefined;
     this.cancelLongPress();

@@ -27,20 +27,25 @@ import {
   type Palette,
 } from './atlas';
 import { parseColor, type Rgb } from './bake';
-import { displayScale, TILE_PX, type Camera, type Extent } from './camera';
+import { displayScale, type Camera, type Extent } from './camera';
 import {
-  clusterOffset,
+  bannerBox,
   clusterReach,
+  groupScreen,
   iconPixel,
+  memberBox,
+  memberShape,
   onScreen,
+  pickGroup,
   spriteName,
   spriteNames,
+  SPRITE_SCALE,
   textureKey,
+  TOUCH_SLOP,
+  type PickShapes,
   type Reach,
 } from './crowd';
 
-/** Échelle, en pixels physiques par pixel de carte, à partir de laquelle on voit les gens. */
-export const SPRITE_SCALE = 3;
 /** Motif de la bannière d'un groupe. */
 const BANNER = 'icons/group';
 /** Durée d'une image de la marche, en millisecondes. */
@@ -65,6 +70,8 @@ export class PeopleLayer {
   /** La bannière, et son étendue autour du pied de sa hampe, en pixels d'icône. */
   private readonly bannerFrame: Frame;
   private readonly bannerReach: Reach;
+  /** Les motifs, pour retrouver le groupe sous un appui. */
+  private readonly shapes: PickShapes;
   private frame: GroupsFrame | undefined;
 
   constructor(app: Application, data: PeopleData) {
@@ -85,6 +92,11 @@ export class PeopleLayer {
       right: this.bannerFrame.width,
       up: this.bannerFrame.height,
       down: 0,
+    };
+    this.shapes = {
+      banner: this.bannerFrame,
+      largest: this.largest,
+      member: (code) => memberShape(code, frameOf),
     };
     // Les plus bas à l'écran passent devant.
     this.layer.sortableChildren = true;
@@ -146,11 +158,9 @@ export class PeopleLayer {
     banner.texture = this.texture(BANNER, textureKey(BANNER, 0, cloth), () =>
       personPalette(this.data.appearance, { skin: [0, 0, 0], hair: [0, 0, 0], cloth }),
     );
+    const box = bannerBox(screenX, screenY, this.bannerFrame, pixel);
     banner.scale.set(pixel / resolution);
-    banner.position.set(
-      Math.round(screenX) / resolution,
-      Math.round(screenY - this.bannerFrame.height * pixel) / resolution,
-    );
+    banner.position.set(box.left / resolution, box.top / resolution);
     banner.zIndex = screenY;
     return used + 1;
   }
@@ -185,14 +195,11 @@ export class PeopleLayer {
       );
       const person = this.sprite(next++);
       person.texture = texture;
-      const offset = clusterOffset(member);
-      const shape = frameOf(name);
       // Les pieds sur la case, les pixels du sprite sur ceux de la carte.
-      const left = Math.round(screenX + (offset.dx - Math.floor(shape.width / 2)) * scale);
-      const top = Math.round(screenY + (offset.dy - shape.height + 2) * scale);
+      const box = memberBox(screenX, screenY, member, frameOf(name), scale);
       person.scale.set(scale / resolution);
-      person.position.set(left / resolution, top / resolution);
-      person.zIndex = top + shape.height * scale;
+      person.position.set(box.left / resolution, box.top / resolution);
+      person.zIndex = box.top + box.height;
     }
     return next;
   }
@@ -202,18 +209,15 @@ export class PeopleLayer {
     const frame = this.frame;
     let used = 0;
     if (frame !== undefined && world !== undefined) {
+      const { resolution } = this.app.renderer;
+      const view = { camera, viewport, world, resolution };
       const scale = displayScale(camera.zoom);
       const close = scale >= SPRITE_SCALE;
       // Pixels physiques par pixel de bannière : la densité de la carte, si elle le permet.
-      const icon = iconPixel(scale, this.app.renderer.resolution);
-      // Largeur d'une copie du monde à l'écran : quand le monde est plus étroit que l'écran,
-      // chaque groupe se voit dans chacune des copies visibles (monde cylindrique).
-      const span = world.width * scale;
+      const icon = iconPixel(scale, resolution);
       const groups = frame.groups;
       let first = 0;
       for (let index = 0; index + GROUP_STRIDE <= groups.length; index += GROUP_STRIDE) {
-        const x = groups[index + 1] ?? 0;
-        const y = groups[index + 2] ?? 0;
         const size = groups[index + 3] ?? 0;
         const culture = groups[index + 4] ?? 1;
         // Ce qui se dessine autour de la case, grappe ou bannière, en unités de `unit`
@@ -222,17 +226,10 @@ export class PeopleLayer {
           ? clusterReach(size, this.largest.width, this.largest.height)
           : this.bannerReach;
         const unit = close ? scale : icon;
-        // Centre de la case, dans la copie du monde la plus proche de la caméra.
-        let mapX = x * TILE_PX + TILE_PX / 2;
-        const mapY = y * TILE_PX + TILE_PX / 2;
-        mapX += Math.round((camera.x - mapX) / world.width) * world.width;
-        const nearest = (mapX - camera.x) * scale + viewport.width / 2;
-        const screenY = (mapY - camera.y) * scale + viewport.height / 2;
-        const copies = Math.ceil(
-          (viewport.width / 2 + Math.max(reach.left, reach.right) * unit + 1) / span,
-        );
-        for (let copy = -copies; copy <= copies; copy++) {
-          const screenX = nearest + copy * span;
+        const at = groupScreen(groups[index + 1] ?? 0, groups[index + 2] ?? 0, view, reach, unit);
+        const screenY = at.y;
+        for (let copy = -at.copies; copy <= at.copies; copy++) {
+          const screenX = at.x + copy * at.span;
           if (!onScreen(screenX, screenY, reach, unit, viewport)) continue;
           if (close) {
             used = this.drawMembers(
@@ -257,6 +254,18 @@ export class PeopleLayer {
       const unused = this.sprites.at(index);
       if (unused !== undefined) unused.visible = false;
     }
+  }
+
+  /**
+   * Le groupe dessiné sous le point (x, y) de l'écran, en pixels physiques, d'après la
+   * dernière image des groupes et la caméra du dernier dessin (pickGroup), ou undefined.
+   */
+  pick(camera: Camera, viewport: Extent, world: Extent | undefined, x: number, y: number) {
+    const frame = this.frame;
+    if (frame === undefined || world === undefined) return undefined;
+    const { resolution } = this.app.renderer;
+    const view = { camera, viewport, world, resolution };
+    return pickGroup(frame, view, x, y, this.shapes, TOUCH_SLOP * resolution);
   }
 
   /** Vide les textures (changement de monde : rien ne s'y rattache plus). */

@@ -13,6 +13,7 @@
  */
 import type { GameData } from '../core/data';
 import {
+  CHRONICLE_RECENT,
   PROTOCOL_VERSION,
   transferablesOf,
   type GameCommand,
@@ -34,9 +35,9 @@ import {
 import { defaultWorldParams, worldParamsSchema, type WorldParams } from '../core/worldParams';
 import { GameCommandSchema } from '../sim/commands';
 import { MIGRATIONS, restoreState, saveState } from '../sim/save';
-import { createState, takeDirtyChunks, type SimState } from '../sim/state';
+import { cellIndex, createState, takeDirtyChunks, type SimState } from '../sim/state';
 import { step } from '../sim/step';
-import { chronicleView, groupsFrame, inspect } from '../sim/views';
+import { chroniclePage, chronicleViews, groupsFrame, inspect } from '../sim/views';
 import { GENERATOR_VERSION, type GenerationParams } from '../worldgen/generate';
 
 export interface HostEnvironment {
@@ -53,11 +54,18 @@ export type WorldGenerator = (
   onStage: (stage: GenerationStage) => void,
 ) => WorldLayers;
 
-/** Faits de la chronique envoyés avec l'instantané d'une partie. */
-const CHRONICLE_SNAPSHOT = 200;
-
 /** Largeur d'un aperçu de l'écran de création, en colonnes : bornes et parité. */
 export const PREVIEW_WIDTH = { min: 32, max: 512 } as const;
+
+/**
+ * Un groupe n'apparaît que sur une case du monde franchissable, comme le veut spawnGroup :
+ * refusée dès sa réception, la commande le dit au joueur au lieu de rester sans effet.
+ */
+function placeable(state: SimState, command: GameCommand): boolean {
+  if (command.type !== 'spawnGroup') return true;
+  const cell = cellIndex(state.size, command.x, command.y);
+  return cell !== undefined && Number.isFinite(state.cost[cell] ?? Number.POSITIVE_INFINITY);
+}
 
 export class SimulationHost {
   private readonly env: HostEnvironment;
@@ -114,6 +122,14 @@ export class SimulationHost {
         const state = this.state;
         const result = state === undefined ? {} : inspect(state, this.data, message.target);
         this.send({ type: 'inspection', requestId: message.requestId, ...result });
+        break;
+      }
+      case 'chronicle': {
+        // Jamais au-delà des faits déjà envoyés : les suivants viennent avec les deltas.
+        const state = this.state;
+        const before = Math.min(message.before, this.chronicleSent);
+        const facts = state === undefined ? [] : chroniclePage(state, before);
+        this.send({ type: 'chroniclePage', requestId: message.requestId, facts });
         break;
       }
       case 'setSpeed':
@@ -241,7 +257,8 @@ export class SimulationHost {
 
   /** Vérifie une commande de jeu ; elle s'appliquera au début du prochain pas. */
   private command(command: unknown): void {
-    if (this.state === undefined) {
+    const state = this.state;
+    if (state === undefined) {
       this.send({ type: 'error', code: 'noGame', detail: 'commande reçue avant la partie' });
       return;
     }
@@ -250,7 +267,11 @@ export class SimulationHost {
       this.send({ type: 'error', code: 'command', detail: 'commande invalide' });
       return;
     }
-    this.state.pending.push(parsed.data);
+    if (!placeable(state, parsed.data)) {
+      this.send({ type: 'error', code: 'command', detail: 'case infranchissable' });
+      return;
+    }
+    state.pending.push(parsed.data);
   }
 
   /** Les identifiants de contenu d'une commande existent-ils ? */
@@ -348,9 +369,10 @@ export class SimulationHost {
   private start(state: SimState): void {
     const layers = copyLayers(state.world);
     const frame = groupsFrame(state, this.data);
-    // Les derniers faits de la chronique ; les suivants viendront avec chaque pas.
-    const recent = state.society.chronicle.slice(-CHRONICLE_SNAPSHOT);
-    const chronicle = recent.map((entry) => chronicleView(state, entry));
+    // Les derniers faits de la chronique ; les suivants viendront avec chaque pas, les plus
+    // anciens à la demande, par pages.
+    const total = state.society.chronicle.length;
+    const chronicle = chronicleViews(state, total - CHRONICLE_RECENT, total);
     this.state = state;
     this.chronicleSent = state.society.chronicle.length;
     this.send({
@@ -375,9 +397,13 @@ export class SimulationHost {
     const delay = Math.max(0, this.nextStepAt - this.env.now());
     this.timer = this.env.setTimer(() => {
       this.timer = undefined;
-      this.runStep();
-      this.advanceSchedule();
-      this.reschedule();
+      try {
+        this.runStep();
+      } finally {
+        // Quoi qu'il arrive au pas, le suivant est programmé : la partie ne se fige pas.
+        this.advanceSchedule();
+        this.reschedule();
+      }
     }, delay);
   }
 
@@ -393,29 +419,44 @@ export class SimulationHost {
     if (this.nextStepAt < now - duration) this.nextStepAt = now;
   }
 
+  /**
+   * Fait passer un mois, puis envoie son delta et sa durée. Une exception ne fige pas la
+   * partie : celle d'une commande l'écarte, sans effet sur l'état ni place au journal
+   * (step), et se signale en erreur « command » ; celle du mois lui-même se signale en
+   * erreur « internal », et le pas suivant vient à son heure.
+   */
   private runStep(): void {
     const state = this.state;
     if (state === undefined) return;
     const start = this.env.now();
-    // Les commandes en attente s'appliquent au début du pas, qui les horodate.
-    const members = step(state, state.pending.splice(0), this.data);
-    if (this.stepCost > 0) {
-      const end = start + this.stepCost;
-      while (this.env.now() < end) {
-        // Attente active : le pas factice occupe vraiment le worker.
+    try {
+      // Les commandes en attente s'appliquent au début du pas, qui les horodate.
+      const members = step(state, state.pending.splice(0), this.data, (command, error) => {
+        console.error(error);
+        this.send({ type: 'error', code: 'command', detail: `${command.type} : ${String(error)}` });
+      });
+      if (this.stepCost > 0) {
+        const end = start + this.stepCost;
+        while (this.env.now() < end) {
+          // Attente active : le pas factice occupe vraiment le worker.
+        }
       }
+      const total = state.society.chronicle.length;
+      this.send({
+        type: 'delta',
+        time: this.time(state),
+        chunks: takeDirtyChunks(state),
+        frame: groupsFrame(state, this.data, members),
+        chronicle: chronicleViews(state, this.chronicleSent, total),
+      });
+      this.chronicleSent = total;
+    } catch (error) {
+      console.error(error);
+      this.send({ type: 'error', code: 'internal', detail: String(error) });
+      return;
     }
-    const stepMs = this.env.now() - start;
-    const fresh = state.society.chronicle.slice(this.chronicleSent);
-    this.chronicleSent = state.society.chronicle.length;
-    this.send({
-      type: 'delta',
-      time: this.time(state),
-      chunks: takeDirtyChunks(state),
-      frame: groupsFrame(state, this.data, members),
-      chronicle: fresh.map((entry) => chronicleView(state, entry)),
-    });
-    this.send({ type: 'stats', stats: { stepMs } });
+    // Le pas compte son delta : l'image des groupes, la chronique et leur envoi (W-11).
+    this.send({ type: 'stats', stats: { stepMs: this.env.now() - start } });
   }
 
   private sendTime(): void {

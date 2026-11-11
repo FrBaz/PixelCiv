@@ -1,8 +1,8 @@
 /**
  * Défaillances de l'hôte (ADR 0004) : une copie de couches qui échoue, faute de mémoire
- * par exemple, ou une partie devenue trop grande pour le format. Chaque requête de
- * sauvegarde ou de chargement reçoit tout de même sa réponse, et la partie en cours
- * continue.
+ * par exemple, une partie devenue trop grande pour le format, ou un mois de simulation en
+ * défaut. Chaque requête de sauvegarde ou de chargement reçoit tout de même sa réponse, et
+ * la partie en cours continue.
  */
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { PROTOCOL_VERSION, type WorkerMessage } from '../core/protocol';
@@ -10,7 +10,7 @@ import { MAX_SAVE_BYTES } from '../core/save/format';
 import { testData, testParams, testWorld } from '../sim/testing';
 import { SimulationHost, type HostEnvironment } from './host';
 
-const failures = vi.hoisted(() => ({ copy: false, save: false, huge: false }));
+const failures = vi.hoisted(() => ({ copy: false, save: false, huge: false, step: false }));
 
 vi.mock('../core/world', async (importOriginal) => {
   const original = await importOriginal<typeof import('../core/world')>();
@@ -19,6 +19,17 @@ vi.mock('../core/world', async (importOriginal) => {
     copyLayers: (layers: Parameters<typeof original.copyLayers>[0]) => {
       if (failures.copy) throw new RangeError('mémoire épuisée');
       return original.copyLayers(layers);
+    },
+  };
+});
+
+vi.mock('../sim/step', async (importOriginal) => {
+  const original = await importOriginal<typeof import('../sim/step')>();
+  return {
+    ...original,
+    step: (...args: Parameters<typeof original.step>) => {
+      if (failures.step) throw new TypeError('défaut du mois');
+      return original.step(...args);
     },
   };
 });
@@ -42,17 +53,27 @@ vi.mock('../sim/save', async (importOriginal) => {
 
 class Environment implements HostEnvironment {
   readonly messages: WorkerMessage[] = [];
+  /** Le prochain pas programmé, que le test déclenche quand il veut. */
+  private timer: (() => void) | undefined;
   post(message: WorkerMessage): void {
     this.messages.push(message);
   }
   now(): number {
     return 0;
   }
-  setTimer(): number {
+  setTimer(callback: () => void): number {
+    this.timer = callback;
     return 1;
   }
   clearTimer(): void {
-    // Les pas ne comptent pas ici.
+    this.timer = undefined;
+  }
+  /** Fait venir le pas programmé ; faux s'il n'y en a pas. */
+  fire(): boolean {
+    const timer = this.timer;
+    this.timer = undefined;
+    timer?.();
+    return timer !== undefined;
   }
   of<T extends WorkerMessage['type']>(type: T): Extract<WorkerMessage, { type: T }>[] {
     return this.messages.filter(
@@ -77,6 +98,28 @@ describe("défaillances de l'hôte", () => {
     failures.copy = false;
     failures.save = false;
     failures.huge = false;
+    failures.step = false;
+  });
+
+  it('signale un mois en défaut, et passe au suivant sans figer la partie (L-2)', async () => {
+    const { env, host } = await playing();
+    failures.step = true;
+    expect(env.fire()).toBe(true);
+    expect(env.of('error').map((error) => error.code)).toEqual(['internal']);
+    expect(env.of('delta')).toEqual([]);
+    // Le pas suivant est programmé : la partie reprend dès que le défaut cesse.
+    failures.step = false;
+    expect(env.fire()).toBe(true);
+    expect(env.of('delta').map((delta) => delta.time.tick)).toEqual([1]);
+    expect(env.of('stats')).toHaveLength(1);
+    // Le pas demandé en pause ne lève rien non plus.
+    host.receive({ type: 'setPaused', paused: true });
+    failures.step = true;
+    expect(() => {
+      host.receive({ type: 'stepOnce' });
+    }).not.toThrow();
+    expect(env.of('error').map((error) => error.code)).toEqual(['internal', 'internal']);
+    quiet.mockClear();
   });
 
   it("refuse d'écrire une partie que la lecture refuserait, et le dit", async () => {

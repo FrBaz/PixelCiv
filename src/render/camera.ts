@@ -63,6 +63,16 @@ export function screenToMap(
   };
 }
 
+/**
+ * Case du monde sous un point de la carte, en pixels de carte, pour un monde de `columns`
+ * colonnes : la colonne est ramenée dans le monde (wrapX), quelle que soit la copie du
+ * monde touchée, comme le veut le monde cylindrique ; la ligne peut tomber au-delà des
+ * pôles, hors du monde.
+ */
+export function cellAt(mapX: number, mapY: number, columns: number): { x: number; y: number } {
+  return { x: wrapX(Math.floor(mapX / TILE_PX), columns), y: Math.floor(mapY / TILE_PX) };
+}
+
 /** Déplace la caméra d'un glissement à l'écran : la carte suit le doigt. */
 export function pan(camera: Camera, deltaX: number, deltaY: number): Camera {
   const scale = displayScale(camera.zoom);

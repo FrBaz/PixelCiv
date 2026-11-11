@@ -32,7 +32,7 @@ import {
 } from '../core/world';
 import { bakeBiomes, CHUNK_PX, type BakeBiome } from './bake';
 import { Baker } from './baker';
-import { displayScale, TILE_PX, visibleChunks, type Camera, type Extent } from './camera';
+import { displayScale, visibleChunks, type Camera, type Extent } from './camera';
 import { MAP_FRAGMENT, MAP_VERTEX } from './mapShader';
 import { seasonPalettes, seasonTexels } from './seasons';
 
@@ -329,9 +329,4 @@ export class MapView {
     chunk.source.update();
     chunk.baked = true;
   }
-}
-
-/** Case du monde sous un point de la carte, en pixels de carte. */
-export function cellAt(mapX: number, mapY: number): { x: number; y: number } {
-  return { x: Math.floor(mapX / TILE_PX), y: Math.floor(mapY / TILE_PX) };
 }

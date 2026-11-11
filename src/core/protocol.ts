@@ -10,7 +10,7 @@ import { LAYER_NAMES, type GenerationStage, type WorldLayers, type WorldSize } f
 import type { WorldParams } from './worldParams';
 
 /** Version du protocole, vérifiée à la poignée de main. */
-export const PROTOCOL_VERSION = 3;
+export const PROTOCOL_VERSION = 4;
 
 /**
  * Pinceau de biome : donne à une case de terre un autre biome de terre. C'est un outil
@@ -47,11 +47,13 @@ export interface LoggedCommand {
   readonly command: GameCommand;
 }
 
-/** Ce qu'on inspecte (IHM-02) : un individu, un groupe, ou le groupe le plus proche d'un lieu. */
+/**
+ * Ce qu'on inspecte (IHM-02) : un individu ou un groupe. Le fil principal choisit le groupe
+ * touché d'après ce que la carte dessine (render/crowd.ts, pickGroup).
+ */
 export type InspectTarget =
   | { readonly kind: 'person'; readonly id: number }
-  | { readonly kind: 'group'; readonly id: number }
-  | { readonly kind: 'place'; readonly x: number; readonly y: number };
+  | { readonly kind: 'group'; readonly id: number };
 
 /** Un individu en quelques mots : de quoi le nommer et le désigner. */
 export interface PersonSummary {
@@ -116,6 +118,11 @@ export interface GroupView extends GroupSummary {
 
 /** Un fait de la chronique (CHR-01), prêt à afficher. */
 export interface ChronicleView {
+  /**
+   * Rang du fait dans la chronique de la partie, de 0 pour le plus ancien : il ne change
+   * jamais, sauvegarde comprise, et sert de clé à l'affichage.
+   */
+  readonly index: number;
   readonly tick: number;
   readonly kind: string;
   /** Groupe en cause : son identifiant (peut-être disparu), et son nom. */
@@ -126,6 +133,15 @@ export interface ChronicleView {
   readonly other: string;
   readonly count: number;
 }
+
+/**
+ * Faits récents de la chronique : l'instantané d'une partie les envoie, et le fil
+ * principal les garde ; les plus anciens se demandent par pages (message « chronicle »).
+ */
+export const CHRONICLE_RECENT = 300;
+
+/** Faits d'une page de la chronique, au plus. */
+export const CHRONICLE_PAGE = 100;
 
 /** Entiers par groupe dans GroupsFrame.groups : identifiant, x, y, membres, culture. */
 export const GROUP_STRIDE = 5;
@@ -157,6 +173,11 @@ export type MainMessage =
   | { readonly type: 'game'; readonly command: GameCommand }
   /** Demande la fiche d'un individu ou d'un groupe ; la réponse porte le même numéro. */
   | { readonly type: 'inspect'; readonly requestId: number; readonly target: InspectTarget }
+  /**
+   * Demande une page de la chronique : les CHRONICLE_PAGE faits, au plus, qui précèdent le
+   * fait de rang `before`. La réponse porte le même numéro.
+   */
+  | { readonly type: 'chronicle'; readonly requestId: number; readonly before: number }
   | { readonly type: 'setSpeed'; readonly speed: SpeedId }
   | { readonly type: 'setPaused'; readonly paused: boolean }
   /** Avance d'un seul pas, en pause. */
@@ -194,7 +215,10 @@ export interface TimeInfo {
 
 /** Mesures du worker, pour le panneau de débogage. */
 export interface StepStats {
-  /** Durée du dernier pas, en millisecondes. */
+  /**
+   * Durée du dernier pas, en millisecondes : le mois de la simulation, puis son delta,
+   * de la construction de l'image des groupes et des faits de la chronique à leur envoi.
+   */
   readonly stepMs: number;
 }
 
@@ -244,6 +268,15 @@ export type WorkerMessage =
       readonly person?: PersonView;
       readonly group?: GroupView;
     }
+  /**
+   * Page de la chronique demandée : ses faits, du plus ancien au plus récent, de rangs
+   * consécutifs ; aucun sans partie, ou avant le premier fait.
+   */
+  | {
+      readonly type: 'chroniclePage';
+      readonly requestId: number;
+      readonly facts: readonly ChronicleView[];
+    }
   /** Changement de vitesse ou de pause, sans pas. */
   | { readonly type: 'time'; readonly time: TimeInfo }
   | { readonly type: 'stats'; readonly stats: StepStats }
@@ -278,8 +311,9 @@ export type WorkerMessage =
   | { readonly type: 'error'; readonly code: ErrorCode; readonly detail: string };
 
 /**
- * Erreurs : poignée de main absente ou refusée, commande sans partie, commande ou
- * paramètres de monde invalides, ou défaut du worker lui-même.
+ * Erreurs : poignée de main absente ou refusée, commande sans partie, commande refusée
+ * (invalide, sur une case où elle ne peut rien, ou en échec à son application, sans effet
+ * sur la partie), paramètres de monde invalides, ou défaut du worker lui-même.
  */
 export type ErrorCode = 'protocol' | 'noGame' | 'command' | 'params' | 'internal';
 
@@ -312,6 +346,8 @@ export function transferablesOf(message: MainMessage | WorkerMessage): ArrayBuff
     case 'game':
     case 'inspect':
     case 'inspection':
+    case 'chronicle':
+    case 'chroniclePage':
     case 'setSpeed':
     case 'setPaused':
     case 'stepOnce':

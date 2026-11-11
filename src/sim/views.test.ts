@@ -1,15 +1,17 @@
 import { describe, expect, it } from 'vitest';
-import { GROUP_STRIDE } from '../core/protocol';
+import { CHRONICLE_PAGE, GROUP_STRIDE } from '../core/protocol';
 import { AGE_CLASSES, decodeVisual } from '../core/visual';
 import { groupMembers } from './groups';
-import { NONE } from './population';
+import { FEMALE, GENOME_WORDS, NONE } from './population';
 import { spawnGroup } from './spawn';
 import type { SimState } from './state';
-import { firstCellOf, testData, testState } from './testing';
+import { step } from './step';
+import { firstCellOf, scatteredGroups, testData, testState } from './testing';
 import {
+  chroniclePage,
   chronicleView,
+  chronicleViews,
   groupName,
-  groupNear,
   groupsFrame,
   groupView,
   inspect,
@@ -101,20 +103,17 @@ describe('fiches (tâche 2.10 ; IHM-02)', () => {
     expect(groupView(state, 999)).toBeUndefined();
   });
 
-  it('trouve le groupe le plus proche du lieu touché, à travers la couture est-ouest', () => {
+  it("répond à une demande de fiche, et ne donne rien pour une cible qui n'existe pas", () => {
     const state = testState();
     const group = spawned(state);
-    expect(groupNear(state, group.x, group.y)).toBe(group.id);
-    expect(groupNear(state, group.x, (group.y + 20) % state.size.height)).toBeUndefined();
-    // Un groupe sur la première colonne se trouve depuis la dernière.
-    group.x = 0;
-    expect(groupNear(state, state.size.width - 1, group.y)).toBe(group.id);
-    expect(inspect(state, testData, { kind: 'place', x: 1, y: group.y }).group?.id).toBe(group.id);
     expect(inspect(state, testData, { kind: 'group', id: group.id }).group?.id).toBe(group.id);
     expect(inspect(state, testData, { kind: 'person', id: group.leader }).person?.id).toBe(
       group.leader,
     );
-    expect(inspect(state, testData, { kind: 'person', id: 999_999 })).toEqual({});
+    for (const id of [999_999, 0, -1, 1.5, Number.NaN]) {
+      expect(inspect(state, testData, { kind: 'person', id })).toEqual({});
+      expect(inspect(state, testData, { kind: 'group', id })).toEqual({});
+    }
   });
 
   it('nomme les groupes des faits de la chronique d’après leurs meneurs', () => {
@@ -123,8 +122,9 @@ describe('fiches (tâche 2.10 ; IHM-02)', () => {
     const entry = state.society.chronicle.at(-1);
     expect(entry).toBeDefined();
     if (entry === undefined) return;
-    const view = chronicleView(state, entry);
+    const view = chronicleView(state, entry, 0);
     expect(view).toMatchObject({
+      index: 0,
       kind: 'groupAppeared',
       groupId: group.id,
       group: groupName(state, group.leader),
@@ -132,6 +132,50 @@ describe('fiches (tâche 2.10 ; IHM-02)', () => {
       x: group.x,
       y: group.y,
     });
+  });
+});
+
+describe('chronique (tâche 2.10 ; CHR-01, D-13, U-9)', () => {
+  /** Un état dont la chronique compte `count` faits, tous différents par leur effectif. */
+  function chronicled(count: number): SimState {
+    const state = testState();
+    spawned(state);
+    const first = state.society.chronicle.at(0);
+    if (first === undefined) throw new Error('aucun fait');
+    for (let index = 1; index < count; index++) {
+      state.society.chronicle.push({ ...first, kind: 'famine', count: index });
+    }
+    return state;
+  }
+
+  it('numérote chaque fait de son rang, qui ne change pas', () => {
+    const state = chronicled(10);
+    expect(chronicleViews(state, 7, 10).map((view) => view.index)).toEqual([7, 8, 9]);
+    expect(chronicleViews(state, -5, 2).map((view) => view.index)).toEqual([0, 1]);
+    expect(chronicleViews(state, 8, 20).map((view) => view.count)).toEqual([8, 9]);
+    expect(chronicleViews(state, 6, 4)).toEqual([]);
+  });
+
+  it('donne les faits plus anciens par pages, sans trou ni doublon jusqu’au premier', () => {
+    const total = CHRONICLE_PAGE * 2 + 37;
+    const state = chronicled(total);
+    const seen: number[] = [];
+    let before = total;
+    for (let pages = 0; before > 0; pages++) {
+      expect(pages).toBeLessThan(10);
+      const page = chroniclePage(state, before);
+      expect(page.length).toBeLessThanOrEqual(CHRONICLE_PAGE);
+      expect(page.at(-1)?.index).toBe(before - 1);
+      seen.unshift(...page.map((view) => view.index));
+      before = page[0]?.index ?? 0;
+    }
+    expect(seen).toEqual(Array.from({ length: total }, (_, index) => index));
+    // Avant le premier fait, ou pour un rang qui n'en est pas un : rien.
+    for (const rank of [0, -3, 1.5, Number.NaN, Number.POSITIVE_INFINITY]) {
+      expect(chroniclePage(state, rank)).toEqual([]);
+    }
+    // Au-delà du dernier fait, la page finit avec lui.
+    expect(chroniclePage(state, total + 50).at(-1)?.index).toBe(total - 1);
   });
 });
 
@@ -165,4 +209,68 @@ describe('image des groupes pour la carte (tâche 2.9 ; REN-04)', () => {
     expect([...again.sprites]).toEqual([...frame.sprites]);
     expect(second.culture).toBe(2);
   });
+
+  it('est la même avec les membres que renvoie le pas, mois après mois (W-10)', () => {
+    const state = testState();
+    for (const command of scatteredGroups(state, 6, 30)) spawnGroup(state, command, testData);
+    for (let month = 0; month < 120; month++) {
+      const members = step(state, [], testData);
+      const fromStep = groupsFrame(state, testData, members);
+      const counted = groupsFrame(state, testData);
+      expect([...fromStep.groups]).toEqual([...counted.groups]);
+      expect([...fromStep.sprites]).toEqual([...counted.sprites]);
+    }
+    expect(state.society.groups.size).toBeGreaterThan(0);
+  });
+
+  it("recalcule l'apparence d'un emplacement qui resert à un autre individu (W-10)", () => {
+    const state = testState();
+    const group = spawned(state, 20);
+    const members = groupMembers(state.people).get(group.id) ?? [];
+    // Le cache retient le teint et les cheveux de chaque emplacement.
+    const before = groupsFrame(state, testData);
+    const slot = members.find((member) => state.people.get('mother', member) === NONE) ?? -1;
+    const old = decodeVisual(before.sprites[members.indexOf(slot)] ?? 0);
+    const dead = state.people.get('id', slot);
+    state.people.remove(slot, state.tick, 'accident');
+    // Une nouvelle venue, d'un autre génome, prend l'emplacement libéré.
+    const genome = new Uint32Array(GENOME_WORDS).fill(0xffffffff);
+    const reused = state.people.add({
+      sex: FEMALE,
+      birth: state.tick - 30 * 12,
+      species: 0,
+      ancestry: [255],
+      genome,
+      mother: NONE,
+      father: NONE,
+      group: group.id,
+      culture: group.culture,
+      givenName: 1,
+      familyName: 0,
+      familyLanguage: 1,
+    });
+    expect(reused).toBe(slot);
+    expect(state.people.get('id', reused)).not.toBe(dead);
+    const frame = groupsFrame(state, testData);
+    // Son code d'apparence est celui que donnerait un cache tout neuf, et il diffère bien
+    // de celui de la morte : un cache périmé se verrait.
+    const order = groupMembers(state.people).get(group.id) ?? [];
+    const position = order.indexOf(reused);
+    const fresh = groupsFrame(withFreshLooks(state), testData);
+    expect(frame.sprites[position]).toBe(fresh.sprites[position]);
+    const now = decodeVisual(frame.sprites[position] ?? 0);
+    expect([now.skin, now.hair]).not.toEqual([old.skin, old.hair]);
+  });
 });
+
+/**
+ * Le même état, vu par un autre objet de population, aux mêmes colonnes : le cache
+ * d'apparence, rangé par objet de population, y repart de rien.
+ */
+function withFreshLooks(state: SimState): SimState {
+  const people = Object.assign(
+    Object.create(Object.getPrototypeOf(state.people) as object) as SimState['people'],
+    state.people,
+  );
+  return { ...state, people };
+}

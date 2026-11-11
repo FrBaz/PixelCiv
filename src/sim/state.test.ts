@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { CHUNK_SIZE, emptyLayers, WORLD_SIZES } from '../core/world';
 import { cellIndex, createState, takeDirtyChunks } from './state';
-import { applyCommand, fingerprint, step } from './step';
-import { firstCellOf, testData, testParams, testState } from './testing';
+import { applyCommand, fingerprint, step, type SimContent } from './step';
+import { firstCellOf, testData, testHuman, testParams, testState } from './testing';
 
 const land = (family: string) => family !== 'water';
 
@@ -68,6 +68,49 @@ describe('pas', () => {
     expect(state.commandLog).toEqual([
       { tick: 1, command: { type: 'paintBiome', ...cell, biome: 'steppe' } },
     ]);
+  });
+
+  it('écartent une commande qui échoue, sans trace dans l’état ni au journal (L-2)', () => {
+    // Des humains que le schéma refuserait : en couple après la fin de leur fécondité,
+    // l'âge de leurs adultes ne se tire pas. L'apparition lève une exception en plein
+    // tirage, après la langue et la culture de son groupe.
+    const broken: SimContent = {
+      ...testData,
+      species: {
+        entries: [{ ...testHuman, couple: { ...testHuman.couple, minAge: 60 } }],
+        indexOf: (id) => (id === testHuman.id ? 0 : undefined),
+      },
+    };
+    const failing = testState();
+    const control = testState();
+    const cell = firstCellOf(failing, (family) => family === 'temperate');
+    const spawn = { type: 'spawnGroup', ...cell, species: 'human', subspecies: 'plains' } as const;
+    const paint = { type: 'paintBiome', ...firstCellOf(failing, land), biome: 'steppe' } as const;
+    const rejected: [string, unknown][] = [];
+    step(failing, [{ ...spawn, count: 12 }, paint], broken, (command, error) => {
+      rejected.push([command.type, error]);
+    });
+    step(control, [paint], broken);
+    expect(rejected).toHaveLength(1);
+    expect(rejected[0]?.[0]).toBe('spawnGroup');
+    expect(rejected[0]?.[1]).toBeInstanceOf(RangeError);
+    // Ni groupe, ni langue, ni culture, ni tirage : la partie est celle où rien n'a été tenté,
+    // et la suite du mois s'est déroulée.
+    expect(failing.commandLog).toEqual([{ tick: 0, command: paint }]);
+    expect(failing.society.languages).toEqual([]);
+    expect(fingerprint(failing)).toBe(fingerprint(control));
+    // Les mois suivants le restent, une apparition réussie comprise.
+    const valid = { ...spawn, count: 12 };
+    step(failing, [valid], testData);
+    step(control, [valid], testData);
+    for (let month = 0; month < 6; month++) {
+      step(failing, [], testData);
+      step(control, [], testData);
+    }
+    expect(failing.society.groups.size).toBe(1);
+    expect(fingerprint(failing)).toBe(fingerprint(control));
+    // Sans rappel, l'exception remonte, comme au rejeu et dans les tests.
+    expect(() => step(testState(), [{ ...spawn, count: 12 }], broken)).toThrow(RangeError);
   });
 
   it('donnent la même empreinte à la même graine, et une autre à une autre graine', () => {

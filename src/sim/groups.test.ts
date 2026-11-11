@@ -157,6 +157,20 @@ function playCentury(): Century {
   return century;
 }
 
+describe('distance entre deux cases', () => {
+  it('passe par la couture, quelles que soient les copies du monde où sont les colonnes (W-3)', () => {
+    const width = 512;
+    // De la colonne 5 à elle-même, puis à ses voisines, vue depuis chaque copie du monde.
+    for (let copy = -2; copy <= 2; copy++) {
+      const x = 5 + copy * width;
+      expect(cellDistance(width, x, 10, 5, 10)).toBe(0);
+      expect(cellDistance(width, x, 10, width - 3, 10)).toBe(8);
+      expect(cellDistance(width, x, 10, 9, 13)).toBe(5);
+    }
+    expect(cellDistance(width, 0, 0, width / 2, 0)).toBe(width / 2);
+  });
+});
+
 describe('groupes nomades (tâche 2.5)', () => {
   it("marche une trentaine de cases de plaine par mois, sans jamais entrer dans l'eau", () => {
     const state = testState();

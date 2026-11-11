@@ -1,9 +1,28 @@
 import { describe, expect, it, vi } from 'vitest';
-import { PROTOCOL_VERSION, type GameCommand, type WorkerMessage } from '../core/protocol';
-import { SaveError } from '../core/save/format';
+import type { GameData } from '../core/data';
+import {
+  CHRONICLE_PAGE,
+  CHRONICLE_RECENT,
+  GROUP_STRIDE,
+  PROTOCOL_VERSION,
+  type ChronicleView,
+  type GameCommand,
+  type SpawnGroupCommand,
+  type WorkerMessage,
+} from '../core/protocol';
+import { readSave, SaveError } from '../core/save/format';
 import { monthDuration, NORMAL_MONTH_MS } from '../core/time';
 import { CHUNK_SIZE, GENERATION_STAGES, LAYER_NAMES } from '../core/world';
-import { firstCellOf, testData, testParams, testState, testWorld } from '../sim/testing';
+import { MIGRATIONS } from '../sim/save';
+import {
+  firstCellOf,
+  scatteredGroups,
+  testData,
+  testHuman,
+  testParams,
+  testState,
+  testWorld,
+} from '../sim/testing';
 import { generateWorld } from '../worldgen/generate';
 import { SimulationHost, type HostEnvironment, type WorldGenerator } from './host';
 
@@ -17,8 +36,13 @@ const generate: WorldGenerator = (params, onStage) => {
   return generateWorld(params, testData);
 };
 
-function newHost(env: HostEnvironment): SimulationHost {
-  return new SimulationHost(env, testData, generate);
+function newHost(env: HostEnvironment, data: GameData = testData): SimulationHost {
+  return new SimulationHost(env, data, generate);
+}
+
+/** Apparitions de `count` groupes de `members` personnes, répartis sur les terres. */
+function spawns(count: number, members = 12, seed = 'graine'): SpawnGroupCommand[] {
+  return scatteredGroups(testState(seed), count, members);
 }
 
 /** Une case de terre du monde de cette graine, que le pinceau peut peindre. */
@@ -35,6 +59,8 @@ class FakeEnvironment implements HostEnvironment {
   time = 0;
   /** Avance de l'horloge à chaque lecture : une attente active finit donc par aboutir. */
   advancePerRead = 0;
+  /** Durée de l'envoi d'un delta, comme la copie d'une grosse image : l'horloge avance d'autant. */
+  deltaCost = 0;
   readonly sent: { message: WorkerMessage; transfer: Transferable[] }[] = [];
   private readonly timers = new Map<number, { at: number; callback: () => void }>();
   private nextHandle = 1;
@@ -45,6 +71,7 @@ class FakeEnvironment implements HostEnvironment {
    */
   post(message: WorkerMessage, transfer: Transferable[]): void {
     this.sent.push({ message: structuredClone(message, { transfer }), transfer });
+    if (message.type === 'delta') this.time += this.deltaCost;
   }
 
   now(): number {
@@ -88,15 +115,15 @@ class FakeEnvironment implements HostEnvironment {
   }
 }
 
-function greetedHost() {
+function greetedHost(data: GameData = testData) {
   const env = new FakeEnvironment();
-  const host = newHost(env);
+  const host = newHost(env, data);
   host.receive({ type: 'hello', protocol: PROTOCOL_VERSION });
   return { env, host };
 }
 
-async function startedHost(seed = 'graine') {
-  const { env, host } = greetedHost();
+async function startedHost(seed = 'graine', data: GameData = testData) {
+  const { env, host } = greetedHost(data);
   host.receive({ type: 'newGame', params: testParams(seed) });
   await host.idle();
   return { env, host };
@@ -226,6 +253,13 @@ describe('partie', () => {
     expect(stats?.stepMs).toBeGreaterThanOrEqual(200);
     expect(stats?.stepMs).toBeLessThan(210);
   });
+
+  it("compte dans la durée du pas son delta, jusqu'à son envoi (W-11)", async () => {
+    const { env } = await startedHost();
+    env.deltaCost = 40;
+    env.advance(NORMAL_MONTH_MS);
+    expect(env.messages('stats').at(0)?.stats.stepMs).toBeGreaterThanOrEqual(40);
+  });
 });
 
 describe('aperçu', () => {
@@ -315,6 +349,184 @@ describe('commandes de jeu', () => {
     env.advance(NORMAL_MONTH_MS);
     expect(env.messages('delta').at(-1)?.time.tick).toBe(4);
     expect(env.messages('delta').at(-1)?.chunks).toHaveLength(1);
+  });
+});
+
+describe('fiches (IHM-02)', () => {
+  it('répondent par la fiche demandée, ou par rien pour une cible inconnue (W-10)', async () => {
+    const { env: before, host: waiting } = greetedHost();
+    waiting.receive({ type: 'inspect', requestId: 1, target: { kind: 'person', id: 1 } });
+    expect(before.messages('inspection')).toEqual([{ type: 'inspection', requestId: 1 }]);
+
+    const { env, host } = await startedHost();
+    host.receive({ type: 'setPaused', paused: true });
+    for (const command of spawns(1)) host.receive({ type: 'game', command });
+    host.receive({ type: 'stepOnce' });
+    const id = env.messages('delta').at(-1)?.frame.groups[0] ?? 0;
+    host.receive({ type: 'inspect', requestId: 2, target: { kind: 'group', id } });
+    const group = env.messages('inspection').at(-1);
+    expect(group).toMatchObject({ requestId: 2, group: { id, size: 12 } });
+    const member = group?.group?.members.at(0)?.id ?? 0;
+    host.receive({ type: 'inspect', requestId: 3, target: { kind: 'person', id: member } });
+    expect(env.messages('inspection').at(-1)).toMatchObject({
+      requestId: 3,
+      person: { id: member, alive: true, group: { id } },
+    });
+    for (const target of [
+      { kind: 'person', id: 999_999 },
+      { kind: 'group', id: id + 1 },
+      { kind: 'person', id: -4 },
+    ] as const) {
+      host.receive({ type: 'inspect', requestId: 4, target });
+      expect(env.messages('inspection').at(-1)).toEqual({ type: 'inspection', requestId: 4 });
+    }
+  });
+});
+
+describe("apparition d'un groupe (CRE-03)", () => {
+  /** Journal et commandes en attente d'une partie, d'après sa sauvegarde. */
+  async function logOf(env: FakeEnvironment, host: SimulationHost, requestId: number) {
+    const saved = await saveOf(env, host, requestId);
+    const save = await readSave(new Uint8Array(saved.data), MIGRATIONS);
+    return save.json as { readonly commandLog: unknown[]; readonly pending: unknown[] };
+  }
+
+  it('refuse dès sa réception une espèce, une sous-espèce ou une case impossibles (W-10, W-13)', async () => {
+    const { env, host } = await startedHost();
+    host.receive({ type: 'setPaused', paused: true });
+    const valid = spawns(1).at(0);
+    if (valid === undefined) throw new Error('aucune case');
+    const water = firstCellOf(testState(), (family) => family === 'water');
+    const refused: GameCommand[] = [
+      { ...valid, species: 'dragon' },
+      { ...valid, subspecies: 'sylvains' },
+      { ...valid, subspecies: 'human' },
+      { ...valid, ...water },
+      { ...valid, y: -1 },
+      { ...valid, y: 256 },
+    ];
+    for (const command of refused) host.receive({ type: 'game', command });
+    expect(env.messages('error').map((error) => error.code)).toEqual(refused.map(() => 'command'));
+    // Rien n'attend ni n'entre au journal : le pas suivant ne fait apparaître personne.
+    host.receive({ type: 'stepOnce' });
+    expect(env.messages('delta').at(-1)?.frame.groups).toHaveLength(0);
+    expect(env.messages('delta').at(-1)?.chronicle).toEqual([]);
+    expect(await logOf(env, host, 1)).toMatchObject({ commandLog: [], pending: [] });
+    // La même apparition, sur sa case de terre : le groupe vient au pas suivant.
+    host.receive({ type: 'game', command: valid });
+    host.receive({ type: 'stepOnce' });
+    expect(env.messages('delta').at(-1)?.frame.groups).toHaveLength(GROUP_STRIDE);
+    expect(
+      env
+        .messages('delta')
+        .at(-1)
+        ?.chronicle.map((fact) => fact.kind),
+    ).toEqual(['groupAppeared']);
+  });
+
+  it('écarte, sans figer la partie, une apparition qui lève une exception (L-2)', async () => {
+    // Des humains que le schéma refuserait : leurs couples se forment après leur fécondité.
+    const broken: GameData = {
+      ...testData,
+      species: {
+        entries: [{ ...testHuman, couple: { ...testHuman.couple, minAge: 60 } }],
+        indexOf: (id) => (id === testHuman.id ? 0 : undefined),
+      },
+    };
+    const { env, host } = await startedHost('graine', broken);
+    const quiet = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    for (const command of spawns(1)) host.receive({ type: 'game', command });
+    try {
+      env.advance(NORMAL_MONTH_MS * 3);
+    } finally {
+      quiet.mockRestore();
+    }
+    expect(env.messages('error').map((error) => error.code)).toEqual(['command']);
+    expect(env.messages('error').at(0)?.detail).toContain('spawnGroup');
+    // La partie continue, à sa cadence, sans groupe ni fait ; la commande n'est pas au journal.
+    expect(env.messages('delta').map((delta) => delta.time.tick)).toEqual([1, 2, 3]);
+    for (const delta of env.messages('delta')) {
+      expect(delta.frame.groups).toHaveLength(0);
+      expect(delta.chronicle).toEqual([]);
+    }
+    expect(await logOf(env, host, 1)).toMatchObject({ commandLog: [], pending: [] });
+  });
+});
+
+describe('chronique (CHR-01)', () => {
+  /** Faits reçus d'un hôte, de l'instantané aux deltas, dans l'ordre. */
+  function received(env: FakeEnvironment): ChronicleView[] {
+    return env.sent.flatMap(({ message }) =>
+      message.type === 'snapshot' || message.type === 'delta' ? message.chronicle : [],
+    );
+  }
+  const ranks = (facts: readonly ChronicleView[]) => facts.map((fact) => fact.index);
+  const consecutive = (facts: readonly ChronicleView[]) =>
+    ranks(facts).map((_, offset) => (facts[0]?.index ?? 0) + offset);
+
+  it("livre chaque fait une fois, de l'instantané aux deltas, avant comme après un chargement (W-10)", async () => {
+    const { env, host } = await startedHost();
+    // Des groupes apparaissent de mois en mois : leurs faits arrivent dans plusieurs deltas.
+    const commands = spawns(40, 2);
+    for (let wave = 0; wave < 4; wave++) {
+      for (const command of commands.slice(wave * 10, wave * 10 + 10)) {
+        host.receive({ type: 'game', command });
+      }
+      env.advance(NORMAL_MONTH_MS * 3);
+    }
+    env.advance(NORMAL_MONTH_MS * 12);
+    const facts = received(env);
+    expect(facts.length).toBeGreaterThanOrEqual(40);
+    expect(
+      env.messages('delta').filter((delta) => delta.chronicle.length > 0).length,
+    ).toBeGreaterThanOrEqual(4);
+    expect(ranks(facts)).toEqual(consecutive(facts));
+    expect(facts[0]?.index).toBe(0);
+    // Rechargée, la partie redonne ses derniers faits, à l'identique, puis la suite.
+    const saved = await saveOf(env, host, 1);
+    const { env: other, host: loader } = greetedHost();
+    loader.receive({ type: 'load', requestId: 2, data: saved.data });
+    await until(() => other.messages('loaded').length > 0);
+    expect(other.messages('snapshot').at(0)?.chronicle).toEqual(facts.slice(-CHRONICLE_RECENT));
+    other.advance(NORMAL_MONTH_MS * 12);
+    const after = received(other);
+    expect(ranks(after)).toEqual(consecutive(after));
+    expect(after.length).toBeGreaterThanOrEqual(facts.length);
+  });
+
+  it('donne les faits plus anciens par pages, et pas au-delà de ceux déjà envoyés (D-13)', async () => {
+    const { env: before, host: waiting } = greetedHost();
+    waiting.receive({ type: 'chronicle', requestId: 1, before: 10 });
+    expect(before.messages('chroniclePage')).toEqual([
+      { type: 'chroniclePage', requestId: 1, facts: [] },
+    ]);
+
+    const { env, host } = await startedHost();
+    host.receive({ type: 'setPaused', paused: true });
+    const total = CHRONICLE_RECENT + 30;
+    for (const command of spawns(total, 2)) host.receive({ type: 'game', command });
+    host.receive({ type: 'stepOnce' });
+    const facts = received(env);
+    expect(facts.length).toBeGreaterThanOrEqual(total);
+    const saved = await saveOf(env, host, 2);
+    const { env: other, host: loader } = greetedHost();
+    loader.receive({ type: 'load', requestId: 3, data: saved.data });
+    await until(() => other.messages('loaded').length > 0);
+    // L'instantané n'a que les derniers faits ; le reste vient page après page.
+    let kept = other.messages('snapshot').at(0)?.chronicle ?? [];
+    expect(kept).toHaveLength(CHRONICLE_RECENT);
+    for (let request = 10; (kept[0]?.index ?? 0) > 0; request++) {
+      loader.receive({ type: 'chronicle', requestId: request, before: kept[0]?.index ?? 0 });
+      const page = other.messages('chroniclePage').at(-1);
+      expect(page?.requestId).toBe(request);
+      expect(page?.facts.length).toBeLessThanOrEqual(CHRONICLE_PAGE);
+      kept = [...(page?.facts ?? []), ...kept];
+    }
+    expect(kept).toEqual(facts);
+    // Une demande au-delà du dernier fait envoyé s'arrête à lui : les suivants viendront
+    // avec les deltas.
+    loader.receive({ type: 'chronicle', requestId: 99, before: 1_000_000 });
+    expect(other.messages('chroniclePage').at(-1)?.facts.at(-1)).toEqual(facts.at(-1));
   });
 });
 

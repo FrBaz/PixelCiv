@@ -26,7 +26,7 @@ import {
   type FoodStocks,
   type ForageContent,
 } from './forage';
-import { terrainCosts } from './groups';
+import { terrainCosts } from './terrain';
 import { Population } from './population';
 import { migrateChronicle, restorePeople, savePeople } from './populationSave';
 import { emptySociety } from './society';

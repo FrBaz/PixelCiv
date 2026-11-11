@@ -15,12 +15,13 @@ import type { GameCommand, PaintBiomeCommand } from '../core/protocol';
 import { LAYER_NAMES } from '../core/world';
 import { PARAMETER_NAMES } from '../core/data/worldgen';
 import { depletedCells, feedGroup, FOOD_STRIDE, regrowFood } from './forage';
-import { groupMembers, mergeGroup, moveGroup, splitGroup, walkCost } from './groups';
+import { groupMembers, mergeGroup, moveGroup, splitGroup } from './groups';
 import { lifeCycle } from './lifecycle';
 import { NONE } from './population';
 import { fingerprintPeople } from './populationSave';
 import { spawnGroup } from './spawn';
-import { cellIndex, markDirty, type SimState } from './state';
+import { markDirty, type SimState } from './state';
+import { cellIndex, walkCost } from './terrain';
 
 /** Contenu dont la simulation se sert. */
 export interface SimContent {
@@ -32,7 +33,11 @@ export interface SimContent {
   readonly nomads: Nomads;
 }
 
-/** Applique une commande ; une commande sans effet est sans danger. */
+/**
+ * Applique une commande ; une commande sans effet est sans danger. Une commande vérifie et
+ * calcule tout avant de toucher à l'état : si elle lève une exception, seul le générateur
+ * a pu avancer, et step le ramène en arrière.
+ */
 export function applyCommand(state: SimState, command: GameCommand, content: SimContent): void {
   switch (command.type) {
     case 'paintBiome':
@@ -61,18 +66,38 @@ function paintBiome(state: SimState, command: PaintBiomeCommand, content: SimCon
 }
 
 /**
+ * Commande écartée : elle a levé `error` en s'appliquant. L'état est resté celui d'avant
+ * elle, générateur compris, et elle n'entre pas au journal.
+ */
+export type RejectedCommand = (command: GameCommand, error: unknown) => void;
+
+/**
  * Fait passer un mois. Les commandes reçues s'appliquent d'abord, et sont journalisées
- * avec le pas au début duquel elles s'appliquent. Renvoie les membres de chaque groupe à
- * la fin du mois, dans l'ordre des emplacements, tels que les donnerait groupMembers.
+ * avec le pas au début duquel elles s'appliquent. Sans `rejected`, l'exception d'une
+ * commande remonte ; avec, la commande est écartée et signalée, et le mois continue.
+ * Renvoie les membres de chaque groupe à la fin du mois, dans l'ordre des emplacements,
+ * tels que les donnerait groupMembers.
  */
 export function step(
   state: SimState,
   commands: readonly GameCommand[],
   content: SimContent,
+  rejected?: RejectedCommand,
 ): ReadonlyMap<number, readonly number[]> {
   for (const command of commands) {
+    if (rejected === undefined) {
+      applyCommand(state, command, content);
+    } else {
+      const streams = state.rng.states();
+      try {
+        applyCommand(state, command, content);
+      } catch (error) {
+        state.rng.restore(streams);
+        rejected(command, error);
+        continue;
+      }
+    }
     state.commandLog.push({ tick: state.tick, command });
-    applyCommand(state, command, content);
   }
   // Systèmes, dans un ordre fixe.
   const { people, society, food, world, size, tick } = state;

@@ -665,3 +665,8 @@ button:disabled {
   width: 100%;
   text-align: left;
 }
+
+.chronicle-older button {
+  width: 100%;
+  margin-top: 0.375rem;
+}

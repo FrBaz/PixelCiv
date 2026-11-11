@@ -3,7 +3,6 @@
  * (CLAUDE.md, « Performances » ; ADR 0009), la population et ses groupes (ADR 0011), le
  * temps, le journal des commandes et le générateur de la partie.
  */
-import { wrapX } from '../core/cylinder';
 import type { ChunkPatch, GameCommand, LoggedCommand } from '../core/protocol';
 import { Rng } from '../core/rng';
 import {
@@ -15,9 +14,12 @@ import {
 } from '../core/world';
 import type { WorldParams } from '../core/worldParams';
 import { emptyStocks, type FoodStocks } from './forage';
-import { terrainCosts, type GroupsContent } from './groups';
+import type { GroupsContent } from './groups';
 import { Population } from './population';
 import { emptySociety, type Society } from './society';
+import { terrainCosts } from './terrain';
+
+export { cellIndex } from './terrain';
 
 export interface SimState {
   /** Paramètres du monde : graine, taille, réglages de la création. */
@@ -77,18 +79,6 @@ export function createState(
     rng: new Rng(params.seed),
     dirtyChunks: new Uint8Array(grid.columns * grid.rows),
   };
-}
-
-/**
- * Case qui contient le point (x, y) : sa colonne boucle d'est en ouest, et une ligne
- * hors du monde, au nord ou au sud, n'en a pas, pas plus qu'un point non fini. La partie
- * entière est prise avant de boucler : x = -0,1 tombe bien dans la dernière colonne.
- */
-export function cellIndex(size: WorldSize, x: number, y: number): number | undefined {
-  const { width, height } = size;
-  const row = Math.floor(y);
-  if (!Number.isFinite(x) || !(row >= 0 && row < height)) return undefined;
-  return row * width + wrapX(Math.floor(x), width);
 }
 
 /** Marque le bloc de la case `index` comme modifié. */

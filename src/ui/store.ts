@@ -87,6 +87,8 @@ export interface UiActions {
   inspectPerson(id: number): void;
   inspectGroup(id: number): void;
   closeSheet(): void;
+  /** Demande au worker la page de faits de la chronique qui précède les faits gardés. */
+  olderChronicle(): void;
   /** Centre la carte sur une case. */
   focus(x: number, y: number): void;
 }
@@ -124,10 +126,14 @@ export type Sheet =
   | { readonly kind: 'group'; readonly view: GroupView };
 export const sheet = signal<Sheet | undefined>(undefined);
 
-/** Faits de la chronique reçus, du plus ancien au plus récent ; les derniers seulement. */
-export const CHRONICLE_KEPT = 300;
+/**
+ * Faits de la chronique reçus, du plus ancien au plus récent : les derniers, et les pages
+ * plus anciennes demandées (app/chronicle.ts).
+ */
 export const chronicle = signal<readonly ChronicleView[]>([]);
 export const chronicleOpen = signal(false);
+/** Une page de faits plus anciens est demandée, et pas encore reçue. */
+export const chronicleLoading = signal(false);
 
 /** Ce que l'écran de création propose : bornes des paramètres, tailles, taille par défaut. */
 export interface CreationSetup {

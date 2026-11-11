@@ -127,6 +127,16 @@ export class RandomStream {
   state(): StreamState {
     return [this.s0 >>> 0, this.s1 >>> 0, this.s2 >>> 0, this.s3 >>> 0];
   }
+
+  /** Reprend un état donné par state() : les tirages faits depuis sont comme annulés. */
+  restore(state: StreamState): void {
+    [this.s0, this.s1, this.s2, this.s3] = state.map((word) => word >>> 0) as [
+      number,
+      number,
+      number,
+      number,
+    ];
+  }
 }
 
 /** Générateur d'une partie : la graine du monde et ses flux nommés. */
@@ -155,5 +165,18 @@ export class Rng {
   states(): Record<string, StreamState> {
     const names = [...this.streams.keys()].sort();
     return Object.fromEntries(names.map((name) => [name, this.stream(name).state()]));
+  }
+
+  /**
+   * Revient aux états `states`, donnés plus tôt par states() : chaque flux reprend le sien,
+   * en place (un flux reste le même objet), et un flux créé depuis disparaît, comme s'il
+   * n'avait jamais servi.
+   */
+  restore(states: Readonly<Record<string, StreamState>>): void {
+    for (const [name, stream] of this.streams) {
+      const state = Object.hasOwn(states, name) ? states[name] : undefined;
+      if (state === undefined) this.streams.delete(name);
+      else stream.restore(state);
+    }
   }
 }

@@ -258,6 +258,9 @@
   "creator.hint": "Touchez la carte pour faire apparaître le groupe.",
   "creator.done": "Terminer",
   "creator.water": "Choisissez une terre : un groupe ne peut pas apparaître là.",
+  "creator.summit": "Choisissez une terre moins haute : personne ne franchit ce sommet.",
+  "creator.outside": "Choisissez une case du monde : au-delà des pôles, il n'y a rien.",
+  "command.refused": "La simulation a refusé cette action.",
   "sheet.close": "Fermer la fiche",
   "person.title": "Fiche d'un individu",
   "person.woman": "femme",
@@ -314,6 +317,8 @@
   "chronicle.toggle": "Chronique",
   "chronicle.title": "Chronique",
   "chronicle.empty": "Rien encore : faites apparaître un groupe.",
+  "chronicle.older": "Faits plus anciens",
+  "chronicle.loading": "Recherche des faits plus anciens…",
   "chronicle.groupAppeared": {
     "one": "Le groupe {of} apparaît, avec {count} personne.",
     "other": "Le groupe {of} apparaît, avec {count} personnes."

@@ -20,7 +20,15 @@ import { spawnAdultAges } from '../core/data/people';
 import type { SpawnGroupCommand } from '../core/protocol';
 import type { RandomStream } from '../core/rng';
 import { inheritGenome, pureAncestry, randomGenome } from './genetics';
-import { FEMALE, GENOME_WORDS, MALE, NONE, NEVER, type Population } from './population';
+import {
+  FEMALE,
+  GENOME_WORDS,
+  MALE,
+  NONE,
+  NEVER,
+  type NewPerson,
+  type Population,
+} from './population';
 import { MONTHS_PER_YEAR } from './people';
 import { NAMING_RULES, type Group, type NamingRule } from './society';
 import { cellIndex, type SimState } from './state';
@@ -78,9 +86,23 @@ function pickRule(content: SimContent, random: RandomStream): NamingRule {
   return 'father';
 }
 
+/** Un membre prévu du groupe, avant son entrée dans la population. */
+interface Planned {
+  readonly person: NewPerson & { readonly genome: Uint32Array };
+  /** Son conjoint, par son rang dans le plan, ou -1. */
+  partner: number;
+  /** Pas de son dernier accouchement, ou NEVER. */
+  lastBirth: number;
+}
+
 /**
  * Fait apparaître le groupe de la commande ; sans effet sur une case infranchissable
  * (eau, lit d'un fleuve, sommet : `state.cost` infini) ou hors du monde.
+ *
+ * Tout se tire et se calcule d'abord : langue, culture, et chaque membre, dans l'ordre où
+ * il entrera dans la population. L'état ne change qu'ensuite, d'un bloc, par des écritures
+ * qui ne peuvent pas échouer : une exception en cours de route le laisse intact, hors du
+ * générateur (applyCommand).
  */
 export function spawnGroup(state: SimState, command: SpawnGroupCommand, content: SimContent): void {
   const cell = cellIndex(state.size, command.x, command.y);
@@ -98,35 +120,26 @@ export function spawnGroup(state: SimState, command: SpawnGroupCommand, content:
   const x = cell % state.size.width;
   const y = (cell - x) / state.size.width;
   const language = { id: society.languages.length + 1, seed: random.nextUint32() };
-  society.languages.push(language);
   const culture = {
     id: society.cultures.length + 1,
     language: language.id,
     naming: pickRule(content, random),
     founded: tick,
   };
-  society.cultures.push(culture);
-  const group: Group = {
-    id: society.nextGroupId++,
-    culture: culture.id,
-    founded: tick,
-    parent: NONE,
-    leader: NONE,
-    x,
-    y,
-    homeX: x,
-    homeY: y,
-    targetX: -1,
-    targetY: -1,
-    food: STARTING_FOOD * command.count,
-  };
-  society.groups.set(group.id, group);
+  const groupId = society.nextGroupId;
 
-  // Emplacements des membres, au fil de leur apparition.
-  const slots: number[] = [];
-  const added = (slot: number): number => {
-    slots.push(slot);
-    return slot;
+  // Les membres prévus, dans l'ordre de leur entrée dans la population, qui leur donnera
+  // des identifiants consécutifs à partir de firstId.
+  const planned: Planned[] = [];
+  const firstId = people.nextId;
+  const plan = (person: Planned['person']): number => {
+    planned.push({ person, partner: -1, lastBirth: NEVER });
+    return planned.length - 1;
+  };
+  const member = (index: number): Planned => {
+    const found = planned.at(index);
+    if (found === undefined) throw new RangeError(`membre prévu inconnu : ${index}`);
+    return found;
   };
   const ancestry = pureAncestry(subspeciesIndex);
   const months = (years: number) => years * MONTHS_PER_YEAR;
@@ -135,27 +148,25 @@ export function spawnGroup(state: SimState, command: SpawnGroupCommand, content:
     const code = nameCode(random);
     return { code: culture.naming === 'none' ? 0 : code, language: language.id };
   };
-  /** Un adulte de `age` mois, sans parents connus. */
+  /** Un adulte de `age` mois, sans parents connus ; renvoie son rang dans le plan. */
   const adult = (sex: number, age: number): number => {
     const family = founderName();
     const genome = new Uint32Array(GENOME_WORDS);
     randomGenome(content.genetics, subspecies, random, genome);
-    return added(
-      people.add({
-        sex,
-        birth: tick - age,
-        species: speciesIndex,
-        ancestry,
-        genome,
-        mother: NONE,
-        father: NONE,
-        group: group.id,
-        culture: culture.id,
-        givenName: random.nextUint32(),
-        familyName: family.code,
-        familyLanguage: family.language,
-      }),
-    );
+    return plan({
+      sex,
+      birth: tick - age,
+      species: speciesIndex,
+      ancestry,
+      genome,
+      mother: NONE,
+      father: NONE,
+      group: groupId,
+      culture: culture.id,
+      givenName: random.nextUint32(),
+      familyName: family.code,
+      familyLanguage: family.language,
+    });
   };
   const { fertility, couple } = species;
   const [youngest, eldest] = spawnAdultAges(species);
@@ -175,12 +186,12 @@ export function spawnGroup(state: SimState, command: SpawnGroupCommand, content:
       Math.max(youngest, womanAge - gap),
       Math.min(eldest, womanAge + gap) + 1,
     );
-    const mother = adult(FEMALE, womanAge);
-    const father = adult(MALE, manAge);
-    const motherId = people.get('id', mother);
-    const fatherId = people.get('id', father);
-    people.set('partner', mother, fatherId);
-    people.set('partner', father, motherId);
+    const motherIndex = adult(FEMALE, womanAge);
+    const fatherIndex = adult(MALE, manAge);
+    const mother = member(motherIndex);
+    const father = member(fatherIndex);
+    mother.partner = fatherIndex;
+    father.partner = motherIndex;
     const wanted = Math.min(remaining - 2, random.nextInt(MAX_CHILDREN + 1));
     // L'aîné est né quand ses parents étaient en âge d'être en couple, sa mère féconde,
     // et il n'est pas encore adulte.
@@ -201,48 +212,65 @@ export function spawnGroup(state: SimState, command: SpawnGroupCommand, content:
       const genome = new Uint32Array(GENOME_WORDS);
       inheritGenome(
         content.genetics,
-        people.columns.genome,
-        mother * GENOME_WORDS,
-        people.columns.genome,
-        father * GENOME_WORDS,
+        mother.person.genome,
+        0,
+        father.person.genome,
+        0,
         random,
         genome,
       );
       const family = inheritedFamilyName(
         culture.naming,
-        {
-          code: people.get('familyName', mother),
-          language: people.get('familyLanguage', mother),
-        },
-        {
-          code: people.get('familyName', father),
-          language: people.get('familyLanguage', father),
-        },
+        { code: mother.person.familyName, language: mother.person.familyLanguage },
+        { code: father.person.familyName, language: father.person.familyLanguage },
         language.id,
         random,
       );
-      added(
-        people.add({
-          sex: random.nextInt(2) === 0 ? FEMALE : MALE,
-          birth: tick - age,
-          species: speciesIndex,
-          ancestry,
-          genome,
-          mother: motherId,
-          father: fatherId,
-          group: group.id,
-          culture: culture.id,
-          givenName: random.nextUint32(),
-          familyName: family.code,
-          familyLanguage: family.language,
-        }),
-      );
+      plan({
+        sex: random.nextInt(2) === 0 ? FEMALE : MALE,
+        birth: tick - age,
+        species: speciesIndex,
+        ancestry,
+        genome,
+        mother: firstId + motherIndex,
+        father: firstId + fatherIndex,
+        group: groupId,
+        culture: culture.id,
+        givenName: random.nextUint32(),
+        familyName: family.code,
+        familyLanguage: family.language,
+      });
     }
     // Le dernier accouchement : celui du plus jeune, dont l'allaitement suit son cours.
     const last = ages.at(0);
-    people.set('lastBirth', mother, last === undefined ? NEVER : tick - last);
+    mother.lastBirth = last === undefined ? NEVER : tick - last;
     remaining -= 2 + ages.length;
   }
+
+  // Le groupe prend place, d'un bloc : plus rien ne tire au sort ni ne peut échouer.
+  society.languages.push(language);
+  society.cultures.push(culture);
+  const group: Group = {
+    id: society.nextGroupId++,
+    culture: culture.id,
+    founded: tick,
+    parent: NONE,
+    leader: NONE,
+    x,
+    y,
+    homeX: x,
+    homeY: y,
+    targetX: -1,
+    targetY: -1,
+    food: STARTING_FOOD * command.count,
+  };
+  society.groups.set(group.id, group);
+  const slots = planned.map((entry) => people.add(entry.person));
+  planned.forEach((entry, index) => {
+    const slot = slots[index] ?? 0;
+    if (entry.partner >= 0) people.set('partner', slot, firstId + entry.partner);
+    people.set('lastBirth', slot, entry.lastBirth);
+  });
   // Le meneur : l'aîné du groupe ; à âge égal, le premier dans l'ordre des emplacements.
   const members = slots.sort((a, b) => a - b);
   const eldestMember = members.reduce(

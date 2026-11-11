@@ -49,6 +49,22 @@ describe('flux nommés', () => {
       expected,
     );
   });
+
+  it('reviennent en arrière, en place, et oublient les flux créés depuis', () => {
+    const rng = new Rng('graine');
+    const rain = rng.stream('pluie');
+    rain.nextUint32();
+    const saved = rng.states();
+    const expected = Array.from({ length: 4 }, () => rain.nextUint32());
+    rng.stream('vent').nextUint32();
+    rng.restore(saved);
+    // Le même objet, revenu à son état : il redonne les mêmes tirages.
+    expect(rng.stream('pluie')).toBe(rain);
+    expect(Array.from({ length: 4 }, () => rain.nextUint32())).toEqual(expected);
+    // Le flux du vent n'a jamais existé : il repart de sa graine.
+    expect(Object.keys(rng.states())).toEqual(['pluie']);
+    expect(rng.stream('vent').state()).toEqual(streamSeed('graine', 'vent'));
+  });
 });
 
 describe('tirages', () => {
