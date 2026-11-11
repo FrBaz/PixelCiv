@@ -2,7 +2,14 @@ import { describe, expect, it } from 'vitest';
 import { CHUNK_SIZE, emptyLayers, WORLD_SIZES } from '../core/world';
 import { cellIndex, createState, takeDirtyChunks } from './state';
 import { applyCommand, fingerprint, step, type SimContent } from './step';
-import { firstCellOf, testData, testHuman, testParams, testState } from './testing';
+import {
+  firstCellOf,
+  scatteredGroups,
+  testData,
+  testHuman,
+  testParams,
+  testState,
+} from './testing';
 
 const land = (family: string) => family !== 'water';
 
@@ -160,5 +167,22 @@ describe('pas', () => {
     // puis gibier plus rare dans le froid, pêche gelée comme sur la carte, marche sans
     // coin coupé, scissions (meneur, fratries, aire, une seule marche).
     expect(fingerprint(state)).toBe('c955a80d');
+  });
+
+  it("redonnent l'empreinte de référence de trente mois de trois mille individus (ADR 0011)", () => {
+    // Cent groupes de trente répartis sur un vrai monde, comme les mesures de la
+    // démographie (scatteredGroups) : climat, saisons, biomes, rivières et relief entrent
+    // dans l'empreinte, à une échelle où les optimisations de la population comptent.
+    // Trop nombreux pour le monde Petit, ils se scindent, et la faim les éclaircit : un
+    // peu plus de 2 300 vivants, 173 groupes et près d'un millier de morts au bout de
+    // trente mois. Comme celle des scénarios du banc d'essai, qui l'imprime, l'empreinte
+    // ne change que si le déroulement change (D-10).
+    const state = testState();
+    step(state, scatteredGroups(state, 100), testData);
+    for (let tick = 1; tick < 30; tick++) step(state, [], testData);
+    expect(state.society.groups.size).toBeGreaterThan(100);
+    expect(state.people.count).toBeGreaterThan(2000);
+    expect(state.people.archive.rows).toBeGreaterThan(500);
+    expect(fingerprint(state)).toBe('2b9b4590');
   });
 });

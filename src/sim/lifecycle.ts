@@ -115,9 +115,10 @@ export interface Hardship {
 /**
  * Rigueurs du mois pour l'emplacement `slot`, écrites dans `out` : le froid et la chaleur,
  * hors du confort de l'espèce (`hardship.comfort` et `hardship.extremes` ; NaN : pas de
- * climat connu), surtout pour les plus fragiles, et la faim.
+ * climat connu), surtout pour les plus fragiles et les moins adaptés ; et la faim, selon
+ * la seule nutrition, la même à tout âge et pour toute ascendance.
  */
-function hardshipInto(
+export function hardshipInto(
   species: Species,
   people: Population,
   slot: number,

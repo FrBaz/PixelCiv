@@ -6,7 +6,7 @@ Le code et le contenu propres au jeu restent sous droits réservés : le dépôt
 
 ## Pack de sprites
 
-Pas intégré. Le pack retenu par l'auteur est la version gratuite de « 2D Pixel Art Male and Female Character », de GandalfHardcore : <https://gandalfhardcore.itch.io/2d-pixel-art-male-and-female-character> (PRD, question 14). Sa licence reste à vérifier avant tout versement (AST-01, AST-02), et les mini-sprites de la carte, de 6 à 10 px de haut, seront de toute façon générés (REN-04, phase 2). On consignera ici sa licence s'il est intégré.
+Pas intégré. Le pack retenu par l'auteur est la version gratuite de « 2D Pixel Art Male and Female Character », de GandalfHardcore : <https://gandalfhardcore.itch.io/2d-pixel-art-male-and-female-character> (PRD, question 14). Sa licence reste à vérifier avant tout versement (AST-01, AST-02). Les mini-sprites de la carte n'en dépendent pas : ils sont dessinés pour le jeu, sous la licence du dépôt, en grilles de texte de 6 à 9 px de haut (`assets/pixel/`), et recolorés pour chaque individu (REN-04, REN-09). On consignera ici sa licence s'il est intégré.
 
 | Auteur | Lien | Licence | Emplacement |
 |---|---|---|---|
@@ -42,8 +42,8 @@ Ces algorithmes ont été réécrits à partir de leur description publiée, san
 | Algorithme | Usage | Auteurs | Référence |
 |---|---|---|---|
 | xoshiro128** | Générateur pseudo-aléatoire (`src/core/rng.ts`) | David Blackman et Sebastiano Vigna | https://prng.di.unimi.it |
-| SplitMix et finaliseur de MurmurHash3 | Graines des flux du générateur (`src/core/rng.ts`) | Guy L. Steele Jr., Doug Lea et Christine H. Flood ; Austin Appleby | « Fast Splittable Pseudorandom Number Generators », OOPSLA 2014 ; https://github.com/aappleby/smhasher |
-| FNV-1a | Empreintes de l'état (`src/core/hash.ts`) | Glenn Fowler, Landon Curt Noll et Kiem-Phong Vo | http://www.isthe.com/chongo/tech/comp/fnv/ |
+| SplitMix et finaliseur de MurmurHash3 | Graines des flux du générateur (`src/core/rng.ts`) et des noms de chaque langue (`src/gen/names.ts`) | Guy L. Steele Jr., Doug Lea et Christine H. Flood ; Austin Appleby | « Fast Splittable Pseudorandom Number Generators », OOPSLA 2014 ; https://github.com/aappleby/smhasher |
+| FNV-1a | Empreintes de l'état (`src/core/hash.ts`) ; variante de chaque portrait, tirée du génome (`src/ui/Portrait.tsx`) | Glenn Fowler, Landon Curt Noll et Kiem-Phong Vo | http://www.isthe.com/chongo/tech/comp/fnv/ |
 | Réduction d'argument de Cody et Waite | Fonctions trigonométriques déterministes (`src/core/dmath.ts`) | William J. Cody et William Waite | *Software Manual for the Elementary Functions*, Prentice-Hall, 1980 |
 | Bruit simplex | Relief, climat, flore et gisements (`src/core/noise.ts`), au noyau resserré à √0,5 | Ken Perlin ; forme et code de Stefan Gustavson (domaine public) | Ken Perlin, « Noise hardware », SIGGRAPH 2001 ; Stefan Gustavson, « Simplex noise demystified », 2005 |
 | Bruit de crêtes | Chaînes de montagnes (`src/worldgen/sampler.ts`) | F. Kenton Musgrave | *Texturing and Modeling: A Procedural Approach*, Academic Press, 1994 |
@@ -51,7 +51,10 @@ Ces algorithmes ont été réécrits à partir de leur description publiée, san
 | Algorithme de Dial | Champs de distance (`src/worldgen/grid.ts`) | Robert B. Dial | « Algorithm 360: Shortest-path forest with topological ordering », *Communications of the ACM* 12, 1969 |
 | Formule de Turc et Pike | Évapotranspiration et ruissellement (`src/worldgen/hydrology.ts`) | Lucien Turc ; J. G. Pike | L. Turc, « Le bilan d'eau des sols », *Annales agronomiques*, 1954 ; J. G. Pike, « The estimation of annual run-off from meteorological data in a tropical climate », *Journal of Hydrology* 2, 1964 |
 | Seuil d'aridité de Köppen | Climats secs du classement des biomes (`data/worldgen.json`) | Wladimir Köppen | « Das geographische System der Klimate », *Handbuch der Klimatologie*, 1936 |
+| Mortalité de Siler | Risque de mort selon l'âge, pour chaque espèce (`src/sim/lifecycle.ts` ; paramètres dans `data/species.json`, décrits par `src/core/data/people.ts`) | William Siler | « A competing-risk model for animal mortality », *Ecology* 60, 1979 |
+| Transformation de Box et Muller | Tirages gaussiens des traits continus, à l'apparition comme à l'hérédité (`src/sim/genetics.ts`) | George E. P. Box et Mervin E. Muller | « A Note on the Generation of Random Normal Deviates », *The Annals of Mathematical Statistics* 29, 1958 |
 | Tramage ordonné de Bayer | Couverture de neige et de glace, sans sortir des palettes (`src/render/bake.ts`, `src/render/mapShader.ts`) | Bryce E. Bayer | « An optimum method for two-level rendition of continuous-tone pictures », IEEE International Conference on Communications, 1973 |
+| Spirale de Vogel | Grappe des mini-sprites autour de leur groupe, à l'angle d'or (`src/render/crowd.ts`) | Helmut Vogel | « A better way to construct the sunflower head », *Mathematical Biosciences* 44, 1979 |
 
 ## Outils de développement
 

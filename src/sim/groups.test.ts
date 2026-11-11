@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { deltaX } from '../core/cylinder';
 import { readSave, writeSave } from '../core/save/format';
 import type { WorldSize } from '../core/world';
 import { GENERATOR_VERSION } from '../worldgen/generate';
@@ -274,6 +275,29 @@ describe('groupes nomades (tâche 2.5)', () => {
       ).toBeLessThan(testData.nomads.range * 3);
     }
     expect(visited.size).toBeGreaterThan(5);
+  });
+
+  it('choisit sa destination à dix cases au plus de lui, l’aire le rappelant (F-12)', () => {
+    // Une plaine uniforme, et un groupe à soixante cases du centre de son aire : partout la
+    // même nourriture, seul compte le malus hors de l'aire. Les cases comparées se tirent
+    // autour du groupe, et non dans son aire : chaque destination est à dix cases au plus
+    // de lui, et le rapproche de l'aire.
+    const state = flatState();
+    const group = spawn(state, { x: 40, y: 60 });
+    group.homeX = 100;
+    group.homeY = 60;
+    const members = groupMembers(state.people).get(group.id) ?? [];
+    const random = state.rng.stream('tests');
+    const { width } = state.size;
+    const away = () => cellDistance(width, group.x, group.y, group.homeX, group.homeY);
+    const start = away();
+    for (let month = 0; month < 12; month++) {
+      const from = { x: group.x, y: group.y };
+      moveGroup(state, group, members, testData, random);
+      expect(Math.abs(deltaX(from.x, group.targetX, width))).toBeLessThanOrEqual(10);
+      expect(Math.abs(group.targetY - from.y)).toBeLessThanOrEqual(10);
+    }
+    expect(away()).toBeLessThan(start - 20);
   });
 
   it('se scinde au-delà du seuil en deux groupes de même culture, familles réunies', () => {

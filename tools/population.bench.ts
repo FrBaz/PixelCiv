@@ -8,6 +8,10 @@
  * la plus rapide (×16), ou un pas de 50 000 celle d'un mois à ×4, sur la machine qui le
  * lance : ce sont des garde-fous contre les régressions ; la cible de 50 000 individus à
  * ×16 se mesure sur un vrai PC. Les mesures sont consignées dans docs/BACKLOG.md.
+ *
+ * Chaque scénario imprime aussi l'empreinte de l'état au bout de ses trente mois : une
+ * optimisation qui ne change pas le déroulement la laisse intacte (ADR 0011), ce que l'on
+ * vérifie en comparant la sortie du banc avant et après elle.
  */
 import { describe, expect, it } from 'vitest';
 import { loadGameData } from '../src/core/data';
@@ -16,7 +20,7 @@ import { WORLD_SIZES } from '../src/core/world';
 import { defaultWorldParams } from '../src/core/worldParams';
 import { spawnGroup } from '../src/sim/spawn';
 import { createState, type SimState } from '../src/sim/state';
-import { step } from '../src/sim/step';
+import { fingerprint, step } from '../src/sim/step';
 import { groupsFrame } from '../src/sim/views';
 import { generateWorld } from '../src/worldgen/generate';
 
@@ -102,7 +106,7 @@ describe('pas mensuel de la population', () => {
           `image ${format(mean(frames))}, total moyen ${format(mean(total))}, ` +
           `p95 ${format(percentile(sorted, 0.95))}, max ${format(sorted.at(-1) ?? 0)} ` +
           `(un mois à ×16 : ${format(monthDuration('faster'))}, ` +
-          `à ×4 : ${format(monthDuration('fast'))})\n`,
+          `à ×4 : ${format(monthDuration('fast'))}) ; empreinte ${fingerprint(state)}\n`,
       );
       expect(mean(total)).toBeLessThan(monthDuration(people === 50_000 ? 'fast' : 'faster'));
     });

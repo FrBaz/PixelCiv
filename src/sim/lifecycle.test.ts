@@ -8,9 +8,11 @@ import {
   birthCulture,
   causeOf,
   fertilityAt,
+  hardshipInto,
   lifeCycle,
   monthlyProbability,
   silerHazards,
+  type Hardship,
 } from './lifecycle';
 import {
   ANCESTRY_SLOTS,
@@ -20,6 +22,7 @@ import {
   MALE,
   NEVER,
   NONE,
+  Population,
   type DeathCause,
   type NewPerson,
 } from './population';
@@ -462,6 +465,63 @@ describe('causes de mort (IND-04)', () => {
         random,
       ),
     ).toBe('cold');
+  });
+});
+
+describe('rigueurs du mois (ADR 0011 ; L-12)', () => {
+  it('rendent le froid plus dur aux fragiles et aux moins adaptés, la faim égale pour tous', () => {
+    const people = new Population();
+    const subspecies = (id: string) => human.subspecies.findIndex((entry) => entry.id === id);
+    const person = (years: number, kind: string) =>
+      people.add({
+        sex: FEMALE,
+        birth: -years * MONTHS_PER_YEAR,
+        species: 0,
+        ancestry: pureAncestry(subspecies(kind)),
+        genome: new Uint32Array(GENOME_WORDS),
+        mother: NONE,
+        father: NONE,
+        group: NONE,
+        culture: 1,
+        givenName: 1,
+        familyName: 0,
+        familyLanguage: 1,
+      });
+    // Un nourrisson, une adulte et une vieille, nordiques ou des sables.
+    const ages = [0, 30, 70] as const;
+    const everyone = ['nordic', 'sands'].flatMap((kind) =>
+      ages.map((years) => ({ years, kind, slot: person(years, kind) })),
+    );
+    const hardship = (slot: number, years: number, temperature: number) => {
+      const out: Hardship = { cold: 0, heat: 0, famine: 0 };
+      hardshipInto(human, people, slot, years, temperature, out);
+      return out;
+    };
+    const comfortable = (human.hardship.comfort[0] + human.hardship.comfort[1]) / 2;
+    const [coldest] = human.hardship.extremes;
+    // La faim ne suit que la nutrition : ni l'âge ni l'ascendance n'y entrent.
+    for (const nutrition of [0, 128, 255]) {
+      const missing = 1 - nutrition / 255;
+      const expected = human.hardship.famine * missing * missing;
+      for (const { years, slot } of everyone) {
+        people.set('nutrition', slot, nutrition);
+        for (const temperature of [comfortable, coldest]) {
+          expect(hardship(slot, years, temperature).famine).toBeCloseTo(expected, 12);
+        }
+      }
+    }
+    // Le froid épargne le confort, frappe surtout les plus jeunes et les plus vieux, et
+    // moins ceux qu'adapte leur sous-espèce.
+    const cold = (years: number, kind: string) => {
+      const found = everyone.find((entry) => entry.years === years && entry.kind === kind);
+      return hardship(found?.slot ?? -1, years, coldest).cold;
+    };
+    for (const { years, slot } of everyone) expect(hardship(slot, years, comfortable).cold).toBe(0);
+    for (const kind of ['nordic', 'sands']) {
+      expect(cold(0, kind)).toBeGreaterThan(cold(30, kind));
+      expect(cold(70, kind)).toBeGreaterThan(cold(30, kind));
+    }
+    for (const years of ages) expect(cold(years, 'nordic')).toBeLessThan(cold(years, 'sands'));
   });
 });
 

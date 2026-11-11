@@ -1,8 +1,8 @@
 # Plan de développement — Jeu de simulation de mondes et de vies
 
-Version 0.5 · 9 novembre 2026 · complète le PRD (`docs/PRD.md`, version 0.5)
+Version 0.6 · 11 novembre 2026 · complète le PRD (`docs/PRD.md`, version 0.5)
 
-Historique : 0.1, première version ; 0.2, intégration de la séance C1 sur le monde ; 0.3, générateurs de portraits et d'armoiries conçus à neuf, portraits d'environ 64×64 px ; 0.4, ADR de la phase 0 et dossier `src/worker/` (tâche 0.2) ; 0.5, intégration de la séance C2 sur les peuples et les établissements.
+Historique : 0.1, première version ; 0.2, intégration de la séance C1 sur le monde ; 0.3, générateurs de portraits et d'armoiries conçus à neuf, portraits d'environ 64×64 px ; 0.4, ADR de la phase 0 et dossier `src/worker/` (tâche 0.2) ; 0.5, intégration de la séance C2 sur les peuples et les établissements ; 0.6, lot « Population » de la phase 2 aligné sur l'ADR 0011 : les emplacements sont recyclés, les identifiants restent stables (relecture de la phase 2).
 
 ## 1. Principes
 
@@ -230,7 +230,7 @@ Objectif : une population qui vit, se reproduit, transmet ses gènes et meurt, e
 
 | Lot | Contenu | Exigences |
 |---|---|---|
-| Population | Stockage en tableaux typés, identifiants recyclés, archivage des morts. | IND-01, IND-03 |
+| Population | Stockage en tableaux typés, emplacements recyclés et identifiants stables, archivage des morts. | IND-01, IND-03 |
 | Génétique | Génome compact, allèles dominants et récessifs, traits polygéniques, mutations. | IND-05, IND-06 |
 | Cycle de vie | Âges, mortalité et fertilité par espèce, couples, naissances ; adaptations des sous-espèces humaines ; métissage. | IND-04, ESP-01 à ESP-04 |
 | Survie | Faim, cueillette, chasse, pêche, avec des rendements saisonniers et une mortalité hivernale (D9) ; faune chassable. | ECO-11, RES-03, RES-04, FAU-01, SAI-03 |

@@ -23,5 +23,5 @@ Au build, et au lancement du serveur de développement, `tools/pixel-atlas.ts` l
 
 ## Contenu
 
-- `sprites/` : mini-sprites de la carte (REN-04), de 6 à 10 pixels de haut, à la densité de pixels de la carte (REN-08) : nourrisson de 4 × 6, enfant de 4 × 7, adulte de 6 × 9. Deux images par classe d'âge, pour la marche, de même taille ; les adultes ont un motif par sexe, le nourrisson et l'enfant un seul.
+- `sprites/` : mini-sprites de la carte, de 6 à 9 pixels de haut, dans la plage de REN-04 (de 6 à 10), à la densité de pixels de la carte (REN-08) : nourrisson de 4 × 6, enfant de 4 × 7, adulte de 6 × 9, largeur × hauteur. Le test de l'atlas (`tools/pixel-atlas.test.ts`) vérifie la plage de REN-04, et que le nourrisson est plus petit que l'enfant, l'enfant que l'adulte. Deux images par classe d'âge, pour la marche, de même taille ; les adultes ont un motif par sexe, le nourrisson et l'enfant un seul.
 - `icons/` : icônes de la carte, comme la bannière d'un groupe vu de loin (`icons/group`), aux couleurs de l'habit de sa culture. Quand l'échelle de la carte le permet, l'icône est à la densité de la carte, un pixel d'icône par pixel de carte ; plus loin, elle devient un marqueur d'interface, à 2 pixels CSS par pixel d'icône, arrondis en pixels physiques entiers (`src/render/crowd.ts`).
