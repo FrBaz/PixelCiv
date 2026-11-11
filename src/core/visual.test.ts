@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { decodeVisual, encodeVisual } from './visual';
+import { MAX_ALLELES } from './data/people';
+import { decodeVisual, encodeVisual, visualCode } from './visual';
 
 describe("code d'apparence des mini-sprites", () => {
   it('se relit à l’identique, sur 16 bits', () => {
@@ -14,5 +15,17 @@ describe("code d'apparence des mini-sprites", () => {
       hair: 0,
       grey: false,
     });
+  });
+
+  it('garde chacun des allèles de cheveux que les données permettent (A-6)', () => {
+    // Le schéma admet MAX_ALLELES allèles par locus : aucun ne se replie sur un autre, et
+    // les autres champs du code n'en sont pas touchés.
+    for (let hair = 0; hair < MAX_ALLELES; hair++) {
+      for (const grey of [false, true]) {
+        const code = visualCode(1, 2, 5, hair, grey);
+        expect(code).toBeLessThan(1 << 16);
+        expect(decodeVisual(code)).toEqual({ sex: 1, age: 2, skin: 5, hair, grey });
+      }
+    }
   });
 });

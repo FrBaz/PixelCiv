@@ -1,5 +1,12 @@
 import { describe, expect, it } from 'vitest';
-import { familyName, givenName, MAX_NAME_LENGTH, phonology, wordOf } from './names';
+import {
+  consonantSounds,
+  familyName,
+  givenName,
+  MAX_NAME_LENGTH,
+  phonology,
+  wordOf,
+} from './names';
 
 const SEEDS = Array.from({ length: 40 }, (_, index) => (index + 1) * 2654435761);
 
@@ -50,6 +57,36 @@ describe('langues et noms (LAN-01, IND-08)', () => {
         // Jamais trois voyelles de suite, ni une consonne redoublée.
         expect(name.toLowerCase()).not.toMatch(/[aeiou]{3}/);
         expect(name.toLowerCase()).not.toMatch(/([^aeiou])\1/);
+        // Au plus deux sons de consonne de suite, un digramme n'en faisant qu'un (A-5).
+        expect(name.toLowerCase().replace(/ch|th|kh/g, 'X')).not.toMatch(/[^aeiou]{3}/);
+      }
+    }
+  });
+
+  it('comptent pour un son les digrammes « ch », « th » et « kh »', () => {
+    expect(consonantSounds('')).toBe(0);
+    expect(consonantSounds('t')).toBe(1);
+    expect(consonantSounds('tr')).toBe(2);
+    expect(consonantSounds('ch')).toBe(1);
+    expect(consonantSounds('nth')).toBe(2);
+    expect(consonantSounds('str')).toBe(3);
+    expect(consonantSounds('khth')).toBe(2);
+  });
+
+  it('ne mettent jamais trois sons de consonne de suite, même sur un grand nombre de langues', () => {
+    // Les groupes d'attaque (« tr », « st »…) après une consonne de fin de syllabe en
+    // faisaient trois dans un à quatre noms sur cent.
+    for (let seed = 1; seed <= 120; seed++) {
+      const language = phonology(seed * 7919);
+      for (let code = 0; code < 120; code++) {
+        for (const name of [
+          givenName(language, 0, code),
+          givenName(language, 1, code),
+          familyName(language, code),
+          wordOf(language, code),
+        ]) {
+          expect(name.toLowerCase().replace(/ch|th|kh/g, 'X'), name).not.toMatch(/[^aeiou]{3}/);
+        }
       }
     }
   });

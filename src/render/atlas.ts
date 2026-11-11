@@ -84,6 +84,14 @@ export function skinColor(appearance: Appearance, value: number): Rgb {
   ];
 }
 
+/**
+ * Habit d'une culture : les cultures embryonnaires prennent à tour de rôle les habits de
+ * data/appearance.json, le premier pour la culture 1. Indéfini sans habit.
+ */
+export function cultureCloth<T>(clothing: readonly T[], culture: number): T | undefined {
+  return clothing[(Math.max(1, culture) - 1) % clothing.length];
+}
+
 /** Ombre et lumière d'une teinte de base. */
 const SHADOW = 0.78;
 const LIGHT = 1.16;

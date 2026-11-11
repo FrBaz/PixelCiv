@@ -324,7 +324,8 @@ export type Nomads = z.infer<typeof NomadsSchema>;
 
 /**
  * Couleurs des portraits et des mini-sprites (REN-07, REN-04, REN-09) : rampe des teints,
- * du plus clair au plus foncé, que le trait « skin » parcourt ; cheveux gris ; contour,
+ * du plus clair au plus foncé, que le trait « skin » parcourt ; cheveux gris ; contour ;
+ * fond des portraits, qui doit se détacher du contour et des cheveux les plus sombres ;
  * blanc des yeux, bouche ; habits des cultures embryonnaires, un par culture, à tour de rôle.
  */
 export const AppearanceSchema = z
@@ -332,6 +333,7 @@ export const AppearanceSchema = z
     skin: z.array(ColorSchema).min(2),
     grey: ColorSchema,
     outline: ColorSchema,
+    backdrop: ColorSchema,
     white: ColorSchema,
     mouth: ColorSchema,
     clothing: z.array(ColorSchema).min(1),

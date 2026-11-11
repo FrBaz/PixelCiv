@@ -2,11 +2,12 @@
  * Code d'apparence d'un individu sur la carte (tâche 2.9 ; REN-04) : ce qu'un mini-sprite
  * en montre, sur 16 bits, que le worker calcule et que le rendu lit.
  *
- *   bit 0       sexe (0 féminin, 1 masculin)
- *   bits 1 à 2  âge : nourrisson, enfant, adulte, aîné
- *   bits 3 à 6  teint, de 0 (clair) à 15 (foncé)
- *   bits 7 à 9  couleur des cheveux : indice de l'allèle exprimé du locus « hair »
- *   bit 10      cheveux gris
+ *   bit 0        sexe (0 féminin, 1 masculin)
+ *   bits 1 à 2   âge : nourrisson, enfant, adulte, aîné
+ *   bits 3 à 6   teint, de 0 (clair) à 15 (foncé)
+ *   bits 7 à 10  couleur des cheveux : indice de l'allèle exprimé du locus « hair », sur
+ *                4 bits, autant que les allèles d'un locus (MAX_ALLELES, core/data/people.ts)
+ *   bit 11       cheveux gris
  */
 
 export const AGE_CLASSES = ['baby', 'child', 'adult', 'elder'] as const;
@@ -36,7 +37,7 @@ export function visualCode(
   grey: boolean,
 ): number {
   return (
-    (sex & 1) | ((age & 3) << 1) | ((skin & 15) << 3) | ((hair & 7) << 7) | ((grey ? 1 : 0) << 10)
+    (sex & 1) | ((age & 3) << 1) | ((skin & 15) << 3) | ((hair & 15) << 7) | ((grey ? 1 : 0) << 11)
   );
 }
 
@@ -45,8 +46,8 @@ export function decodeVisual(code: number): Visual {
     sex: code & 1,
     age: (code >> 1) & 3,
     skin: (code >> 3) & 15,
-    hair: (code >> 7) & 7,
-    grey: ((code >> 10) & 1) === 1,
+    hair: (code >> 7) & 15,
+    grey: ((code >> 11) & 1) === 1,
   };
 }
 

@@ -57,6 +57,17 @@ class Canvas {
     if (x < 0 || y < 0 || x >= PORTRAIT_SIZE || y >= PORTRAIT_SIZE) return ROLE.transparent;
     return this.roles[y * PORTRAIT_SIZE + x] ?? ROLE.transparent;
   }
+
+  /**
+   * Creuse un pli de la peau (ride, patte d'oie) : la peau, claire ou non, passe à l'ombre,
+   * et la peau déjà dans l'ombre au contour, pour que le pli se voie des deux côtés du
+   * visage. Ce qui n'est pas de la peau (cheveux, sourcils) ne change pas.
+   */
+  crease(x: number, y: number): void {
+    const role = this.get(x, y);
+    if (role === ROLE.skin || role === ROLE.skinLight) this.set(x, y, ROLE.skinShadow);
+    else if (role === ROLE.skinShadow) this.set(x, y, ROLE.outline);
+  }
 }
 
 /** Le point (dx, dy), relatif au centre, est-il dans la tête ? */
@@ -193,10 +204,10 @@ export function portraitRoles(input: PortraitInput): Uint8Array {
     canvas.set(ex - 1, eyeY + 1, ROLE.eye);
     canvas.set(ex, eyeY + 1, ROLE.eye);
     for (let x = ex - 3; x <= ex + 2; x++) canvas.set(x, eyeY - 3, ROLE.hairShadow);
-    // Pattes d'oie et cernes avec l'âge.
+    // Pattes d'oie et cernes avec l'âge, du côté de l'ombre aussi.
     if (input.age >= 45) {
-      canvas.set(ex + side * 3, eyeY - 1, ROLE.skinShadow);
-      canvas.set(ex + side * 3, eyeY + 1, ROLE.skinShadow);
+      canvas.crease(ex + side * 3, eyeY - 1);
+      canvas.crease(ex + side * 3, eyeY + 1);
     }
   }
 
@@ -236,13 +247,24 @@ export function portraitRoles(input: PortraitInput): Uint8Array {
     }
   }
 
-  // Rides du front et sillons, avec l'âge.
-  if (input.age >= 40) {
-    for (const line of input.age >= 60 ? [0.62, 0.52] : [0.56]) {
-      const y = Math.round(cy - shape.height * line);
-      for (let x = cx - 5; x <= cx + 5; x += 2) {
-        if (canvas.get(x, y) === ROLE.skin) canvas.set(x, y, ROLE.skinShadow);
+  // Rides du front, avec l'âge, dans la bande que découvrent les cheveux, entre leur
+  // dernière rangée et les sourcils : une ride pointillée à 40 ans, qui se creuse d'un
+  // trait continu à 60 ans. Elle passe à deux rangées des sourcils si le front y est nu,
+  // et une seconde paraît alors à 60 ans deux rangées plus haut, là où le front l'est
+  // encore ; sinon, elle passe juste au-dessus des sourcils, entre eux seulement.
+  if (!child && input.age >= 40) {
+    const brow = eyeY - 3;
+    const bare = (y: number) =>
+      canvas.get(cx - 1, y) === ROLE.skin && canvas.get(cx, y) === ROLE.skin;
+    const deep = input.age >= 60;
+    const step = deep ? 1 : 2;
+    if (bare(brow - 2)) {
+      for (let x = cx - 5; x <= cx + 5; x += step) canvas.crease(x, brow - 2);
+      if (deep && bare(brow - 4)) {
+        for (let x = cx - 4; x <= cx + 4; x += 2) canvas.crease(x, brow - 4);
       }
+    } else {
+      for (let x = cx - 3; x <= cx + 2; x += step) canvas.crease(x, brow - 1);
     }
   }
   if (input.age >= 55 && !beard) {

@@ -609,12 +609,11 @@ button:disabled {
   margin: 0.25rem 0;
 }
 
+/* Le portrait fixe lui-même sa taille, un nombre entier de pixels physiques par pixel, et
+   peint son fond (Portrait.tsx). */
 .portrait {
   flex: none;
-  width: 128px;
-  height: 128px;
   image-rendering: pixelated;
-  background: var(--ink-soft);
   border: 1px solid var(--gold);
 }
 

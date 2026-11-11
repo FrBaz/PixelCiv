@@ -8,8 +8,9 @@
  * découlent, ce qui leur donne une identité sonore commune.
  *
  * Règles d'enchaînement, communes à toutes les langues : jamais deux voyelles de suite,
- * jamais une consonne redoublée, au plus deux consonnes de suite, et une fin de syllabe
- * prise parmi les consonnes que la langue permet à cette place.
+ * jamais une consonne redoublée, au plus deux sons de consonne de suite (un digramme comme
+ * « ch » n'en fait qu'un), et une fin de syllabe prise parmi les consonnes que la langue
+ * permet à cette place.
  *
  * Un nom se désigne par un code entier, tiré à la naissance : la langue et le code
  * redonnent toujours le même nom, dans le worker comme sur le fil principal. Les
@@ -155,6 +156,22 @@ export function phonology(seed: number): Phonology {
   };
 }
 
+/** Digrammes : deux lettres pour un seul son de consonne. */
+const DIGRAPHS = ['ch', 'th', 'kh'];
+
+/**
+ * Sons de consonne d'une suite de lettres consonnes, lue de gauche à droite : un digramme
+ * (« ch », « th », « kh ») compte pour un son, toute autre lettre pour un.
+ */
+export function consonantSounds(letters: string): number {
+  let sounds = 0;
+  for (let index = 0; index < letters.length; index++) {
+    sounds++;
+    if (DIGRAPHS.includes(letters.slice(index, index + 2))) index++;
+  }
+  return sounds;
+}
+
 /** Ajoute un son à un mot, en respectant les règles d'enchaînement ; vrai s'il est ajouté. */
 function append(parts: string[], sound: string): boolean {
   const word = parts.join('');
@@ -162,10 +179,22 @@ function append(parts: string[], sound: string): boolean {
   const vowel = isVowel(sound.charAt(0));
   if (vowel && isVowel(last)) return false;
   if (!vowel && last !== undefined && last === sound.charAt(0)) return false;
-  // Au plus deux consonnes de suite.
-  if (!vowel && word.length >= 2 && !isVowel(last) && !isVowel(word.at(-2))) return false;
+  // Au plus deux sons de consonne de suite : ceux qui finissent le mot et ceux du son
+  // ajouté (deux pour un groupe comme « tr », un pour un digramme comme « ch »).
+  if (!vowel) {
+    const ending = /[^aeiou]*$/.exec(word)?.[0] ?? '';
+    const start = /^[^aeiou]*/.exec(sound)?.[0] ?? '';
+    if (consonantSounds(ending + start) > 2) return false;
+  }
   parts.push(sound);
   return true;
+}
+
+/** Ajoute une consonne simple de la langue ; un son refusé en appelle un autre. */
+function appendConsonant(parts: string[], language: Phonology, random: RandomStream): void {
+  for (let attempt = 0; attempt < 4; attempt++) {
+    if (append(parts, weightedPick(language.consonants, random))) return;
+  }
 }
 
 /** Un mot de la langue, de `syllables` syllabes, tiré du flux. */
@@ -179,15 +208,19 @@ function makeWord(language: Phonology, syllables: number, random: RandomStream):
       const kind = structure[slot];
       const final = slot === structure.length - 1 && slot > 0;
       if (kind === 'C' && structure[slot + 1] === 'C') {
-        append(parts, random.pick(language.clusters));
+        // Un groupe d'attaque refusé (après une consonne de fin de syllabe, il en ferait
+        // trois de suite) cède la place à une consonne simple.
+        if (!append(parts, random.pick(language.clusters)))
+          appendConsonant(parts, language, random);
         slot++;
       } else if (kind === 'C' && final) {
         append(parts, random.pick(language.codas));
+      } else if (kind === 'C') {
+        appendConsonant(parts, language, random);
       } else {
-        const sounds = kind === 'C' ? language.consonants : language.vowels;
-        // Un son refusé (redoublé, troisième consonne de suite) en appelle un autre.
+        // Une voyelle refusée (après une autre voyelle) en appelle une autre.
         for (let attempt = 0; attempt < 4; attempt++) {
-          if (append(parts, weightedPick(sounds, random))) break;
+          if (append(parts, weightedPick(language.vowels, random))) break;
         }
       }
     }
