@@ -1,14 +1,16 @@
 /**
  * Fiches d'inspection (tâche 2.10 ; IHM-02, CRE-05) : un individu, vivant ou mort, ou un
  * groupe nomade. Les liens familiaux et les membres d'un groupe s'ouvrent d'un appui :
- * on suit les lignées de fiche en fiche.
+ * on suit les lignées de fiche en fiche. Chaque cible a sa fiche : une autre cible s'ouvre
+ * en haut, son titre au focus (U-8, U-14) ; Échap la ferme.
  */
 import type { Appearance } from '../core/data';
 import type { GroupSummary, GroupView, PersonSummary, PersonView } from '../core/protocol';
 import { ofName, t, tKey, type MessageKey } from '../i18n';
 import { formatDate } from './calendar';
+import { DialogFocus } from './dialog';
 import { Portrait } from './Portrait';
-import { sheet, type UiActions } from './store';
+import { sheet, type Sheet, type UiActions } from './store';
 
 /** Ce que les fiches nomment d'après les données : espèces, sous-espèces, gènes. */
 export interface SheetContent {
@@ -45,6 +47,18 @@ function identity(person: PersonSummary): string {
   return t('person.identity', { who: t(who), age: t('person.age', { count: person.age }) });
 }
 
+/**
+ * Ce qu'un lien dit d'un parent : « fille, 11 ans » d'une vivante, « morte à 11 ans »
+ * d'une morte. La mort s'écrit, pour se lire comme elle se voit (U-13 ; WCAG 1.4.1).
+ */
+function summary(person: PersonSummary): string {
+  if (person.alive) return identity(person);
+  const gender = person.sex === 0 ? 'feminine' : 'masculine';
+  return person.age < 1
+    ? t('person.diedYoung', { gender })
+    : t('person.diedAt', { gender, age: t('person.age', { count: person.age }) });
+}
+
 function PersonLink({ person, actions }: { person: PersonSummary; actions: UiActions }) {
   return (
     <button
@@ -55,7 +69,7 @@ function PersonLink({ person, actions }: { person: PersonSummary; actions: UiAct
       }}
     >
       {person.name}
-      <small>{identity(person)}</small>
+      <small>{summary(person)}</small>
     </button>
   );
 }
@@ -84,16 +98,37 @@ function Row({ label, children }: { label: string; children: preact.ComponentChi
   );
 }
 
+/** Focus de la fiche : son titre à l'ouverture, son origine à la fermeture (dialog.ts). */
+const focus = new DialogFocus();
+
+/** Ferme la fiche, et rend le focus à l'élément d'où elle s'était ouverte. */
+function close(actions: UiActions): void {
+  focus.close(() => {
+    actions.closeSheet();
+  });
+}
+
+/** Échap ferme la fiche, où que soit le focus en elle. */
+function keyDown(actions: UiActions) {
+  return (event: KeyboardEvent) => {
+    focus.keyDown(event, () => {
+      actions.closeSheet();
+    });
+  };
+}
+
 function Header({ title, actions }: { title: string; actions: UiActions }) {
   return (
     <div class="cell-info-head">
-      <strong>{title}</strong>
+      <strong ref={focus.title} tabIndex={-1}>
+        {title}
+      </strong>
       <button
         type="button"
         aria-label={t('sheet.close')}
         title={t('sheet.close')}
         onClick={() => {
-          actions.closeSheet();
+          close(actions);
         }}
       >
         ×
@@ -170,7 +205,12 @@ function PersonSheet({
       </span>
     );
   return (
-    <div class="panel cell-info sheet" role="dialog" aria-label={t('person.title')}>
+    <div
+      class="panel cell-info sheet"
+      role="dialog"
+      aria-label={t('person.title')}
+      onKeyDown={keyDown(actions)}
+    >
       <Header title={person.name} actions={actions} />
       <div class="sheet-top">
         <Portrait person={person} content={content} />
@@ -208,14 +248,14 @@ function PersonSheet({
         {person.pregnant && <Row label={t('person.pregnant')}>✓</Row>}
         <Row label={t('person.mother')}>
           {person.mother === undefined ? (
-            t('person.none')
+            t('person.mother.none')
           ) : (
             <PersonLink person={person.mother} actions={actions} />
           )}
         </Row>
         <Row label={t('person.father')}>
           {person.father === undefined ? (
-            t('person.none')
+            t('person.father.none')
           ) : (
             <PersonLink person={person.father} actions={actions} />
           )}
@@ -247,6 +287,7 @@ function GroupSheet({ group, actions }: { group: GroupView; actions: UiActions }
       class="panel cell-info sheet"
       role="dialog"
       aria-label={t('group.title', { of: ofName(group.name) })}
+      onKeyDown={keyDown(actions)}
     >
       <Header title={t('group.title', { of: ofName(group.name) })} actions={actions} />
       <dl>
@@ -258,7 +299,8 @@ function GroupSheet({ group, actions }: { group: GroupView; actions: UiActions }
               actions.focus(group.x, group.y);
             }}
           >
-            {t('group.placeValue', { x: group.x, y: group.y })}
+            {/* Des coordonnées, et non des quantités : sans séparateur des milliers (U-15). */}
+            {t('group.placeValue', { x: String(group.x), y: String(group.y) })}
           </button>
         </Row>
         <Row label={t('group.founded')}>{formatDate(group.founded)}</Row>
@@ -283,13 +325,21 @@ function GroupSheet({ group, actions }: { group: GroupView; actions: UiActions }
   );
 }
 
+/**
+ * Clé de la fiche d'une cible : la même tant que la fiche se rafraîchit, une autre pour
+ * une autre cible, qui recrée la fiche, en haut et son titre au focus (U-8, U-14).
+ */
+export function sheetKey(open: Sheet): string {
+  return `${open.kind}:${String(open.view.id)}`;
+}
+
 /** La fiche ouverte, s'il y en a une. */
 export function SheetPanel({ content, actions }: { content: SheetContent; actions: UiActions }) {
   const open = sheet.value;
   if (open === undefined) return null;
   return open.kind === 'person' ? (
-    <PersonSheet person={open.view} content={content} actions={actions} />
+    <PersonSheet key={sheetKey(open)} person={open.view} content={content} actions={actions} />
   ) : (
-    <GroupSheet group={open.view} actions={actions} />
+    <GroupSheet key={sheetKey(open)} group={open.view} actions={actions} />
   );
 }

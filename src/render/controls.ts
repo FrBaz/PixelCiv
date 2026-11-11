@@ -30,6 +30,13 @@ export interface ControlsOptions {
   readonly onTap: (mapX: number, mapY: number, screenX: number, screenY: number) => void;
   /** Appui long, sans glissement, aux mêmes points. */
   readonly onLongPress: (mapX: number, mapY: number, screenX: number, screenY: number) => void;
+  /**
+   * Vrai quand un appui long doit attendre le relâcher : il ne se déclare alors que si le
+   * geste n'est devenu ni un glisser ni un pincement. Sinon, il part dès que le doigt est
+   * resté en place assez longtemps, comme pour inspecter une case. L'outil d'apparition
+   * attend, car une apparition ne s'annule pas (U-6).
+   */
+  readonly holdUntilRelease?: () => boolean;
 }
 
 /** Vitesse du déplacement au clavier, en pixels physiques par seconde. */
@@ -58,6 +65,24 @@ const KEY_DIRECTIONS: Readonly<Partial<Record<string, readonly [number, number]>
 interface Point {
   readonly x: number;
   readonly y: number;
+}
+
+/**
+ * Un panneau de l'interface défilera-t-il sous cette flèche ? Le navigateur fait défiler
+ * le plus proche ancêtre de l'élément qui a le focus, une fiche longue par exemple, qui
+ * prend le focus à son ouverture (U-14) : la carte lui laisse alors la touche.
+ */
+function scrollsPanel(target: EventTarget | null, vertical: boolean): boolean {
+  if (typeof Element === 'undefined' || !(target instanceof Element)) return false;
+  for (let node: Element | null = target; node !== null; node = node.parentElement) {
+    const style = getComputedStyle(node);
+    const overflow = vertical ? style.overflowY : style.overflowX;
+    const room = vertical
+      ? node.scrollHeight > node.clientHeight
+      : node.scrollWidth > node.clientWidth;
+    if (room && (overflow === 'auto' || overflow === 'scroll')) return true;
+  }
+  return false;
 }
 
 export class CameraControls {
@@ -147,7 +172,8 @@ export class CameraControls {
         ? { id: event.pointerId, start: point, time: event.timeStamp }
         : undefined;
     this.cancelLongPress();
-    if (this.tap !== undefined) {
+    // Un appui long qui attend le relâcher n'a pas de minuteur : onPointerUp le déclare.
+    if (this.tap !== undefined && this.options.holdUntilRelease?.() !== true) {
       const tap = this.tap;
       this.longPress = window.setTimeout(() => {
         this.longPress = undefined;
@@ -202,7 +228,8 @@ export class CameraControls {
     const tap = this.tap;
     this.pointers.delete(event.pointerId);
     if (tap?.id === event.pointerId) {
-      // Un geste encore en cours est bref, ou long si son minuteur n'a pas encore sonné.
+      // Un geste encore en cours est bref, ou long : son minuteur n'a pas encore sonné, ou
+      // il attendait le relâcher.
       const point = this.point(event);
       const target = screenToMap(this.camera, this.options.viewport(), point.x, point.y);
       if (event.timeStamp - tap.time < TAP_DURATION) {
@@ -271,6 +298,9 @@ export class CameraControls {
         height / 2,
       );
     } else if (event.code in KEY_DIRECTIONS) {
+      const arrow = event.code.startsWith('Arrow');
+      const vertical = event.code === 'ArrowUp' || event.code === 'ArrowDown';
+      if (arrow && scrollsPanel(event.target, vertical)) return;
       this.keys.add(event.code);
     }
   };

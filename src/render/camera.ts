@@ -64,6 +64,27 @@ export function screenToMap(
 }
 
 /**
+ * La caméra, au même zoom, qui montre le point (mapX, mapY) de la carte, en pixels de
+ * carte, au point (screenX, screenY) de l'écran, en pixels physiques : au milieu de la
+ * partie visible de la carte, par exemple, plutôt qu'au centre de l'écran.
+ */
+export function showAt(
+  camera: Camera,
+  viewport: Extent,
+  mapX: number,
+  mapY: number,
+  screenX: number,
+  screenY: number,
+): Camera {
+  const scale = displayScale(camera.zoom);
+  return {
+    ...camera,
+    x: mapX - (screenX - viewport.width / 2) / scale,
+    y: mapY - (screenY - viewport.height / 2) / scale,
+  };
+}
+
+/**
  * Case du monde sous un point de la carte, en pixels de carte, pour un monde de `columns`
  * colonnes : la colonne est ramenée dans le monde (wrapX), quelle que soit la copie du
  * monde touchée, comme le veut le monde cylindrique ; la ligne peut tomber au-delà des

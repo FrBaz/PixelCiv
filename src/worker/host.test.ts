@@ -350,6 +350,48 @@ describe('commandes de jeu', () => {
     expect(env.messages('delta').at(-1)?.time.tick).toBe(4);
     expect(env.messages('delta').at(-1)?.chunks).toHaveLength(1);
   });
+
+  it("s'appliquent dès leur réception en pause, comme au début du pas suivant (U-7)", async () => {
+    const commands = spawns(2);
+    // En pause : chaque groupe apparaît aussitôt, dans un delta sans pas, au même mois.
+    const { env, host } = await startedHost();
+    host.receive({ type: 'setPaused', paused: true });
+    for (const [rank, command] of commands.entries()) {
+      host.receive({ type: 'game', command });
+      const delta = env.messages('delta').at(-1);
+      expect(env.messages('delta')).toHaveLength(rank + 1);
+      expect(delta?.time).toEqual({ tick: 0, paused: true, speed: 'normal' });
+      expect(delta?.frame.groups).toHaveLength((rank + 1) * GROUP_STRIDE);
+      expect(delta?.chronicle.map((fact) => fact.kind)).toEqual(['groupAppeared']);
+    }
+    expect(env.messages('stats')).toEqual([]);
+    // Hors pause, les mêmes commandes attendent le premier pas.
+    const { env: running, host: other } = await startedHost();
+    for (const command of commands) other.receive({ type: 'game', command });
+    expect(running.messages('delta')).toEqual([]);
+    // Trois mois plus tard, les deux parties n'en font qu'une : mêmes groupes, même état,
+    // même journal, où les commandes datent du premier pas.
+    for (let month = 0; month < 3; month++) host.receive({ type: 'stepOnce' });
+    running.advance(NORMAL_MONTH_MS * 3);
+    const last = (environment: FakeEnvironment) => environment.messages('delta').at(-1);
+    expect(last(env)?.time.tick).toBe(3);
+    expect(last(running)?.time.tick).toBe(3);
+    expect(last(env)?.frame).toEqual(last(running)?.frame);
+    const paused = await savedState(env, host, 1);
+    expect(paused).toEqual(await savedState(running, other, 1));
+    expect((paused.json as { commandLog: unknown }).commandLog).toEqual(
+      commands.map((command) => ({ tick: 0, command })),
+    );
+  });
+
+  it("s'appliquent à la mise en pause si elles attendaient encore leur pas (U-7)", async () => {
+    const { env, host } = await startedHost();
+    for (const command of spawns(1)) host.receive({ type: 'game', command });
+    expect(env.messages('delta')).toEqual([]);
+    host.receive({ type: 'setPaused', paused: true });
+    expect(env.messages('delta').at(-1)?.time.tick).toBe(0);
+    expect(env.messages('delta').at(-1)?.frame.groups).toHaveLength(GROUP_STRIDE);
+  });
 });
 
 describe('fiches (IHM-02)', () => {
@@ -412,9 +454,8 @@ describe("apparition d'un groupe (CRE-03)", () => {
     expect(env.messages('delta').at(-1)?.frame.groups).toHaveLength(0);
     expect(env.messages('delta').at(-1)?.chronicle).toEqual([]);
     expect(await logOf(env, host, 1)).toMatchObject({ commandLog: [], pending: [] });
-    // La même apparition, sur sa case de terre : le groupe vient au pas suivant.
+    // La même apparition, sur sa case de terre : en pause, le groupe apparaît aussitôt (U-7).
     host.receive({ type: 'game', command: valid });
-    host.receive({ type: 'stepOnce' });
     expect(env.messages('delta').at(-1)?.frame.groups).toHaveLength(GROUP_STRIDE);
     expect(
       env
@@ -573,6 +614,12 @@ describe('sauvegarde', () => {
   });
 });
 
+/** État d'une partie, d'après sa sauvegarde relue : métadonnées, JSON et tableaux. */
+async function savedState(env: FakeEnvironment, host: SimulationHost, requestId: number) {
+  const saved = await saveOf(env, host, requestId);
+  return readSave(new Uint8Array(saved.data), MIGRATIONS);
+}
+
 /** Sauvegarde la partie d'un hôte et renvoie le fichier. */
 async function saveOf(env: FakeEnvironment, host: SimulationHost, requestId: number) {
   host.receive({ type: 'save', requestId });
@@ -600,11 +647,12 @@ function biomeSent(env: FakeEnvironment, x: number, y: number): number | undefin
 
 describe('commandes en attente', () => {
   it('sont sauvegardées, et appliquées après rechargement', async () => {
+    // Hors pause, la commande attend le pas suivant, qui ne vient pas avant la sauvegarde.
     const { env, host } = await startedHost();
-    host.receive({ type: 'setPaused', paused: true });
     const cell = landCell();
     host.receive({ type: 'game', command: paint(cell, 'taiga') });
     const saved = await saveOf(env, host, 1);
+    expect(env.messages('delta')).toEqual([]);
 
     const { env: other, host: loader } = greetedHost();
     loader.receive({ type: 'setPaused', paused: true });

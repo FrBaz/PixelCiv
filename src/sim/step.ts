@@ -72,18 +72,20 @@ function paintBiome(state: SimState, command: PaintBiomeCommand, content: SimCon
 export type RejectedCommand = (command: GameCommand, error: unknown) => void;
 
 /**
- * Fait passer un mois. Les commandes reçues s'appliquent d'abord, et sont journalisées
- * avec le pas au début duquel elles s'appliquent. Sans `rejected`, l'exception d'une
- * commande remonte ; avec, la commande est écartée et signalée, et le mois continue.
- * Renvoie les membres de chaque groupe à la fin du mois, dans l'ordre des emplacements,
- * tels que les donnerait groupMembers.
+ * Applique des commandes, dans l'ordre, et les journalise avec le pas au début duquel
+ * elles s'appliquent : le pas courant, qui n'a pas encore commencé. Sans `rejected`,
+ * l'exception d'une commande remonte ; avec, la commande est écartée et signalée.
+ *
+ * step les applique au début du mois. L'hôte, en pause, les applique dès leur réception :
+ * rien ne change l'état d'ici le pas suivant, qui commence donc là où il aurait commencé
+ * après elles, et le rejeu du journal ne voit aucune différence.
  */
-export function step(
+export function applyCommands(
   state: SimState,
   commands: readonly GameCommand[],
   content: SimContent,
   rejected?: RejectedCommand,
-): ReadonlyMap<number, readonly number[]> {
+): void {
   for (const command of commands) {
     if (rejected === undefined) {
       applyCommand(state, command, content);
@@ -99,6 +101,21 @@ export function step(
     }
     state.commandLog.push({ tick: state.tick, command });
   }
+}
+
+/**
+ * Fait passer un mois. Les commandes reçues s'appliquent d'abord (applyCommands) ; sans
+ * `rejected`, l'exception d'une commande remonte ; avec, la commande est écartée et
+ * signalée, et le mois continue. Renvoie les membres de chaque groupe à la fin du mois,
+ * dans l'ordre des emplacements, tels que les donnerait groupMembers.
+ */
+export function step(
+  state: SimState,
+  commands: readonly GameCommand[],
+  content: SimContent,
+  rejected?: RejectedCommand,
+): ReadonlyMap<number, readonly number[]> {
+  applyCommands(state, commands, content, rejected);
   // Systèmes, dans un ordre fixe.
   const { people, society, food, world, size, tick } = state;
   regrowFood(food, world, size, tick, content);

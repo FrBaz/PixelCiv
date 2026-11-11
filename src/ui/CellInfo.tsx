@@ -60,9 +60,12 @@ export function CellInfo() {
     ['inspect.flora', t('inspect.floraValue', { trees: cell.trees, shrubs: cell.shrubs })],
   ];
   return (
-    <div class="panel cell-info" role="dialog" aria-label={t('inspect.title')}>
+    // Un panneau qui ne prend pas le focus, et que la carte laisse ouvert : une région, et
+    // non un dialogue (U-14).
+    <div class="panel cell-info" role="region" aria-label={t('inspect.title')}>
       <div class="cell-info-head">
-        <strong>{t('inspect.coordinates', { x: cell.x, y: cell.y })}</strong>
+        {/* Des coordonnées, et non des quantités : sans séparateur des milliers (U-15). */}
+        <strong>{t('inspect.coordinates', { x: String(cell.x), y: String(cell.y) })}</strong>
         <button
           type="button"
           aria-label={t('inspect.close')}

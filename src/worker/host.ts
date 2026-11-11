@@ -36,7 +36,7 @@ import { defaultWorldParams, worldParamsSchema, type WorldParams } from '../core
 import { GameCommandSchema } from '../sim/commands';
 import { MIGRATIONS, restoreState, saveState } from '../sim/save';
 import { cellIndex, createState, takeDirtyChunks, type SimState } from '../sim/state';
-import { step } from '../sim/step';
+import { applyCommands, step, type RejectedCommand } from '../sim/step';
 import { chroniclePage, chronicleViews, groupsFrame, inspect } from '../sim/views';
 import { GENERATOR_VERSION, type GenerationParams } from '../worldgen/generate';
 
@@ -255,7 +255,10 @@ export class SimulationHost {
     });
   }
 
-  /** Vérifie une commande de jeu ; elle s'appliquera au début du prochain pas. */
+  /**
+   * Vérifie une commande de jeu ; elle s'appliquera au début du prochain pas, ou aussitôt
+   * en pause (applyPending).
+   */
   private command(command: unknown): void {
     const state = this.state;
     if (state === undefined) {
@@ -272,7 +275,32 @@ export class SimulationHost {
       return;
     }
     state.pending.push(parsed.data);
+    if (this.paused) this.applyPending();
   }
+
+  /**
+   * En pause, les commandes en attente s'appliquent sans attendre le pas (U-7) : le joueur
+   * voit aussitôt le groupe apparu. Elles s'appliquent comme au début du pas qui vient, et
+   * se journalisent avec lui (applyCommands) : rien ne change l'état d'ici là, et le rejeu
+   * redonne la même partie. Ce qui a changé part aussitôt, dans un delta sans pas.
+   */
+  private applyPending(): void {
+    const state = this.state;
+    if (state === undefined || state.pending.length === 0) return;
+    try {
+      applyCommands(state, state.pending.splice(0), this.data, this.rejected);
+      this.sendDelta(state);
+    } catch (error) {
+      console.error(error);
+      this.send({ type: 'error', code: 'internal', detail: String(error) });
+    }
+  }
+
+  /** Commande écartée parce qu'elle a levé une exception (L-2) : elle se signale. */
+  private readonly rejected: RejectedCommand = (command, error) => {
+    console.error(error);
+    this.send({ type: 'error', code: 'command', detail: `${command.type} : ${String(error)}` });
+  };
 
   /** Les identifiants de contenu d'une commande existent-ils ? */
   private knownContent(command: GameCommand): boolean {
@@ -307,7 +335,10 @@ export class SimulationHost {
     this.sendTime();
   }
 
-  /** Met en pause ou reprend, là où le mois en était. */
+  /**
+   * Met en pause ou reprend, là où le mois en était. Les commandes reçues juste avant la
+   * pause s'appliquent alors, sans attendre la reprise.
+   */
   private setPaused(paused: boolean): void {
     if (paused !== this.paused) {
       const now = this.env.now();
@@ -315,6 +346,7 @@ export class SimulationHost {
       else this.nextStepAt = now + this.remaining;
       this.paused = paused;
       this.reschedule();
+      if (paused) this.applyPending();
     }
     this.sendTime();
   }
@@ -431,25 +463,14 @@ export class SimulationHost {
     const start = this.env.now();
     try {
       // Les commandes en attente s'appliquent au début du pas, qui les horodate.
-      const members = step(state, state.pending.splice(0), this.data, (command, error) => {
-        console.error(error);
-        this.send({ type: 'error', code: 'command', detail: `${command.type} : ${String(error)}` });
-      });
+      const members = step(state, state.pending.splice(0), this.data, this.rejected);
       if (this.stepCost > 0) {
         const end = start + this.stepCost;
         while (this.env.now() < end) {
           // Attente active : le pas factice occupe vraiment le worker.
         }
       }
-      const total = state.society.chronicle.length;
-      this.send({
-        type: 'delta',
-        time: this.time(state),
-        chunks: takeDirtyChunks(state),
-        frame: groupsFrame(state, this.data, members),
-        chronicle: chronicleViews(state, this.chronicleSent, total),
-      });
-      this.chronicleSent = total;
+      this.sendDelta(state, members);
     } catch (error) {
       console.error(error);
       this.send({ type: 'error', code: 'internal', detail: String(error) });
@@ -457,6 +478,22 @@ export class SimulationHost {
     }
     // Le pas compte son delta : l'image des groupes, la chronique et leur envoi (W-11).
     this.send({ type: 'stats', stats: { stepMs: this.env.now() - start } });
+  }
+
+  /**
+   * Ce qui a changé depuis le dernier message : blocs, temps, groupes (avec leurs membres
+   * s'ils sont connus) et faits nouveaux de la chronique.
+   */
+  private sendDelta(state: SimState, members?: ReadonlyMap<number, readonly number[]>): void {
+    const total = state.society.chronicle.length;
+    this.send({
+      type: 'delta',
+      time: this.time(state),
+      chunks: takeDirtyChunks(state),
+      frame: groupsFrame(state, this.data, members),
+      chronicle: chronicleViews(state, this.chronicleSent, total),
+    });
+    this.chronicleSent = total;
   }
 
   private sendTime(): void {

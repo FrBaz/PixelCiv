@@ -11,7 +11,7 @@ import { parseColor } from '../render/bake';
 import { CameraControls } from '../render/controls';
 import { MapView } from '../render/map';
 import { legend, overlayTexels } from '../render/mapModes';
-import { cellAt, TILE_PX, type Camera } from '../render/camera';
+import { cellAt, showAt, TILE_PX, type Camera } from '../render/camera';
 import { PeopleLayer } from '../render/people';
 import { previewPixels } from '../render/preview';
 import { SPAWN_COUNT } from '../sim/commands';
@@ -36,8 +36,10 @@ import {
   PREVIEW_COLUMNS,
   previewImage,
   previewKey,
+  raise,
   sheet,
   showNotice,
+  spawnChoice,
   spawnSettings,
   time,
   tool,
@@ -48,6 +50,7 @@ import {
 } from '../ui/store';
 import { appendFacts, olderThan, prependPage } from './chronicle';
 import { DebugSampler, usedMemoryMb } from './debug';
+import { centerOf, visibleArea, type Rect } from './focus';
 import { SaveManager, SaveStore } from './saves';
 import { describeCell } from './inspect';
 import { SheetRequests } from './sheets';
@@ -101,6 +104,18 @@ async function main(): Promise<void> {
     parameters: data.worldgen.parameters,
     sizes: touchOnly ? ['small', 'medium', 'large'] : ['small', 'medium', 'large', 'huge'],
     defaultSize: touchOnly ? 'medium' : 'large',
+  };
+  // Ce que l'outil d'apparition propose : les espèces des données et leurs sous-espèces.
+  const creator: CreatorSetup = {
+    species: data.species.entries.map((species) => ({
+      id: species.id,
+      name: species.name as MessageKey,
+      subspecies: species.subspecies.map((entry) => ({
+        id: entry.id,
+        name: entry.name as MessageKey,
+      })),
+    })),
+    count: SPAWN_COUNT,
   };
   const simulation = new SimulationClient();
   const biomeColors = data.biomes.entries.map((biome) => parseColor(biome.palette.base));
@@ -169,6 +184,7 @@ async function main(): Promise<void> {
         : people.pick(drawnCamera, map.viewport, map.world, screenX, screenY);
     if (group === undefined) {
       showCell(cell.x, cell.y);
+      raise('cell');
     } else {
       // Le groupe montré, la case qu'on inspectait s'efface.
       inspected.value = undefined;
@@ -186,6 +202,9 @@ async function main(): Promise<void> {
     onTap: (mapX, mapY, screenX, screenY) => {
       designate(mapX, mapY, screenX, screenY, true);
     },
+    // Une apparition ne s'annule pas : outil armé, un appui long attend le relâcher, et ne
+    // compte pas s'il est devenu un glisser ou un pincement (U-6).
+    holdUntilRelease: () => tool.value === 'spawn',
   });
   // Couches du monde affiché, pour l'inspection et les légendes.
   let worldLayers: WorldLayers | undefined;
@@ -193,6 +212,8 @@ async function main(): Promise<void> {
   const sheets = new SheetRequests();
   const openSheet = (target: InspectTarget) => {
     simulation.send({ type: 'inspect', ...sheets.open(target) });
+    // Sur petit écran, la fiche demandée passe au-dessus, même si elle était déjà ouverte.
+    raise('sheet');
   };
   /** Fait apparaître un groupe sur la case, si elle le permet ; un avis dit sinon pourquoi. */
   const spawnAt = (x: number, y: number) => {
@@ -203,11 +224,30 @@ async function main(): Promise<void> {
       showNotice(target.refusal);
       return;
     }
-    const settings = spawnSettings.value;
+    // Les réglages choisis, ou ceux tirés des données (U-11).
+    const settings = spawnChoice(creator, spawnSettings.value);
+    if (settings === undefined) return;
     simulation.send({
       type: 'game',
       command: { type: 'spawnGroup', x: target.x, y: target.y, ...settings },
     });
+  };
+  const uiElement = element('ui');
+  /**
+   * Ce qui couvre la carte : les panneaux de l'interface et le bouton du débogage, et la
+   * colonne de droite entière dès qu'un panneau s'y montre, car la fiche qui s'ouvre y
+   * prendra sa place.
+   */
+  const covers = (): Rect[] => {
+    const rects: Rect[] = [...uiElement.querySelectorAll('.panel, .debug-toggle')].map((panel) =>
+      panel.getBoundingClientRect(),
+    );
+    const side = uiElement.querySelector('.hud-side');
+    const shown = [...(side?.querySelectorAll('.panel') ?? [])].some(
+      (panel) => panel.getClientRects().length > 0,
+    );
+    if (side !== null && shown) rects.push(side.getBoundingClientRect());
+    return rects;
   };
   /** Montre la case (x, y) dans le panneau d'inspection, au mois courant. */
   const showCell = (x: number, y: number) => {
@@ -408,11 +448,19 @@ async function main(): Promise<void> {
       simulation.send({ type: 'chronicle', requestId: chronicleRequest, before });
     },
     focus: (x: number, y: number) => {
-      controls.camera = {
-        ...controls.camera,
-        x: x * TILE_PX + TILE_PX / 2,
-        y: y * TILE_PX + TILE_PX / 2,
-      };
+      // Le lieu au milieu de la partie visible de la carte, et non sous les panneaux (U-5).
+      const hud = uiElement.querySelector('.hud') ?? uiElement;
+      const center = centerOf(visibleArea(hud.getBoundingClientRect(), covers()));
+      const origin = mapElement.getBoundingClientRect();
+      const resolution = app.renderer.resolution;
+      controls.camera = showAt(
+        controls.camera,
+        map.viewport,
+        x * TILE_PX + TILE_PX / 2,
+        y * TILE_PX + TILE_PX / 2,
+        (center.x - origin.left) * resolution,
+        (center.y - origin.top) * resolution,
+      );
     },
     setMapMode: (mode: MapModeId) => {
       mapMode.value = mode;
@@ -455,24 +503,13 @@ async function main(): Promise<void> {
       creationBusy.value = false;
     }
   }
-  const creator: CreatorSetup = {
-    species: data.species.entries.map((species) => ({
-      id: species.id,
-      name: species.name as MessageKey,
-      subspecies: species.subspecies.map((entry) => ({
-        id: entry.id,
-        name: entry.name as MessageKey,
-      })),
-    })),
-    count: SPAWN_COUNT,
-  };
   const content: SheetContent = {
     species: data.species.entries,
     loci: data.genetics.loci,
     traits: data.genetics.traits,
     appearance: data.appearance,
   };
-  render(h(App, { actions, setup, creator, content }), element('ui'));
+  render(h(App, { actions, setup, creator, content }), uiElement);
 
   // La poignée de main d'abord : le worker refuse tout message qui la précède.
   simulation.send({ type: 'hello', protocol: PROTOCOL_VERSION });

@@ -68,7 +68,8 @@ body {
   box-sizing: border-box;
   height: 100%;
   display: grid;
-  /* Barre du haut, colonne de droite, barre du bas : la colonne prend ce qui reste. */
+  /* Barre du haut, colonne de droite, barre du bas : la colonne prend ce qui reste, et
+     descend jusqu'en bas de l'écran, à droite de la barre du bas. */
   grid-template-rows: auto minmax(0, 1fr) auto;
   grid-template-columns: minmax(0, 1fr);
   gap: 0.5rem;
@@ -87,11 +88,15 @@ body {
 }
 
 .hud-top {
-  grid-row: 1;
+  grid-area: 1 / 1;
 }
 
+/* La barre du bas partage la troisième rangée avec la colonne de droite : leurs places sont
+   données, sans quoi la grille ouvrirait une seconde colonne pour l'une d'elles. */
 .hud-bottom {
-  grid-row: 3;
+  grid-area: 3 / 1;
+  /* À gauche de la colonne de droite, qui descend jusqu'en bas. */
+  max-width: calc(100% - min(20rem, 100%) - 0.5rem);
 }
 
 .panel {
@@ -148,6 +153,15 @@ button:disabled {
 .hud-bottom {
   flex-direction: column;
   align-items: flex-start;
+}
+
+/* Outils, modes de carte et menu de la partie, l'un sous l'autre. */
+.hud-actions {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.5rem;
+  max-width: 100%;
 }
 
 .save-menu {
@@ -207,17 +221,25 @@ button:disabled {
   padding: 0 0.75rem;
 }
 
-/* Colonne de droite : inspection d'une case et légende, entre les deux barres.
-   L'inspection passe d'abord, jusqu'à 60 % de la colonne, au-delà de quoi elle défile ;
-   la légende prend le reste et fait défiler ses entrées. */
+/* Colonne de droite : outil d'apparition, fiche, chronique, inspection d'une case et
+   légende, de la barre du haut jusqu'en bas de l'écran (U-3, U-4). Chaque panneau prend la
+   hauteur de son contenu, et cède quand la place manque, jusqu'à une hauteur où il reste
+   lisible ; il défile au-delà. Si même ainsi les panneaux ne tiennent pas, la colonne
+   défile. */
 .hud-side {
-  grid-row: 2;
+  grid-area: 2 / 1 / 4;
   justify-self: end;
   display: flex;
   flex-direction: column;
   gap: 0.5rem;
   width: min(20rem, 100%);
   min-height: 0;
+  overflow-y: auto;
+}
+
+/* Une place par panneau, sans boîte à elle : ses panneaux sont ceux de la colonne. */
+.side-slot {
+  display: contents;
 }
 
 .cell-info,
@@ -227,9 +249,10 @@ button:disabled {
 }
 
 .cell-info {
-  flex: 0 0 auto;
-  max-height: 60%;
+  flex: 0 1 auto;
+  min-height: min(5rem, 100%);
   overflow-y: auto;
+  overscroll-behavior: contain;
 }
 
 .cell-info dl {
@@ -247,7 +270,9 @@ button:disabled {
   display: flex;
   flex-direction: column;
   flex: 0 1 auto;
-  min-height: 4.5rem;
+  min-height: min(4.5rem, 100%);
+  /* Une longue liste laisse la moitié de la colonne aux autres panneaux. */
+  max-height: 50%;
 }
 
 .legend-toggle {
@@ -277,10 +302,59 @@ button:disabled {
   border: 1px solid var(--parchment-dim);
 }
 
-/* Téléphone en portrait : la colonne de droite se fait plus étroite. */
+/* Petit écran, téléphone en portrait ou en paysage (U-3, U-4) : la colonne ne montre que
+   le panneau du dessus, le dernier ouvert (panels.ts) ; la barre du bas tient sur une
+   ligne, qui défile au doigt. */
+@media (max-width: 34rem), (max-height: 32rem) {
+  .side-under {
+    display: none;
+  }
+
+  /* Seul dans la colonne, le panneau du dessus la prend tout entière. */
+  .chronicle,
+  .legend {
+    max-height: none;
+  }
+
+  .hud-bottom {
+    max-width: 100%;
+  }
+
+  /* En paysage, un panneau ouvert descend jusqu'en bas, à droite : la barre s'arrête avant. */
+  .hud:has(.hud-side .panel) .hud-bottom {
+    max-width: calc(100% - min(20rem, 100%) - 0.5rem);
+  }
+
+  .hud-actions {
+    flex-direction: row;
+    overflow-x: auto;
+    overscroll-behavior-x: contain;
+    touch-action: pan-x;
+    scrollbar-width: thin;
+    /* La ligne se saisit tout entière, sa barre de défilement comprise. */
+    pointer-events: auto;
+  }
+
+  .hud-actions > .panel {
+    flex: none;
+    flex-wrap: nowrap;
+  }
+}
+
+/* Téléphone en portrait : la colonne devient une feuille au bas de la carte, sur toute la
+   largeur, au-dessus de la barre du bas. Elle garde la même place quel que soit son
+   panneau, et la carte reste visible au-dessus d'elle (U-5). */
 @media (max-width: 34rem) {
   .hud-side {
-    width: min(13rem, 100%);
+    grid-area: 2 / 1;
+    align-self: end;
+    justify-content: flex-end;
+    width: 100%;
+    height: 60%;
+  }
+
+  .hud:has(.hud-side .panel) .hud-bottom {
+    max-width: 100%;
   }
 }
 
@@ -564,6 +638,14 @@ button:disabled {
   display: flex;
   flex-direction: column;
   gap: 0.375rem;
+  flex: 0 1 auto;
+  min-height: min(7.5rem, 100%);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.creator-panel .cell-info-head button {
+  padding: 0 0.75rem;
 }
 
 .creator-choices {
@@ -594,9 +676,7 @@ button:disabled {
 
 /* Fiches : portrait, lignes, liens familiaux qui s'ouvrent d'un appui. */
 .sheet {
-  flex: 0 1 auto;
-  max-height: 70%;
-  overflow-y: auto;
+  min-height: min(9rem, 100%);
 }
 
 .sheet-top {
@@ -649,8 +729,9 @@ button:disabled {
   display: flex;
   flex-direction: column;
   flex: 0 1 auto;
+  min-height: min(6rem, 100%);
+  /* Une longue chronique laisse la moitié de la colonne aux autres panneaux. */
   max-height: 50%;
-  min-height: 0;
 }
 
 .chronicle-entries {

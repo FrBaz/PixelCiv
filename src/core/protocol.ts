@@ -170,6 +170,10 @@ export type MainMessage =
       readonly params: WorldParams;
       readonly width: number;
     }
+  /**
+   * Commande de jeu : elle s'applique au début du prochain pas, ou aussitôt en pause, comme
+   * au début du pas qui vient (U-7).
+   */
   | { readonly type: 'game'; readonly command: GameCommand }
   /** Demande la fiche d'un individu ou d'un groupe ; la réponse porte le même numéro. */
   | { readonly type: 'inspect'; readonly requestId: number; readonly target: InspectTarget }
@@ -252,7 +256,8 @@ export type WorkerMessage =
     }
   /**
    * Ce qui a changé depuis le dernier message : blocs modifiés, temps, groupes, et faits
-   * nouveaux de la chronique.
+   * nouveaux de la chronique. Il suit un pas, ou, en pause, une commande appliquée aussitôt,
+   * sans que le temps avance.
    */
   | {
       readonly type: 'delta';

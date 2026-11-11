@@ -8,7 +8,7 @@
 import type { ChronicleView } from '../core/protocol';
 import { ofName, t, type MessageKey } from '../i18n';
 import { formatDate } from './calendar';
-import { chronicle, chronicleLoading, chronicleOpen, type UiActions } from './store';
+import { buried, chronicle, chronicleLoading, chronicleOpen, raise, type UiActions } from './store';
 
 /** Message de chaque sorte de fait (sim/society.ts, CHRONICLE_KINDS). */
 const KINDS: Readonly<Record<string, MessageKey>> = {
@@ -37,7 +37,9 @@ export function ChronicleToggle() {
       type="button"
       aria-pressed={open}
       onClick={() => {
-        chronicleOpen.value = !open;
+        // Sur petit écran, une chronique ouverte sous un autre panneau remonte.
+        if (open && buried(document.querySelector('.chronicle'))) raise('chronicle');
+        else chronicleOpen.value = !open;
       }}
     >
       {t('chronicle.toggle')}
@@ -52,7 +54,20 @@ export function ChroniclePanel({ actions }: { actions: UiActions }) {
   const older = (entries.at(0)?.index ?? 0) > 0;
   return (
     <div class="panel chronicle" role="log" aria-label={t('chronicle.title')}>
-      <strong>{t('chronicle.title')}</strong>
+      <div class="cell-info-head">
+        <strong>{t('chronicle.title')}</strong>
+        {/* Sur petit écran, la chronique peut couvrir son bouton de la barre du bas. */}
+        <button
+          type="button"
+          aria-label={t('chronicle.close')}
+          title={t('chronicle.close')}
+          onClick={() => {
+            chronicleOpen.value = false;
+          }}
+        >
+          ×
+        </button>
+      </div>
       {entries.length === 0 ? (
         <p>{t('chronicle.empty')}</p>
       ) : (
