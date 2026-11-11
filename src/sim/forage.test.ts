@@ -293,6 +293,48 @@ describe('survie (tâche 2.4)', () => {
     }
   });
 
+  it('ne reconnaît aucun biome à son nom : renommés, rivières et lacs nourrissent de même (D-6)', () => {
+    // Chaque biome renommé, rivière et lac compris : la pêche des rivières, la glace de
+    // l'eau douce et les rendements tiennent aux attributs des biomes (famille, couverture,
+    // rendements de data/biomes.json) et au réseau des rivières, jamais à un identifiant.
+    const state = testState();
+    const entries = testData.biomes.entries.map((biome) => ({ ...biome, id: `${biome.id}-x` }));
+    const renamed: SimContent = {
+      ...testData,
+      biomes: { entries, indexOf: (id) => testData.biomes.indexOf(id.replace(/-x$/, '')) },
+    };
+    const cells = state.world.biome.length;
+    // Ce que cellFood donne de chaque case : rendements, puis plafonds, des plantes, du gibier
+    // et du poisson.
+    const stride = cellFood(state.world, state.size, 0, JULY, testData).length;
+    const food = (content: SimContent, month: number) => {
+      const all = new Float64Array(cells * stride);
+      for (let cell = 0; cell < cells; cell++) {
+        all.set(
+          cellFood(state.world, state.size, cell, month, content).subarray(0, stride),
+          cell * stride,
+        );
+      }
+      return all;
+    };
+    for (const month of [JANUARY, JULY]) {
+      const before = food(testData, month);
+      expect(food(renamed, month)).toEqual(before);
+      // Des cases de terre pêchent dans leur rivière, d'autres dans un lac ou un fleuve.
+      let streams = 0;
+      let waters = 0;
+      for (let cell = 0; cell < cells; cell++) {
+        const fish = before[cell * stride + 2] ?? 0; // rendement du poisson
+        const biome = testData.biomes.entries.at(state.world.biome[cell] ?? 0);
+        if (fish <= 0 || biome === undefined) continue;
+        if (biome.family === 'water') waters++;
+        else if (riverClass(state.world.drainage[cell] ?? 0) > 0) streams++;
+      }
+      expect(streams).toBeGreaterThan(100);
+      expect(waters).toBeGreaterThan(100);
+    }
+  });
+
   it('tient une case intacte au plafond, la suit une fois entamée, puis la libère', () => {
     const state = testState();
     const { cell } = cellOf(state, 'temperate-forest');

@@ -6,6 +6,7 @@
  */
 import type { SaveErrorCode, SaveMeta } from './save/format';
 import type { SpeedId } from './time';
+import type { AgeClass } from './visual';
 import { LAYER_NAMES, type GenerationStage, type WorldLayers, type WorldSize } from './world';
 import type { WorldParams } from './worldParams';
 
@@ -62,6 +63,11 @@ export interface PersonSummary {
   readonly sex: number;
   /** Âge en années révolues, aujourd'hui ou à sa mort. */
   readonly age: number;
+  /**
+   * Classe d'âge, aujourd'hui ou à sa mort, selon les âges de son espèce (core/life.ts) :
+   * celle de son mini-sprite.
+   */
+  readonly stage: AgeClass;
   readonly alive: boolean;
 }
 
@@ -92,6 +98,11 @@ export interface PersonView extends PersonSummary {
   readonly traits: readonly { readonly trait: string; readonly value: number }[];
   /** Taille adulte, en centimètres. */
   readonly height: number;
+  /**
+   * Grisonnement de ses cheveux, aujourd'hui ou à sa mort, de 0 à GREY_LEVELS − 1
+   * (core/life.ts) : celui de son mini-sprite.
+   */
+  readonly grey: number;
   /** Nutrition, de 0 à 1, et grossesse en cours, pour un vivant. */
   readonly nutrition: number;
   readonly pregnant: boolean;

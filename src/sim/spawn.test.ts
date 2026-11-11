@@ -161,8 +161,8 @@ describe("apparition d'un groupe (CRE-03, C2 D4)", () => {
     const variants: Species[] = [
       { ...testHuman, couple: { ...testHuman.couple, minAge: 16.5 } },
       { ...testHuman, fertility: { ...testHuman.fertility, peak: 24.5 } },
-      // Une espèce brève, et une espèce qui vit des siècles.
-      { ...testHuman, longevity: 30 },
+      // Une espèce brève, aînée à 25 ans, et une espèce qui vit des siècles.
+      { ...testHuman, longevity: 30, ages: { ...testHuman.ages, elder: 25 } },
       {
         ...testHuman,
         maturity: 30,

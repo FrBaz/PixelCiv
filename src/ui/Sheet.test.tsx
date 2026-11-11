@@ -1,6 +1,8 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { loadGameData } from '../core/data';
+import { ageClass } from '../core/life';
 import type { GroupView, PersonSummary, PersonView } from '../core/protocol';
+import { t, tKey } from '../i18n';
 import { CellInfo } from './CellInfo';
 import { Portrait } from './Portrait';
 import { SheetPanel, sheetKey, type SheetContent } from './Sheet';
@@ -10,10 +12,14 @@ import { buttons, expand, findAll, fire, textOf, type Rendered } from './testing
 const data = loadGameData();
 const content: SheetContent = {
   species: data.species.entries,
-  loci: data.genetics.loci,
-  traits: data.genetics.traits,
+  genetics: data.genetics,
   appearance: data.appearance,
 };
+const human = data.species.entries[0] ?? missing();
+
+function missing(): never {
+  throw new Error('donnée absente');
+}
 
 function fakeActions() {
   return {
@@ -30,6 +36,7 @@ function person(overrides: Partial<PersonView> = {}): PersonView {
     name: 'Tiko',
     sex: 1,
     age: 30,
+    stage: 'adult',
     alive: true,
     birth: -360,
     species: 'human',
@@ -39,6 +46,7 @@ function person(overrides: Partial<PersonView> = {}): PersonView {
     loci: [],
     traits: [],
     height: 172,
+    grey: 0,
     nutrition: 1,
     pregnant: false,
     children: [],
@@ -102,6 +110,7 @@ describe('fiches (IHM-02)', () => {
       name: `P${String(id)}`,
       sex,
       age,
+      stage: ageClass(human, age),
       alive,
     });
     sheet.value = {
@@ -183,5 +192,79 @@ describe('fiches (IHM-02)', () => {
       expect(title?.props.tabIndex).toBe(-1);
       expect(typeof title?.ref).toBe('function');
     }
+  });
+
+  it('nomment chacun selon la classe d’âge que lui donne son espèce (U-12)', () => {
+    const relative = (id: number, sex: number, age: number, stage: PersonSummary['stage']) => ({
+      id,
+      name: `P${String(id)}`,
+      sex,
+      age,
+      stage,
+      alive: true,
+    });
+    sheet.value = {
+      kind: 'person',
+      view: person({
+        children: [
+          // Un homme de 13 ans, d'une espèce qui mûrit à 12 ans ; un garçon de 20 ans,
+          // d'une espèce qui mûrit à 30 ans ; un nourrisson de 4 ans, d'une espèce qui le
+          // reste plus longtemps ; une aînée, qui reste une femme.
+          relative(1, 1, 13, 'adult'),
+          relative(2, 1, 20, 'child'),
+          relative(3, 0, 4, 'baby'),
+          relative(4, 0, 70, 'elder'),
+        ],
+      }),
+    };
+    const links = buttons(shown()).filter((button) =>
+      String(button.props.class).includes('sheet-link'),
+    );
+    expect(links.map(textOf)).toEqual([
+      'P1 homme, 13 ans',
+      'P2 garçon, 20 ans',
+      'P3 nourrisson, 4 ans',
+      'P4 femme, 70 ans',
+    ]);
+  });
+
+  it('donnent la taille adulte d’un enfant pour ce qu’elle est (U-12)', () => {
+    const rows = (view: PersonView) => {
+      sheet.value = { kind: 'person', view };
+      return findAll(shown(), (element) => element.props.class === 'debug-row').map(textOf);
+    };
+    expect(rows(person({ age: 1, stage: 'baby', height: 171 }))).toContain('Taille adulte 171 cm');
+    expect(rows(person({ age: 9, stage: 'child', height: 165 }))).toContain('Taille adulte 165 cm');
+    expect(rows(person({ age: 30, stage: 'adult', height: 172 }))).toContain('Taille 172 cm');
+    // Le statut d'un enfant vivant le dit enfant, quel que soit son âge en années.
+    sheet.value = { kind: 'person', view: person({ age: 20, stage: 'child' }) };
+    expect(textOf(shown())).toContain('garçon, 20 ans');
+  });
+
+  it('ne montrent en niveaux que les traits sans rôle, quels que soient leurs noms (D-6)', () => {
+    // Des traits renommés : teint et taille restent hors de la liste, par leur rôle.
+    const genetics = {
+      ...data.genetics,
+      traits: data.genetics.traits.map((entry) => ({ ...entry, id: `${entry.id}-x` })),
+    };
+    const renamed: SheetContent = { ...content, genetics };
+    sheet.value = {
+      kind: 'person',
+      view: person({
+        traits: genetics.traits.map((entry) => ({ trait: entry.id, value: 0.7 })),
+      }),
+    };
+    const tree = expand(
+      SheetPanel({ content: renamed, actions: fakeActions() as unknown as UiActions }),
+      [Portrait],
+    );
+    const labels = findAll(tree, (element) => element.type === 'dt').map(textOf);
+    // Les traits sans rôle, chacun son niveau ; le teint nulle part ; la taille une seule
+    // fois, en centimètres.
+    const plain = genetics.traits.filter((entry) => entry.role === undefined);
+    expect(plain.length).toBeGreaterThan(0);
+    for (const entry of plain) expect(labels).toContain(tKey(entry.name));
+    expect(labels).not.toContain(tKey('trait.skin'));
+    expect(labels.filter((label) => label === t('person.height'))).toHaveLength(1);
   });
 });

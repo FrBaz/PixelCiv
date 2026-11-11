@@ -380,6 +380,27 @@ describe('cycle de vie (tâche 2.3)', () => {
     expect(deathsBy(sands, 'cold')).toBeGreaterThan(deathsBy(nordic, 'cold') * 1.5);
   });
 
+  it('tient le confort et les froids extrêmes des données de l’espèce (D-6)', () => {
+    // Le monde plat, à 15 °C toute l'année : le confort des humains (de 0 à 30 °C), mais un
+    // froid pour une espèce qui ne s'y trouve bien qu'au-delà de 20 °C.
+    const chilly = withHuman((human) => ({
+      ...human,
+      hardship: { ...human.hardship, comfort: [20, 35], extremes: [10, 45] },
+    }));
+    const coldDeaths = (content: SimContent) => {
+      const state = flatState();
+      step(
+        state,
+        [{ type: 'spawnGroup', x: 40, y: 60, species: 'human', subspecies: 'plains', count: 30 }],
+        content,
+      );
+      run(state, 10 * MONTHS_PER_YEAR, content);
+      return deathsBy(state, 'cold');
+    };
+    expect(coldDeaths(testData)).toBe(0);
+    expect(coldDeaths(chilly)).toBeGreaterThan(0);
+  });
+
   it('éteint un groupe dont le dernier membre meurt, et la chronique le note', () => {
     const state = testState();
     step(state, spawn(state, ['grassland', 'temperate-forest'], 1), testData);

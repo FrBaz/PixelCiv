@@ -6,7 +6,7 @@ import { PROTOCOL_VERSION, type InspectTarget } from '../core/protocol';
 import { WORLD_SIZES, type WorldLayers, type WorldSizeId } from '../core/world';
 import { defaultWorldParams, type WorldParams } from '../core/worldParams';
 import { determinismSelfTest } from '../core/selftest';
-import { t, type MessageKey } from '../i18n';
+import { t } from '../i18n';
 import { parseColor } from '../render/bake';
 import { CameraControls } from '../render/controls';
 import { MapView } from '../render/map';
@@ -26,6 +26,7 @@ import {
   creationBusy,
   creationOpen,
   creationPending,
+  creatorSetup,
   debugInfo,
   determinismOk,
   generation,
@@ -45,7 +46,6 @@ import {
   tool,
   worldInfo,
   type CreationSetup,
-  type CreatorSetup,
   type MapModeId,
 } from '../ui/store';
 import { appendFacts, olderThan, prependPage } from './chronicle';
@@ -106,17 +106,7 @@ async function main(): Promise<void> {
     defaultSize: touchOnly ? 'medium' : 'large',
   };
   // Ce que l'outil d'apparition propose : les espèces des données et leurs sous-espèces.
-  const creator: CreatorSetup = {
-    species: data.species.entries.map((species) => ({
-      id: species.id,
-      name: species.name as MessageKey,
-      subspecies: species.subspecies.map((entry) => ({
-        id: entry.id,
-        name: entry.name as MessageKey,
-      })),
-    })),
-    count: SPAWN_COUNT,
-  };
+  const creator = creatorSetup(data.species.entries, SPAWN_COUNT);
   const simulation = new SimulationClient();
   const biomeColors = data.biomes.entries.map((biome) => parseColor(biome.palette.base));
   const biomeWater = data.biomes.entries.map((biome) => biome.tile === 'water');
@@ -505,8 +495,7 @@ async function main(): Promise<void> {
   }
   const content: SheetContent = {
     species: data.species.entries,
-    loci: data.genetics.loci,
-    traits: data.genetics.traits,
+    genetics: data.genetics,
     appearance: data.appearance,
   };
   render(h(App, { actions, setup, creator, content }), uiElement);

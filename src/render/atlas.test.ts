@@ -1,7 +1,17 @@
 import { describe, expect, it } from 'vitest';
 import { loadGameData } from '../core/data';
-import { ROLE } from '../core/visual';
-import { cultureCloth, frameOf, personPalette, recolor, recolorRoles, skinColor } from './atlas';
+import { geneRoles } from '../core/data/people';
+import { GREY_LEVELS, ROLE } from '../core/visual';
+import {
+  alleleColors,
+  cultureCloth,
+  frameOf,
+  greyed,
+  personPalette,
+  recolor,
+  recolorRoles,
+  skinColor,
+} from './atlas';
 import { parseColor, type Rgb } from './bake';
 
 const { appearance, genetics } = loadGameData();
@@ -78,17 +88,43 @@ describe('recoloration (REN-09)', () => {
     expect(contrast(backdrop, outline)).toBeGreaterThanOrEqual(2);
     // L'ombre des cheveux les plus sombres aussi : la tête garde sa silhouette.
     const black: Rgb = [0, 0, 0];
-    const shadows = (genetics.loci.find((locus) => locus.id === 'hair')?.alleles ?? []).map(
-      (allele) =>
-        personPalette(appearance, {
-          skin: black,
-          hair: parseColor(allele.color ?? '#000000'),
-          cloth: black,
-        })[ROLE.hairShadow] ?? black,
+    const hairs = alleleColors(genetics.loci[geneRoles(genetics).loci.hair], black);
+    const shadows = hairs.map(
+      (hair) =>
+        personPalette(appearance, { skin: black, hair, cloth: black })[ROLE.hairShadow] ?? black,
     );
     expect(shadows.length).toBeGreaterThan(0);
     const darkest = shadows.reduce((a, b) => (luminance(b) < luminance(a) ? b : a));
     expect(contrast(backdrop, darkest)).toBeGreaterThanOrEqual(2);
+  });
+
+  it('prend les couleurs des cheveux au locus qui en tient le rôle, quel que soit son nom', () => {
+    const hair = genetics.loci.at(geneRoles(genetics).loci.hair);
+    if (hair === undefined) throw new Error('pas de cheveux');
+    expect(alleleColors({ ...hair, id: 'chevelure' }, [1, 2, 3])).toEqual(
+      hair.alleles.map((allele) => parseColor(allele.color ?? '')),
+    );
+    // Un allèle sans couleur (le schéma l'interdit pour ce rôle) prend la couleur de repli.
+    const bare = { ...hair, alleles: hair.alleles.map(({ color: _color, ...allele }) => allele) };
+    expect(alleleColors(bare, [1, 2, 3])[0]).toEqual([1, 2, 3]);
+    expect(alleleColors(undefined, [1, 2, 3])).toEqual([]);
+  });
+
+  it('grisonne les cheveux par crans, le même gris sur la carte et au portrait (A-10)', () => {
+    const hair: Rgb = [30, 20, 10];
+    const grey = parseColor(appearance.grey);
+    expect(greyed(hair, grey, 0)).toEqual(hair);
+    expect(greyed(hair, grey, GREY_LEVELS - 1)).toEqual(grey);
+    // Chaque cran rapproche du gris, sans le dépasser.
+    let previous = hair;
+    for (let level = 1; level < GREY_LEVELS; level++) {
+      const now = greyed(hair, grey, level);
+      for (let channel = 0; channel < 3; channel++) {
+        expect(now[channel]).toBeGreaterThan(previous[channel] ?? 0);
+        expect(now[channel]).toBeLessThanOrEqual(grey[channel] ?? 0);
+      }
+      previous = now;
+    }
   });
 
   it('habille les cultures à tour de rôle', () => {

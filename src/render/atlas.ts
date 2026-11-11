@@ -7,8 +7,8 @@
  * base, assombrie ou éclaircie, pour rester dans une gamme restreinte.
  */
 import atlas from 'virtual:pixel-atlas';
-import type { Appearance } from '../core/data';
-import { ROLE } from '../core/visual';
+import type { Appearance, Locus } from '../core/data';
+import { GREY_LEVELS, ROLE } from '../core/visual';
 import { parseColor, type Rgb } from './bake';
 
 export { ROLE } from '../core/visual';
@@ -81,6 +81,30 @@ export function skinColor(appearance: Appearance, value: number): Rgb {
     Math.round(a[0] + (b[0] - a[0]) * t),
     Math.round(a[1] + (b[1] - a[1]) * t),
     Math.round(a[2] + (b[2] - a[2]) * t),
+  ];
+}
+
+/**
+ * Couleur de chaque allèle d'un locus, dans l'ordre des allèles : le schéma en donne une à
+ * chaque allèle des rôles « eyes » et « hair » ; `missing` pour un allèle qui n'en a pas.
+ */
+export function alleleColors(locus: Locus | undefined, missing: Rgb): Rgb[] {
+  return (locus?.alleles ?? []).map((allele) =>
+    allele.color === undefined ? missing : parseColor(allele.color),
+  );
+}
+
+/**
+ * Cheveux grisonnants : la couleur des cheveux mêlée au gris au cran `level`, de 0 (aucun
+ * gris) à GREY_LEVELS − 1 (tout gris), le même pour le mini-sprite et le portrait
+ * (core/life.ts).
+ */
+export function greyed(hair: Rgb, grey: Rgb, level: number): Rgb {
+  const t = Math.min(1, Math.max(0, level / (GREY_LEVELS - 1)));
+  return [
+    Math.round(hair[0] + (grey[0] - hair[0]) * t),
+    Math.round(hair[1] + (grey[1] - hair[1]) * t),
+    Math.round(hair[2] + (grey[2] - hair[2]) * t),
   ];
 }
 

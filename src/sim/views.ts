@@ -4,7 +4,9 @@
  * groupes de la carte avec un code d'apparence par membre.
  *
  * Les noms se forment ici, dans le worker, d'après la langue de chaque culture : le fil
- * principal reçoit des textes prêts, que la traduction n'a pas à toucher.
+ * principal reçoit des textes prêts, que la traduction n'a pas à toucher. La classe d'âge
+ * et le grisonnement viennent des âges de l'espèce de chacun (src/core/life.ts), les mêmes
+ * pour la fiche et pour le mini-sprite.
  */
 import {
   CHRONICLE_PAGE,
@@ -16,7 +18,9 @@ import {
   type PersonSummary,
   type PersonView,
 } from '../core/protocol';
-import { SKIN_TONES, visualCode } from '../core/visual';
+import { geneRoles } from '../core/data/people';
+import { ageClass, greyLevel, lifeTable, type LifeAges } from '../core/life';
+import { AGE_CODE, SKIN_TONES, visualCode, type AgeClass } from '../core/visual';
 import { expressed, trait } from './genetics';
 import { groupMembers } from './groups';
 import { DEATH_CAUSES, GENOME_WORDS, NEVER, NONE, type Population } from './population';
@@ -26,23 +30,34 @@ import { cultureOf, type ChronicleEntry } from './society';
 import type { SimState } from './state';
 import type { SimContent } from './step';
 
-/** Âge, en années révolues, d'un vivant aujourd'hui ou d'un mort à sa mort. */
-function ageOf(state: SimState, record: PersonRecord): number {
+/** Âge exact, en années, d'un vivant aujourd'hui ou d'un mort à sa mort. */
+function yearsOf(state: SimState, record: PersonRecord): number {
   const birth = field(state.people, record, 'birth');
   const end = record.alive
     ? state.tick
     : (state.people.archive.columns.death[record.index] ?? state.tick);
-  return Math.max(0, Math.floor((end - birth) / MONTHS_PER_YEAR));
+  return Math.max(0, end - birth) / MONTHS_PER_YEAR;
 }
 
-function summary(state: SimState, id: number): PersonSummary | undefined {
+/**
+ * Classe d'âge à `years` ans selon les âges de l'espèce ; adulte pour une espèce inconnue,
+ * ce que l'apparition et la relecture d'une sauvegarde empêchent.
+ */
+function stageOf(species: LifeAges | undefined, years: number): AgeClass {
+  return species === undefined ? 'adult' : ageClass(species, years);
+}
+
+function summary(state: SimState, content: SimContent, id: number): PersonSummary | undefined {
   const record = recordOf(state.people, id);
   if (record === undefined) return undefined;
+  const years = yearsOf(state, record);
+  const species = content.species.entries.at(field(state.people, record, 'species'));
   return {
     id,
     name: personName(state.people, state.society, id),
     sex: field(state.people, record, 'sex'),
-    age: ageOf(state, record),
+    age: Math.floor(years),
+    stage: stageOf(species, years),
     alive: record.alive,
   };
 }
@@ -66,11 +81,12 @@ export function personView(
 ): PersonView | undefined {
   const { people } = state;
   const record = recordOf(people, id);
-  const base = summary(state, id);
+  const base = summary(state, content, id);
   if (record === undefined || base === undefined) return undefined;
   const species = content.species.entries.at(field(people, record, 'species'));
   const { genome, ancestry } = heredity(people, record);
   const { genetics } = content;
+  const roles = geneRoles(genetics);
   const loci = genetics.loci.map((locus, index) => ({
     locus: locus.id,
     allele: locus.alleles.at(expressed(genetics, genome, 0, index))?.id ?? '',
@@ -79,9 +95,8 @@ export function personView(
     trait: entry.id,
     value: trait(genome, 0, index),
   }));
-  const heightIndex = genetics.traits.findIndex((entry) => entry.id === 'height');
   const [short, tall] = species?.height ?? [0, 0];
-  const height = Math.round(short + (tall - short) * trait(genome, 0, Math.max(0, heightIndex)));
+  const height = Math.round(short + (tall - short) * trait(genome, 0, roles.traits.height));
   const shares = ancestry
     .map((share, index) => ({
       subspecies: species?.subspecies.at(index)?.id ?? '',
@@ -98,7 +113,7 @@ export function personView(
   }
   const list = (ids: Iterable<number>) =>
     [...ids].flatMap((other) => {
-      const found = summary(state, other);
+      const found = summary(state, content, other);
       return found === undefined ? [] : [found];
     });
   const groupId = field(people, record, 'group');
@@ -119,11 +134,12 @@ export function personView(
     loci,
     traits,
     height,
+    grey: species === undefined ? 0 : greyLevel(species, yearsOf(state, record)),
     nutrition: record.alive ? people.get('nutrition', record.index) / 255 : 0,
     pregnant: record.alive && people.get('conceived', record.index) !== NEVER,
-    ...optional('mother', summary(state, mother)),
-    ...optional('father', summary(state, father)),
-    ...optional('partner', summary(state, field(people, record, 'partner'))),
+    ...optional('mother', summary(state, content, mother)),
+    ...optional('father', summary(state, content, father)),
+    ...optional('partner', summary(state, content, field(people, record, 'partner'))),
     children: list(childrenOf(people, id)),
     siblings: list(siblings),
     ...optional('group', record.alive ? groupSummary(state, groupId, size) : undefined),
@@ -135,7 +151,7 @@ function optional<K extends string, V>(key: K, value: V | undefined): Partial<Re
 }
 
 /** Fiche d'un groupe vivant. */
-export function groupView(state: SimState, id: number): GroupView | undefined {
+export function groupView(state: SimState, content: SimContent, id: number): GroupView | undefined {
   const group = state.society.groups.get(id);
   if (group === undefined) return undefined;
   const all = groupMembers(state.people);
@@ -153,7 +169,7 @@ export function groupView(state: SimState, id: number): GroupView | undefined {
     homeX: group.homeX,
     homeY: group.homeY,
     members: members.flatMap((slot) => {
-      const found = summary(state, state.people.get('id', slot));
+      const found = summary(state, content, state.people.get('id', slot));
       return found === undefined ? [] : [found];
     }),
   };
@@ -171,7 +187,7 @@ export function inspect(
       return person === undefined ? {} : { person };
     }
     case 'group': {
-      const group = groupView(state, target.id);
+      const group = groupView(state, content, target.id);
       return group === undefined ? {} : { group };
     }
   }
@@ -266,11 +282,15 @@ export function groupsFrame(
   for (const group of state.society.groups.values()) total += members.get(group.id)?.length ?? 0;
   const sprites = new Uint16Array(total);
   const { genetics } = content;
-  const hairLocus = genetics.loci.findIndex((locus) => locus.id === 'hair');
-  const skinTrait = genetics.traits.findIndex((entry) => entry.id === 'skin');
+  const roles = geneRoles(genetics);
+  const hairLocus = roles.loci.hair;
+  const skinTrait = roles.traits.skin;
   const cache = looks(people);
   const { id: ids, sex, birth, species: kinds, genome } = people.columns;
-  const entries = content.species.entries;
+  // Classe d'âge et gris par mois d'âge, de chaque espèce (core/life.ts) ; un adulte sans
+  // gris pour une espèce inconnue, comme le dit stageOf.
+  const lives = content.species.entries.map((entry) => lifeTable(entry));
+  const unknown = AGE_CODE.adult;
   let index = 0;
   let sprite = 0;
   for (const group of state.society.groups.values()) {
@@ -284,19 +304,19 @@ export function groupsFrame(
         cache.ids[slot] = id;
         cache.skin[slot] = Math.min(
           SKIN_TONES - 1,
-          Math.floor(trait(genome, offset, Math.max(0, skinTrait)) * SKIN_TONES),
+          Math.floor(trait(genome, offset, skinTrait) * SKIN_TONES),
         );
-        cache.hair[slot] = hairLocus < 0 ? 0 : expressed(genetics, genome, offset, hairLocus);
+        cache.hair[slot] = expressed(genetics, genome, offset, hairLocus);
       }
-      const years = (tick - (birth[slot] ?? 0)) / MONTHS_PER_YEAR;
-      const maturity = entries.at(kinds[slot] ?? 0)?.maturity ?? 15;
-      const age = years < 3 ? 0 : years < maturity ? 1 : years < 55 ? 2 : 3;
+      const life = lives.at(kinds[slot] ?? 0);
+      const months = Math.max(0, tick - (birth[slot] ?? 0));
+      const aging = life === undefined ? unknown : (life[Math.min(months, life.length - 1)] ?? 0);
       sprites[sprite++] = visualCode(
         sex[slot] ?? 0,
-        age,
+        aging & 3,
         cache.skin[slot] ?? 0,
         cache.hair[slot] ?? 0,
-        years >= 50,
+        aging >> 2,
       );
     }
   }

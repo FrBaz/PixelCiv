@@ -199,7 +199,7 @@ describe('groupe sous un appui (W-7)', () => {
     const total = groups.reduce((sum, group) => sum + group[3], 0);
     return {
       groups: Uint32Array.from(groups.flatMap(([id, x, y, size]) => [id, x, y, size, 1])),
-      sprites: new Uint16Array(total).fill(visualCode(1, 2, 3, 2, false)),
+      sprites: new Uint16Array(total).fill(visualCode(1, 2, 3, 2, 0)),
     };
   }
   /** Caméra visant le centre de la case (x, y). */

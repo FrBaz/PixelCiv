@@ -6,19 +6,22 @@
  *   d'interface, de taille fixe en pixels CSS (iconPixel, crowd.ts).
  * - De près (à partir de SPRITE_SCALE pixels de l'écran par pixel de carte), un mini-sprite
  *   par membre, rangé en grappe autour de la case du groupe. Il est tiré de l'individu :
- *   sexe, âge, teint, cheveux (gris avec l'âge), habit de la culture. Il est dessiné à la
- *   densité de pixels de la carte, sans mélange (REN-08), à une position entière, et il
- *   marche : deux images en alternance.
+ *   sexe, âge, teint, cheveux (grisonnants avec l'âge, comme au portrait), habit de la
+ *   culture. Il est dessiné à la densité de pixels de la carte, sans mélange (REN-08), à
+ *   une position entière, et il marche : deux images en alternance.
  *
  * Un groupe se dessine s'il touche l'écran, grappe ou bannière comprise. Les textures
  * recolorées se gardent d'une image à l'autre, une par apparence et par couleur d'habit.
  */
 import { BufferImageSource, Container, Sprite, Texture, type Application } from 'pixi.js';
 import type { Appearance, Genetics } from '../core/data';
+import { geneRoles } from '../core/data/people';
 import { GROUP_STRIDE, type GroupsFrame } from '../core/protocol';
 import { decodeVisual, SKIN_TONES } from '../core/visual';
 import {
+  alleleColors,
   cultureCloth,
+  greyed,
   personPalette,
   recolor,
   frameOf,
@@ -77,9 +80,12 @@ export class PeopleLayer {
   constructor(app: Application, data: PeopleData) {
     this.app = app;
     this.data = data;
-    const hair = data.genetics.loci.find((locus) => locus.id === 'hair');
-    this.hairColors = (hair?.alleles ?? []).map((allele) => parseColor(allele.color ?? '#000000'));
     this.grey = parseColor(data.appearance.grey);
+    // Les couleurs des cheveux : celles des allèles du locus qui en tient le rôle.
+    this.hairColors = alleleColors(
+      data.genetics.loci[geneRoles(data.genetics).loci.hair],
+      this.grey,
+    );
     this.clothing = data.appearance.clothing.map((color) => parseColor(color));
     const frames = spriteNames().map((name) => frameOf(name));
     this.largest = {
@@ -185,7 +191,7 @@ export class PeopleLayer {
       const visual = decodeVisual(code);
       const step = Math.floor(now / STEP_MS + member * 0.37) % 2;
       const name = spriteName(visual.age, visual.sex, step);
-      const hair = visual.grey ? this.grey : (this.hairColors[visual.hair] ?? this.grey);
+      const hair = greyed(this.hairColors[visual.hair] ?? this.grey, this.grey, visual.grey);
       const texture = this.texture(name, textureKey(name, code, cloth), () =>
         personPalette(this.data.appearance, {
           skin: skinColor(this.data.appearance, (visual.skin + 0.5) / SKIN_TONES),

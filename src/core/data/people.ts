@@ -6,8 +6,14 @@
  * deux allèles de 4 bits (dominants ou récessifs), puis huit traits continus de 8 bits
  * (moyenne des parents et variation). Les données ne peuvent donc pas décrire plus de
  * huit locus, de seize allèles chacun, ni plus de huit traits.
+ *
+ * Le code ne nomme aucun locus, aucun trait ni aucun allèle (D-6, A-10, W-12) : ce que
+ * dessinent les portraits et les mini-sprites se désigne dans les données, par le rôle
+ * d'un locus ou d'un trait, et chaque allèle d'un rôle porte ce qu'il en faut dessiner,
+ * sa couleur ou sa forme.
  */
 import { z } from 'zod';
+import { DataError } from './catalog';
 import { IdSchema, MessageKeySchema, ShareSchema, uniqueIds } from './schemas';
 
 export const MAX_LOCI = 8;
@@ -18,6 +24,74 @@ export const MAX_SUBSPECIES = 4;
 
 const ColorSchema = z.string().regex(/^#[0-9a-f]{6}$/, 'couleur #rrggbb');
 
+/**
+ * Rôles d'un locus : la couleur des yeux, celle des cheveux, la forme du visage et celle du
+ * nez. Chacun est tenu par un locus, et un seul ; un locus sans rôle se lit dans la fiche,
+ * sans se dessiner.
+ */
+export const LOCUS_ROLES = ['eyes', 'hair', 'face', 'nose'] as const;
+export type LocusRole = (typeof LOCUS_ROLES)[number];
+
+/**
+ * Rôles d'un trait continu : le teint, qui parcourt la rampe de data/appearance.json, et la
+ * taille, entre les deux bouts de `height` de l'espèce. Chacun est tenu par un trait, et un
+ * seul.
+ */
+export const TRAIT_ROLES = ['skin', 'height'] as const;
+export type TraitRole = (typeof TRAIT_ROLES)[number];
+
+/**
+ * Bornes de la forme du visage. Le portrait d'un adulte y garde ses yeux et sa bouche dans
+ * la tête, et tout son dessin dans le canevas (src/gen/portrait.test.ts) : plus étroite, la
+ * tête perd le coin des yeux ; plus resserrée, la mâchoire coupe la bouche.
+ */
+export const FACE_BOUNDS = {
+  width: [10, 16],
+  height: [10, 20],
+  jaw: [0, 0.6],
+} as const;
+
+/**
+ * Forme du visage d'un allèle du rôle « face », en pixels du portrait de 64 × 64 :
+ * demi-largeur et demi-hauteur de la tête adulte ; exposant du contour, 2 pour une ellipse,
+ * 4 pour un visage carré ; rétrécissement de la mâchoire vers le menton.
+ */
+const FaceShapeSchema = z
+  .object({
+    width: z.number().int().min(FACE_BOUNDS.width[0]).max(FACE_BOUNDS.width[1]),
+    height: z.number().int().min(FACE_BOUNDS.height[0]).max(FACE_BOUNDS.height[1]),
+    power: z.union([z.literal(2), z.literal(4)]),
+    jaw: z.number().min(FACE_BOUNDS.jaw[0]).max(FACE_BOUNDS.jaw[1]),
+  })
+  .strict();
+
+export type FaceShape = z.infer<typeof FaceShapeSchema>;
+
+/**
+ * Bornes de la forme du nez : son arête monte au plus jusqu'aux yeux de l'adulte, à 4
+ * pixels du bout du nez, et ses narines restent dans le visage le plus étroit.
+ */
+export const NOSE_BOUNDS = {
+  length: [1, 4],
+  wing: [1, 4],
+} as const;
+
+/**
+ * Forme du nez d'un allèle du rôle « nose », en pixels du portrait : longueur de l'arête
+ * au-dessus du bout du nez ; bosse au milieu de l'arête ; demi-largeur des narines ; base
+ * pleine, d'une narine à l'autre.
+ */
+const NoseShapeSchema = z
+  .object({
+    length: z.number().int().min(NOSE_BOUNDS.length[0]).max(NOSE_BOUNDS.length[1]),
+    hump: z.boolean(),
+    wing: z.number().int().min(NOSE_BOUNDS.wing[0]).max(NOSE_BOUNDS.wing[1]),
+    base: z.boolean(),
+  })
+  .strict();
+
+export type NoseShape = z.infer<typeof NoseShapeSchema>;
+
 /** Allèle d'un locus discret : le plus dominant des deux s'exprime. */
 const AlleleSchema = z
   .object({
@@ -25,28 +99,91 @@ const AlleleSchema = z
     name: MessageKeySchema,
     /** Rang de dominance : à rang égal, l'allèle qui vient d'abord dans la liste l'emporte. */
     dominance: z.number().int().min(0),
-    /** Couleur qu'il donne, pour les yeux et les cheveux ; aucune pour les formes. */
+    /** Couleur, pour les rôles « eyes » et « hair ». */
     color: ColorSchema.optional(),
+    /** Forme du visage, pour le rôle « face ». */
+    face: FaceShapeSchema.optional(),
+    /** Forme du nez, pour le rôle « nose ». */
+    nose: NoseShapeSchema.optional(),
   })
   .strict();
+
+/** Ce que chaque rôle demande à chacun de ses allèles. */
+const ROLE_PARAMETER = {
+  eyes: 'color',
+  hair: 'color',
+  face: 'face',
+  nose: 'nose',
+} as const satisfies Record<LocusRole, 'color' | 'face' | 'nose'>;
+
+const ALLELE_PARAMETERS = ['color', 'face', 'nose'] as const;
 
 const LocusSchema = z
   .object({
     id: IdSchema,
     name: MessageKeySchema,
+    role: z.enum(LOCUS_ROLES).optional(),
     alleles: uniqueIds(AlleleSchema).min(2).max(MAX_ALLELES),
   })
-  .strict();
+  .strict()
+  .superRefine((locus, context) => {
+    // Chaque allèle porte ce que demande le rôle de son locus, et rien d'autre : un locus
+    // sans rôle ne se dessine pas, ses allèles n'ont ni couleur ni forme.
+    const { role } = locus;
+    const wanted = role === undefined ? undefined : ROLE_PARAMETER[role];
+    locus.alleles.forEach((allele, index) => {
+      for (const parameter of ALLELE_PARAMETERS) {
+        const present = allele[parameter] !== undefined;
+        if (present === (parameter === wanted)) continue;
+        context.addIssue({
+          code: 'custom',
+          message:
+            role === undefined
+              ? 'sans emploi pour un locus sans rôle'
+              : present
+                ? `sans emploi pour le rôle ${role}`
+                : `demandé par le rôle ${role}`,
+          path: ['alleles', index, parameter],
+        });
+      }
+    });
+  });
 
 /** Trait continu, de 0 à 1, stocké sur 8 bits. */
 const TraitSchema = z
   .object({
     id: IdSchema,
     name: MessageKeySchema,
+    role: z.enum(TRAIT_ROLES).optional(),
     /** Écart type de la variation autour de la moyenne des parents. */
     variation: ShareSchema,
   })
   .strict();
+
+/**
+ * Relève les rôles que ne tient aucune entrée, ou que plusieurs tiennent ; `kind` nomme les
+ * entrées, au singulier puis au pluriel.
+ */
+function eachRoleOnce(
+  roles: readonly string[],
+  entries: readonly { readonly role?: string | undefined }[],
+  kind: readonly [one: string, many: string],
+  context: z.core.$RefinementCtx,
+  path: string,
+): void {
+  for (const role of roles) {
+    const holders = entries.filter((entry) => entry.role === role).length;
+    if (holders === 1) continue;
+    context.addIssue({
+      code: 'custom',
+      message:
+        holders === 0
+          ? `aucun ${kind[0]} ne tient le rôle ${role}`
+          : `plusieurs ${kind[1]} tiennent le rôle ${role}`,
+      path: [path],
+    });
+  }
+}
 
 export const GeneticsSchema = z
   .object({
@@ -65,11 +202,62 @@ export const GeneticsSchema = z
       })
       .strict(),
   })
-  .strict();
+  .strict()
+  .superRefine((genetics, context) => {
+    eachRoleOnce(LOCUS_ROLES, genetics.loci, ['locus', 'locus'], context, 'loci');
+    eachRoleOnce(TRAIT_ROLES, genetics.traits, ['trait', 'traits'], context, 'traits');
+  });
 
 export type Genetics = z.infer<typeof GeneticsSchema>;
 export type Locus = z.infer<typeof LocusSchema>;
+export type Allele = Locus['alleles'][number];
 export type Trait = z.infer<typeof TraitSchema>;
+
+/**
+ * Rang, dans data/genetics.json, du locus et du trait qui tiennent chaque rôle : ce que
+ * les portraits, les mini-sprites et les fiches dessinent ou montrent à part.
+ */
+export interface GeneRoles {
+  readonly loci: Readonly<Record<LocusRole, number>>;
+  readonly traits: Readonly<Record<TraitRole, number>>;
+}
+
+const rolesOf = new WeakMap<object, GeneRoles>();
+
+/**
+ * Rôles d'une génétique validée, calculés une fois par objet. Le schéma garantit que chaque
+ * rôle est tenu une fois : une génétique qui ne l'a pas traversé et en manque lève une
+ * DataError.
+ */
+export function geneRoles(genetics: {
+  readonly loci: readonly { readonly id: string; readonly role?: LocusRole | undefined }[];
+  readonly traits: readonly { readonly id: string; readonly role?: TraitRole | undefined }[];
+}): GeneRoles {
+  let roles = rolesOf.get(genetics);
+  if (roles !== undefined) return roles;
+  const holder = <R extends string>(
+    entries: readonly { readonly role?: R | undefined }[],
+    role: R,
+  ): number => {
+    const index = entries.findIndex((entry) => entry.role === role);
+    if (index < 0) throw new DataError(`data/genetics.json : aucun gène ne tient le rôle ${role}`);
+    return index;
+  };
+  roles = {
+    loci: {
+      eyes: holder(genetics.loci, 'eyes'),
+      hair: holder(genetics.loci, 'hair'),
+      face: holder(genetics.loci, 'face'),
+      nose: holder(genetics.loci, 'nose'),
+    },
+    traits: {
+      skin: holder(genetics.traits, 'skin'),
+      height: holder(genetics.traits, 'height'),
+    },
+  };
+  rolesOf.set(genetics, roles);
+  return roles;
+}
 
 /** Répartition d'un trait continu dans une sous-espèce : moyenne et écart type. */
 const DistributionSchema = z.object({ mean: ShareSchema, sd: ShareSchema }).strict();
@@ -150,6 +338,37 @@ const FertilitySchema = z
     message: 'la fécondité commence, culmine puis cesse',
   });
 
+/**
+ * Âges de la vie et de l'apparence, en années (REN-04, REN-07 ; D-6, A-10, U-12), que
+ * lisent les mini-sprites, les fiches et les portraits (src/core/life.ts) : nourrisson
+ * jusqu'à `baby` ans, enfant jusqu'à la maturité de l'espèce, adulte, puis aîné dès
+ * `elder` ans. Les cheveux grisonnent de `grey[0]` à `grey[1]` ans. Chez un adulte, la
+ * barbe paraît à `beard` ans et la calvitie à `bald` ; les rides viennent au front à
+ * `wrinkles.forehead`, au coin des yeux à `wrinkles.eyes`, autour de la bouche à
+ * `wrinkles.mouth`, et le front se creuse à `wrinkles.deep`.
+ */
+const AgesSchema = z
+  .object({
+    baby: z.number().positive(),
+    elder: z.number().positive(),
+    grey: z.tuple([z.number().min(0), z.number().min(0)]).refine(([from, to]) => from < to, {
+      message: 'les cheveux grisonnent de grey[0] à grey[1]',
+    }),
+    beard: z.number().min(0),
+    bald: z.number().min(0),
+    wrinkles: z
+      .object({
+        forehead: z.number().min(0),
+        eyes: z.number().min(0),
+        mouth: z.number().min(0),
+        deep: z.number().min(0),
+      })
+      .strict(),
+  })
+  .strict();
+
+export type SpeciesAges = z.infer<typeof AgesSchema>;
+
 export const SpeciesSchema = z
   .object({
     id: IdSchema,
@@ -158,6 +377,7 @@ export const SpeciesSchema = z
     maturity: z.number().positive(),
     /** Âge au-delà duquel nul ne survit, en années. */
     longevity: z.number().positive(),
+    ages: AgesSchema,
     mortality: MortalitySchema,
     fertility: FertilitySchema,
     /** Couple : âge minimal et plus grand écart d'âge, en années. */
@@ -165,23 +385,31 @@ export const SpeciesSchema = z
     /** Besoin de nourriture d'un enfant, en part de celui d'un adulte. */
     childNeed: ShareSchema,
     /**
-     * Rigueurs (SAI-03), en risque annuel de mort : un froid de 20 °C sous zéro, une
-     * chaleur de 10 °C au-delà de 30 °C, une faim complète. Le froid et la chaleur frappent
-     * les plus fragiles, les enfants (avant `frail[0]` ans) et les vieux (dès `frail[1]`
-     * ans) ; les autres n'en reçoivent que `adults`. L'adaptation de la sous-espèce tempère
-     * le froid et la chaleur ; la faim ne dépend que de la nutrition. C'est aussi dès
-     * `frail[1]` ans que la vieillesse tue : avant, les morts de la sénescence comptent
-     * parmi les maladies.
+     * Rigueurs (SAI-03), en risque annuel de mort. Le froid et la chaleur sont nuls entre
+     * `comfort[0]` et `comfort[1]` °C au mois ; au-delà, ils croissent d'un trait jusqu'à
+     * leur plein, `cold` à `extremes[0]` °C et au-dessous, `heat` à `extremes[1]` °C et
+     * au-dessus. Une faim complète vaut `famine`. Le froid et la chaleur frappent les plus
+     * fragiles, les enfants (avant `frail[0]` ans) et les vieux (dès `frail[1]` ans) ; les
+     * autres n'en reçoivent que `adults`. L'adaptation de la sous-espèce tempère le froid et
+     * la chaleur ; la faim ne dépend que de la nutrition. C'est aussi dès `frail[1]` ans que
+     * la vieillesse tue : avant, les morts de la sénescence comptent parmi les maladies.
      */
     hardship: z
       .object({
         cold: z.number().min(0),
         heat: z.number().min(0),
+        comfort: z.tuple([z.number(), z.number()]),
+        extremes: z.tuple([z.number(), z.number()]),
         famine: z.number().min(0),
         frail: z.tuple([z.number().min(0), z.number().min(0)]),
         adults: ShareSchema,
       })
-      .strict(),
+      .strict()
+      .refine(
+        ({ comfort, extremes }) =>
+          extremes[0] < comfort[0] && comfort[0] <= comfort[1] && comfort[1] < extremes[1],
+        { message: 'le froid extrême, le confort puis la chaleur extrême se suivent' },
+      ),
     /** Probabilité mensuelle qu'une femme seule, en âge, trouve un conjoint dans son groupe. */
     pairing: ShareSchema,
     /** Taille adulte, en centimètres, aux deux bouts du trait « taille ». */
@@ -192,6 +420,14 @@ export const SpeciesSchema = z
   .refine((species) => species.maturity < species.longevity, {
     message: "l'âge adulte précède la longévité",
   })
+  .refine(
+    ({ ages, maturity, longevity }) =>
+      ages.baby < maturity && maturity < ages.elder && ages.elder < longevity,
+    {
+      message:
+        'les âges de la vie se suivent : nourrisson, enfant jusqu’à la maturité, adulte, puis aîné avant la longévité',
+    },
+  )
   .refine(
     (species) => {
       const [youngest, eldest] = spawnAdultAges(species);
@@ -324,9 +560,10 @@ export type Nomads = z.infer<typeof NomadsSchema>;
 
 /**
  * Couleurs des portraits et des mini-sprites (REN-07, REN-04, REN-09) : rampe des teints,
- * du plus clair au plus foncé, que le trait « skin » parcourt ; cheveux gris ; contour ;
- * fond des portraits, qui doit se détacher du contour et des cheveux les plus sombres ;
- * blanc des yeux, bouche ; habits des cultures embryonnaires, un par culture, à tour de rôle.
+ * du plus clair au plus foncé, que parcourt le trait du rôle « skin » ; cheveux gris ;
+ * contour ; fond des portraits, qui doit se détacher du contour et des cheveux les plus
+ * sombres ; blanc des yeux, bouche ; habits des cultures embryonnaires, un par culture, à
+ * tour de rôle.
  */
 export const AppearanceSchema = z
   .object({

@@ -286,6 +286,7 @@
   "person.ancestry": "Ascendance",
   "person.share": "{name} {percent} %",
   "person.height": "Taille",
+  "person.height.adult": "Taille adulte",
   "person.food": "Nourriture",
   "person.food.good": "suffisante",
   "person.food.low": "maigre",

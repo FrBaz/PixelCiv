@@ -4,6 +4,19 @@
     "name": "species.human",
     "maturity": 15,
     "longevity": 95,
+    "ages": {
+      "baby": 3,
+      "elder": 55,
+      "grey": [40, 70],
+      "beard": 18,
+      "bald": 48,
+      "wrinkles": {
+        "forehead": 40,
+        "eyes": 45,
+        "mouth": 55,
+        "deep": 60
+      }
+    },
     "mortality": {
       "infant": {
         "level": 0.42,
@@ -40,6 +53,8 @@
     "hardship": {
       "cold": 0.8,
       "heat": 0.5,
+      "comfort": [0, 30],
+      "extremes": [-20, 40],
       "famine": 3,
       "frail": [5, 60],
       "adults": 0.15

@@ -4,7 +4,8 @@
  * on suit les lignées de fiche en fiche. Chaque cible a sa fiche : une autre cible s'ouvre
  * en haut, son titre au focus (U-8, U-14) ; Échap la ferme.
  */
-import type { Appearance } from '../core/data';
+import type { Appearance, Genetics, Species } from '../core/data';
+import { isMinor } from '../core/life';
 import type { GroupSummary, GroupView, PersonSummary, PersonView } from '../core/protocol';
 import { ofName, t, tKey, type MessageKey } from '../i18n';
 import { formatDate } from './calendar';
@@ -12,32 +13,25 @@ import { DialogFocus } from './dialog';
 import { Portrait } from './Portrait';
 import { sheet, type Sheet, type UiActions } from './store';
 
-/** Ce que les fiches nomment d'après les données : espèces, sous-espèces, gènes. */
+/**
+ * Ce que les fiches et les portraits lisent des données : espèces et sous-espèces, leurs
+ * âges, la génétique et ses rôles, les couleurs des portraits.
+ */
 export interface SheetContent {
-  readonly species: readonly {
-    readonly id: string;
-    readonly name: string;
-    readonly subspecies: readonly { readonly id: string; readonly name: string }[];
-  }[];
-  readonly loci: readonly {
-    readonly id: string;
-    readonly name: string;
-    readonly alleles: readonly {
-      readonly id: string;
-      readonly name: string;
-      readonly color?: string;
-    }[];
-  }[];
-  readonly traits: readonly { readonly id: string; readonly name: string }[];
+  readonly species: readonly Species[];
+  readonly genetics: Genetics;
   readonly appearance: Appearance;
 }
 
-/** « femme, 24 ans », « garçon, 6 ans », « nourrisson, 1 an ». */
+/**
+ * « femme, 24 ans », « garçon, 6 ans », « nourrisson, 1 an » : selon la classe d'âge que
+ * la simulation tire des âges de son espèce, celle de son mini-sprite (U-12).
+ */
 function identity(person: PersonSummary): string {
   const who: MessageKey =
-    person.age < 3
+    person.stage === 'baby'
       ? 'person.baby'
-      : person.age < 15
+      : person.stage === 'child'
         ? person.sex === 0
           ? 'person.girl'
           : 'person.boy'
@@ -222,9 +216,12 @@ function PersonSheet({
       </div>
       <dl>
         <Row label={t('person.ancestry')}>{ancestry}</Row>
-        <Row label={t('person.height')}>{t('unit.centimeters', { value: person.height })}</Row>
+        {/* La taille d'un adulte ; celle qu'aura un enfant, puisqu'il grandit encore (U-12). */}
+        <Row label={t(isMinor(person.stage) ? 'person.height.adult' : 'person.height')}>
+          {t('unit.centimeters', { value: person.height })}
+        </Row>
         {person.loci.map((entry) => {
-          const locus = content.loci.find((item) => item.id === entry.locus);
+          const locus = content.genetics.loci.find((item) => item.id === entry.locus);
           const allele = locus?.alleles.find((item) => item.id === entry.allele);
           if (locus === undefined || allele === undefined) return null;
           return (
@@ -233,17 +230,17 @@ function PersonSheet({
             </Row>
           );
         })}
-        {person.traits
-          .filter((entry) => entry.trait !== 'skin' && entry.trait !== 'height')
-          .map((entry) => {
-            const trait = content.traits.find((item) => item.id === entry.trait);
-            if (trait === undefined) return null;
-            return (
-              <Row key={entry.trait} label={tKey(trait.name)}>
-                {t(level(entry.value))}
-              </Row>
-            );
-          })}
+        {person.traits.map((entry) => {
+          const trait = content.genetics.traits.find((item) => item.id === entry.trait);
+          // Un trait qui tient un rôle se montre autrement : le teint au portrait, la taille
+          // en centimètres.
+          if (trait === undefined || trait.role !== undefined) return null;
+          return (
+            <Row key={entry.trait} label={tKey(trait.name)}>
+              {t(level(entry.value))}
+            </Row>
+          );
+        })}
         {person.alive && <Row label={t('person.food')}>{t(food)}</Row>}
         {person.pregnant && <Row label={t('person.pregnant')}>✓</Row>}
         <Row label={t('person.mother')}>

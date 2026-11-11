@@ -113,8 +113,9 @@ export interface Hardship {
 }
 
 /**
- * Rigueurs du mois pour l'emplacement `slot`, écrites dans `out` : le froid et la chaleur
- * extrêmes (NaN : pas de climat connu), surtout pour les plus fragiles, et la faim.
+ * Rigueurs du mois pour l'emplacement `slot`, écrites dans `out` : le froid et la chaleur,
+ * hors du confort de l'espèce (`hardship.comfort` et `hardship.extremes` ; NaN : pas de
+ * climat connu), surtout pour les plus fragiles, et la faim.
  */
 function hardshipInto(
   species: Species,
@@ -127,15 +128,17 @@ function hardshipInto(
   const { hardship } = species;
   const nutrition = (people.columns.nutrition[slot] ?? 0) / 255;
   out.famine = nutrition < 1 ? hardship.famine * (1 - nutrition) * (1 - nutrition) : 0;
-  if (Number.isNaN(temperature) || (temperature >= 0 && temperature <= 30)) {
+  const [mild, warm] = hardship.comfort;
+  if (Number.isNaN(temperature) || (temperature >= mild && temperature <= warm)) {
     out.cold = 0;
     out.heat = 0;
     return;
   }
   const frail = years < hardship.frail[0] || years >= hardship.frail[1] ? 1 : hardship.adults;
   const adaptation = adaptationOf(people, slot, species);
-  const cold = Math.min(1, Math.max(0, -temperature / 20));
-  const heat = Math.min(1, Math.max(0, (temperature - 30) / 10));
+  const [coldest, hottest] = hardship.extremes;
+  const cold = Math.min(1, Math.max(0, (mild - temperature) / (mild - coldest)));
+  const heat = Math.min(1, Math.max(0, (temperature - warm) / (hottest - warm)));
   out.cold = frail * hardship.cold * cold * (1 - adaptation.cold);
   out.heat = frail * hardship.heat * heat * (1 - adaptation.heat);
 }

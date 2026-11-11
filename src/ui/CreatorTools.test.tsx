@@ -1,9 +1,8 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { loadGameData } from '../core/data';
-import type { MessageKey } from '../i18n';
 import { SPAWN_COUNT } from '../sim/commands';
 import { CreatorPanel } from './CreatorTools';
-import { spawnChoice, spawnSettings, tool, type CreatorSetup } from './store';
+import { creatorSetup, spawnChoice, spawnSettings, tool, type CreatorSetup } from './store';
 import { buttons, expand, findAll, fire, textOf } from './testing';
 
 const count = { min: 2, max: 50, initial: 20 };
@@ -45,17 +44,8 @@ afterEach(() => {
 describe("réglages de l'outil d'apparition (U-11)", () => {
   it('partent des données : la première espèce, sa première sous-espèce', () => {
     const data = loadGameData();
-    const setup: CreatorSetup = {
-      species: data.species.entries.map((species) => ({
-        id: species.id,
-        name: species.name as MessageKey,
-        subspecies: species.subspecies.map((entry) => ({
-          id: entry.id,
-          name: entry.name as MessageKey,
-        })),
-      })),
-      count: SPAWN_COUNT,
-    };
+    // Les réglages que l'application tire des données (main.ts).
+    const setup = creatorSetup(data.species.entries, SPAWN_COUNT);
     const first = data.species.entries.at(0);
     expect(spawnChoice(setup, undefined)).toEqual({
       species: first?.id,

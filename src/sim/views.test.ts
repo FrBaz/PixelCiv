@@ -1,12 +1,15 @@
 import { describe, expect, it } from 'vitest';
+import type { Species } from '../core/data';
 import { CHRONICLE_PAGE, GROUP_STRIDE } from '../core/protocol';
 import { AGE_CLASSES, decodeVisual } from '../core/visual';
 import { groupMembers } from './groups';
+import { GENERATOR_VERSION } from '../worldgen/generate';
 import { FEMALE, GENOME_WORDS, NONE } from './population';
+import { restoreState, saveState } from './save';
 import { spawnGroup } from './spawn';
 import type { SimState } from './state';
-import { step } from './step';
-import { firstCellOf, scatteredGroups, testData, testState } from './testing';
+import { step, type SimContent } from './step';
+import { firstCellOf, scatteredGroups, testData, testHuman, testState, withHuman } from './testing';
 import {
   chroniclePage,
   chronicleView,
@@ -92,7 +95,7 @@ describe('fiches (tâche 2.10 ; IHM-02)', () => {
   it("donne la fiche d'un groupe : membres, réserves, culture, et son nom d'après son meneur", () => {
     const state = testState();
     const group = spawned(state, 12);
-    const view = groupView(state, group.id);
+    const view = groupView(state, testData, group.id);
     expect(view).toMatchObject({ id: group.id, x: group.x, y: group.y, size: 12 });
     expect(view?.members).toHaveLength(12);
     expect(view?.members.map((member) => member.id)).toContain(group.leader);
@@ -100,7 +103,7 @@ describe('fiches (tâche 2.10 ; IHM-02)', () => {
     expect(view?.name).not.toBe('');
     expect(view?.parent).toBeUndefined();
     expect(view?.reserve).toBeGreaterThanOrEqual(0);
-    expect(groupView(state, 999)).toBeUndefined();
+    expect(groupView(state, testData, 999)).toBeUndefined();
   });
 
   it("répond à une demande de fiche, et ne donne rien pour une cible qui n'existe pas", () => {
@@ -195,13 +198,22 @@ describe('image des groupes pour la carte (tâche 2.9 ; REN-04)', () => {
     ]);
     expect(frame.groups[GROUP_STRIDE + 3]).toBe(9);
     expect(frame.sprites).toHaveLength(29);
-    // Les codes suivent l'ordre des membres : sexe et classe d'âge de chacun.
+    // Les codes suivent l'ordre des membres : sexe et classe d'âge de chacun, aux âges que
+    // data/species.json donne aux humains.
     const members = groupMembers(state.people).get(first.id) ?? [];
+    const { ages, maturity } = testHuman;
     members.forEach((slot, index) => {
       const visual = decodeVisual(frame.sprites[index] ?? 0);
       expect(visual.sex).toBe(state.people.get('sex', slot));
       const years = state.people.age(slot, state.tick) / 12;
-      const expected = years < 3 ? 'baby' : years < 15 ? 'child' : years < 55 ? 'adult' : 'elder';
+      const expected =
+        years < ages.baby
+          ? 'baby'
+          : years < maturity
+            ? 'child'
+            : years < ages.elder
+              ? 'adult'
+              : 'elder';
       expect(AGE_CLASSES[visual.age]).toBe(expected);
     });
     // Même état, même image.
@@ -274,3 +286,144 @@ function withFreshLooks(state: SimState): SimState {
   );
   return { ...state, people };
 }
+
+describe("âges de la vie, tirés de l'espèce (D-6, A-10, U-12)", () => {
+  /**
+   * Un groupe d'humains apparu, puis vu avec le contenu `content`, dont les membres ont les
+   * âges `years` (en années, un par membre, dans l'ordre des membres).
+   */
+  function agedGroup(content: SimContent, years: readonly number[]) {
+    const state = testState();
+    const group = spawned(state, years.length);
+    const members = groupMembers(state.people).get(group.id) ?? [];
+    members.forEach((slot, index) => {
+      state.people.set('birth', slot, state.tick - Math.round((years[index] ?? 0) * 12));
+    });
+    const frame = groupsFrame(state, content);
+    return members.map((slot, index) => {
+      const id = state.people.get('id', slot);
+      const view = personView(state, content, id);
+      if (view === undefined) throw new Error('pas de fiche');
+      return { visual: decodeVisual(frame.sprites[index] ?? 0), view };
+    });
+  }
+
+  /** Une espèce qui mûrit à 30 ans et vit 400 ans, aux âges à sa mesure. */
+  const elf = withHuman((human): Species => ({
+    ...human,
+    maturity: 30,
+    longevity: 400,
+    ages: {
+      ...human.ages,
+      baby: 6,
+      elder: 300,
+      grey: [250, 380],
+      beard: 40,
+      bald: 300,
+      wrinkles: { forehead: 200, eyes: 220, mouth: 280, deep: 320 },
+    },
+    fertility: { ...human.fertility, from: 30, peak: 60, to: 200, maleTo: 300 },
+    couple: { minAge: 31, maxGap: 60 },
+    hardship: { ...human.hardship, frail: [10, 300] },
+  }));
+
+  it('dessine une espèce longévive selon ses propres âges, sur la carte et dans la fiche', () => {
+    const [young, adult] = agedGroup(elf, [20, 60]);
+    // À 20 ans, l'elfe est encore un enfant ; à 60 ans, un jeune adulte, sans un cheveu gris.
+    expect(AGE_CLASSES[young.visual.age]).toBe('child');
+    expect(young.view.stage).toBe('child');
+    expect(AGE_CLASSES[adult.visual.age]).toBe('adult');
+    expect(adult.view.stage).toBe('adult');
+    expect(adult.visual.grey).toBe(0);
+    expect(adult.view.grey).toBe(0);
+    // Les mêmes âges font, chez les humains, un adulte et une aînée aux cheveux gris.
+    const [human20, human60] = agedGroup(testData, [20, 60]);
+    expect(human20.view.stage).toBe('adult');
+    expect(human60.view.stage).toBe('elder');
+    expect(human60.visual.grey).toBeGreaterThan(0);
+  });
+
+  it('fait d’un humain de 13 ans un adulte quand les données fixent la maturité à 12 ans', () => {
+    const early = withHuman((human) => ({ ...human, maturity: 12 }));
+    const [thirteen, eleven, two] = agedGroup(early, [13, 11, 2]).map((entry) => ({
+      stage: entry.view.stage,
+      onMap: AGE_CLASSES[entry.visual.age],
+    }));
+    expect(thirteen).toEqual({ stage: 'adult', onMap: 'adult' });
+    expect(eleven).toEqual({ stage: 'child', onMap: 'child' });
+    expect(two).toEqual({ stage: 'baby', onMap: 'baby' });
+    // Les liens de chaque fiche disent de chacun la classe d'âge de son mini-sprite.
+    const state = testState();
+    const group = spawned(state, 20);
+    const members = groupMembers(state.people).get(group.id) ?? [];
+    members.forEach((slot, index) => {
+      state.people.set('birth', slot, state.tick - ((index * 7) % 40) * 12 - (index % 12));
+    });
+    const frame = groupsFrame(state, early);
+    const onMap = new Map(
+      members.map((slot, index) => [
+        state.people.get('id', slot),
+        AGE_CLASSES[decodeVisual(frame.sprites[index] ?? 0).age],
+      ]),
+    );
+    let links = 0;
+    for (const slot of members) {
+      const view = personView(state, early, state.people.get('id', slot));
+      const relatives = [view?.mother, view?.father, view?.partner];
+      for (const link of [...relatives, ...(view?.children ?? []), ...(view?.siblings ?? [])]) {
+        if (link === undefined || !onMap.has(link.id)) continue;
+        expect(link.stage).toBe(onMap.get(link.id));
+        links++;
+      }
+    }
+    expect(links).toBeGreaterThan(10);
+  });
+
+  it('donne au mini-sprite et à la fiche la même classe d’âge et le même gris, à tout âge', () => {
+    const years = Array.from({ length: 48 }, (_, index) => index * 2 + 0.5);
+    for (const { visual, view } of agedGroup(testData, years)) {
+      expect(AGE_CLASSES[visual.age]).toBe(view.stage);
+      expect(visual.grey).toBe(view.grey);
+    }
+    // Les crans du gris suivent ages.grey des humains, de 40 à 70 ans : aucun à 44 ans, un
+    // à 45 et à 50 ans, deux à 60 ans, tout gris à 65 ans.
+    const greys = agedGroup(testData, [44, 45, 50, 60, 65, 90]).map((entry) => entry.view.grey);
+    expect(greys).toEqual([0, 1, 1, 2, 3, 3]);
+  });
+
+  it('lit le teint, les cheveux et la taille par leur rôle, quels que soient leur nom et leur rang', () => {
+    const state = testState();
+    const group = spawned(state, 12);
+    const ids = (groupMembers(state.people).get(group.id) ?? []).map((slot) =>
+      state.people.get('id', slot),
+    );
+    const heights = (content: SimContent, from: SimState) =>
+      ids.map((id) => personView(from, content, id)?.height);
+    const before = groupsFrame(state, testData);
+    // Renommés : le code ne connaît pas leurs identifiants.
+    const { genetics } = testData;
+    const renamed = {
+      ...testData,
+      genetics: {
+        ...genetics,
+        loci: genetics.loci.map((locus) => ({ ...locus, id: `${locus.id}-renamed` })),
+        traits: genetics.traits.map((entry) => ({ ...entry, id: `${entry.id}-renamed` })),
+      },
+    };
+    expect([...groupsFrame(withFreshLooks(state), renamed).sprites]).toEqual([...before.sprites]);
+    expect(heights(renamed, state)).toEqual(heights(testData, state));
+    // Rangés à l'envers : la relecture d'une sauvegarde réécrit les génomes, et chaque rôle
+    // suit son gène.
+    const reversed = {
+      ...testData,
+      genetics: {
+        ...genetics,
+        loci: [...genetics.loci].reverse(),
+        traits: [...genetics.traits].reverse(),
+      },
+    };
+    const restored = restoreState(saveState(state, GENERATOR_VERSION, testData), reversed);
+    expect([...groupsFrame(restored, reversed).sprites]).toEqual([...before.sprites]);
+    expect(heights(reversed, restored)).toEqual(heights(testData, state));
+  });
+});

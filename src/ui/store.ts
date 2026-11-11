@@ -3,7 +3,7 @@
  * worker lui envoie, et les composants se mettent à jour d'eux-mêmes.
  */
 import { signal } from '@preact/signals';
-import type { Worldgen } from '../core/data';
+import type { Species, Worldgen } from '../core/data';
 import type {
   ChronicleView,
   GroupView,
@@ -139,6 +139,29 @@ export interface CreatorSetup {
   }[];
   /** Taille d'un groupe : au moins, au plus, et au départ. */
   readonly count: { readonly min: number; readonly max: number; readonly initial: number };
+}
+
+/**
+ * Ce que l'outil propose, tiré des données : chaque espèce de data/species.json et ses
+ * sous-espèces, dans leur ordre. Une espèce ou une sous-espèce ajoutée aux données y paraît
+ * d'elle-même.
+ */
+export function creatorSetup(
+  species: readonly Species[],
+  count: CreatorSetup['count'],
+): CreatorSetup {
+  return {
+    species: species.map((entry) => ({
+      id: entry.id,
+      // Clés de traduction, vérifiées contre le catalogue par les tests des données.
+      name: entry.name as MessageKey,
+      subspecies: entry.subspecies.map((subspecies) => ({
+        id: subspecies.id,
+        name: subspecies.name as MessageKey,
+      })),
+    })),
+    count,
+  };
 }
 
 /**

@@ -3,6 +3,7 @@
     {
       "id": "eyes",
       "name": "gene.eyes",
+      "role": "eyes",
       "alleles": [
         {
           "id": "brown",
@@ -27,6 +28,7 @@
     {
       "id": "hair",
       "name": "gene.hair",
+      "role": "hair",
       "alleles": [
         {
           "id": "black",
@@ -57,52 +59,102 @@
     {
       "id": "face",
       "name": "gene.face",
+      "role": "face",
       "alleles": [
         {
           "id": "oval",
           "name": "gene.face.oval",
-          "dominance": 2
+          "dominance": 2,
+          "face": {
+            "width": 12,
+            "height": 16,
+            "power": 2,
+            "jaw": 0.22
+          }
         },
         {
           "id": "round",
           "name": "gene.face.round",
-          "dominance": 1
+          "dominance": 1,
+          "face": {
+            "width": 14,
+            "height": 15,
+            "power": 2,
+            "jaw": 0.08
+          }
         },
         {
           "id": "square",
           "name": "gene.face.square",
-          "dominance": 1
+          "dominance": 1,
+          "face": {
+            "width": 13,
+            "height": 15,
+            "power": 4,
+            "jaw": 0.05
+          }
         },
         {
           "id": "long",
           "name": "gene.face.long",
-          "dominance": 0
+          "dominance": 0,
+          "face": {
+            "width": 11,
+            "height": 18,
+            "power": 2,
+            "jaw": 0.2
+          }
         }
       ]
     },
     {
       "id": "nose",
       "name": "gene.nose",
+      "role": "nose",
       "alleles": [
         {
           "id": "straight",
           "name": "gene.nose.straight",
-          "dominance": 1
+          "dominance": 1,
+          "nose": {
+            "length": 4,
+            "hump": false,
+            "wing": 2,
+            "base": false
+          }
         },
         {
           "id": "broad",
           "name": "gene.nose.broad",
-          "dominance": 1
+          "dominance": 1,
+          "nose": {
+            "length": 4,
+            "hump": false,
+            "wing": 3,
+            "base": true
+          }
         },
         {
           "id": "aquiline",
           "name": "gene.nose.aquiline",
-          "dominance": 0
+          "dominance": 0,
+          "nose": {
+            "length": 4,
+            "hump": true,
+            "wing": 2,
+            "base": false
+          }
         },
         {
           "id": "small",
           "name": "gene.nose.small",
-          "dominance": 0
+          "dominance": 0,
+          "nose": {
+            "length": 2,
+            "hump": false,
+            "wing": 1,
+            "base": false
+          }
         }
       ]
     }
@@ -111,11 +163,13 @@
     {
       "id": "skin",
       "name": "trait.skin",
+      "role": "skin",
       "variation": 0.05
     },
     {
       "id": "height",
       "name": "trait.height",
+      "role": "height",
       "variation": 0.085
     },
     {

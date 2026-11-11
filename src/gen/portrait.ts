@@ -7,41 +7,35 @@
  * (core/visual.ts) : l'interface les recolore selon le teint, la couleur des yeux et des
  * cheveux (grisonnants avec l'âge) et l'habit, comme les mini-sprites (REN-09).
  *
+ * Tout ce qui est contenu vient des données (D-6, A-10) : les formes du visage et du nez
+ * sont celles des allèles exprimés (data/genetics.json), et les âges de la barbe, de la
+ * calvitie et des rides, ainsi que la maturité, ceux de l'espèce (data/species.json).
+ *
  * Fonction pure : les mêmes gènes, le même sexe et le même âge donnent le même portrait.
  */
-import { ROLE } from '../core/visual';
+import type { FaceShape, NoseShape, Species } from '../core/data';
+import { isMinor } from '../core/life';
+import { ROLE, type AgeClass } from '../core/visual';
 
 export const PORTRAIT_SIZE = 64;
 
 export interface PortraitInput {
   readonly sex: number;
-  /** Âge en années. */
+  /** Âge en années révolues. */
   readonly age: number;
-  /** Allèles exprimés des locus « face » et « nose » (data/genetics.json). */
-  readonly face: string;
-  readonly nose: string;
+  /**
+   * Classe d'âge, celle de la simulation (core/life.ts) : un nourrisson ou un enfant a les
+   * traits de l'enfance, et ni barbe, ni calvitie, ni rides.
+   */
+  readonly stage: AgeClass;
+  /** Maturité et âges de l'apparence de son espèce (data/species.json). */
+  readonly species: Pick<Species, 'maturity' | 'ages'>;
+  /** Formes du visage et du nez de ses allèles exprimés (data/genetics.json). */
+  readonly face: FaceShape;
+  readonly nose: NoseShape;
   /** Bits tirés du génome : coiffure, barbe, calvitie. */
   readonly variant: number;
 }
-
-interface Shape {
-  /** Demi-largeur et demi-hauteur de la tête, en pixels. */
-  readonly width: number;
-  readonly height: number;
-  /** Exposant de la forme : 2 pour une ellipse, 4 pour un visage carré. */
-  readonly power: 2 | 4;
-  /** Rétrécissement de la mâchoire, de 0 à 1. */
-  readonly jaw: number;
-}
-
-const OVAL: Shape = { width: 12, height: 16, power: 2, jaw: 0.22 };
-
-const SHAPES: Readonly<Record<string, Shape>> = {
-  oval: OVAL,
-  round: { width: 14, height: 15, power: 2, jaw: 0.08 },
-  square: { width: 13, height: 15, power: 4, jaw: 0.05 },
-  long: { width: 11, height: 18, power: 2, jaw: 0.2 },
-};
 
 class Canvas {
   readonly roles = new Uint8Array(PORTRAIT_SIZE * PORTRAIT_SIZE);
@@ -71,7 +65,7 @@ class Canvas {
 }
 
 /** Le point (dx, dy), relatif au centre, est-il dans la tête ? */
-function inHead(shape: Shape, dx: number, dy: number, grow = 0): boolean {
+function inHead(shape: FaceShape, dx: number, dy: number, grow = 0): boolean {
   // La mâchoire se resserre vers le menton.
   const narrowing = dy > 0 ? 1 - shape.jaw * (dy / shape.height) : 1;
   const u = Math.abs(dx) / ((shape.width + grow) * narrowing);
@@ -84,11 +78,14 @@ function inHead(shape: Shape, dx: number, dy: number, grow = 0): boolean {
 /** Image de rôles d'un portrait, ligne par ligne. */
 export function portraitRoles(input: PortraitInput): Uint8Array {
   const canvas = new Canvas();
-  const base = (Object.hasOwn(SHAPES, input.face) ? SHAPES[input.face] : undefined) ?? OVAL;
-  const child = input.age < 15;
-  // L'enfant a une tête plus petite et plus basse, des traits plus ronds.
-  const growth = child ? 0.78 + (0.22 * Math.max(0, input.age)) / 15 : 1;
-  const shape: Shape = {
+  const base = input.face;
+  const { maturity, ages } = input.species;
+  const child = isMinor(input.stage);
+  // L'enfant a une tête plus petite et plus basse, des traits plus ronds ; elle grandit
+  // jusqu'à la maturité.
+  const growth = child ? 0.78 + Math.min(0.22, (0.22 * Math.max(0, input.age)) / maturity) : 1;
+  // La tête à dessiner : la forme du visage, à la taille de l'âge.
+  const shape: FaceShape = {
     width: Math.round(base.width * growth),
     height: Math.round(base.height * growth),
     power: base.power,
@@ -99,8 +96,8 @@ export function portraitRoles(input: PortraitInput): Uint8Array {
   const female = input.sex === 0;
   const variant = input.variant >>> 0;
   const long = female ? (variant & 3) !== 0 : (variant & 7) === 0;
-  const beard = !female && input.age >= 18 && (variant & 8) !== 0;
-  const bald = !female && input.age >= 48 && (variant & 48) !== 0;
+  const beard = !female && !child && input.age >= ages.beard && (variant & 8) !== 0;
+  const bald = !female && !child && input.age >= ages.bald && (variant & 48) !== 0;
 
   // Cheveux longs, derrière la tête et sur les épaules.
   if (long) {
@@ -205,25 +202,24 @@ export function portraitRoles(input: PortraitInput): Uint8Array {
     canvas.set(ex, eyeY + 1, ROLE.eye);
     for (let x = ex - 3; x <= ex + 2; x++) canvas.set(x, eyeY - 3, ROLE.hairShadow);
     // Pattes d'oie et cernes avec l'âge, du côté de l'ombre aussi.
-    if (input.age >= 45) {
+    if (!child && input.age >= ages.wrinkles.eyes) {
       canvas.crease(ex + side * 3, eyeY - 1);
       canvas.crease(ex + side * 3, eyeY + 1);
     }
   }
 
-  // Nez, selon son allèle.
+  // Nez, selon la forme de son allèle : l'arête, sa bosse, les narines et leur base.
+  const { nose } = input;
   const noseTop = eyeY + 2;
   const noseY = cy + (child ? 4 : 5);
-  const ridge = input.nose === 'small' ? noseY - 2 : noseTop;
+  const ridge = Math.max(noseTop, noseY - nose.length);
   for (let y = ridge; y <= noseY; y++) {
     canvas.set(cx + 1, y, ROLE.skinShadow);
-    if (input.nose === 'aquiline' && y === Math.round((ridge + noseY) / 2))
-      canvas.set(cx + 2, y, ROLE.skinShadow);
+    if (nose.hump && y === Math.round((ridge + noseY) / 2)) canvas.set(cx + 2, y, ROLE.skinShadow);
   }
-  const wing = input.nose === 'broad' ? 3 : input.nose === 'small' ? 1 : 2;
-  canvas.set(cx - wing + 1, noseY + 1, ROLE.skinShadow);
-  canvas.set(cx + wing, noseY + 1, ROLE.skinShadow);
-  if (input.nose === 'broad') canvas.set(cx, noseY + 1, ROLE.skinShadow);
+  canvas.set(cx - nose.wing + 1, noseY + 1, ROLE.skinShadow);
+  canvas.set(cx + nose.wing, noseY + 1, ROLE.skinShadow);
+  if (nose.base) canvas.set(cx, noseY + 1, ROLE.skinShadow);
 
   // Bouche.
   const mouthY = cy + (child ? 8 : 9);
@@ -248,15 +244,16 @@ export function portraitRoles(input: PortraitInput): Uint8Array {
   }
 
   // Rides du front, avec l'âge, dans la bande que découvrent les cheveux, entre leur
-  // dernière rangée et les sourcils : une ride pointillée à 40 ans, qui se creuse d'un
-  // trait continu à 60 ans. Elle passe à deux rangées des sourcils si le front y est nu,
-  // et une seconde paraît alors à 60 ans deux rangées plus haut, là où le front l'est
-  // encore ; sinon, elle passe juste au-dessus des sourcils, entre eux seulement.
-  if (!child && input.age >= 40) {
+  // dernière rangée et les sourcils : une ride pointillée dès `wrinkles.forehead` ans (40
+  // chez les humains), qui se creuse d'un trait continu à `wrinkles.deep` (60). Elle passe
+  // à deux rangées des sourcils si le front y est nu, et une seconde paraît alors, le front
+  // creusé, deux rangées plus haut, là où le front l'est encore ; sinon, elle passe juste
+  // au-dessus des sourcils, entre eux seulement.
+  if (!child && input.age >= ages.wrinkles.forehead) {
     const brow = eyeY - 3;
     const bare = (y: number) =>
       canvas.get(cx - 1, y) === ROLE.skin && canvas.get(cx, y) === ROLE.skin;
-    const deep = input.age >= 60;
+    const deep = input.age >= ages.wrinkles.deep;
     const step = deep ? 1 : 2;
     if (bare(brow - 2)) {
       for (let x = cx - 5; x <= cx + 5; x += step) canvas.crease(x, brow - 2);
@@ -267,7 +264,8 @@ export function portraitRoles(input: PortraitInput): Uint8Array {
       for (let x = cx - 3; x <= cx + 2; x += step) canvas.crease(x, brow - 1);
     }
   }
-  if (input.age >= 55 && !beard) {
+  // Sillons autour de la bouche, que la barbe cache.
+  if (!child && input.age >= ages.wrinkles.mouth && !beard) {
     for (let step = 0; step <= 3; step++) {
       canvas.set(cx - 4 - step / 2, noseY + 1 + step, ROLE.skinShadow);
       canvas.set(cx + 5 + step / 2, noseY + 1 + step, ROLE.skinShadow);
