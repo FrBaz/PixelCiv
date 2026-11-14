@@ -449,6 +449,14 @@ describe('groupes nomades (tâche 2.5)', () => {
     expect(merged?.id).toBe(big.id);
     expect(state.society.groups.has(small.id)).toBe(false);
     expect(groupMembers(state.people).get(big.id)?.length ?? 0).toBeGreaterThanOrEqual(21);
+    // La sauvegarde ne garde que le groupe vivant, mais les deux cultures et les deux langues,
+    // qui ne disparaissent jamais (ADR 0007).
+    const { people } = saveState(state, GENERATOR_VERSION, testData).json as {
+      people: Record<'groups' | 'cultures' | 'languages', unknown[]>;
+    };
+    expect([people.groups.length, people.cultures.length, people.languages.length]).toEqual([
+      1, 2, 2,
+    ]);
   });
 
   it('préfère, pour une réunion, un groupe de sa culture à un groupe étranger plus proche', () => {

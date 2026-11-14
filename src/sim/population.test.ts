@@ -315,6 +315,11 @@ function without(data: SaveData, name: string): SaveData {
 
 const corrupt = expect.objectContaining({ code: 'corrupt' }) as Error;
 const obsolete = expect.objectContaining({ code: 'obsolete' }) as Error;
+/** Refus de la chronique elle-même, et non du compte de ses groupes. */
+const incoherent = expect.objectContaining({
+  code: 'corrupt',
+  message: 'chronique incohérente',
+}) as Error;
 
 /**
  * La partie de populated(), plus un vivant de chaque autre sous-espèce des humains (5, 6),
@@ -452,8 +457,38 @@ describe('sauvegarde : chronique en colonnes', () => {
     );
     expect(() => restoreState(withPeople(data, { nextGroupId: 3 }), testData)).toThrow(corrupt);
     // Le premier groupe formé porte l'identifiant 1 : son fait ne peut en nommer un autre.
+    // Le compte, lui, n'y suffit pas : l'erreur est celle de l'ordre.
     const shifted = withPeople(withValue(data, 'chronicleGroup', 0, 2), { nextGroupId: 3 });
-    expect(() => restoreState(shifted, testData)).toThrow(corrupt);
+    expect(() => restoreState(shifted, testData)).toThrow(incoherent);
+  });
+
+  it('refuse des faits de formation au bon compte, mais qui ne nomment pas 1, puis 2', () => {
+    // Le groupe 1 apparaît, puis se scinde : le groupe 2 naît, et le prochain sera le 3.
+    const state = populated();
+    state.society.chronicle.push({
+      tick: 0,
+      kind: 'groupSplit',
+      x: 10,
+      y: 20,
+      group: 1,
+      other: 2,
+      leader: 1,
+      otherLeader: 3,
+      count: 2,
+    });
+    state.society.nextGroupId = 3;
+    const data = save(state);
+    expect(restoreState(data, testData).society.nextGroupId).toBe(3);
+    const cases: [string, SaveData][] = [
+      [
+        'identifiants échangés',
+        withValue(withValue(data, 'chronicleGroup', 0, 2), 'chronicleOther', 1, 1),
+      ],
+      ['identifiant en double', withValue(data, 'chronicleOther', 1, 1)],
+    ];
+    for (const [label, forged] of cases) {
+      expect(() => restoreState(forged, testData), label).toThrow(incoherent);
+    }
   });
 });
 

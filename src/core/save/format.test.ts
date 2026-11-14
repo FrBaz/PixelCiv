@@ -14,6 +14,12 @@ import {
 /** Pas de migration : les fichiers de ces tests sont à la version courante. */
 const NONE = {};
 
+/** Mémoire des ArrayBuffer du processus (Node), en octets. */
+const arrayBuffers = () =>
+  (
+    globalThis as unknown as { process: { memoryUsage(): { arrayBuffers: number } } }
+  ).process.memoryUsage().arrayBuffers;
+
 const sample: SaveData = {
   meta: { seed: 'graine', tick: 42 },
   json: { log: [{ tick: 3, command: { type: 'paint', x: 1, y: 2, value: 3 } }], note: 'é' },
@@ -205,10 +211,14 @@ describe('taille', () => {
   });
 
   it("refuse d'écrire, avant d'allouer le conteneur, des tableaux que la lecture refuserait", async () => {
-    // Des zéros, que le système ne réserve vraiment qu'une fois écrits : le conteneur, lui,
-    // les écrirait. Avec l'en-tête, il dépasse la borne.
+    // Avec l'en-tête, ces tableaux dépassent la borne.
     const big = { ...sample, arrays: { big: new Uint8Array(MAX_SAVE_BYTES) } };
+    // Alloué, le conteneur pèserait 256 Mio de plus : la mémoire des ArrayBuffer du processus
+    // n'en montre rien. La mesure se fait autour de encodeSave seul : autour de writeSave, le
+    // ramasse-miettes, qui libère des tampons plus anciens, la fausserait.
+    const before = arrayBuffers();
     expect(() => encodeSave(big)).toThrow(expect.objectContaining({ code: 'size' }) as Error);
+    expect(arrayBuffers() - before).toBeLessThan(16 * 1024 * 1024);
     expect((await rejection(writeSave(big))).code).toBe('size');
   });
 

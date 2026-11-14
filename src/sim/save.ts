@@ -278,7 +278,7 @@ function remapping(
 /**
  * Reconstruit l'état d'une sauvegarde ; lève une SaveError si elle est incohérente.
  * Les champs sont vérifiés entre eux : paramètres du monde, couches de la bonne taille,
- * indices du contenu connus, journal ordonné et antérieur au pas courant, flux du
+ * indices du contenu connus, journal ordonné, jusqu'au pas courant compris, flux du
  * générateur valides.
  */
 export function restoreState(save: SaveData, content: SaveContent): SimState {
@@ -301,10 +301,12 @@ export function restoreState(save: SaveData, content: SaveContent): SimState {
   const commandLog = each(parsed.data.commandLog, LoggedCommandSchema, 'journal');
   const pending = each(parsed.data.pending, GameCommandSchema, 'commandes en attente');
   const { tick } = save.meta;
-  // Une commande journalisée au pas t s'est appliquée avant que le temps ne passe à t + 1.
+  // Une commande journalisée au pas t s'applique au début de t, ou en pause dès sa
+  // réception, avant que le temps ne passe à t + 1 (ADR 0003, ADR 0004) : une sauvegarde
+  // prise en pause juste après elle la garde au journal, au pas courant.
   let previous = 0;
   for (const entry of commandLog) {
-    if (entry.tick < previous || entry.tick >= tick) {
+    if (entry.tick < previous || entry.tick > tick) {
       throw new SaveError('corrupt', 'journal des commandes incohérent');
     }
     previous = entry.tick;

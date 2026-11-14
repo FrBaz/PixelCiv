@@ -4,10 +4,19 @@ import { BiomesSchema } from '../core/data/schemas';
 import { encodeSave, readSave, SaveError, writeSave, type SaveData } from '../core/save/format';
 import { LAYER_NAMES } from '../core/world';
 import { GENERATOR_VERSION } from '../worldgen/generate';
+import { replay } from './replay';
 import { MIGRATIONS, restoreState, saveState } from './save';
 import type { SimState } from './state';
-import { fingerprint, step } from './step';
-import { cellsOf, firstCellOf, testData, testState } from './testing';
+import { applyCommands, fingerprint, step } from './step';
+import {
+  cellsOf,
+  firstCellOf,
+  scatteredGroups,
+  testData,
+  testParams,
+  testState,
+  testWorld,
+} from './testing';
 import biomesJson from '../../data/biomes.json';
 
 const land = (family: string) => family !== 'water';
@@ -78,6 +87,36 @@ describe('sauvegarde de la simulation', () => {
     expect(restored.pending).toEqual(original.pending);
     step(original, original.pending.splice(0), testData);
     step(restored, restored.pending.splice(0), testData);
+    expect(fingerprint(restored)).toBe(fingerprint(original));
+  });
+
+  it('se relit, prise en pause juste après des commandes appliquées aussitôt (U-7)', async () => {
+    const original = testState();
+    step(original, [], testData);
+    step(original, [], testData);
+    // En pause, l'hôte applique les commandes dès leur réception (applyCommands) : elles se
+    // journalisent au pas courant, qui n'a pas encore commencé, et la sauvegarde aussi.
+    const cell = firstCellOf(original, land);
+    applyCommands(
+      original,
+      [...scatteredGroups(original, 2, 12), { type: 'paintBiome', ...cell, biome: 'desert' }],
+      testData,
+    );
+    const data = save(original);
+    expect(data.meta.tick).toBe(2);
+    expect(original.commandLog.map((entry) => entry.tick)).toEqual([2, 2, 2]);
+    const restored = restore(await readSave(await writeSave(data), MIGRATIONS));
+    expect(fingerprint(restored)).toBe(fingerprint(original));
+    expect(restored.commandLog).toEqual(original.commandLog);
+    expect(restored.society.groups.size).toBe(2);
+    // Le rejeu du journal redonne l'état sauvegardé, commandes du pas courant comprises.
+    const replayed = replay(testParams(), testWorld(), restored.commandLog, 2, testData);
+    expect(fingerprint(replayed)).toBe(fingerprint(original));
+    // La partie relue se poursuit à l'identique.
+    for (let month = 0; month < 24; month++) {
+      step(original, [], testData);
+      step(restored, [], testData);
+    }
     expect(fingerprint(restored)).toBe(fingerprint(original));
   });
 
@@ -223,6 +262,12 @@ describe('sauvegarde de la simulation', () => {
     const params = json.params as Record<string, unknown>;
     const paint = { type: 'paintBiome', x: 1, y: 1, biome: 'desert' };
     const count = 512 * 256;
+    // Témoin : le journal va jusqu'au pas courant compris, où l'hôte journalise une commande
+    // appliquée en pause, avant que ce pas ne commence (U-7).
+    const current = [{ tick: data.meta.tick, command: paint }];
+    expect(restore({ ...data, json: { ...json, commandLog: current } }).commandLog).toEqual(
+      current,
+    );
     const cases: [string, object][] = [
       ['taille inconnue', { json: { ...json, params: { ...params, size: 'géante' } } }],
       ['paramètre hors bornes', { json: { ...json, params: { ...params, relief: 7 } } }],
@@ -242,7 +287,10 @@ describe('sauvegarde de la simulation', () => {
         'écoulement illisible',
         { arrays: { ...data.arrays, drainage: new Uint8Array(count).fill(9) } },
       ],
-      ['commande future', { json: { ...json, commandLog: [{ tick: 3, command: paint }] } }],
+      [
+        'commande future',
+        { json: { ...json, commandLog: [{ tick: data.meta.tick + 1, command: paint }] } },
+      ],
       [
         'journal désordonné',
         {

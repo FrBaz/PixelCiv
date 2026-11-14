@@ -2,7 +2,15 @@ import { describe, expect, it } from 'vitest';
 import type { GameCommand } from '../core/protocol';
 import { replay } from './replay';
 import { applyCommands, fingerprint, step } from './step';
-import { cellsOf, scatteredGroups, testData, testParams, testState, testWorld } from './testing';
+import {
+  cellsOf,
+  firstCellOf,
+  scatteredGroups,
+  testData,
+  testParams,
+  testState,
+  testWorld,
+} from './testing';
 
 describe('replay', () => {
   it("redonne l'état d'une partie à partir de son monde et de son journal", () => {
@@ -39,6 +47,40 @@ describe('replay', () => {
     expect(fingerprint(beforeStep)).toBe(fingerprint(inStep));
     const replayed = replay(testParams(), testWorld(), beforeStep.commandLog, 12, testData);
     expect(fingerprint(replayed)).toBe(fingerprint(inStep));
+  });
+
+  it('redonne une partie en pause, commandes de son pas courant comprises, même d’un journal plus long (U-7)', () => {
+    const state = testState();
+    const spawns = scatteredGroups(state, 4, 8);
+    const cell = firstCellOf(state, (family) => family !== 'water');
+    const paint: GameCommand = { type: 'paintBiome', ...cell, biome: 'desert' };
+    // Commandes appliquées en pause dès leur réception, avant que les pas 3 et 7 ne commencent.
+    const inPause = new Map<number, GameCommand[]>([
+      [3, spawns.slice(0, 2)],
+      [7, [...spawns.slice(2), paint]],
+    ]);
+    // Empreintes de la partie en pause, juste après ces commandes.
+    const paused = new Map<number, string>();
+    for (let tick = 0; tick < 12; tick++) {
+      const commands = inPause.get(tick);
+      if (commands !== undefined) {
+        applyCommands(state, commands, testData);
+        paused.set(tick, fingerprint(state));
+        // Le journal que garderait une sauvegarde prise à cet instant redonne la partie.
+        const replayed = replay(testParams(), testWorld(), state.commandLog, tick, testData);
+        expect(fingerprint(replayed)).toBe(fingerprint(state));
+        expect(replayed.commandLog).toEqual(state.commandLog);
+      }
+      step(state, tick === 5 ? [{ ...paint, biome: 'steppe' }] : [], testData);
+    }
+    // Le journal entier, plus long, redonne ces mêmes états, puis la partie à son dernier pas.
+    for (const [tick, print] of paused) {
+      const replayed = replay(testParams(), testWorld(), state.commandLog, tick, testData);
+      expect(fingerprint(replayed)).toBe(print);
+    }
+    const replayed = replay(testParams(), testWorld(), state.commandLog, 12, testData);
+    expect(fingerprint(replayed)).toBe(fingerprint(state));
+    expect(replayed.commandLog).toEqual(state.commandLog);
   });
 
   it("s'arrête au pas demandé", () => {

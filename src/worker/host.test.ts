@@ -13,7 +13,8 @@ import {
 import { readSave, SaveError } from '../core/save/format';
 import { monthDuration, NORMAL_MONTH_MS } from '../core/time';
 import { CHUNK_SIZE, GENERATION_STAGES, LAYER_NAMES } from '../core/world';
-import { MIGRATIONS } from '../sim/save';
+import { MIGRATIONS, restoreState } from '../sim/save';
+import { fingerprint } from '../sim/step';
 import {
   firstCellOf,
   scatteredGroups,
@@ -603,6 +604,73 @@ describe('sauvegarde', () => {
     expect(snapshot?.layers.biome[cell.y * 512 + cell.x]).toBe(testData.biomes.indexOf('desert'));
   });
 
+  it('se relit, prise en pause juste après une commande appliquée aussitôt (U-7)', async () => {
+    const spawn = spawns(1).at(0);
+    if (spawn === undefined) throw new Error('aucune case');
+    const pause = (host: SimulationHost) => {
+      host.receive({ type: 'setPaused', paused: true });
+    };
+    const variants: [label: string, play: (host: SimulationHost) => void, groups: number][] = [
+      [
+        'apparition en pause',
+        (host) => {
+          pause(host);
+          host.receive({ type: 'game', command: spawn });
+        },
+        1,
+      ],
+      [
+        'coup de pinceau en pause',
+        (host) => {
+          pause(host);
+          host.receive({ type: 'game', command: paint(landCell()) });
+        },
+        0,
+      ],
+      [
+        // Reçue en marche, la commande attend le pas ; la mise en pause l'applique.
+        'commande reçue en marche, puis pause',
+        (host) => {
+          host.receive({ type: 'game', command: spawn });
+          pause(host);
+        },
+        1,
+      ],
+    ];
+    const last = (environment: FakeEnvironment) => environment.messages('delta').at(-1);
+    for (const [label, play, groups] of variants) {
+      const { env, host } = await startedHost();
+      env.advance(NORMAL_MONTH_MS * 2);
+      play(host);
+      // La commande est au journal, au pas même de la sauvegarde, et rien n'attend plus.
+      const saved = await saveOf(env, host, 1);
+      const json = (await readSave(new Uint8Array(saved.data), MIGRATIONS)).json as {
+        readonly commandLog: readonly { readonly tick: number }[];
+        readonly pending: readonly unknown[];
+      };
+      const logged = json.commandLog.map((entry) => entry.tick);
+      expect(saved.meta.tick, label).toBe(2);
+      expect(logged, label).toEqual([2]);
+      expect(json.pending, label).toEqual([]);
+      // Un autre hôte la charge, puis les deux parties avancent de trois mois : même image
+      // des groupes, même état.
+      const { env: other, host: loader } = greetedHost();
+      loader.receive({ type: 'setPaused', paused: true });
+      loader.receive({ type: 'load', requestId: 2, data: saved.data });
+      await until(() => other.messages('loaded').length + other.messages('loadFailed').length > 0);
+      expect(other.messages('loadFailed'), label).toEqual([]);
+      expect(other.messages('loaded'), label).toEqual([{ type: 'loaded', requestId: 2 }]);
+      for (let month = 0; month < 3; month++) {
+        host.receive({ type: 'stepOnce' });
+        loader.receive({ type: 'stepOnce' });
+      }
+      expect(last(other)?.time.tick, label).toBe(5);
+      expect(last(other)?.frame.groups, label).toHaveLength(groups * GROUP_STRIDE);
+      expect(last(other)?.frame, label).toEqual(last(env)?.frame);
+      expect(await fingerprintOf(other, loader, 3), label).toBe(await fingerprintOf(env, host, 3));
+    }
+  });
+
   it("refuse un fichier qui n'est pas une sauvegarde, sans toucher à la partie", async () => {
     const { env, host } = await startedHost();
     host.receive({ type: 'load', requestId: 9, data: new TextEncoder().encode('bonjour').buffer });
@@ -618,6 +686,11 @@ describe('sauvegarde', () => {
 async function savedState(env: FakeEnvironment, host: SimulationHost, requestId: number) {
   const saved = await saveOf(env, host, requestId);
   return readSave(new Uint8Array(saved.data), MIGRATIONS);
+}
+
+/** Empreinte de l'état d'une partie, d'après sa sauvegarde relue (ADR 0003). */
+async function fingerprintOf(env: FakeEnvironment, host: SimulationHost, requestId: number) {
+  return fingerprint(restoreState(await savedState(env, host, requestId), testData));
 }
 
 /** Sauvegarde la partie d'un hôte et renvoie le fichier. */
