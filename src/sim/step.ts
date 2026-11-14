@@ -3,8 +3,8 @@
  * au début du pas, puis les systèmes s'exécutent dans un ordre fixe (ADR 0003, ADR 0011) :
  * la nourriture repousse, les groupes cherchent leur nourriture et mangent, la
  * population vit (morts, naissances, couples), les groupes trop petits rejoignent un
- * voisin, les groupes trop grands se scindent, et tous se déplacent, sauf ceux qui
- * viennent de naître d'une scission, déjà partis vers leur aire.
+ * voisin, à un mois de marche au plus, les groupes trop grands se scindent, et tous se
+ * déplacent, sauf ceux qui viennent de naître d'une scission, déjà partis vers leur aire.
  */
 import type { Cultures, Genetics, Nomads, Species } from '../core/data';
 import type { AltitudeLevel } from '../core/data/schemas';
@@ -15,7 +15,7 @@ import type { GameCommand, PaintBiomeCommand } from '../core/protocol';
 import { LAYER_NAMES } from '../core/world';
 import { PARAMETER_NAMES } from '../core/data/worldgen';
 import { depletedCells, feedGroup, FOOD_STRIDE, regrowFood } from './forage';
-import { groupMembers, mergeGroup, moveGroup, splitGroup } from './groups';
+import { groupMembers, mergeGroup, moveGroup, Neighborhood, splitGroup } from './groups';
 import { lifeCycle } from './lifecycle';
 import { NONE } from './population';
 import { fingerprintPeople } from './populationSave';
@@ -51,7 +51,10 @@ export function applyCommand(state: SimState, command: GameCommand, content: Sim
 
 /**
  * Le pinceau ne change que le biome d'une case de terre en un autre biome de terre : la
- * mer et les lacs, qui ont une profondeur, restent ce qu'ils sont.
+ * mer et les lacs, qui ont une profondeur, restent ce qu'ils sont. Il ne change donc jamais
+ * la franchissabilité d'une case, puisque seule l'eau est infranchissable parmi les biomes
+ * et que l'altitude, qui fait les sommets, ne change pas : la couche des terres
+ * (`state.land`) reste juste sans se recalculer.
  */
 function paintBiome(state: SimState, command: PaintBiomeCommand, content: SimContent): void {
   const index = cellIndex(state.size, command.x, command.y);
@@ -123,13 +126,16 @@ export function step(
   for (const group of society.groups.values()) {
     feedGroup(group, members.get(group.id) ?? [], people, food, world, size, tick, content);
   }
-  lifeCycle(state, content, members);
+  // Le voisinage des groupes, en temps de trajet : les groupes ne bougent qu'en fin de
+  // mois, et mariages et réunions le partagent.
+  const neighbors = new Neighborhood(state, content.nomads.marriage);
+  lifeCycle(state, content, members, neighbors);
   // Les fusions se décident toutes sur les membres d'après le cycle de vie ; les listes
   // se mettent à jour ensuite, dans l'ordre des emplacements, comme si on les recomptait.
   members = groupMembers(people);
   const merges: [from: number, into: number][] = [];
   for (const group of [...society.groups.values()]) {
-    const into = mergeGroup(state, group, members, content);
+    const into = mergeGroup(state, group, members, content, neighbors);
     if (into !== undefined) merges.push([group.id, into.id]);
   }
   for (const [from, into] of merges) {

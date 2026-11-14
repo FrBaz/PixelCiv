@@ -13,8 +13,10 @@
  *   mère meurt parfois en couches ; le nouveau-né court aussitôt le risque de son premier
  *   mois, puisqu'il ne sera parcouru que le mois suivant ;
  * - la conception, pour une femme en couple, en âge, nourrie, hors de l'allaitement.
- * Puis les célibataires en âge forment des couples, hors des proches parents. Un groupe
- * dont le dernier membre meurt s'éteint, et la chronique le note.
+ * Puis les célibataires en âge forment des couples, hors des proches parents, dans leur
+ * groupe ou dans un groupe voisin, à un mois de marche au plus (Neighborhood, dans
+ * groups.ts) : jamais par-dessus l'eau. Un groupe dont le dernier membre meurt s'éteint,
+ * et la chronique le note.
  *
  * Toutes les espèces sont décrites par data/species.json (ESP-03).
  */
@@ -32,7 +34,7 @@ import {
   type DeathCause,
   type Population,
 } from './population';
-import { cellDistance, groupMembers } from './groups';
+import { groupMembers, Neighborhood } from './groups';
 import { adaptationOf, cellTemperature, closeKin, monthOf, MONTHS_PER_YEAR } from './people';
 import { inheritedFamilyName, type FamilyName } from './spawn';
 import { cultureOf, type Group } from './society';
@@ -326,12 +328,14 @@ function livingSlots(people: Population): Int32Array {
 
 /**
  * Fait vivre la population un mois. `members` donne les membres de chaque groupe au début
- * du mois, tels que les donne groupMembers ; on les dresse au besoin.
+ * du mois, tels que les donne groupMembers ; on les dresse au besoin. `neighbors` donne le
+ * voisinage des groupes du mois, que step partage avec les réunions.
  */
 export function lifeCycle(
   state: SimState,
   content: SimContent,
   members?: ReadonlyMap<number, readonly number[]>,
+  neighbors = new Neighborhood(state, content.nomads.marriage),
 ): void {
   const { people, society, tick } = state;
   let lists = members;
@@ -428,7 +432,7 @@ export function lifeCycle(
     }
   }
 
-  formCouples(state, content);
+  formCouples(state, content, neighbors);
 
   // Groupes éteints, et famines de la chronique.
   const sizes = new Int32Array(groupCount);
@@ -463,11 +467,12 @@ export function lifeCycle(
  * célibataire de l'autre sexe, d'un âge proche, qui n'est pas un proche parent : dans son
  * groupe d'abord, sinon dans un groupe voisin de sa culture, et à défaut, avec une
  * probabilité moindre (nomads.intermarriage), dans un groupe voisin d'une autre culture :
- * c'est le métissage (ESP-04). L'un des deux rejoint alors l'autre avec ses enfants (les
- * bandes échangent leurs conjoints) : le conjoint du plus petit des deux groupes rejoint
- * le plus grand ; à taille égale, la femme rejoint l'homme.
+ * c'est le métissage (ESP-04). Un groupe voisin est à un mois de marche au plus, sur la même
+ * terre (`neighbors`). L'un des deux rejoint alors l'autre avec ses enfants (les bandes
+ * échangent leurs conjoints) : le conjoint du plus petit des deux groupes rejoint le plus
+ * grand ; à taille égale, la femme rejoint l'homme.
  */
-function formCouples(state: SimState, content: SimContent): void {
+function formCouples(state: SimState, content: SimContent, neighbors: Neighborhood): void {
   const { people, tick, society } = state;
   const random = state.rng.stream('sim.couples');
   const women = new Map<number, number[]>();
@@ -530,10 +535,9 @@ function formCouples(state: SimState, content: SimContent): void {
   }
   const { marriage: distance, intermarriage } = content.nomads;
   const { width, height } = state.size;
+  // Un groupe voisin : à un mois de marche au plus, sur la même terre (Neighborhood).
   const near = (home: Group, other: Group | undefined): other is Group =>
-    other !== undefined &&
-    other.id !== home.id &&
-    cellDistance(width, home.x, home.y, other.x, other.y) <= distance;
+    other !== undefined && other.id !== home.id && neighbors.cost(home, other) <= distance;
   // Les groupes où des hommes sont à marier, rangés en carrés d'au moins `distance` cases
   // de côté, dressés au premier besoin : un groupe voisin d'un autre est dans son carré ou
   // dans l'un des huit autour, la dernière colonne touchant la première (couture).

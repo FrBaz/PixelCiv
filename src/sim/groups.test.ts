@@ -13,15 +13,16 @@ import {
   splitGroup,
   walk,
   walkBudget,
+  walkCosts,
 } from './groups';
 import { MONTHS_PER_YEAR } from './people';
 import { NONE } from './population';
 import { MIGRATIONS, restoreState, saveState } from './save';
-import type { Group } from './society';
 import { spawnGroup } from './spawn';
 import type { SimState } from './state';
 import { fingerprint, step, type SimContent } from './step';
-import { flatState, scatteredGroups, testData, testHuman, testState } from './testing';
+import { terrainLands } from './terrain';
+import { flatState, flooded, scatteredGroups, testData, testHuman, testState } from './testing';
 
 /** Première case d'un biome. */
 function cellOf(state: SimState, biome: string): { x: number; y: number } {
@@ -82,10 +83,70 @@ function lands(cost: Float32Array, size: WorldSize): Int32Array {
   return label;
 }
 
+/**
+ * Coût de marche le plus faible de `from` vers chaque case `targets`, au plus `budget`,
+ * calculé à part de walkCosts, par relaxations successives jusqu'à ce que rien ne bouge,
+ * sur les cases à moins de `budget` + 1 colonnes et lignes de `from`, avec la couture et la
+ * règle du coin : de quoi vérifier walkCosts.
+ */
+function referenceCosts(
+  cost: Float32Array,
+  size: WorldSize,
+  from: { x: number; y: number },
+  targets: readonly number[],
+  budget: number,
+): number[] {
+  const { width, height } = size;
+  const reach = Math.floor(budget) + 1;
+  const spent = new Map<number, number>([[from.y * width + from.x, 0]]);
+  const open = (x: number, y: number) =>
+    y >= 0 && y < height && Number.isFinite(cost[y * width + ((x + width) % width)] ?? Infinity);
+  for (let changed = true; changed;) {
+    changed = false;
+    for (let dy = -reach; dy <= reach; dy++) {
+      for (let dx = -reach; dx <= reach; dx++) {
+        const x = (from.x + dx + width) % width;
+        const y = from.y + dy;
+        const here = spent.get(y * width + x);
+        if (here === undefined) continue;
+        for (const [sx, sy] of [
+          [1, 0],
+          [-1, 0],
+          [0, 1],
+          [0, -1],
+          [1, 1],
+          [1, -1],
+          [-1, 1],
+          [-1, -1],
+        ] as const) {
+          const nx = (x + sx + width) % width;
+          const ny = y + sy;
+          if (!open(nx, ny)) continue;
+          if (sx !== 0 && sy !== 0 && (!open(nx, y) || !open(x, ny))) continue;
+          const step =
+            (cost[ny * width + nx] ?? Infinity) * (sx !== 0 && sy !== 0 ? Math.SQRT2 : 1);
+          const total = here + step;
+          const cell = ny * width + nx;
+          if (total <= budget && total < (spent.get(cell) ?? Infinity) - 1e-12) {
+            spent.set(cell, total);
+            changed = true;
+          }
+        }
+      }
+    }
+  }
+  return targets.map((target) => spent.get(target) ?? Infinity);
+}
+
 /** Ce que l'on relève, mois après mois, sur un siècle de nomadisme. */
 interface Century {
   /** Pas où un groupe a changé de terre en un mois, et ses deux cases. */
   readonly crossings: string[];
+  /**
+   * Pas où une personne a changé de terre en un mois, celle de la case de son groupe : par
+   * une marche, une réunion, un mariage ou une scission.
+   */
+  readonly travellers: string[];
   /** Pas où deux groupes vivants avaient le même meneur. */
   readonly sharedLeaders: string[];
   /** Scissions dont le nouveau groupe a le même meneur que l'ancien. */
@@ -94,33 +155,81 @@ interface Century {
   readonly leaderLeft: number;
   /** Nouveaux groupes dont le centre de l'aire tombe sur une case infranchissable. */
   readonly homesInWater: number;
+  /**
+   * Scissions dont le centre de l'aire du nouveau groupe est sur une autre terre que la
+   * case de la scission, sans être l'aire du groupe d'origine, qu'il garde faute de mieux.
+   */
+  readonly homesElsewhere: string[];
+  /** Scissions où aucune direction ne convient : le nouveau groupe garde l'aire d'origine. */
+  readonly fallbacks: number;
   readonly splits: number;
+  readonly merges: number;
   readonly groups: number;
 }
 
-let century: Century | undefined;
+const centuries = new Map<string, Century>();
 
-/** Seize groupes répartis sur le monde des tests, pendant un siècle (calculé une fois). */
-function playCentury(): Century {
-  if (century !== undefined) return century;
-  const state = testState();
+/**
+ * `count` groupes répartis sur le monde Petit de la graine `seed`, pendant un siècle
+ * (calculé une fois). Les terres viennent ici d'un calcul indépendant de terrainLands.
+ */
+function playCentury(seed = 'graine', count = 16): Century {
+  const key = `${seed}:${String(count)}`;
+  const known = centuries.get(key);
+  if (known !== undefined) return known;
+  const state = testState(seed);
   const land = lands(state.cost, state.size);
   const { width } = state.size;
-  const landOf = (group: Group) => land[group.y * width + group.x] ?? -1;
-  step(state, scatteredGroups(state, 16), testData);
+  const landOf = (group: { x: number; y: number }) => land[group.y * width + group.x] ?? -1;
+  step(state, scatteredGroups(state, count), testData);
   const seen = new Map<number, { land: number; at: string }>();
   for (const group of state.society.groups.values()) {
     seen.set(group.id, { land: landOf(group), at: `${group.x},${group.y}` });
   }
   const crossings: string[] = [];
+  const travellers: string[] = [];
+  const homesElsewhere: string[] = [];
   const sharedLeaders: string[] = [];
   let sameLeader = 0;
   let leaderLeft = 0;
   let homesInWater = 0;
   let splits = 0;
+  let merges = 0;
+  let fallbacks = 0;
+  // Terre de chaque personne au début du mois, par identifiant, et aire de chaque groupe.
+  const landsBefore = new Map<number, number>();
+  const homes = new Map<number, string>();
   for (let month = 1; month < 100 * MONTHS_PER_YEAR; month++) {
     const tick = state.tick;
+    const { people, society } = state;
+    landsBefore.clear();
+    people.forEach((slot) => {
+      const group = society.groups.get(people.get('group', slot));
+      if (group !== undefined) landsBefore.set(people.get('id', slot), landOf(group));
+    });
+    homes.clear();
+    for (const group of society.groups.values()) {
+      homes.set(group.id, `${String(group.homeX)},${String(group.homeY)}`);
+    }
+    const facts = society.chronicle.length;
     step(state, [], testData);
+    people.forEach((slot) => {
+      const id = people.get('id', slot);
+      const group = society.groups.get(people.get('group', slot));
+      const was = landsBefore.get(id);
+      if (group === undefined || was === undefined || was === landOf(group)) return;
+      travellers.push(`pas ${String(tick)}, personne ${String(id)} : groupe ${String(group.id)}`);
+    });
+    for (const fact of society.chronicle.slice(facts)) {
+      if (fact.kind === 'groupMerged') merges++;
+      const child = society.groups.get(fact.other);
+      if (fact.kind !== 'groupSplit' || child === undefined) continue;
+      const home = { x: child.homeX, y: child.homeY };
+      const at = `${String(home.x)},${String(home.y)}`;
+      if (landOf(home) === landOf(fact)) continue;
+      if (homes.get(fact.group) === at) fallbacks++;
+      else homesElsewhere.push(`pas ${String(tick)}, groupe ${String(child.id)} : aire ${at}`);
+    }
     const leaders = new Map<number, number>();
     for (const group of state.society.groups.values()) {
       const before = seen.get(group.id) ?? seen.get(group.parent);
@@ -146,15 +255,20 @@ function playCentury(): Century {
       if (leader !== undefined && state.people.get('group', leader) === group.id) leaderLeft++;
     }
   }
-  century = {
+  const century: Century = {
     crossings,
+    travellers,
     sharedLeaders,
     sameLeader,
     leaderLeft,
     homesInWater,
+    homesElsewhere,
+    fallbacks,
     splits,
+    merges,
     groups: state.society.groups.size,
   };
+  centuries.set(key, century);
   return century;
 }
 
@@ -257,10 +371,25 @@ describe('groupes nomades (tâche 2.5)', () => {
   });
 
   it('ne change jamais de terre en un siècle : ni la mer, ni les lacs, ni les fleuves (D-2)', () => {
-    const { crossings, splits, groups } = playCentury();
+    // Ni un groupe en marchant, ni l'un de ses membres en rejoignant un autre groupe : une
+    // réunion, un mariage ou une scission ne font pas passer l'eau (3-nomades/P0).
+    const { crossings, travellers, splits, merges, groups } = playCentury();
     expect(splits).toBeGreaterThan(30);
+    expect(merges).toBeGreaterThan(10);
     expect(groups).toBeGreaterThan(16);
     expect(crossings).toEqual([]);
+    expect(travellers).toEqual([]);
+  });
+
+  it('ne fait changer personne de terre en un siècle, sur « pixelciv » avec quarante groupes', () => {
+    const { crossings, travellers, homesElsewhere, splits, merges } = playCentury('pixelciv', 40);
+    expect(splits).toBeGreaterThan(60);
+    expect(merges).toBeGreaterThan(10);
+    expect(crossings).toEqual([]);
+    expect(travellers).toEqual([]);
+    // Le centre d'une nouvelle aire est sur la terre de la scission, sauf quand aucune des
+    // huit directions n'y mène : le nouveau groupe garde alors l'aire du groupe d'origine.
+    expect(homesElsewhere).toEqual([]);
   });
 
   it('se déplace au fil des saisons, sans trop s’écarter de son aire', () => {
@@ -411,10 +540,39 @@ describe('groupes nomades (tâche 2.5)', () => {
     }
   });
 
-  it('pose l’aire du nouveau groupe sur une case franchissable (F-7)', () => {
-    const { homesInWater, splits } = playCentury();
+  it('pose l’aire du nouveau groupe sur une case franchissable de sa terre (F-7)', () => {
+    // Le centre d'une aire sur une autre terre que la scission, une île en face, ne se
+    // rejoint pas à pied : le nouveau groupe longerait la côte (3-nomades/P1).
+    const { homesInWater, homesElsewhere, fallbacks, splits } = playCentury();
     expect(splits).toBeGreaterThan(30);
     expect(homesInWater).toBe(0);
+    expect(homesElsewhere).toEqual([]);
+    expect(fallbacks).toBe(0);
+  });
+
+  it('cherche l’aire du nouveau groupe dans une autre direction qu’une île en face', () => {
+    // Une bande de terre en diagonale, du groupe vers le nord-ouest, dans la mer ; à l'est,
+    // à une aire de distance, une île. Des huit centres possibles, seul celui du nord-ouest
+    // est sur la terre de la scission ; celui de l'île, franchissable, ne se rejoint pas à
+    // pied (3-nomades/P1). La direction tirée change d'une graine à l'autre.
+    const band = (x: number, y: number) => x >= 88 && x <= 112 && x - y >= 8 && x - y <= 12;
+    const island = (x: number, y: number) => Math.abs(x - 130) <= 3 && Math.abs(y - 100) <= 3;
+    const homes = new Set<string>();
+    for (let attempt = 0; attempt < 8; attempt++) {
+      const state = flatState(
+        `île ${String(attempt)}`,
+        flooded((x, y) => !band(x, y) && !island(x, y)),
+      );
+      const { width } = state.size;
+      const land = lands(state.cost, state.size);
+      expect(land[100 * width + 130]).not.toBe(land[100 * width + 110]);
+      const group = spawn(state, { x: 110, y: 100 }, 48);
+      const members = groupMembers(state.people).get(group.id) ?? [];
+      const child = splitGroup(state, group, members, testData, state.rng.stream('tests'));
+      if (child === undefined) throw new Error('pas de scission');
+      homes.add(`${String(child.homeX)},${String(child.homeY)}`);
+    }
+    expect([...homes]).toEqual(['90,80']);
   });
 
   it('ne fait marcher qu’une fois le nouveau groupe le mois de sa scission (F-5, D-8)', () => {
@@ -476,8 +634,10 @@ describe('groupes nomades (tâche 2.5)', () => {
   });
 
   it('marie des célibataires de deux groupes voisins de même culture', () => {
-    const state = testState();
-    const at = cellOf(state, 'grassland');
+    // Sur la steppe, où les deux groupes restent à moins d'un mois de marche l'un de
+    // l'autre : en terrain plus rude, ils cesseraient vite d'être voisins.
+    const state = flatState('voisins');
+    const at = { x: 100, y: 100 };
     const a = spawn(state, at, 20);
     const b = spawn(state, at, 20);
     // Même culture, et des célibataires d'un seul sexe de chaque côté.
@@ -610,5 +770,203 @@ describe('couture et pôles (monde cylindrique, F-11)', () => {
         }
       }
     }
+  });
+});
+
+describe('terres et voisinage, en temps de trajet (MON-16 ; C2, D13)', () => {
+  it('relie les cases voisines par un côté, à travers la couture, mais ni par les pôles ni par un coin', () => {
+    // Deux lignes d'eau d'un bord à l'autre, sous le pôle nord et au-dessus du pôle sud, et
+    // une case isolée qui ne touche la terre que par un coin.
+    const state = flatState(
+      'terres',
+      flooded(
+        (x, y) =>
+          y === 1 ||
+          y === 254 ||
+          (Math.abs(x - 50) <= 1 &&
+            Math.abs(y - 50) <= 1 &&
+            (x !== 50 || y !== 50) &&
+            x + y !== 102),
+      ),
+    );
+    const { width } = state.size;
+    const at = (x: number, y: number) => state.land[y * width + x];
+    // La ligne du pôle nord, celle du pôle sud et le reste du monde : trois terres, chacune
+    // d'un seul tenant d'est en ouest, à travers la couture.
+    expect(at(0, 0)).toBe(at(width - 1, 0));
+    expect(at(0, 100)).toBe(at(width - 1, 100));
+    expect(new Set([at(7, 0), at(7, 100), at(7, 255)]).size).toBe(3);
+    expect(at(7, 1)).toBe(-1);
+    // La case (50, 50) ne touche (51, 51) que par un coin : deux terres, et nulle marche.
+    expect(at(50, 50)).not.toBe(at(51, 51));
+    expect(walk(state.cost, state.size, { x: 50, y: 50 }, { x: 51, y: 51 }, 30)).toEqual({
+      x: 50,
+      y: 50,
+    });
+    expect(at(51, 51)).toBe(at(7, 100));
+  });
+
+  it('suit exactement ce que relie la marche, sur le monde des tests', async () => {
+    const state = testState();
+    const { width, height } = state.size;
+    // Le calcul indépendant des tests, et ce que dit la marche, d'une case à l'autre.
+    expect(state.land).toEqual(lands(state.cost, state.size));
+    const random = state.rng.stream('tests');
+    let walks = 0;
+    while (walks < 3000) {
+      const from = { x: random.nextInt(width), y: random.nextInt(height) };
+      const here = state.land[from.y * width + from.x] ?? -1;
+      if (here < 0) continue;
+      const target = {
+        x: (from.x + random.nextRange(-40, 41) + width) % width,
+        y: Math.max(0, Math.min(height - 1, from.y + random.nextRange(-40, 41))),
+      };
+      const reached = walk(state.cost, state.size, from, target, 60);
+      expect(state.land[reached.y * width + reached.x]).toBe(here);
+      walks++;
+    }
+    // Elle ne se sauvegarde pas : la relecture la recalcule, la même.
+    const restored = restoreState(
+      await readSave(await writeSave(saveState(state, GENERATOR_VERSION, testData)), MIGRATIONS),
+      testData,
+    );
+    expect(restored.land).toEqual(state.land);
+    expect(terrainLands(state.cost, state.size)).toEqual(state.land);
+  });
+
+  it('compte en coût de marche, avec la couture et sans couper de coin (walkCosts)', () => {
+    const { size } = testState();
+    const { width } = size;
+    const cell = (x: number, y: number) => y * width + x;
+    const cost = plain(size);
+    // En plaine : une case par pas droit, √2 par pas en diagonale, rien au-delà du budget.
+    const costs = walkCosts(
+      cost,
+      size,
+      { x: 100, y: 100 },
+      [
+        cell(100, 100),
+        cell(110, 100),
+        cell(110, 110),
+        cell(130, 100),
+        cell(131, 100),
+        cell(125, 115),
+      ],
+      30,
+    );
+    expect([costs[0], costs[1], costs[3], costs[4], costs[5]]).toEqual([
+      0,
+      10,
+      30,
+      Infinity,
+      Infinity,
+    ]);
+    expect(costs[2]).toBeCloseTo(10 * Math.SQRT2, 12);
+    // À travers la couture, dans les deux sens.
+    expect([...walkCosts(cost, size, { x: 2, y: 100 }, [cell(width - 3, 100)], 30)]).toEqual([5]);
+    expect([...walkCosts(cost, size, { x: width - 3, y: 100 }, [cell(2, 100)], 30)]).toEqual([5]);
+    // Le coût est celui des cases où l'on entre : une forêt tempérée compte une fois et demie.
+    const forest = plain(size).fill(1.5);
+    expect([
+      ...walkCosts(forest, size, { x: 100, y: 100 }, [cell(120, 100), cell(121, 100)], 30),
+    ]).toEqual([30, Infinity]);
+    // Un mur d'eau : on passe par sa brèche, s'il en reste le temps, et tout droit, puisqu'on
+    // n'y entre ni n'en sort par un coin : quatre diagonales et six pas droits de chaque
+    // côté, et les deux pas de la brèche.
+    const walled = plain(size);
+    for (let y = 80; y <= 120; y++) walled[cell(105, y)] = Number.POSITIVE_INFINITY;
+    walled[cell(105, 90)] = 1;
+    const around = walkCosts(walled, size, { x: 100, y: 100 }, [cell(110, 100)], 30);
+    expect(around[0]).toBeCloseTo(8 * Math.SQRT2 + 14, 9);
+    walled[cell(105, 90)] = Number.POSITIVE_INFINITY;
+    expect([...walkCosts(walled, size, { x: 100, y: 100 }, [cell(110, 100)], 30)]).toEqual([
+      Infinity,
+    ]);
+    // Deux eaux qui se touchent par un coin ne se passent pas.
+    const corner = plain(size);
+    corner[cell(41, 40)] = Number.POSITIVE_INFINITY;
+    corner[cell(40, 41)] = Number.POSITIVE_INFINITY;
+    const diagonal = walkCosts(corner, size, { x: 40, y: 40 }, [cell(41, 41)], 30);
+    expect(diagonal[0]).toBeGreaterThan(Math.SQRT2);
+  });
+
+  it('trouve le chemin le moins coûteux sur le monde des tests, couture et pôles compris', () => {
+    // Des départs sur la terre, tirés au hasard, au bord de la couture, près des pôles ou
+    // n'importe où, et des cibles autour : walkCosts redonne les coûts d'un calcul à part.
+    const state = testState();
+    const { width, height } = state.size;
+    const random = state.rng.stream('tests');
+    const budget = testData.nomads.marriage;
+    const passable = (x: number, y: number) =>
+      Number.isFinite(state.cost[y * width + x] ?? Infinity);
+    const near = [
+      (): [number, number] => [random.nextInt(4) - 2, random.nextInt(height)],
+      (): [number, number] => [random.nextInt(width), random.nextInt(4)],
+      (): [number, number] => [random.nextInt(width), height - 1 - random.nextInt(4)],
+      (): [number, number] => [random.nextInt(width), random.nextInt(height)],
+    ];
+    let reached = 0;
+    let tried = 0;
+    for (let found = 0; found < 32; tried++) {
+      const [dx, y] = near[found % near.length]?.() ?? [0, 0];
+      const from = { x: (dx + width) % width, y };
+      if (!passable(from.x, from.y)) continue;
+      found++;
+      const targets = Array.from({ length: 12 }, () => {
+        const x = (from.x + random.nextRange(-20, 21) + width) % width;
+        const ty = Math.max(0, Math.min(height - 1, from.y + random.nextRange(-20, 21)));
+        return ty * width + x;
+      });
+      const costs = walkCosts(state.cost, state.size, from, targets, budget);
+      const expected = referenceCosts(state.cost, state.size, from, targets, budget);
+      expected.forEach((value, index) => {
+        if (value === Infinity) expect(costs[index]).toBe(Infinity);
+        else expect(costs[index]).toBeCloseTo(value, 9);
+      });
+      reached += expected.filter((value) => value < Infinity).length;
+    }
+    expect(tried).toBeLessThan(10_000);
+    expect(reached).toBeGreaterThan(100);
+  });
+
+  it('ne réunit pas deux groupes que sépare un détroit, même tout proches (3-nomades/P0)', () => {
+    // Deux bandes d'eau, du pôle nord au pôle sud, font deux terres sans lien, pas même
+    // par la couture ; les deux groupes sont à vingt cases à vol d'oiseau.
+    const state = flatState(
+      'détroit',
+      flooded((x) => (x >= 110 && x <= 115) || (x >= 300 && x <= 305)),
+    );
+    const { width } = state.size;
+    const big = spawn(state, { x: 100, y: 100 }, 20);
+    const small = spawn(state, { x: 120, y: 100 }, 3);
+    expect(cellDistance(width, big.x, big.y, small.x, small.y)).toBeLessThan(
+      testData.nomads.marriage,
+    );
+    expect(state.land[100 * width + 100]).not.toBe(state.land[100 * width + 120]);
+    expect(mergeGroup(state, small, groupMembers(state.people), testData)).toBeUndefined();
+    // Un mois : le petit groupe reste seul de son côté, avec ses membres.
+    step(state, [], testData);
+    expect(state.society.chronicle.filter((fact) => fact.kind === 'groupMerged')).toEqual([]);
+    // Sans le détroit, ils se réunissent.
+    const open = flatState('détroit');
+    spawn(open, { x: 100, y: 100 }, 20);
+    const alone = spawn(open, { x: 120, y: 100 }, 3);
+    expect(mergeGroup(open, alone, groupMembers(open.people), testData)).toBeDefined();
+  });
+
+  it('ne réunit pas deux groupes au bord d’un même lac, à plus d’un mois de marche par le tour', () => {
+    // Un lac de 22 cases de large et 121 de haut : une seule terre, et deux rives à 27 cases
+    // l'une de l'autre, mais à bien plus d'un mois de marche en le contournant.
+    const lake = (x: number, y: number) => x >= 103 && x <= 124 && y >= 40 && y <= 160;
+    const state = flatState('lac', flooded(lake));
+    const { width } = state.size;
+    spawn(state, { x: 127, y: 100 }, 20);
+    const small = spawn(state, { x: 100, y: 100 }, 3);
+    expect(state.land[100 * width + 100]).toBe(state.land[100 * width + 127]);
+    expect(cellDistance(width, 100, 100, 127, 100)).toBeLessThan(testData.nomads.marriage);
+    expect([
+      ...walkCosts(state.cost, state.size, small, [100 * width + 127], testData.nomads.marriage),
+    ]).toEqual([Infinity]);
+    expect(mergeGroup(state, small, groupMembers(state.people), testData)).toBeUndefined();
   });
 });

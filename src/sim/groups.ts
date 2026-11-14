@@ -7,17 +7,22 @@
  *   plaine par mois (C2, D13), que l'endurance allonge ; chaque case coûte selon son
  *   biome et son étage d'altitude (C1, D11). L'eau, le lit des fleuves et les sommets ne
  *   se traversent pas à pied, pas même par un coin : un pas en diagonale n'enjambe pas
- *   une case infranchissable.
+ *   une case infranchissable. Une marche ne change donc jamais de terre (`state.land`).
  * - Aire : le groupe s'écarte peu de son centre, qui le suit lentement : il nomadise au
  *   fil des saisons, et migre sur des générations.
  * - Scission : au-delà d'une trentaine de membres, le groupe se scinde en deux groupes de
  *   même culture (C2, D4) ; les familles restent ensemble, frères et sœurs orphelins
  *   compris, le meneur reste dans son groupe, et le nouveau groupe, mené par un autre,
- *   part fonder son aire plus loin, autour d'une case franchissable.
+ *   part fonder son aire plus loin, autour d'une case franchissable de sa terre.
+ * - Voisinage : deux groupes sont voisins quand l'un atteint l'autre à pied en un mois de
+ *   marche au plus, la distance du mariage, comptée en coût de marche comme le budget du
+ *   mois, et non à vol d'oiseau (MON-16 ; C2, D13) : ils sont donc sur la même terre. Un
+ *   groupe trop petit rejoint un voisin, et les célibataires se marient entre voisins
+ *   (lifecycle.ts) ; ni les uns ni les autres ne passent l'eau.
  */
 import type { Catalog, Species } from '../core/data';
 import type { AltitudeLevel } from '../core/data/schemas';
-import { deltaX, wrapNearX } from '../core/cylinder';
+import { deltaX, wrapNearX, wrapX } from '../core/cylinder';
 import type { RandomStream } from '../core/rng';
 import type { WorldSize } from '../core/world';
 import { totalStock, type ForageContent } from './forage';
@@ -141,6 +146,189 @@ export function walk(
     left -= bestCost;
   }
   return { x, y };
+}
+
+/** Tas binaire de cases, par coût croissant : la file de walkCosts. */
+class CostHeap {
+  private costs = new Float64Array(256);
+  private cells = new Int32Array(256);
+  size = 0;
+
+  push(cost: number, cell: number): void {
+    if (this.size === this.costs.length) {
+      const costs = new Float64Array(this.size * 2);
+      const cells = new Int32Array(this.size * 2);
+      costs.set(this.costs);
+      cells.set(this.cells);
+      this.costs = costs;
+      this.cells = cells;
+    }
+    let index = this.size++;
+    while (index > 0) {
+      const parent = (index - 1) >> 1;
+      const above = this.costs[parent] ?? 0;
+      if (above <= cost) break;
+      this.costs[index] = above;
+      this.cells[index] = this.cells[parent] ?? 0;
+      index = parent;
+    }
+    this.costs[index] = cost;
+    this.cells[index] = cell;
+  }
+
+  /** Coût de la case de tête, la moins coûteuse. */
+  peek(): number {
+    return this.costs[0];
+  }
+
+  /** Retire la case de tête et la renvoie. */
+  pop(): number {
+    const cell = this.cells[0];
+    const size = --this.size;
+    const cost = this.costs[size] ?? 0;
+    const last = this.cells[size] ?? 0;
+    let index = 0;
+    for (;;) {
+      let child = 2 * index + 1;
+      if (child >= size) break;
+      if (child + 1 < size && (this.costs[child + 1] ?? 0) < (this.costs[child] ?? 0)) child++;
+      const below = this.costs[child] ?? 0;
+      if (below >= cost) break;
+      this.costs[index] = below;
+      this.cells[index] = this.cells[child] ?? 0;
+      index = child;
+    }
+    this.costs[index] = cost;
+    this.cells[index] = last;
+    return cell;
+  }
+}
+
+/** File et tampons de walkCosts, repris d'une recherche à l'autre : ils ne gardent rien. */
+const heap = new CostHeap();
+let windowCost = new Float64Array(0);
+let windowSpent = new Float64Array(0);
+let windowFlags = new Uint8Array(0);
+let windowColumns = new Int32Array(0);
+const SETTLED = 1;
+const WANTED = 2;
+
+/**
+ * Plus petit coût de marche de `from` à chacune des cases `targets` (des indices de cases),
+ * au plus `budget`, Infinity au-delà : Dijkstra sur les cases franchissables, en huit
+ * directions, avec la règle du coin et la couture de walk, chaque pas coûtant comme dans
+ * walk, la case où l'on entre, fois √2 en diagonale. La recherche s'arrête dès que toutes
+ * les cibles sont atteintes, ou le budget épuisé.
+ *
+ * Le coût d'une case vaut au moins 1 : la recherche se tient dans le carré de 2 ⌊budget⌋ + 1
+ * cases de côté centré sur `from`. On y recopie les coûts, bordés d'une rangée de cases
+ * infranchissables, au-delà du carré comme au-delà des pôles ; ses colonnes bouclent, et
+ * s'il est plus large que le monde, il en montre une colonne plusieurs fois : une cible
+ * compte alors par la plus proche de ses copies.
+ */
+export function walkCosts(
+  cost: Float32Array,
+  size: WorldSize,
+  from: { readonly x: number; readonly y: number },
+  targets: readonly number[],
+  budget: number,
+): Float64Array {
+  const { width, height } = size;
+  const found = new Float64Array(targets.length).fill(Number.POSITIVE_INFINITY);
+  const radius = Math.floor(budget);
+  if (!(radius >= 0) || targets.length === 0) return found;
+  const span = 2 * radius + 1;
+  const left = from.x - radius;
+  const top = Math.max(0, from.y - radius);
+  const rows = Math.min(height - 1, from.y + radius) - top + 1;
+  if (rows <= 0) return found;
+  const stride = span + 2;
+  const cells = stride * (rows + 2);
+  if (windowCost.length < cells) {
+    windowCost = new Float64Array(cells);
+    windowSpent = new Float64Array(cells);
+    windowFlags = new Uint8Array(cells);
+  }
+  if (windowColumns.length < span) windowColumns = new Int32Array(span);
+  const local = windowCost;
+  const spent = windowSpent;
+  const flags = windowFlags;
+  const columns = windowColumns;
+  local.fill(Number.POSITIVE_INFINITY, 0, cells);
+  spent.fill(Number.POSITIVE_INFINITY, 0, cells);
+  flags.fill(0, 0, cells);
+  for (let column = 0; column < span; column++) columns[column] = wrapX(left + column, width);
+  for (let row = 0; row < rows; row++) {
+    const world = (top + row) * width;
+    const base = (row + 1) * stride + 1;
+    for (let column = 0; column < span; column++) {
+      local[base + column] = cost[world + (columns[column] ?? 0)] ?? Number.POSITIVE_INFINITY;
+    }
+  }
+  /** Les copies de la case (x, y) dans le carré. */
+  const copiesOf = (x: number, y: number): number[] => {
+    const row = y - top;
+    const copies: number[] = [];
+    if (row < 0 || row >= rows) return copies;
+    for (let column = wrapX(x - left, width); column < span; column += width) {
+      copies.push((row + 1) * stride + 1 + column);
+    }
+    return copies;
+  };
+  let wanted = 0;
+  for (const target of targets) {
+    for (const at of copiesOf(target % width, Math.floor(target / width))) {
+      if ((flags[at] ?? 0) & WANTED || !((local[at] ?? Infinity) < Infinity)) continue;
+      flags[at] = WANTED;
+      wanted++;
+    }
+  }
+  const start = (from.y - top + 1) * stride + 1 + radius;
+  if (!((local[start] ?? Infinity) < Infinity)) return found;
+  // Les huit pas, et pour chaque diagonale, les deux cases qu'elle enjambe.
+  const steps = [-stride - 1, -stride, 1 - stride, -1, 1, stride - 1, stride, stride + 1];
+  const besideX = [-1, 0, 1, 0, 0, -1, 0, 1];
+  const besideY = [-stride, 0, -stride, 0, 0, stride, 0, stride];
+  heap.size = 0;
+  spent[start] = 0;
+  heap.push(0, start);
+  while (heap.size > 0 && wanted > 0) {
+    const used = heap.peek();
+    const at = heap.pop();
+    // Une case revient au tas chaque fois qu'on la rejoint moins cher : seule la première
+    // sortie compte.
+    if ((flags[at] ?? 0) & SETTLED) continue;
+    flags[at] = (flags[at] ?? 0) | SETTLED;
+    if ((flags[at] ?? 0) & WANTED) wanted--;
+    for (let direction = 0; direction < 8; direction++) {
+      const next = at + (steps[direction] ?? 0);
+      const enter = local[next] ?? Infinity;
+      if (!(enter < Infinity)) continue;
+      const dx = besideX[direction] ?? 0;
+      let total = used + enter;
+      if (dx !== 0) {
+        // Pas de coin coupé, comme dans walk.
+        const dy = besideY[direction] ?? 0;
+        if (
+          !((local[at + dx] ?? Infinity) < Infinity) ||
+          !((local[at + dy] ?? Infinity) < Infinity)
+        ) {
+          continue;
+        }
+        total = used + enter * Math.SQRT2;
+      }
+      if (!(total <= budget) || !(total < (spent[next] ?? 0))) continue;
+      spent[next] = total;
+      heap.push(total, next);
+    }
+  }
+  targets.forEach((target, index) => {
+    for (const at of copiesOf(target % width, Math.floor(target / width))) {
+      if ((flags[at] ?? 0) & SETTLED)
+        found[index] = Math.min(found[index] ?? Infinity, spent[at] ?? Infinity);
+    }
+  });
+  return found;
 }
 
 /** Une case de terre franchissable, tirée au hasard à moins de `radius` cases de (x, y). */
@@ -358,18 +546,20 @@ export function splitGroup(
   }
   if (eldest < 0) return undefined;
   // Le nouveau groupe vise une aire voisine, à une aire de distance, dans la direction
-  // tirée ou, si son centre y tombe sur une case infranchissable, la suivante ; faute de
-  // mieux, il garde l'aire du groupe d'origine.
+  // tirée ou, si son centre y tombe sur une case infranchissable ou sur une autre terre
+  // que celle de la scission, que nul ne rejoint à pied, la suivante ; faute de mieux, il
+  // garde l'aire du groupe d'origine.
   const angle = random.nextFloat();
   const reach = content.nomads.range;
   const first = Math.floor(angle * SPLIT_DIRECTIONS.length) % SPLIT_DIRECTIONS.length;
+  const land = state.land[group.y * size.width + group.x] ?? -1;
   let homeX = group.homeX;
   let homeY = group.homeY;
   for (let turn = 0; turn < SPLIT_DIRECTIONS.length; turn++) {
     const [ox, oy] = SPLIT_DIRECTIONS[(first + turn) % SPLIT_DIRECTIONS.length] ?? [1, 0];
     const y = Math.min(size.height - 1, Math.max(0, group.homeY + Math.round(oy * reach)));
     const x = (((group.homeX + Math.round(ox * reach)) % size.width) + size.width) % size.width;
-    if (Number.isFinite(cost[y * size.width + x] ?? Number.POSITIVE_INFINITY)) {
+    if (land >= 0 && state.land[y * size.width + x] === land) {
       homeX = x;
       homeY = y;
       break;
@@ -419,27 +609,123 @@ export function splitGroup(
 }
 
 /**
- * Un groupe tombé sous le seuil de data/nomads.json rejoint le groupe le plus proche, à la
- * distance du mariage au plus, de sa culture de préférence ; ses membres gardent la leur.
- * Le groupe qui l'accueille n'est pas lui-même sous le seuil : il ne partira pas à son
- * tour. Renvoie le groupe qui l'a accueilli, ou undefined s'il reste seul.
+ * Voisinage des groupes le temps d'un mois (MON-16 ; C2, D13) : un groupe est voisin d'un
+ * autre s'il l'atteint à pied dans la distance du mariage (nomads.marriage), comptée en
+ * coût de marche comme nomads.walk, soit un mois de marche ; il est donc sur sa terre. Les
+ * réunions et les mariages entre groupes s'en tiennent à ce voisinage.
+ *
+ * Les groupes ne bougent qu'à la fin du mois (step) : la recherche (walkCosts) se fait au
+ * plus une fois par groupe et par mois, à la première question, vers les groupes de sa
+ * terre qui sont, à vol d'oiseau, à la distance du mariage ; elle n'a pas lieu tant qu'on
+ * ne demande pas un tel groupe. Le coût d'une case vaut au moins 1 (data/biomes.json,
+ * data/altitude-levels.json) : on n'atteint jamais à pied plus loin qu'à vol d'oiseau.
+ */
+export class Neighborhood {
+  private readonly state: SimState;
+  private readonly reach: number;
+  /** Pour chaque groupe qui a cherché : le coût de marche vers chaque groupe atteint. */
+  private readonly found = new Map<number, ReadonlyMap<number, number>>();
+  /** Les groupes, rangés en carrés d'au moins `reach` cases de côté, au premier besoin. */
+  private squares: Map<number, Group[]> | undefined;
+  private readonly across: number;
+  private readonly down: number;
+
+  constructor(state: SimState, reach: number) {
+    this.state = state;
+    this.reach = reach;
+    const { width, height } = state.size;
+    this.across = Math.max(1, Math.floor(width / Math.max(1, reach)));
+    this.down = Math.max(1, Math.floor(height / Math.max(1, reach)));
+  }
+
+  /** Coût de marche de `home` à `other`, s'il en est voisin ; Infinity sinon. */
+  cost(home: Group, other: Group): number {
+    if (other.id === home.id || !this.candidate(home, other)) return Number.POSITIVE_INFINITY;
+    return this.search(home).get(other.id) ?? Number.POSITIVE_INFINITY;
+  }
+
+  /** `other` est-il sur la terre de `home`, à vol d'oiseau à la distance du mariage ? */
+  private candidate(home: Group, other: Group): boolean {
+    const { size, land } = this.state;
+    if (cellDistance(size.width, home.x, home.y, other.x, other.y) > this.reach) return false;
+    const here = land[home.y * size.width + home.x] ?? -1;
+    return here >= 0 && land[other.y * size.width + other.x] === here;
+  }
+
+  private square(group: Group): number {
+    const { width, height } = this.state.size;
+    const row = Math.floor((group.y * this.down) / height);
+    return row * this.across + Math.floor((group.x * this.across) / width);
+  }
+
+  /** Groupes atteints à pied depuis `home`, avec leur coût, cherchés une fois. */
+  private search(home: Group): ReadonlyMap<number, number> {
+    const known = this.found.get(home.id);
+    if (known !== undefined) return known;
+    const { state, across, down } = this;
+    if (this.squares === undefined) {
+      this.squares = new Map();
+      for (const group of state.society.groups.values()) {
+        const list = this.squares.get(this.square(group));
+        if (list === undefined) this.squares.set(this.square(group), [group]);
+        else list.push(group);
+      }
+    }
+    // Un groupe à la distance du mariage est dans le carré de `home` ou l'un des huit
+    // autour, la dernière colonne touchant la première (couture).
+    const targets: Group[] = [];
+    const at = this.square(home);
+    const row = Math.floor(at / across);
+    const column = at - row * across;
+    const columns = new Set([column - 1, column, column + 1].map((c) => (c + across) % across));
+    for (let r = Math.max(0, row - 1); r <= Math.min(down - 1, row + 1); r++) {
+      for (const c of columns) {
+        for (const other of this.squares.get(r * across + c) ?? []) {
+          if (other.id !== home.id && this.candidate(home, other)) targets.push(other);
+        }
+      }
+    }
+    const { width } = state.size;
+    const costs = walkCosts(
+      state.cost,
+      state.size,
+      home,
+      targets.map((other) => other.y * width + other.x),
+      this.reach,
+    );
+    const reached = new Map<number, number>();
+    targets.forEach((other, index) => {
+      const spent = costs[index] ?? Number.POSITIVE_INFINITY;
+      if (spent <= this.reach) reached.set(other.id, spent);
+    });
+    this.found.set(home.id, reached);
+    return reached;
+  }
+}
+
+/**
+ * Un groupe tombé sous le seuil de data/nomads.json rejoint le groupe voisin le plus proche
+ * (Neighborhood), en coût de marche, de sa culture de préférence ; ses membres gardent la
+ * leur. Le groupe qui l'accueille n'est pas lui-même sous le seuil : il ne partira pas à
+ * son tour. Renvoie le groupe qui l'a accueilli, ou undefined s'il reste seul.
  */
 export function mergeGroup(
   state: SimState,
   group: Group,
   membersOf: ReadonlyMap<number, readonly number[]>,
   content: GroupsContent,
+  neighbors = new Neighborhood(state, content.nomads.marriage),
 ): Group | undefined {
   const { nomads } = content;
   const members = membersOf.get(group.id) ?? [];
   if (members.length === 0 || members.length >= nomads.merge) return undefined;
-  const { society, people, size, tick } = state;
+  const { society, people, tick } = state;
   let best: Group | undefined;
   let bestScore = Number.POSITIVE_INFINITY;
   for (const other of society.groups.values()) {
     if (other.id === group.id || (membersOf.get(other.id)?.length ?? 0) < nomads.merge) continue;
-    const distance = cellDistance(size.width, group.x, group.y, other.x, other.y);
-    if (distance > nomads.marriage) continue;
+    const distance = neighbors.cost(group, other);
+    if (!(distance <= nomads.marriage)) continue;
     // Une culture étrangère compte comme une marche de plus.
     const score = distance + (other.culture === group.culture ? 0 : nomads.marriage);
     if (score < bestScore) {

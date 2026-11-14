@@ -495,8 +495,10 @@ export const NomadsSchema = z
     /** Rayon de l'aire d'un groupe autour de son centre, en cases. */
     range: z.number().positive(),
     /**
-     * Distance, en cases, à laquelle un célibataire trouve un conjoint dans un autre groupe
-     * de sa culture, faute d'en trouver dans le sien : les bandes échangent leurs conjoints.
+     * Distance du mariage, en coût de marche, compté comme `walk` en cases de plaine : deux
+     * groupes sont voisins quand l'un atteint l'autre à pied pour ce coût au plus, et non à
+     * vol d'oiseau ; avec 30, un mois de marche (MON-16 ; C2, D13). Un célibataire y trouve
+     * un conjoint, faute d'en trouver dans son groupe : les bandes échangent leurs conjoints.
      */
     marriage: z.number().min(0),
     /**

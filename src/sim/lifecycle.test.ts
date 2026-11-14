@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { Species } from '../core/data';
 import type { SpawnGroupCommand } from '../core/protocol';
+import type { WorldLayers } from '../core/world';
 import { log } from '../core/dmath';
 import { RandomStream, streamSeed } from '../core/rng';
 import { pureAncestry } from './genetics';
@@ -35,6 +36,7 @@ import { fingerprint, step, type SimContent } from './step';
 import { groupMembers } from './groups';
 import {
   flatState,
+  flooded,
   scatteredGroups,
   testData,
   testHuman as human,
@@ -138,11 +140,11 @@ function immortal(species: Species): Species {
 const calm = withHuman(immortal);
 
 /**
- * Une partie sur la steppe : pour chaque règle de nommage, une langue, une culture et un
- * groupe, à deux cases l'un de l'autre.
+ * Une partie sur la steppe, retouchée au besoin par `shape` : pour chaque règle de nommage,
+ * une langue, une culture et un groupe, à deux cases l'un de l'autre.
  */
-function founded(rules: readonly NamingRule[]): SimState {
-  const state = flatState();
+function founded(rules: readonly NamingRule[], shape?: (world: WorldLayers) => void): SimState {
+  const state = flatState(undefined, shape);
   rules.forEach((naming, index) => {
     const id = index + 1;
     state.society.languages.push({ id, seed: 7919 * id });
@@ -796,6 +798,32 @@ describe('métissage (ESP-04)', () => {
       expect(shares[slot * ANCESTRY_SLOTS]).toBe(128);
       expect(shares[slot * ANCESTRY_SLOTS + 2]).toBe(127);
     });
+  });
+
+  it('ne marie pas deux groupes que sépare un détroit, de même culture ou non (3-nomades/P0)', () => {
+    // Deux bandes d'eau, du pôle nord au pôle sud, font deux terres sans lien, pas même par
+    // la couture. Une femme seule d'un côté, un homme seul de l'autre, à dix cases à vol
+    // d'oiseau : de même culture ou non, ils ne se marient pas ; sans l'eau, si.
+    const eager = withHuman((species) => ({ ...immortal(species), pairing: 1 }));
+    const strait = flooded((x) => (x >= 108 && x <= 112) || (x >= 300 && x <= 305));
+    for (const water of [true, false]) {
+      for (const culture of [1, 2]) {
+        const state = founded(['father', 'mother'], water ? strait : undefined);
+        const first = state.society.groups.get(1) ?? missing();
+        const second = state.society.groups.get(2) ?? missing();
+        Object.assign(first, { x: 105, homeX: 105 });
+        Object.assign(second, { x: 115, homeX: 115, culture });
+        const woman = person(state, { years: 18 });
+        const man = person(state, { sex: MALE, years: 20, group: 2, culture });
+        let married = false;
+        for (let month = 0; month < 5 * MONTHS_PER_YEAR && !married; month++) {
+          lifeCycle(state, eager);
+          married = state.people.get('partner', woman) === idOf(state, man);
+          state.tick++;
+        }
+        expect({ water, culture, married }).toEqual({ water, culture, married: !water });
+      }
+    }
   });
 
   it('fait naître des métis de deux groupes voisins de sous-espèces différentes', () => {

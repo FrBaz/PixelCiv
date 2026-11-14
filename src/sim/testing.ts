@@ -40,14 +40,27 @@ export const FLAT_TEMPERATURE = 150;
 /**
  * Nouvel état sur un monde Petit sans génération, tout de steppe à 120 m et à 15 °C toute
  * l'année : ni froid, ni chaleur, ni hiver, ni relief, de quoi poser des familles à la
- * main ou mesurer vite.
+ * main ou mesurer vite. `shape` retouche le monde avant que la partie commence : coûts de
+ * marche et terres en découlent, comme dans une vraie partie.
  */
-export function flatState(seed = 'plat'): SimState {
+export function flatState(seed = 'plat', shape?: (world: WorldLayers) => void): SimState {
   const world = emptyLayers(WORLD_SIZES.small);
   world.biome.fill(testData.biomes.indexOf('steppe') ?? 0);
   world.elevation.fill(120);
   world.temperature.fill(FLAT_TEMPERATURE);
+  shape?.(world);
   return createState(testParams(seed), world, testData);
+}
+
+/** Retouche d'un monde plat (flatState) : de l'océan sur les cases (x, y) que choisit `where`. */
+export function flooded(where: (x: number, y: number) => boolean): (world: WorldLayers) => void {
+  const ocean = testData.biomes.indexOf('ocean') ?? 0;
+  const { width } = WORLD_SIZES.small;
+  return (world) => {
+    world.biome.forEach((_, cell) => {
+      if (where(cell % width, Math.floor(cell / width))) world.biome[cell] = ocean;
+    });
+  };
 }
 
 const worlds = new Map<string, WorldLayers>();

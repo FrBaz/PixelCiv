@@ -59,7 +59,7 @@
       "frail": [5, 60],
       "adults": 0.15
     },
-    "pairing": 0.15,
+    "pairing": 0.25,
     "height": [145, 195],
     "subspecies": [
       {

@@ -17,7 +17,7 @@ import { emptyStocks, type FoodStocks } from './forage';
 import type { GroupsContent } from './groups';
 import { Population } from './population';
 import { emptySociety, type Society } from './society';
-import { terrainCosts } from './terrain';
+import { terrainCosts, terrainLands } from './terrain';
 
 export { cellIndex } from './terrain';
 
@@ -40,6 +40,15 @@ export interface SimState {
    * monde et du contenu : ni la sauvegarde ni l'empreinte n'en tiennent compte.
    */
   readonly cost: Float32Array<ArrayBuffer>;
+  /**
+   * Terre de chaque case, -1 pour une case infranchissable (terrainLands) : deux cases se
+   * relient à pied si et seulement si elles sont sur la même terre. Elle découle de `cost`,
+   * et se calcule avec lui, à la création et à la relecture d'une partie : ni la sauvegarde
+   * ni l'empreinte n'en tiennent compte. Aucune commande ne change la franchissabilité d'une
+   * case : le pinceau ne peint ni n'efface l'eau, seule infranchissable parmi les biomes, et
+   * ne touche pas à l'altitude, qui fait les sommets. La couche ne se recalcule donc pas.
+   */
+  readonly land: Int32Array<ArrayBuffer>;
   /** Commandes de jeu appliquées, dans l'ordre : rejouées depuis le monde, elles redonnent l'état. */
   readonly commandLog: LoggedCommand[];
   /**
@@ -65,6 +74,7 @@ export function createState(
 ): SimState {
   const size = WORLD_SIZES[params.size];
   const grid = chunkGrid(size);
+  const cost = terrainCosts(world, content);
   return {
     params,
     size,
@@ -73,7 +83,8 @@ export function createState(
     people: new Population(),
     society: emptySociety(),
     food: emptyStocks(world.biome.length),
-    cost: terrainCosts(world, content),
+    cost,
+    land: terrainLands(cost, size),
     commandLog: [],
     pending: [],
     rng: new Rng(params.seed),

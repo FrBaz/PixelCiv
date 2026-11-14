@@ -26,7 +26,7 @@ import {
   type FoodStocks,
   type ForageContent,
 } from './forage';
-import { terrainCosts } from './terrain';
+import { terrainCosts, terrainLands } from './terrain';
 import { Population } from './population';
 import { migrateChronicle, restorePeople, savePeople } from './populationSave';
 import { emptySociety } from './society';
@@ -344,6 +344,8 @@ export function restoreState(save: SaveData, content: SaveContent): SimState {
   const { people, society } = restorePeople(save, parsed.data.people, content, size, tick);
   const food = restoreFood(save, count);
   const grid = chunkGrid(size);
+  // Couches dérivées du monde et du contenu, comme à la création de la partie.
+  const cost = terrainCosts(world, content);
   return {
     params: params.data,
     size,
@@ -352,7 +354,8 @@ export function restoreState(save: SaveData, content: SaveContent): SimState {
     people,
     society,
     food,
-    cost: terrainCosts(world, content),
+    cost,
+    land: terrainLands(cost, size),
     commandLog: [...commandLog],
     pending: [...pending],
     rng: new Rng(save.meta.seed, rng),
