@@ -18,6 +18,7 @@ import { SPAWN_COUNT } from '../sim/commands';
 import type { SheetContent } from '../ui/Sheet';
 import { createRenderer } from '../render/renderer';
 import { App } from '../ui/App';
+import { escapeKey } from '../ui/escape';
 import {
   chronicle,
   chronicleLoading,
@@ -533,6 +534,11 @@ async function main(): Promise<void> {
     appearance: data.appearance,
   };
   render(h(App, { actions, setup, creator, content }), uiElement);
+  // Échap qu'aucun panneau n'a pris, le focus sur la carte par exemple : il ferme le panneau
+  // du dessus (ui/escape.ts).
+  window.addEventListener('keydown', (event) => {
+    escapeKey(event, actions);
+  });
 
   // La poignée de main d'abord : le worker refuse tout message qui la précède.
   simulation.send({ type: 'hello', protocol: PROTOCOL_VERSION });

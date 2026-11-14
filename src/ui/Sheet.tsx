@@ -2,7 +2,8 @@
  * Fiches d'inspection (tâche 2.10 ; IHM-02, CRE-05) : un individu, vivant ou mort, ou un
  * groupe nomade. Les liens familiaux et les membres d'un groupe s'ouvrent d'un appui :
  * on suit les lignées de fiche en fiche. Chaque cible a sa fiche : une autre cible s'ouvre
- * en haut, son titre au focus (U-8, U-14) ; Échap la ferme.
+ * en haut, son titre au focus (U-8, U-14) ; Échap la ferme, même quand le focus a quitté la
+ * fiche, après un glisser sur la carte (escape.ts).
  */
 import type { Appearance, Genetics, Species } from '../core/data';
 import { isMinor } from '../core/life';
@@ -96,7 +97,7 @@ function Row({ label, children }: { label: string; children: preact.ComponentChi
 const focus = new DialogFocus();
 
 /** Ferme la fiche, et rend le focus à l'élément d'où elle s'était ouverte. */
-function close(actions: UiActions): void {
+export function closeSheet(actions: Pick<UiActions, 'closeSheet'>): void {
   focus.close(() => {
     actions.closeSheet();
   });
@@ -122,7 +123,7 @@ function Header({ title, actions }: { title: string; actions: UiActions }) {
         aria-label={t('sheet.close')}
         title={t('sheet.close')}
         onClick={() => {
-          close(actions);
+          closeSheet(actions);
         }}
       >
         ×

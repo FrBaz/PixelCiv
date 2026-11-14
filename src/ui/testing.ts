@@ -55,3 +55,53 @@ export function fire(element: Rendered | undefined, name: string, event: unknown
   if (typeof handler !== 'function') throw new Error(`pas de ${name}`);
   (handler as (event: unknown) => void)(event);
 }
+
+/** Un document imité, pour le focus : l'élément qui l'a, et le corps de la page. */
+export class FakeDocument {
+  readonly body: FakeElement;
+  activeElement: FakeElement;
+
+  constructor() {
+    this.body = new FakeElement(this, 'body');
+    this.activeElement = this.body;
+  }
+}
+
+/**
+ * Un élément imité, qui prend le focus comme dans un navigateur : seulement s'il est dans
+ * la page et affiché. Un élément caché (display: none) n'a pas de boîte.
+ */
+export class FakeElement {
+  isConnected = true;
+  displayed = true;
+  readonly ownerDocument: FakeDocument;
+  readonly name: string;
+
+  constructor(ownerDocument: FakeDocument, name: string) {
+    this.ownerDocument = ownerDocument;
+    this.name = name;
+  }
+
+  focus(): void {
+    if (this.isConnected && this.displayed) this.ownerDocument.activeElement = this;
+  }
+
+  getClientRects(): { readonly length: number } {
+    return { length: this.isConnected && this.displayed ? 1 : 0 };
+  }
+
+  /** Le rendu retire l'élément de la page : s'il avait le focus, le corps de la page le prend. */
+  remove(): void {
+    this.isConnected = false;
+    if (this.ownerDocument.activeElement === this) {
+      this.ownerDocument.activeElement = this.ownerDocument.body;
+    }
+  }
+}
+
+/** Attend l'image suivante, après le rendu : sous Node, la tâche suivante (dialog.ts). */
+export function nextFrame(): Promise<void> {
+  return new Promise((resolve) => {
+    setTimeout(resolve, 0);
+  });
+}

@@ -3,18 +3,30 @@
  * WCAG 2.4.3) : à son ouverture, ou quand il change de cible, le panneau porte le focus
  * sur son titre, qu'un lecteur d'écran annonce ; Échap le ferme, et le focus revient alors
  * à l'élément d'où il s'était ouvert, s'il est encore là. Ces panneaux ne sont pas modaux :
- * la carte reste à portée, et le focus peut en sortir.
+ * la carte reste à portée, et le focus peut en sortir ; Échap les ferme alors aussi
+ * (escape.ts).
+ *
+ * Le focus revient après le rendu qui suit la fermeture : sur petit écran, l'origine, un
+ * fait de la chronique par exemple, reste cachée sous la fiche jusqu'à ce rendu, et
+ * focus() n'agit pas sur un élément qui n'est pas affiché.
  */
 
 /** Un élément qui peut recevoir le focus : un HTMLElement, ou son imitation dans les tests. */
-type Focusable = Pick<HTMLElement, 'focus' | 'isConnected' | 'ownerDocument'>;
+type Focusable = Pick<HTMLElement, 'focus' | 'isConnected' | 'ownerDocument' | 'getClientRects'>;
 
 function isFocusable(element: unknown): element is Focusable {
-  return (
-    typeof element === 'object' &&
-    element !== null &&
-    typeof (element as Partial<Focusable>).focus === 'function'
-  );
+  if (typeof element !== 'object' || element === null) return false;
+  const candidate = element as Partial<Focusable>;
+  return typeof candidate.focus === 'function' && typeof candidate.getClientRects === 'function';
+}
+
+/**
+ * Rappelle `callback` après le rendu qui suit : Preact rend dans une microtâche, avant
+ * l'image suivante. Hors du navigateur, dans les tests sous Node, à la tâche suivante.
+ */
+function afterRender(callback: () => void): void {
+  if ('requestAnimationFrame' in globalThis) requestAnimationFrame(callback);
+  else setTimeout(callback, 0);
 }
 
 export class DialogFocus {
@@ -46,12 +58,23 @@ export class DialogFocus {
     element.focus({ preventScroll: true });
   };
 
-  /** Ferme le panneau par `close`, puis rend le focus à son origine, si elle est encore là. */
+  /**
+   * Ferme le panneau par `close`, puis, après le rendu qui suit, rend le focus à son
+   * origine : si elle est encore dans la page et affichée, et si le focus n'est pas allé
+   * ailleurs entre-temps. Le titre, parti avec le panneau, l'a laissé au corps de la page.
+   */
   close(close: () => void): void {
     const origin = this.origin;
     this.origin = undefined;
     close();
-    if (origin?.isConnected === true) origin.focus({ preventScroll: true });
+    if (origin === undefined) return;
+    afterRender(() => {
+      const { activeElement, body } = origin.ownerDocument;
+      const free = activeElement === null || activeElement === body;
+      if (free && origin.isConnected && origin.getClientRects().length > 0) {
+        origin.focus({ preventScroll: true });
+      }
+    });
   }
 
   /** Touche pressée dans le panneau : Échap le ferme. */

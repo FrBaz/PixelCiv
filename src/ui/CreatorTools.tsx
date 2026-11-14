@@ -3,7 +3,8 @@
  * sous-espèce et un nombre de personnes, puis toucher la carte, au doigt comme à la
  * souris, pour y faire apparaître un groupe nomade. Espèces et sous-espèces viennent des
  * données, comme les réglages de départ (spawnChoice, U-11). Le panneau prend le focus à
- * son ouverture ; Échap ou « Terminer » désarment l'outil (U-14).
+ * son ouverture ; Échap ou « Terminer » désarment l'outil (U-14), Échap même quand le focus
+ * a quitté le panneau, après un appui sur la carte (escape.ts).
  */
 import { t } from '../i18n';
 import { DialogFocus } from './dialog';
@@ -23,6 +24,11 @@ const focus = new DialogFocus();
 const disarm = () => {
   tool.value = 'inspect';
 };
+
+/** Désarme l'outil, et rend le focus à l'élément d'où il s'était armé. */
+export function closeTool(): void {
+  focus.close(disarm);
+}
 
 /** Bouton de la barre du bas : il arme ou désarme l'outil. */
 export function CreatorToggle() {
@@ -65,12 +71,7 @@ export function CreatorPanel({ setup }: { setup: CreatorSetup }) {
         <strong ref={focus.title} tabIndex={-1}>
           {t('creator.title')}
         </strong>
-        <button
-          type="button"
-          onClick={() => {
-            focus.close(disarm);
-          }}
-        >
+        <button type="button" onClick={closeTool}>
           {t('creator.done')}
         </button>
       </div>

@@ -1,7 +1,8 @@
 /**
  * Inspection d'une case (IHM-02, première version) : un appui bref sur la carte montre
  * son biome, son altitude et son niveau, son climat, sa rivière, son gisement, les
- * ressources de son milieu et sa flore.
+ * ressources de son milieu et sa flore. Son bouton la referme, comme Échap quand ni l'outil
+ * ni la fiche ne sont ouverts (escape.ts).
  */
 import { LOCALE, t, type MessageKey } from '../i18n';
 import { inspected } from './store';
