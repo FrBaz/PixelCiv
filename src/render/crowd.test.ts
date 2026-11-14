@@ -3,16 +3,20 @@ import { loadGameData } from '../core/data';
 import { GROUP_STRIDE, type GroupsFrame } from '../core/protocol';
 import { visualCode } from '../core/visual';
 import { SPAWN_COUNT } from '../sim/commands';
-import { cultureCloth, frameOf, recolor, type Palette } from './atlas';
-import { parseColor } from './bake';
-import { displayScale, TILE_PX, type Camera } from './camera';
+import { cultureCloth, frameOf, recolor, ROLE, type Palette } from './atlas';
+import { CHUNK_PX, parseColor } from './bake';
+import { displayScale, TILE_PX, visibleChunks, type Camera } from './camera';
 import {
+  BANNER_CSS_HEIGHT,
   bannerBox,
+  bannerShapes,
+  BANNERS,
+  chooseBanner,
   clusterOffset,
   clusterReach,
+  depth,
   groupScreen,
-  ICON_CSS_PIXEL,
-  iconPixel,
+  mapPixel,
   memberBox,
   memberShape,
   onScreen,
@@ -98,44 +102,96 @@ describe('grappe des membres d’un groupe (tâche 2.9)', () => {
 });
 
 describe('bannière d’un groupe vu de loin (REN-08, A-1)', () => {
-  const DENSITIES = [0.5, 1, 1.25, 1.5, 1.75, 2, 2.625, 2.75, 3];
-  const SCALES = [0.25, 0.5, 0.8, 1, 2];
+  const banners = bannerShapes(frameOf);
+  const largest = banners.reduce((tallest, banner) =>
+    banner.height > tallest.height ? banner : tallest,
+  );
+  const viewport = { width: 1280, height: 720 };
+  /**
+   * Pixels physiques d'un pixel de carte tel que la carte le montre, à l'échelle `scale` :
+   * ses blocs de CHUNK_PX pixels de carte font CHUNK_PX × `scale` pixels physiques
+   * (visibleChunks) ; sous l'échelle 1, elle se lit par ses mipmaps, un pixel physique par
+   * pixel affiché.
+   */
+  function shownMapPixel(scale: number): number {
+    const grid = { columns: 8, rows: 4 };
+    const [chunk] = visibleChunks({ x: 0, y: 0, zoom: scale }, viewport, grid, CHUNK_PX);
+    return Math.max(1, chunk.width / CHUNK_PX);
+  }
 
-  it('se dessine en pixels physiques entiers, à la densité de la carte quand elle le permet', () => {
-    for (const resolution of DENSITIES) {
-      const marker = Math.max(1, Math.round(ICON_CSS_PIXEL * resolution));
-      for (const scale of SCALES) {
-        const pixel = iconPixel(scale, resolution);
-        expect(Number.isInteger(pixel)).toBe(true);
-        expect(pixel).toBeGreaterThanOrEqual(1);
-        if (scale >= marker) {
-          // Un pixel de bannière par pixel de carte : une seule densité dans la vue.
-          expect(pixel, `échelle ${String(scale)}, densité ${String(resolution)}`).toBe(scale);
-        } else {
-          expect(pixel).toBe(marker);
+  it('est toujours à la densité de la carte, et lisible par la taille de son motif', () => {
+    for (const resolution of [1, 1.25, 1.5, 1.75, 2, 2.25, 2.625, 2.75, 3]) {
+      for (const scale of [0.25, 0.5, 1, 2]) {
+        const label = `densité ${String(resolution)}, échelle ${String(scale)}`;
+        // Un pixel de bannière par pixel de carte : une seule densité dans la vue.
+        const pixel = mapPixel(scale);
+        expect(pixel, label).toBe(shownMapPixel(scale));
+        const banner = chooseBanner(banners, pixel, resolution);
+        const box = bannerBox(viewport.width / 2, viewport.height / 2, banner, pixel);
+        expect(box.height / banner.height, label).toBe(shownMapPixel(scale));
+        // De 12 à 24 pixels CSS de haut : la plus petite des bannières qui y suffise.
+        const height = box.height / resolution;
+        expect(height, label).toBeGreaterThanOrEqual(12);
+        expect(height, label).toBeLessThanOrEqual(24);
+        for (const smaller of banners.filter((other) => other.height < banner.height)) {
+          expect((smaller.height * pixel) / resolution, label).toBeLessThan(BANNER_CSS_HEIGHT);
         }
       }
     }
-    // Sur un écran de densité 1, au zoom 2 de la carte, la bannière est à sa densité ; au
-    // zoom 1, la carte est trop fine : la bannière devient un marqueur.
-    expect(iconPixel(2, 1)).toBe(2);
-    expect(iconPixel(1, 1)).toBe(2);
+    // Au-delà d'une densité de 3, la plus grande, faute de mieux.
+    expect(chooseBanner(banners, 1, 4)).toBe(largest);
+    expect(largest.height / 4).toBeLessThan(BANNER_CSS_HEIGHT);
   });
 
-  it('garde, en marqueur, sa taille en pixels CSS sur un écran dense', () => {
-    const banner = frameOf('icons/group');
-    for (const resolution of DENSITIES.filter((density) => density >= 1)) {
-      const marker = Math.max(1, Math.round(ICON_CSS_PIXEL * resolution));
-      for (const scale of SCALES.filter((value) => value < marker)) {
-        // À un demi-pixel physique près, ICON_CSS_PIXEL pixels CSS par pixel d'icône : la
-        // bannière fait de 12 à 20 pixels CSS de haut, et non 5 sur un téléphone.
-        const pixel = iconPixel(scale, resolution);
-        expect(Math.abs(pixel - ICON_CSS_PIXEL * resolution)).toBeLessThanOrEqual(0.5);
-        const height = (banner.height * pixel) / resolution;
-        expect(height, `densité ${String(resolution)}`).toBeGreaterThanOrEqual(12);
-        expect(height, `densité ${String(resolution)}`).toBeLessThanOrEqual(20);
+  it('se redessine en quatre tailles, aux rôles du contour et de l’habit, la hampe sur la case', () => {
+    expect(banners.map((banner) => banner.name)).toEqual([...BANNERS]);
+    expect(banners.map((banner) => banner.height)).toEqual([8, 16, 24, 36]);
+    // Chaque rôle a pour couleur son propre numéro.
+    const numbered: Palette = Array.from({ length: 14 }, (_, role) =>
+      role === ROLE.transparent ? undefined : ([role, 0, 0] as const),
+    );
+    for (const { name, width, height } of banners) {
+      const pixels = recolor(name, numbered);
+      const role = (column: number, row: number) => {
+        const index = (row * width + column) * 4;
+        return pixels[index + 3] === 0 ? ROLE.transparent : (pixels[index] ?? ROLE.transparent);
+      };
+      const roles = new Set<number>();
+      for (let row = 0; row < height; row++) {
+        for (let column = 0; column < width; column++) roles.add(role(column, row));
+      }
+      // Le contour de la hampe et l'habit de la culture, ombre, base et lumière.
+      expect(
+        [...roles].sort((a, b) => a - b),
+        name,
+      ).toEqual([ROLE.transparent, ROLE.outline, ROLE.clothShadow, ROLE.cloth, ROLE.clothLight]);
+      // La hampe tient la colonne de gauche, de haut en bas : son pied, le coin bas gauche
+      // du motif, se plante sur le centre de la case (bannerBox).
+      for (let row = 0; row < height; row++) {
+        expect(role(0, row), `${name}, ligne ${String(row)}`).toBe(ROLE.outline);
       }
     }
+  });
+});
+
+describe('ordre des dessins (W-7)', () => {
+  it('range les dessins par une profondeur unique : le plus bas devant, puis le dernier dessiné', () => {
+    const box = (bottom: number, height: number): Box => ({
+      left: 0,
+      top: bottom - height,
+      width: 7,
+      height,
+    });
+    // Le pied le plus bas passe devant, quels que soient les rangs et les hauteurs.
+    expect(depth(box(10, 8), 0)).toBeGreaterThan(depth(box(9, 36), 2 ** 20 - 1));
+    expect(depth(box(-29, 8), 0)).toBeGreaterThan(depth(box(-30, 16), 5000));
+    // Au même pied, le dernier dessiné, et jamais deux fois la même profondeur.
+    expect(depth(box(10, 8), 3)).toBeGreaterThan(depth(box(10, 24), 2));
+    const seen = new Set<number>();
+    for (let bottom = -40; bottom < 40; bottom++) {
+      for (let rank = 0; rank < 50; rank++) seen.add(depth(box(bottom, 8), rank));
+    }
+    expect(seen.size).toBe(80 * 50);
   });
 });
 
@@ -165,10 +221,10 @@ describe('cache des textures recolorées (A-13)', () => {
 });
 
 describe('groupe sous un appui (W-7)', () => {
-  const banner = frameOf('icons/group');
+  const banners = bannerShapes(frameOf);
   const sprites = spriteNames().map((name) => frameOf(name));
   const shapes: PickShapes = {
-    banner,
+    banners,
     largest: {
       width: Math.max(...sprites.map((frame) => frame.width)),
       height: Math.max(...sprites.map((frame) => frame.height)),
@@ -215,9 +271,10 @@ describe('groupe sous un appui (W-7)', () => {
     for (const resolution of [1, 2, 3]) {
       for (const zoom of [0.25, 0.5, 0.75, 1, 2]) {
         const view: MapView = { camera: aimedAt(100, 50, zoom), viewport, world, resolution };
-        const icon = iconPixel(displayScale(zoom), resolution);
-        const box = bannerBox(viewport.width / 2, viewport.height / 2, banner, icon);
-        const points = visible('icons/group', box, icon);
+        const pixel = mapPixel(displayScale(zoom));
+        const banner = chooseBanner(banners, pixel, resolution);
+        const box = bannerBox(viewport.width / 2, viewport.height / 2, banner, pixel);
+        const points = visible(banner.name, box, pixel);
         expect(points.length).toBeGreaterThan(20);
         for (const [x, y] of points) {
           expect(pickGroup(single, view, x, y, shapes), `zoom ${String(zoom)}`).toBe(7);
@@ -254,19 +311,20 @@ describe('groupe sous un appui (W-7)', () => {
     const seam = frame([9, 0, 60, 10]);
     const zoom = 0.25;
     const resolution = 1;
-    const icon = iconPixel(zoom, resolution);
+    const pixel = mapPixel(zoom);
+    const banner = chooseBanner(banners, pixel, resolution);
     // La caméra vise la dernière colonne : le groupe de la colonne 0 est juste à droite.
     const view: MapView = { camera: aimedAt(511, 60, zoom), viewport, world, resolution };
-    const at = groupScreen(0, 60, view, { left: 0, right: banner.width, up: 0, down: 0 }, icon);
+    const at = groupScreen(0, 60, view, { left: 0, right: banner.width, up: 0, down: 0 }, pixel);
     expect(at.x).toBeGreaterThan(viewport.width / 2);
     // Le monde, quatre fois plus étroit que l'écran à ce zoom, s'y voit plusieurs fois.
     expect(at.span).toBeLessThan(viewport.width);
     let copies = 0;
     for (let copy = -at.copies; copy <= at.copies; copy++) {
-      const box = bannerBox(at.x + copy * at.span, at.y, banner, icon);
+      const box = bannerBox(at.x + copy * at.span, at.y, banner, pixel);
       if (box.left < 0 || box.left + box.width > viewport.width) continue;
       copies++;
-      const [x, y] = visible('icons/group', box, icon)[0] ?? [0, 0];
+      const [x, y] = visible(banner.name, box, pixel)[0] ?? [0, 0];
       expect(pickGroup(seam, view, x, y, shapes)).toBe(9);
     }
     expect(copies).toBeGreaterThanOrEqual(2);
@@ -277,9 +335,9 @@ describe('groupe sous un appui (W-7)', () => {
     // de celle du premier.
     const pair = frame([1, 100, 50, 5], [2, 100, 51, 5]);
     const view: MapView = { camera: aimedAt(100, 50, 2), viewport, world, resolution: 1 };
-    const icon = iconPixel(2, 1);
-    const upper = bannerBox(viewport.width / 2, viewport.height / 2, banner, icon);
-    const lower = bannerBox(viewport.width / 2, viewport.height / 2 + 2 * TILE_PX, banner, icon);
+    const banner = chooseBanner(banners, mapPixel(2), 1);
+    const upper = bannerBox(viewport.width / 2, viewport.height / 2, banner, 2);
+    const lower = bannerBox(viewport.width / 2, viewport.height / 2 + TILE_PX * 2, banner, 2);
     const inBoth = lower.top + 1;
     expect(inBoth).toBeLessThan(upper.top + upper.height);
     expect(pickGroup(pair, view, upper.left + 1, inBoth, shapes, 4)).toBe(2);
@@ -288,5 +346,39 @@ describe('groupe sous un appui (W-7)', () => {
     // Rien sous le point, ni assez près : aucun groupe.
     expect(pickGroup(pair, view, 0, 0, shapes, 4)).toBeUndefined();
     expect(pickGroup(frame(), view, upper.left + 1, upper.top + 1, shapes, 4)).toBeUndefined();
+  });
+
+  it('à pied égal, prend le dernier dessiné, que PixiJS montre devant (depth)', () => {
+    // Deux groupes d'une même ligne, en cases voisines : leurs bannières se recouvrent, et
+    // leurs pieds sont à la même hauteur. Le second de l'image est dessiné après.
+    for (const resolution of [1, 2, 3]) {
+      for (const zoom of [0.25, 0.5, 1, 2]) {
+        const view: MapView = { camera: aimedAt(100, 50, zoom), viewport, world, resolution };
+        const pixel = mapPixel(displayScale(zoom));
+        const banner = chooseBanner(banners, pixel, resolution);
+        const left = bannerBox(viewport.width / 2, viewport.height / 2, banner, pixel);
+        const step = TILE_PX * displayScale(zoom);
+        const right = bannerBox(viewport.width / 2 + step, viewport.height / 2, banner, pixel);
+        expect(right.left).toBeLessThan(left.left + left.width);
+        expect(depth(right, 1)).toBeGreaterThan(depth(left, 0));
+        const [x, y] = [right.left + 0.5, right.top + 0.5];
+        const label = `densité ${String(resolution)}, zoom ${String(zoom)}`;
+        expect(pickGroup(frame([1, 100, 50, 5], [2, 101, 50, 5]), view, x, y, shapes), label).toBe(
+          2,
+        );
+        expect(pickGroup(frame([2, 101, 50, 5], [1, 100, 50, 5]), view, x, y, shapes), label).toBe(
+          1,
+        );
+      }
+    }
+    // De près, deux membres de groupes voisins aux pieds sur la même ligne.
+    const view: MapView = { camera: aimedAt(100, 50, 4), viewport, world, resolution: 1 };
+    const shape = memberShape(visualCode(1, 2, 3, 2, 0), frameOf);
+    const first = memberBox(viewport.width / 2, viewport.height / 2, 0, shape, 4);
+    const second = memberBox(viewport.width / 2 + TILE_PX * 4, viewport.height / 2, 0, shape, 4);
+    expect(second.left).toBeLessThan(first.left + first.width);
+    const [x, y] = [second.left + 0.5, second.top + 0.5];
+    expect(pickGroup(frame([1, 100, 50, 1], [2, 101, 50, 1]), view, x, y, shapes)).toBe(2);
+    expect(pickGroup(frame([2, 101, 50, 1], [1, 100, 50, 1]), view, x, y, shapes)).toBe(1);
   });
 });

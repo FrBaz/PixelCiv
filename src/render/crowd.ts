@@ -1,9 +1,10 @@
 /**
  * Disposition des groupes sur la carte (tâche 2.9 ; REN-03, REN-04, REN-08) : quel motif
  * dessine chaque membre, où il se tient autour de la case du groupe, jusqu'où s'étend ce
- * qui se dessine autour de la case, à quelle densité de pixels se montre la bannière
- * d'un groupe vu de loin, et quel groupe se trouve sous un appui. Fonctions pures, sans
- * PixiJS : PeopleLayer dessine avec elles ce que pickGroup retrouve.
+ * qui se dessine autour de la case, quelle bannière montre un groupe vu de loin, dans quel
+ * ordre les dessins passent les uns devant les autres, et quel groupe se trouve sous un
+ * appui. Fonctions pures, sans PixiJS : PeopleLayer dessine avec elles ce que pickGroup
+ * retrouve.
  */
 import { GROUP_STRIDE, type GroupsFrame } from '../core/protocol';
 import { AGE_CLASSES, decodeVisual } from '../core/visual';
@@ -52,8 +53,8 @@ export function clusterOffset(index: number): { readonly dx: number; readonly dy
 }
 
 /**
- * Étendue d'un dessin autour d'un point de l'écran, de chaque côté, en unités (pixels de
- * carte, ou pixels d'icône) : à gauche, à droite, au-dessus et au-dessous. Les bords
+ * Étendue d'un dessin autour d'un point de l'écran, de chaque côté, en pixels de son motif
+ * (mini-sprites ou bannière) : à gauche, à droite, au-dessus et au-dessous. Les bords
  * droit et bas sont exclus.
  */
 export interface Reach {
@@ -83,8 +84,9 @@ export function clusterReach(size: number, width: number, height: number): Reach
 }
 
 /**
- * Un dessin d'étendue `reach`, en unités de `unit` pixels physiques autour du point (x, y)
- * de l'écran, touche-t-il l'écran ? Un pixel de marge couvre l'arrondi des positions.
+ * Un dessin d'étendue `reach`, à `unit` pixels physiques par pixel de son motif, autour du
+ * point (x, y) de l'écran, touche-t-il l'écran ? Un pixel de marge couvre l'arrondi des
+ * positions.
  */
 export function onScreen(
   x: number,
@@ -101,23 +103,77 @@ export function onScreen(
   );
 }
 
-/** Taille d'un pixel d'icône, en pixels CSS, quand l'icône devient un marqueur d'interface. */
-export const ICON_CSS_PIXEL = 2;
+/**
+ * Pixels physiques par pixel de la carte telle qu'elle se montre à l'échelle `scale`
+ * (displayScale) : l'échelle elle-même à partir de 1, où elle procède par paliers entiers
+ * (camera.ts) ; en deçà, la carte se lit par ses mipmaps au plus proche, un pixel physique
+ * par pixel affiché (map.ts). Mini-sprites et bannières en prennent autant par pixel de
+ * leur motif : une même vue n'affiche qu'une seule densité de pixels (REN-08).
+ */
+export function mapPixel(scale: number): number {
+  return scale >= 1 ? scale : 1;
+}
+
+/** Largeur et hauteur, en pixels. */
+export interface Size {
+  readonly width: number;
+  readonly height: number;
+}
+
+/** Un motif de l'atlas, et sa taille. */
+export interface NamedSize extends Size {
+  readonly name: string;
+}
 
 /**
- * Pixels physiques par pixel d'une icône de la carte, comme la bannière d'un groupe vu de
- * loin (REN-08). Quand l'échelle de la carte, `scale` pixels physiques par pixel de carte,
- * donne au moins la taille voulue, ICON_CSS_PIXEL pixels CSS par pixel d'icône, l'icône
- * est à la densité de la carte : un pixel d'icône par pixel de carte, sans mélange. Plus
- * loin, la carte est trop fine pour qu'une icône y reste lisible à sa densité : l'icône
- * devient un marqueur d'interface, à ICON_CSS_PIXEL pixels CSS par pixel, arrondis en
- * pixels physiques entiers. Sa taille à l'écran ne dépend alors pas de la densité de
- * l'écran (`resolution`, pixels physiques par pixel CSS).
+ * Motifs de la bannière d'un groupe vu de loin, du plus petit au plus grand : un même
+ * dessin, de 8, 16, 24 et 36 pixels de haut, les plus grands redessinés plus finement
+ * (assets/pixel/icons).
  */
-export function iconPixel(scale: number, resolution: number): number {
-  const marker = Math.max(1, Math.round(ICON_CSS_PIXEL * resolution));
-  // Au-delà de 1, l'échelle de la carte procède par paliers entiers (camera.ts).
-  return scale >= marker ? scale : marker;
+export const BANNERS = [
+  'icons/group',
+  'icons/group-16',
+  'icons/group-24',
+  'icons/group-36',
+] as const;
+
+/** Les bannières de BANNERS, chacune avec sa taille, dans le même ordre. */
+export function bannerShapes(
+  frameOf: (name: string) => Size,
+): readonly [NamedSize, ...NamedSize[]] {
+  const shape = (name: string): NamedSize => {
+    const { width, height } = frameOf(name);
+    return { name, width, height };
+  };
+  const [smallest, ...larger] = BANNERS;
+  return [shape(smallest), ...larger.map(shape)];
+}
+
+/** Hauteur à l'écran, en pixels CSS, que doit atteindre la bannière d'un groupe. */
+export const BANNER_CSS_HEIGHT = 12;
+
+/**
+ * La bannière que montre un groupe vu de loin, parmi `banners`, à `pixel` pixels physiques
+ * par pixel de son motif (mapPixel), sur un écran de `resolution` pixels physiques par
+ * pixel CSS : la plus petite dont la hauteur à l'écran atteint BANNER_CSS_HEIGHT pixels
+ * CSS, sinon la plus grande. La bannière reste ainsi à la densité de la carte : sa
+ * lisibilité passe par la taille de son motif, et non par celle de ses pixels. Avec les
+ * bannières de BANNERS, elle fait de 12 à 24 pixels CSS de haut aux densités d'écran de 1
+ * à 3, à toutes les échelles de la vue lointaine.
+ */
+export function chooseBanner<T extends Size>(
+  banners: readonly [T, ...T[]],
+  pixel: number,
+  resolution: number,
+): T {
+  let largest = banners[0];
+  let chosen: T | undefined;
+  for (const banner of banners) {
+    if (banner.height > largest.height) largest = banner;
+    const tall = banner.height * pixel >= BANNER_CSS_HEIGHT * resolution;
+    if (tall && (chosen === undefined || banner.height < chosen.height)) chosen = banner;
+  }
+  return chosen ?? largest;
 }
 
 /**
@@ -129,12 +185,6 @@ export function textureKey(name: string, code: number, cloth: Rgb): string {
   return `${name}|${String(code)}|${cloth.join(',')}`;
 }
 
-/** Largeur et hauteur, en pixels. */
-export interface Size {
-  readonly width: number;
-  readonly height: number;
-}
-
 /** Rectangle de l'écran, en pixels physiques : bords gauche et haut compris, droit et bas exclus. */
 export interface Box {
   readonly left: number;
@@ -143,8 +193,23 @@ export interface Box {
   readonly height: number;
 }
 
+/** Nombre de rangs que départage la profondeur : plus que de sprites dans une image. */
+const RANKS = 2 ** 20;
+
 /**
- * Rectangle de la bannière d'un groupe, de `banner` pixels d'icône à `pixel` pixels
+ * Profondeur d'un dessin de la carte, bannière ou mini-sprite, de rectangle `box` (bords
+ * entiers) et de rang `rank` parmi les sprites de l'image (de 0 à RANKS − 1), dans l'ordre
+ * où PeopleLayer les dessine : le plus bas à l'écran passe devant, puis, à pied égal, le
+ * dernier dessiné. Deux dessins d'une image n'ont jamais la même profondeur. PixiJS, qui
+ * trie les sprites en place par un tri stable, les rend donc dans cet ordre, quel qu'ait
+ * été son tri précédent, et pickGroup compare la même valeur.
+ */
+export function depth(box: Box, rank: number): number {
+  return (box.top + box.height) * RANKS + rank;
+}
+
+/**
+ * Rectangle de la bannière d'un groupe, de `banner` pixels de motif à `pixel` pixels
  * physiques chacun : sa hampe se plante sur le point (x, y) de l'écran, centre de la case.
  */
 export function bannerBox(x: number, y: number, banner: Size, pixel: number): Box {
@@ -208,9 +273,10 @@ export function groupScreen(
   };
 }
 
-/** Motifs que pickGroup doit connaître : la bannière, et le mini-sprite d'un code d'apparence. */
+/** Motifs que pickGroup doit connaître : les bannières, et le mini-sprite d'un code d'apparence. */
 export interface PickShapes {
-  readonly banner: Size;
+  /** Les bannières parmi lesquelles chooseBanner choisit, comme pour PeopleLayer. */
+  readonly banners: readonly [Size, ...Size[]];
   /** Le plus grand des mini-sprites, pour l'étendue d'une grappe. */
   readonly largest: Size;
   readonly member: (code: number) => Size;
@@ -228,10 +294,10 @@ function gap(box: Box, x: number, y: number): number {
 
 /**
  * Le groupe dessiné sous le point (x, y) de l'écran, en pixels physiques (W-7) : sa
- * bannière de loin, l'un de ses membres de près, aux places où PeopleLayer les dessine, à
- * l'échelle de la carte. La bannière se touche donc là où elle se voit, à tout zoom. Un
- * dessin touché l'emporte sur un dessin frôlé, à `slop` pixels au plus ; à égalité, celui
- * qui passe devant : le plus bas à l'écran, puis le dernier dessiné.
+ * bannière de loin, l'un de ses membres de près, aux places, à la taille et dans l'ordre
+ * où PeopleLayer les dessine, à la densité de la carte. La bannière se touche donc là où
+ * elle se voit, à tout zoom. Un dessin touché l'emporte sur un dessin frôlé, à `slop`
+ * pixels au plus ; à égalité, celui qui passe devant, de plus grande profondeur (depth).
  */
 export function pickGroup(
   frame: GroupsFrame,
@@ -243,15 +309,21 @@ export function pickGroup(
 ): number | undefined {
   const scale = displayScale(view.camera.zoom);
   const close = scale >= SPRITE_SCALE;
-  const icon = iconPixel(scale, view.resolution);
-  const bannerReach = { left: 0, right: shapes.banner.width, up: shapes.banner.height, down: 0 };
+  // Pixels physiques par pixel de motif, mini-sprite ou bannière : ceux de la carte.
+  const pixel = mapPixel(scale);
+  const banner = chooseBanner(shapes.banners, pixel, view.resolution);
+  const bannerReach = { left: 0, right: banner.width, up: banner.height, down: 0 };
   let best: number | undefined;
   let bestGap = Number.POSITIVE_INFINITY;
   let bestFront = Number.NEGATIVE_INFINITY;
-  const consider = (id: number, box: Box, front: number) => {
+  // Rang du prochain dessin, compté comme PeopleLayer.draw compte ses sprites : groupe par
+  // groupe, copie par copie du monde, membre par membre.
+  let rank = 0;
+  const consider = (id: number, box: Box) => {
+    const front = depth(box, rank++);
     const distance = gap(box, x, y);
     if (distance > slop) return;
-    if (distance < bestGap || (distance === bestGap && front >= bestFront)) {
+    if (distance < bestGap || (distance === bestGap && front > bestFront)) {
       best = id;
       bestGap = distance;
       bestFront = front;
@@ -265,19 +337,17 @@ export function pickGroup(
     const reach = close
       ? clusterReach(size, shapes.largest.width, shapes.largest.height)
       : bannerReach;
-    const unit = close ? scale : icon;
-    const at = groupScreen(groups[index + 1] ?? 0, groups[index + 2] ?? 0, view, reach, unit);
+    const at = groupScreen(groups[index + 1] ?? 0, groups[index + 2] ?? 0, view, reach, pixel);
     for (let copy = -at.copies; copy <= at.copies; copy++) {
       const screenX = at.x + copy * at.span;
-      if (!onScreen(screenX, at.y, reach, unit, view.viewport)) continue;
+      if (!onScreen(screenX, at.y, reach, pixel, view.viewport)) continue;
       if (close) {
         for (let member = 0; member < size; member++) {
           const shape = shapes.member(frame.sprites[first + member] ?? 0);
-          const box = memberBox(screenX, at.y, member, shape, scale);
-          consider(id, box, box.top + box.height);
+          consider(id, memberBox(screenX, at.y, member, shape, pixel));
         }
       } else {
-        consider(id, bannerBox(screenX, at.y, shapes.banner, icon), at.y);
+        consider(id, bannerBox(screenX, at.y, banner, pixel));
       }
     }
     first += size;

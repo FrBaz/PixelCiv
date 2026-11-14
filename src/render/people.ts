@@ -1,17 +1,23 @@
 /**
  * Groupes et habitants sur la carte (tâche 2.9 ; REN-03, REN-04, REN-08 ; ADR 0011).
  *
- * - De loin, une bannière par groupe, aux couleurs de l'habit de sa culture. Elle est à la
- *   densité de la carte quand l'échelle le permet ; plus loin, c'est un marqueur
- *   d'interface, de taille fixe en pixels CSS (iconPixel, crowd.ts).
+ * Tout se dessine à la densité de pixels de la carte, sans mélange (REN-08), à des
+ * positions entières : à l'échelle s, entière à partir de 1, s pixels physiques par pixel
+ * de motif, un par pixel de carte ; sous l'échelle 1, un pixel physique par pixel de
+ * motif, comme la carte que montrent ses mipmaps (mapPixel, crowd.ts).
+ *
+ * - De loin, une bannière par groupe, aux couleurs de l'habit de sa culture. Sa taille à
+ *   l'écran passe par celle de son motif, et non par celle de ses pixels : la plus petite
+ *   des bannières de 8 à 36 pixels de haut qui atteigne 12 pixels CSS (chooseBanner).
  * - De près (à partir de SPRITE_SCALE pixels de l'écran par pixel de carte), un mini-sprite
  *   par membre, rangé en grappe autour de la case du groupe. Il est tiré de l'individu :
  *   sexe, âge, teint, cheveux (grisonnants avec l'âge, comme au portrait), habit de la
- *   culture. Il est dessiné à la densité de pixels de la carte, sans mélange (REN-08), à
- *   une position entière, et il marche : deux images en alternance.
+ *   culture. Il marche : deux images en alternance.
  *
- * Un groupe se dessine s'il touche l'écran, grappe ou bannière comprise. Les textures
- * recolorées se gardent d'une image à l'autre, une par apparence et par couleur d'habit.
+ * Un groupe se dessine s'il touche l'écran, grappe ou bannière comprise. Chaque sprite a
+ * une profondeur unique (depth, crowd.ts) : le plus bas à l'écran passe devant, puis le
+ * dernier dessiné, comme le retrouve pickGroup. Les textures recolorées se gardent d'une
+ * image à l'autre, une par motif, apparence et couleur d'habit.
  */
 import { BufferImageSource, Container, Sprite, Texture, type Application } from 'pixi.js';
 import type { Appearance, Genetics } from '../core/data';
@@ -26,16 +32,18 @@ import {
   recolor,
   frameOf,
   skinColor,
-  type Frame,
   type Palette,
 } from './atlas';
 import { parseColor, type Rgb } from './bake';
 import { displayScale, type Camera, type Extent } from './camera';
 import {
   bannerBox,
+  bannerShapes,
+  chooseBanner,
   clusterReach,
+  depth,
   groupScreen,
-  iconPixel,
+  mapPixel,
   memberBox,
   memberShape,
   onScreen,
@@ -45,12 +53,11 @@ import {
   SPRITE_SCALE,
   textureKey,
   TOUCH_SLOP,
+  type NamedSize,
   type PickShapes,
   type Reach,
 } from './crowd';
 
-/** Motif de la bannière d'un groupe. */
-const BANNER = 'icons/group';
 /** Durée d'une image de la marche, en millisecondes. */
 const STEP_MS = 420;
 
@@ -70,9 +77,8 @@ export class PeopleLayer {
   private readonly sprites: Sprite[] = [];
   /** Le plus grand des mini-sprites, pour l'étendue d'une grappe. */
   private readonly largest: { readonly width: number; readonly height: number };
-  /** La bannière, et son étendue autour du pied de sa hampe, en pixels d'icône. */
-  private readonly bannerFrame: Frame;
-  private readonly bannerReach: Reach;
+  /** Les bannières, de la plus petite à la plus grande (BANNERS). */
+  private readonly banners: readonly [NamedSize, ...NamedSize[]];
   /** Les motifs, pour retrouver le groupe sous un appui. */
   private readonly shapes: PickShapes;
   private frame: GroupsFrame | undefined;
@@ -92,19 +98,13 @@ export class PeopleLayer {
       width: Math.max(...frames.map((frame) => frame.width)),
       height: Math.max(...frames.map((frame) => frame.height)),
     };
-    this.bannerFrame = frameOf(BANNER);
-    this.bannerReach = {
-      left: 0,
-      right: this.bannerFrame.width,
-      up: this.bannerFrame.height,
-      down: 0,
-    };
+    this.banners = bannerShapes(frameOf);
     this.shapes = {
-      banner: this.bannerFrame,
+      banners: this.banners,
       largest: this.largest,
       member: (code) => memberShape(code, frameOf),
     };
-    // Les plus bas à l'écran passent devant.
+    // Les sprites se rangent par leur profondeur (depth) : le plus bas devant.
     this.layer.sortableChildren = true;
     app.stage.addChild(this.layer);
   }
@@ -147,11 +147,12 @@ export class PeopleLayer {
   }
 
   /**
-   * Une bannière, de `pixel` pixels physiques par pixel d'icône ; sa hampe se plante sur
-   * la case. À la densité de la carte, ses pixels tombent sur ceux de la carte : la case
-   * et la bannière sont à des positions entières de pixels de carte.
+   * La bannière `banner` d'un groupe, de `pixel` pixels physiques par pixel de son motif ;
+   * sa hampe se plante sur la case. À l'échelle 1 et au-delà, ses pixels tombent sur ceux
+   * de la carte : la case et la bannière sont à des positions entières de pixels de carte.
    */
   private drawBanner(
+    banner: NamedSize,
     culture: number,
     screenX: number,
     screenY: number,
@@ -159,15 +160,15 @@ export class PeopleLayer {
     used: number,
   ): number {
     const { resolution } = this.app.renderer;
-    const banner = this.sprite(used);
+    const sprite = this.sprite(used);
     const cloth = this.cloth(culture);
-    banner.texture = this.texture(BANNER, textureKey(BANNER, 0, cloth), () =>
+    sprite.texture = this.texture(banner.name, textureKey(banner.name, 0, cloth), () =>
       personPalette(this.data.appearance, { skin: [0, 0, 0], hair: [0, 0, 0], cloth }),
     );
-    const box = bannerBox(screenX, screenY, this.bannerFrame, pixel);
-    banner.scale.set(pixel / resolution);
-    banner.position.set(box.left / resolution, box.top / resolution);
-    banner.zIndex = screenY;
+    const box = bannerBox(screenX, screenY, banner, pixel);
+    sprite.scale.set(pixel / resolution);
+    sprite.position.set(box.left / resolution, box.top / resolution);
+    sprite.zIndex = depth(box, used);
     return used + 1;
   }
 
@@ -199,13 +200,14 @@ export class PeopleLayer {
           cloth,
         }),
       );
-      const person = this.sprite(next++);
+      const rank = next++;
+      const person = this.sprite(rank);
       person.texture = texture;
       // Les pieds sur la case, les pixels du sprite sur ceux de la carte.
       const box = memberBox(screenX, screenY, member, frameOf(name), scale);
       person.scale.set(scale / resolution);
       person.position.set(box.left / resolution, box.top / resolution);
-      person.zIndex = box.top + box.height;
+      person.zIndex = depth(box, rank);
     }
     return next;
   }
@@ -219,24 +221,24 @@ export class PeopleLayer {
       const view = { camera, viewport, world, resolution };
       const scale = displayScale(camera.zoom);
       const close = scale >= SPRITE_SCALE;
-      // Pixels physiques par pixel de bannière : la densité de la carte, si elle le permet.
-      const icon = iconPixel(scale, resolution);
+      // Pixels physiques par pixel de motif, mini-sprite ou bannière : ceux de la carte.
+      const pixel = mapPixel(scale);
+      const banner = chooseBanner(this.banners, pixel, resolution);
+      const bannerReach: Reach = { left: 0, right: banner.width, up: banner.height, down: 0 };
       const groups = frame.groups;
       let first = 0;
       for (let index = 0; index + GROUP_STRIDE <= groups.length; index += GROUP_STRIDE) {
         const size = groups[index + 3] ?? 0;
         const culture = groups[index + 4] ?? 1;
-        // Ce qui se dessine autour de la case, grappe ou bannière, en unités de `unit`
-        // pixels physiques.
+        // Ce qui se dessine autour de la case, grappe ou bannière, en pixels de motif.
         const reach = close
           ? clusterReach(size, this.largest.width, this.largest.height)
-          : this.bannerReach;
-        const unit = close ? scale : icon;
-        const at = groupScreen(groups[index + 1] ?? 0, groups[index + 2] ?? 0, view, reach, unit);
+          : bannerReach;
+        const at = groupScreen(groups[index + 1] ?? 0, groups[index + 2] ?? 0, view, reach, pixel);
         const screenY = at.y;
         for (let copy = -at.copies; copy <= at.copies; copy++) {
           const screenX = at.x + copy * at.span;
-          if (!onScreen(screenX, screenY, reach, unit, viewport)) continue;
+          if (!onScreen(screenX, screenY, reach, pixel, viewport)) continue;
           if (close) {
             used = this.drawMembers(
               frame,
@@ -245,12 +247,12 @@ export class PeopleLayer {
               culture,
               screenX,
               screenY,
-              scale,
+              pixel,
               now,
               used,
             );
           } else {
-            used = this.drawBanner(culture, screenX, screenY, icon, used);
+            used = this.drawBanner(banner, culture, screenX, screenY, pixel, used);
           }
         }
         first += size;
