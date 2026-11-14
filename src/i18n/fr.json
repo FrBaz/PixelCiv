@@ -263,6 +263,8 @@
   "creator.outside": "Choisissez une case du monde : au-delà des pôles, il n'y a rien.",
   "command.refused": "La simulation a refusé cette action.",
   "sheet.close": "Fermer la fiche",
+  "sheet.missing.person": "Cet individu est introuvable.",
+  "sheet.missing.group": "Ce groupe n'existe plus.",
   "person.title": "Fiche d'un individu",
   "person.woman": "femme",
   "person.man": "homme",
@@ -326,6 +328,7 @@
   "chronicle.empty": "Rien encore : faites apparaître un groupe.",
   "chronicle.older": "Faits plus anciens",
   "chronicle.loading": "Recherche des faits plus anciens…",
+  "chronicle.newFacts": { "one": "{count} fait nouveau", "other": "{count} faits nouveaux" },
   "chronicle.groupAppeared": {
     "one": "Le groupe {of} apparaît, avec {count} personne.",
     "other": "Le groupe {of} apparaît, avec {count} personnes."

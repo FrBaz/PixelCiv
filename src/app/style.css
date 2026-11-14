@@ -751,3 +751,9 @@ button:disabled {
   width: 100%;
   margin-top: 0.375rem;
 }
+
+/* En tête de la liste figée : les faits arrivés depuis, et le retour aux derniers. */
+.chronicle-news button {
+  width: 100%;
+  margin-bottom: 0.375rem;
+}

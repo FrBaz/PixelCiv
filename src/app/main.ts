@@ -21,6 +21,7 @@ import { App } from '../ui/App';
 import {
   chronicle,
   chronicleLoading,
+  chronicleNewFacts,
   chronicleOpen,
   content as contentInfo,
   creationBusy,
@@ -48,7 +49,16 @@ import {
   type CreationSetup,
   type MapModeId,
 } from '../ui/store';
-import { appendFacts, olderThan, prependPage } from './chronicle';
+import {
+  freezeFacts,
+  snapshotFacts,
+  latestFacts,
+  newFacts,
+  olderThan,
+  receiveFacts,
+  receivePage,
+  type KeptFacts,
+} from './chronicle';
 import { DebugSampler, usedMemoryMb } from './debug';
 import { centerOf, visibleArea, type Rect } from './focus';
 import { SaveManager, SaveStore } from './saves';
@@ -202,8 +212,6 @@ async function main(): Promise<void> {
   const sheets = new SheetRequests();
   const openSheet = (target: InspectTarget) => {
     simulation.send({ type: 'inspect', ...sheets.open(target) });
-    // Sur petit écran, la fiche demandée passe au-dessus, même si elle était déjà ouverte.
-    raise('sheet');
   };
   /** Fait apparaître un groupe sur la case, si elle le permet ; un avis dit sinon pourquoi. */
   const spawnAt = (x: number, y: number) => {
@@ -258,10 +266,26 @@ async function main(): Promise<void> {
     const cell = inspected.value;
     if (cell !== undefined) showCell(cell.x, cell.y);
   };
-  // Chronique : numéro de la dernière page demandée, et pages plus anciennes à garder, tant
-  // que la chronique reste ouverte.
+  // Chronique : les faits gardés (app/chronicle.ts), et le numéro de la dernière page demandée.
+  let facts = snapshotFacts([]);
   let chronicleRequest = 0;
-  let olderKept = false;
+  /** Range les faits gardés, et montre les faits affichés et le compte des faits nouveaux. */
+  const showFacts = (next: KeptFacts) => {
+    facts = next;
+    // Une liste figée garde sa référence : la chronique ne se redessine pas.
+    chronicle.value = next.shown;
+    chronicleNewFacts.value = newFacts(next);
+  };
+  /** Revient aux derniers faits ; une page encore en route sera ignorée. */
+  const latestChronicle = () => {
+    chronicleRequest++;
+    chronicleLoading.value = false;
+    showFacts(latestFacts(facts));
+  };
+  // La chronique refermée revient aux derniers faits.
+  chronicleOpen.subscribe((open) => {
+    if (!open) latestChronicle();
+  });
   // Le jeu se met en pause pendant l'écran de création, et reprend à sa fermeture s'il
   // tournait.
   let pausedForCreation = false;
@@ -344,8 +368,7 @@ async function main(): Promise<void> {
         people.setFrame(message.frame);
         chronicleRequest++;
         chronicleLoading.value = false;
-        olderKept = false;
-        chronicle.value = message.chronicle;
+        showFacts(snapshotFacts(message.chronicle));
         const { width } = message.world.size;
         map.setWorld(message.world, layers, (mode) => overlayTexels(mode, layers, modeData, width));
         actions.setMapMode(mapMode.value);
@@ -358,9 +381,8 @@ async function main(): Promise<void> {
       case 'delta':
         map.updateChunks(message.chunks);
         people.setFrame(message.frame);
-        // Les pages plus anciennes se gardent tant que la chronique reste ouverte.
-        if (!chronicleOpen.value) olderKept = false;
-        chronicle.value = appendFacts(chronicle.value, message.chronicle, olderKept);
+        // Pendant la lecture des pages plus anciennes, les faits nouveaux se comptent.
+        showFacts(receiveFacts(facts, message.chronicle));
         time.value = message.time;
         seasons.update(message.time, performance.now());
         break;
@@ -382,16 +404,26 @@ async function main(): Promise<void> {
         previews.ready(message);
         break;
       case 'inspection': {
-        // La fiche demandée, ou sa fermeture si sa cible n'est plus ; une réponse
-        // dépassée (autre cible, autre partie, fiche fermée) ne change rien.
-        const shown = sheets.receive(message);
-        if (shown !== undefined) sheet.value = shown ?? undefined;
+        // La fiche demandée, ou sa fermeture si sa cible n'est plus ; si le joueur demandait
+        // une autre cible, qui n'est plus, la fiche en cours reste, et un avis le dit. Une
+        // réponse dépassée (autre cible, autre partie, fiche fermée) ne change rien.
+        const answer = sheets.receive(message);
+        if (answer.type === 'shown') {
+          sheet.value = answer.sheet;
+          // Sur petit écran, la fiche que le joueur demande passe au-dessus à sa réponse,
+          // même si elle était déjà ouverte : une cible qui n'est plus ne remonte pas la
+          // fiche en cours au-dessus du panneau où il l'a demandée.
+          if (answer.requested) raise('sheet');
+        } else if (answer.type === 'missing') {
+          if (answer.close) sheet.value = undefined;
+          if (answer.notice !== undefined) showNotice(answer.notice);
+        }
         break;
       }
       case 'chroniclePage':
         if (message.requestId !== chronicleRequest) break;
         chronicleLoading.value = false;
-        chronicle.value = prependPage(chronicle.value, message.facts);
+        showFacts(receivePage(facts, message.facts));
         break;
       case 'error':
         console.error(`worker : ${message.code} (${message.detail})`);
@@ -430,13 +462,15 @@ async function main(): Promise<void> {
       sheet.value = undefined;
     },
     olderChronicle: () => {
-      const before = olderThan(chronicle.value);
+      const before = olderThan(facts);
       if (before === undefined || chronicleLoading.value) return;
-      olderKept = true;
+      // La liste affichée se fige jusqu'au retour aux derniers faits.
+      showFacts(freezeFacts(facts));
       chronicleLoading.value = true;
       chronicleRequest++;
       simulation.send({ type: 'chronicle', requestId: chronicleRequest, before });
     },
+    latestChronicle,
     focus: (x: number, y: number) => {
       // Le lieu au milieu de la partie visible de la carte, et non sous les panneaux (U-5).
       const hud = uiElement.querySelector('.hud') ?? uiElement;

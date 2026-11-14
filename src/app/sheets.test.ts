@@ -14,10 +14,14 @@ function answer(request: SheetRequest | undefined, exists = true): Inspection {
     : { type: 'inspection', requestId, group: { id: target.id } as GroupView };
 }
 
-/** Ce que montre la fiche après une réponse : cible, fermeture (null) ou rien (ignorée). */
+/**
+ * Ce que montre la fiche après une réponse : sa cible, sa fermeture (null), ou rien de
+ * nouveau (undefined : réponse ignorée, ou fiche en cours gardée).
+ */
 function shown(requests: SheetRequests, message: Inspection) {
-  const sheet = requests.receive(message);
-  return sheet === null || sheet === undefined ? sheet : `${sheet.kind} ${String(sheet.view.id)}`;
+  const answer = requests.receive(message);
+  if (answer.type === 'shown') return `${answer.sheet.kind} ${String(answer.sheet.view.id)}`;
+  return answer.type === 'missing' && answer.close ? null : undefined;
 }
 
 describe('demandes de fiche (IHM-02)', () => {
@@ -76,10 +80,22 @@ describe('demandes de fiche (IHM-02)', () => {
     expect(shown(requests, answer(requests.open({ kind: 'person', id: 1 })))).toBe('person 1');
   });
 
+  it('dit si la fiche montrée répond au joueur, qui la remonte, ou à un rafraîchissement', () => {
+    const requests = new SheetRequests();
+    const open = requests.receive(answer(requests.open({ kind: 'group', id: 3 })));
+    expect(open).toMatchObject({ type: 'shown', requested: true });
+    expect(requests.receive(answer(requests.refresh()))).toMatchObject({ requested: false });
+    // La même fiche demandée de nouveau, comme un fait touché deux fois : elle remonte.
+    const again = requests.receive(answer(requests.open({ kind: 'group', id: 3 })));
+    expect(again).toMatchObject({ type: 'shown', requested: true });
+  });
+
   it("ferme la fiche d'un groupe qui n'est plus, et reprend après une réponse perdue", () => {
     const requests = new SheetRequests();
     expect(shown(requests, answer(requests.open({ kind: 'group', id: 4 })))).toBe('group 4');
-    expect(shown(requests, answer(requests.refresh(), false))).toBeNull();
+    // Un rafraîchissement sans cible ferme la fiche, sans avis : le joueur n'a rien demandé.
+    const gone = requests.receive(answer(requests.refresh(), false));
+    expect(gone).toEqual({ type: 'missing', close: true, notice: undefined });
     expect(requests.refresh()).toBeUndefined();
     // Une réponse ignorée compte comme reçue : les rafraîchissements reprennent ensuite.
     const lost = requests.open({ kind: 'group', id: 5 });
@@ -87,5 +103,35 @@ describe('demandes de fiche (IHM-02)', () => {
     expect(shown(requests, answer(next))).toBe('group 6');
     expect(shown(requests, answer(lost))).toBeUndefined();
     expect(requests.refresh()?.target).toEqual({ kind: 'group', id: 6 });
+  });
+
+  it("garde la fiche en cours quand le joueur demande un groupe qui n'est plus (W-5, U-1)", () => {
+    const requests = new SheetRequests();
+    expect(shown(requests, answer(requests.open({ kind: 'person', id: 7 })))).toBe('person 7');
+    expect(shown(requests, answer(requests.refresh()))).toBe('person 7');
+    // Un appui sur un fait de la chronique : le groupe 9, réuni à un voisin, n'est plus.
+    const merged = requests.receive(answer(requests.open({ kind: 'group', id: 9 }), false));
+    expect(merged).toEqual({ type: 'missing', close: false, notice: 'sheet.missing.group' });
+    // La fiche de l'individu reste ouverte, et se rafraîchit encore.
+    const refresh = requests.refresh();
+    expect(refresh?.target).toEqual({ kind: 'person', id: 7 });
+    expect(shown(requests, answer(refresh))).toBe('person 7');
+    // Un individu introuvable a son propre avis.
+    const unknown = requests.receive(answer(requests.open({ kind: 'person', id: 99 }), false));
+    expect(unknown).toEqual({ type: 'missing', close: false, notice: 'sheet.missing.person' });
+    expect(requests.refresh()?.target).toEqual({ kind: 'person', id: 7 });
+  });
+
+  it("dit qu'un groupe demandé n'est plus, fiche fermée ou montrant ce groupe", () => {
+    const requests = new SheetRequests();
+    // Aucune fiche ouverte : rien ne s'ouvre, un avis le dit, et rien ne se rafraîchit.
+    const none = requests.receive(answer(requests.open({ kind: 'group', id: 9 }), false));
+    expect(none).toEqual({ type: 'missing', close: false, notice: 'sheet.missing.group' });
+    expect(requests.refresh()).toBeUndefined();
+    // La fiche du groupe 4 est ouverte, et le joueur la redemande quand il vient de s'éteindre.
+    expect(shown(requests, answer(requests.open({ kind: 'group', id: 4 })))).toBe('group 4');
+    const extinct = requests.receive(answer(requests.open({ kind: 'group', id: 4 }), false));
+    expect(extinct).toEqual({ type: 'missing', close: true, notice: 'sheet.missing.group' });
+    expect(requests.refresh()).toBeUndefined();
   });
 });
