@@ -160,8 +160,15 @@ export function portraitRoles(input: PortraitInput): Uint8Array {
     }
   }
 
-  // Cheveux du dessus de la tête ; la calvitie dégarnit le sommet.
-  const hairline = cy - shape.height * (child ? 0.35 : 0.45) - (variant & 64 ? 1 : 0);
+  // Rangée des yeux : au centre de la tête chez l'enfant, une plus haut chez l'adulte.
+  const eyeY = cy - (child ? 0 : 1);
+
+  // Cheveux du dessus de la tête ; la calvitie dégarnit le sommet. Chez l'adulte, ils
+  // s'arrêtent au plus bas cinq rangées au-dessus des yeux, deux au-dessus des sourcils,
+  // même sur le visage le plus court : la rangée qui surmonte les sourcils reste nue, pour
+  // les rides du front.
+  const natural = cy - shape.height * (child ? 0.35 : 0.45) - (variant & 64 ? 1 : 0);
+  const hairline = child ? natural : Math.min(natural, eyeY - 6);
   for (let y = cy - shape.height - 3; y <= hairline + 1; y++) {
     for (let x = cx - shape.width - 2; x <= cx + shape.width + 2; x++) {
       const dx = x - cx;
@@ -187,7 +194,6 @@ export function portraitRoles(input: PortraitInput): Uint8Array {
   }
 
   // Yeux, sourcils : plus grands chez l'enfant.
-  const eyeY = cy - (child ? 0 : 1);
   for (const side of [-1, 1]) {
     const ex = cx + side * 6;
     for (let x = ex - 2; x <= ex + 1; x++) {
@@ -248,7 +254,8 @@ export function portraitRoles(input: PortraitInput): Uint8Array {
   // chez les humains), qui se creuse d'un trait continu à `wrinkles.deep` (60). Elle passe
   // à deux rangées des sourcils si le front y est nu, et une seconde paraît alors, le front
   // creusé, deux rangées plus haut, là où le front l'est encore ; sinon, elle passe juste
-  // au-dessus des sourcils, entre eux seulement.
+  // au-dessus des sourcils, entre eux seulement, sur la rangée que les cheveux laissent
+  // toujours nue.
   if (!child && input.age >= ages.wrinkles.forehead) {
     const brow = eyeY - 3;
     const bare = (y: number) =>

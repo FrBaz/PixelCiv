@@ -8,9 +8,9 @@
  * découlent, ce qui leur donne une identité sonore commune.
  *
  * Règles d'enchaînement, communes à toutes les langues : jamais deux voyelles de suite,
- * jamais une consonne redoublée, au plus deux sons de consonne de suite (un digramme comme
- * « ch » n'en fait qu'un), et une fin de syllabe prise parmi les consonnes que la langue
- * permet à cette place.
+ * jamais une consonne redoublée, qu'elle s'écrive d'une lettre (« tt ») ou d'un digramme
+ * (« thth »), au plus deux sons de consonne de suite (un digramme comme « ch » n'en fait
+ * qu'un), et une fin de syllabe prise parmi les consonnes que la langue permet à cette place.
  *
  * Un nom se désigne par un code entier, tiré à la naissance : la langue et le code
  * redonnent toujours le même nom, dans le worker comme sur le fil principal. Les
@@ -179,6 +179,10 @@ function append(parts: string[], sound: string): boolean {
   const vowel = isVowel(sound.charAt(0));
   if (vowel && isVowel(last)) return false;
   if (!vowel && last !== undefined && last === sound.charAt(0)) return false;
+  // Un digramme ne suit pas le même digramme (« thth », « chch », « khkh ») : la comparaison
+  // des lettres, « h » contre « t », ne voit pas ce son redoublé.
+  if (!vowel && DIGRAPHS.some((digraph) => word.endsWith(digraph) && sound.startsWith(digraph)))
+    return false;
   // Au plus deux sons de consonne de suite : ceux qui finissent le mot et ceux du son
   // ajouté (deux pour un groupe comme « tr », un pour un digramme comme « ch »).
   if (!vowel) {

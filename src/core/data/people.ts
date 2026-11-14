@@ -42,8 +42,9 @@ export type TraitRole = (typeof TRAIT_ROLES)[number];
 
 /**
  * Bornes de la forme du visage. Le portrait d'un adulte y garde ses yeux et sa bouche dans
- * la tête, et tout son dessin dans le canevas (src/gen/portrait.test.ts) : plus étroite, la
- * tête perd le coin des yeux ; plus resserrée, la mâchoire coupe la bouche.
+ * la tête, un front qui se ride avec l'âge, et tout son dessin dans le canevas
+ * (src/gen/portrait.test.ts) : plus étroite, la tête perd le coin des yeux ; plus resserrée,
+ * la mâchoire coupe la bouche.
  */
 export const FACE_BOUNDS = {
   width: [10, 16],

@@ -52,6 +52,18 @@ function skin(roles: Uint8Array): number[] {
   return Array.from(roles, (role) => (skinRoles.includes(role) ? 1 : 0));
 }
 
+/**
+ * Pixels d'ombre de peau au milieu du front, au-dessus des sourcils (rangée 22 chez
+ * l'adulte), loin du côté de l'ombre du visage : ceux des rides du front.
+ */
+function forehead(roles: Uint8Array): number {
+  let total = 0;
+  for (let y = 10; y <= 21; y++) {
+    for (let x = 27; x <= 37; x++) if (roles[y * PORTRAIT_SIZE + x] === ROLE.skinShadow) total++;
+  }
+  return total;
+}
+
 describe('portraits (REN-07)', () => {
   it('dessine un portrait de 64 × 64 rôles, toujours le même pour un même individu', () => {
     const roles = portraitRoles(adult);
@@ -90,16 +102,6 @@ describe('portraits (REN-07)', () => {
   });
 
   it('ride le front et creuse les pattes d’oie des deux côtés, chevelu ou non (A-2)', () => {
-    // Pixels d'ombre de peau au milieu du front, au-dessus des sourcils (rangée 22 chez
-    // l'adulte), loin du côté de l'ombre du visage.
-    const forehead = (roles: Uint8Array) => {
-      let total = 0;
-      for (let y = 10; y <= 21; y++) {
-        for (let x = 27; x <= 37; x++)
-          if (roles[y * PORTRAIT_SIZE + x] === ROLE.skinShadow) total++;
-      }
-      return total;
-    };
     // Pixels changés d'un âge à l'autre autour des yeux, d'un côté du visage.
     const eyes = (before: Uint8Array, after: Uint8Array, side: -1 | 1) => {
       let total = 0;
@@ -189,6 +191,27 @@ describe('portraits (REN-07)', () => {
                   drawn++;
                 }
     expect(drawn).toBe(256);
+  });
+
+  it('ride le front de l’adulte à toute hauteur de visage que permet le schéma (A-2, A-10)', () => {
+    // Sur un visage court (10 à 13 de haut), les cheveux descendaient jusqu'aux sourcils, et
+    // le front ne se ridait ni à 40 ni à 60 ans. Une femme aux cheveux courts, sans frange
+    // (variante 0), à chaque hauteur, aux bornes des autres paramètres.
+    const { width, jaw } = FACE_BOUNDS;
+    const [lowest, highest]: readonly [number, number] = FACE_BOUNDS.height;
+    let drawn = 0;
+    for (let h = lowest; h <= highest; h++)
+      for (const w of width)
+        for (const power of [2, 4] as const)
+          for (const j of jaw) {
+            const shape: FaceShape = { width: w, height: h, power, jaw: j };
+            const at = (age: number) => aged({ ...adult, sex: 0, variant: 0, face: shape }, age);
+            const where = JSON.stringify(shape);
+            expect(forehead(at(40)), where).toBeGreaterThan(forehead(at(39)));
+            expect(forehead(at(60)), where).toBeGreaterThan(forehead(at(59)));
+            drawn++;
+          }
+    expect(drawn).toBe(8 * (highest - lowest + 1));
   });
 
   it('dessine chacun des paramètres de forme du visage et du nez', () => {
