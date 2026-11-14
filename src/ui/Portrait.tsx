@@ -7,8 +7,9 @@
  *
  * Pixel art net : le portrait s'affiche à un nombre entier de pixels physiques par pixel
  * (portraitScale), dans un canevas dont chaque pixel est un pixel physique de l'écran,
- * agrandi par le code (enlarge). Il suit les changements de densité de l'écran : zoom du
- * navigateur, fenêtre passée sur un autre écran.
+ * agrandi par le code (enlarge), et qui a sa propre couche (style.css, portraitCanvas.ts).
+ * Il suit les changements de densité de l'écran : zoom du navigateur, fenêtre passée sur
+ * un autre écran.
  */
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'preact/hooks';
 import type { Allele, LocusRole } from '../core/data';

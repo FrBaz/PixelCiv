@@ -5,9 +5,15 @@
  * de 2 pixels CSS par pixel, le portrait avait, sur un écran de densité 1,25 ou 2,75, des
  * pixels de deux tailles. Fonctions pures.
  *
- * Le navigateur place le canevas au pixel physique près, et sa taille ne change pas si
- * elle tombe juste sur un nombre entier de pixels physiques : chaque pixel du canevas est
- * alors un pixel de l'écran, où que la mise en page le pose.
+ * La taille du canevas tombe juste sur un nombre entier de pixels physiques. Cela ne
+ * suffit pas : peint avec le reste de la fiche, à une position qui tombe entre deux pixels
+ * physiques, Chromium l'étirait encore d'une rangée, sur un téléphone de densité 2,75 en
+ * portrait (320 rangées sur 321 pixels, une rangée du portrait de 6 pixels au lieu de 5).
+ * Le canevas a donc sa propre couche (`will-change: transform`, style.css) : Chromium la
+ * pose telle quelle, chaque pixel du canevas sur un pixel de l'écran, où que la mise en
+ * page la place. Seules la première et la dernière rangée et colonne, aux densités d'écran
+ * non entières, se fondent dans la bordure, comme sans couche. Vérifié au damier dans
+ * Chromium, vivant comme mort (docs/BACKLOG.md, portraits de 2.8).
  */
 import type { Rgb } from '../render/bake';
 

@@ -65,7 +65,7 @@ import { centerOf, visibleArea, type Rect } from './focus';
 import { SaveManager, SaveStore } from './saves';
 import { describeCell } from './inspect';
 import { SheetRequests } from './sheets';
-import { spawnTarget } from './spawn';
+import { OccupiedCells, spawnTarget } from './spawn';
 import { PreviewScheduler } from './preview';
 import { SeasonClock } from './seasonClock';
 import { SimulationClient } from './simulation';
@@ -214,11 +214,14 @@ async function main(): Promise<void> {
   const openSheet = (target: InspectTarget) => {
     simulation.send({ type: 'inspect', ...sheets.open(target) });
   };
+  // Cases occupées, que l'outil d'apparition refuse : celles des groupes de la dernière
+  // image, et celles des apparitions envoyées qu'aucune image n'a encore montrées.
+  const occupied = new OccupiedCells();
   /** Fait apparaître un groupe sur la case, si elle le permet ; un avis dit sinon pourquoi. */
   const spawnAt = (x: number, y: number) => {
     const info = worldInfo.value;
     if (worldLayers === undefined || info === undefined) return;
-    const target = spawnTarget(worldLayers, info.size, x, y, data);
+    const target = spawnTarget(worldLayers, info.size, x, y, data, occupied);
     if ('refusal' in target) {
       showNotice(target.refusal);
       return;
@@ -230,6 +233,9 @@ async function main(): Promise<void> {
       type: 'game',
       command: { type: 'spawnGroup', x: target.x, y: target.y, ...settings },
     });
+    // La case est prise dès l'envoi : un second appui, avant l'image qui montrera le
+    // groupe, ne l'empile pas.
+    occupied.add(target.x, target.y, info.size);
   };
   const uiElement = element('ui');
   /**
@@ -367,6 +373,7 @@ async function main(): Promise<void> {
         sheet.value = undefined;
         people.clear();
         people.setFrame(message.frame);
+        occupied.reset(message.frame, message.world.size);
         chronicleRequest++;
         chronicleLoading.value = false;
         showFacts(snapshotFacts(message.chronicle));
@@ -379,14 +386,17 @@ async function main(): Promise<void> {
         seasons.update(message.time, performance.now());
         break;
       }
-      case 'delta':
+      case 'delta': {
         map.updateChunks(message.chunks);
         people.setFrame(message.frame);
+        const info = worldInfo.value;
+        if (info !== undefined) occupied.update(message.frame, message.chronicle, info.size);
         // Pendant la lecture des pages plus anciennes, les faits nouveaux se comptent.
         showFacts(receiveFacts(facts, message.chronicle));
         time.value = message.time;
         seasons.update(message.time, performance.now());
         break;
+      }
       case 'time':
         time.value = message.time;
         seasons.update(message.time, performance.now());
@@ -429,7 +439,10 @@ async function main(): Promise<void> {
       case 'error':
         console.error(`worker : ${message.code} (${message.detail})`);
         // Une commande refusée ou écartée, comme un groupe sur une case infranchissable.
-        if (message.code === 'command') showNotice('command.refused');
+        if (message.code === 'command') {
+          showNotice('command.refused');
+          occupied.refused();
+        }
         if (message.code === 'params' || message.code === 'internal') {
           // Un aperçu ou un monde demandé ne viendra pas.
           previews.failed();

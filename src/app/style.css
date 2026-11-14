@@ -225,7 +225,8 @@ button:disabled {
    légende, de la barre du haut jusqu'en bas de l'écran (U-3, U-4). Chaque panneau prend la
    hauteur de son contenu, et cède quand la place manque, jusqu'à une hauteur où il reste
    lisible ; il défile au-delà. Si même ainsi les panneaux ne tiennent pas, la colonne
-   défile. */
+   défile : un panneau arrivé au bout de son défilement lui passe la molette ou le doigt,
+   car elle-même, comme toute la couche d'interface, ne reçoit pas les gestes. */
 .hud-side {
   grid-area: 2 / 1 / 4;
   justify-self: end;
@@ -252,7 +253,6 @@ button:disabled {
   flex: 0 1 auto;
   min-height: min(5rem, 100%);
   overflow-y: auto;
-  overscroll-behavior: contain;
 }
 
 .cell-info dl {
@@ -310,10 +310,20 @@ button:disabled {
     display: none;
   }
 
-  /* Seul dans la colonne, le panneau du dessus la prend tout entière. */
-  .chronicle,
-  .legend {
+  /* Seul dans la colonne, le panneau du dessus la prend tout entière : la chronique et la
+     légende y perdent leur plafond. Le sélecteur nomme la colonne, pour l'emporter sur les
+     règles de base, dont celle de la chronique, qui vient plus loin dans la feuille : une
+     media query n'ajoute rien à la spécificité (tools/stylesheet.test.ts). */
+  .hud-side .chronicle,
+  .hud-side .legend {
     max-height: none;
+  }
+
+  /* La colonne ne déborde pas : la fiche, la case et l'outil, au bout de leur défilement,
+     ne le passent pas à la page. */
+  .cell-info,
+  .creator-panel {
+    overscroll-behavior: contain;
   }
 
   .hud-bottom {
@@ -641,7 +651,6 @@ button:disabled {
   flex: 0 1 auto;
   min-height: min(7.5rem, 100%);
   overflow-y: auto;
-  overscroll-behavior: contain;
 }
 
 .creator-panel .cell-info-head button {
@@ -690,11 +699,15 @@ button:disabled {
 }
 
 /* Le portrait fixe lui-même sa taille, un nombre entier de pixels physiques par pixel, et
-   peint son fond (Portrait.tsx). */
+   peint son fond (Portrait.tsx). Il a sa propre couche : Chromium le pose alors tel quel,
+   un pixel du canevas par pixel de l'écran. Peint avec le reste de la fiche, à une position
+   qui tombait entre deux pixels physiques, il étirait ses 320 rangées sur 321, sur un
+   téléphone de densité 2,75 en portrait (portraitCanvas.ts). */
 .portrait {
   flex: none;
   image-rendering: pixelated;
   border: 1px solid var(--gold);
+  will-change: transform;
 }
 
 .portrait-dead {

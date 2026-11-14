@@ -261,6 +261,7 @@
   "creator.water": "Choisissez une terre : un groupe ne peut pas apparaître là.",
   "creator.summit": "Choisissez une terre moins haute : personne ne franchit ce sommet.",
   "creator.outside": "Choisissez une case du monde : au-delà des pôles, il n'y a rien.",
+  "creator.occupied": "Un groupe est déjà là : choisissez une autre case.",
   "command.refused": "La simulation a refusé cette action.",
   "sheet.close": "Fermer la fiche",
   "sheet.missing.person": "Cet individu est introuvable.",
