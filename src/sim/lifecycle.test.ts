@@ -348,6 +348,32 @@ describe('cycle de vie (tâche 2.3)', () => {
     expect(women).toBeGreaterThan(100);
     expect(born / women).toBeGreaterThan(4);
     expect(born / women).toBeLessThan(7);
+    // Naissances de la partie dont les parents sont de deux cultures : 11,8 % sur cette
+    // graine avec nomads.intermarriage à 0,25, 0,8 % sans mariage entre cultures
+    // (docs/BACKLOG.md). La fourchette, large, voit ces mariages disparaître ; au-delà, la
+    // part ne suit guère leur probabilité (de 6,5 à 18 % pour des valeurs de 0,05 à 1).
+    const cultureOf = (id: number) => {
+      const record = recordOf(state.people, id);
+      return record === undefined ? undefined : field(state.people, record, 'culture');
+    };
+    let births = 0;
+    let mixed = 0;
+    const tally = (
+      columns: Readonly<Record<'birth' | 'mother' | 'father', ArrayLike<number>>>,
+      at: number,
+    ) => {
+      const maternal = cultureOf(columns.mother[at] ?? NONE);
+      const paternal = cultureOf(columns.father[at] ?? NONE);
+      if ((columns.birth[at] ?? 0) <= 0 || maternal === undefined || paternal === undefined) return;
+      births++;
+      if (maternal !== paternal) mixed++;
+    };
+    for (let row = 0; row < archive.rows; row++) tally(archive.columns, row);
+    state.people.forEach((slot) => {
+      tally(state.people.columns, slot);
+    });
+    expect(mixed / births).toBeGreaterThan(0.05);
+    expect(mixed / births).toBeLessThan(0.25);
   });
 
   it("tue davantage de froid les fragiles d'une sous-espèce des sables que les nordiques", () => {
@@ -385,9 +411,11 @@ describe('cycle de vie (tâche 2.3)', () => {
     expect(deathsBy(sands, 'cold')).toBeGreaterThan(deathsBy(nordic, 'cold') * 1.5);
   });
 
-  it('tient le confort et les froids extrêmes des données de l’espèce (D-6)', () => {
+  it('tient le confort des données de l’espèce (D-6)', () => {
     // Le monde plat, à 15 °C toute l'année : le confort des humains (de 0 à 30 °C), mais un
-    // froid pour une espèce qui ne s'y trouve bien qu'au-delà de 20 °C.
+    // froid pour une espèce qui ne s'y trouve bien qu'au-delà de 20 °C. Seul le bas du
+    // confort joue ici ; ses deux bornes et les extrêmes sont vérifiés dans « rigueurs du
+    // mois ».
     const chilly = withHuman((human) => ({
       ...human,
       hardship: { ...human.hardship, comfort: [20, 35], extremes: [10, 45] },
@@ -471,28 +499,29 @@ describe('causes de mort (IND-04)', () => {
 });
 
 describe('rigueurs du mois (ADR 0011 ; L-12)', () => {
+  /** Une femme de `years` ans, hors de tout groupe, d'ascendance pure de la sous-espèce `kind`. */
+  const someone = (people: Population, years: number, kind: string) =>
+    people.add({
+      sex: FEMALE,
+      birth: -years * MONTHS_PER_YEAR,
+      species: 0,
+      ancestry: pureAncestry(human.subspecies.findIndex((entry) => entry.id === kind)),
+      genome: new Uint32Array(GENOME_WORDS),
+      mother: NONE,
+      father: NONE,
+      group: NONE,
+      culture: 1,
+      givenName: 1,
+      familyName: 0,
+      familyLanguage: 1,
+    });
+
   it('rendent le froid plus dur aux fragiles et aux moins adaptés, la faim égale pour tous', () => {
     const people = new Population();
-    const subspecies = (id: string) => human.subspecies.findIndex((entry) => entry.id === id);
-    const person = (years: number, kind: string) =>
-      people.add({
-        sex: FEMALE,
-        birth: -years * MONTHS_PER_YEAR,
-        species: 0,
-        ancestry: pureAncestry(subspecies(kind)),
-        genome: new Uint32Array(GENOME_WORDS),
-        mother: NONE,
-        father: NONE,
-        group: NONE,
-        culture: 1,
-        givenName: 1,
-        familyName: 0,
-        familyLanguage: 1,
-      });
     // Un nourrisson, une adulte et une vieille, nordiques ou des sables.
     const ages = [0, 30, 70] as const;
     const everyone = ['nordic', 'sands'].flatMap((kind) =>
-      ages.map((years) => ({ years, kind, slot: person(years, kind) })),
+      ages.map((years) => ({ years, kind, slot: someone(people, years, kind) })),
     );
     const hardship = (slot: number, years: number, temperature: number) => {
       const out: Hardship = { cold: 0, heat: 0, famine: 0 };
@@ -525,6 +554,40 @@ describe('rigueurs du mois (ADR 0011 ; L-12)', () => {
     }
     for (const years of ages) expect(cold(years, 'nordic')).toBeLessThan(cold(years, 'sands'));
   });
+
+  it('suivent le confort et les extrêmes de chaque espèce, pas ceux des humains (D-6)', () => {
+    // Une espèce d'un autre climat que les humains : à son aise de 10 à 20 °C, au plein du
+    // froid dès 0 °C et de la chaleur dès 30 °C. Ses rigueurs se comparent à leur plein, à −10
+    // et à 40 °C : des bornes écrites en dur, celles des humains, s'y verraient.
+    const temperate =
+      withHuman((species) => ({
+        ...species,
+        hardship: { ...species.hardship, comfort: [10, 20], extremes: [0, 30] },
+      })).species.entries.at(0) ?? missing();
+    const people = new Population();
+    const adult = someone(people, 30, 'plains');
+    people.set('nutrition', adult, 255);
+    const at = (temperature: number) => {
+      const out: Hardship = { cold: 0, heat: 0, famine: 0 };
+      hardshipInto(temperate, people, adult, 30, temperature, out);
+      return out;
+    };
+    for (const temperature of [10, 15, 20]) {
+      expect(at(temperature)).toMatchObject({ cold: 0, heat: 0 });
+    }
+    // Le froid : plein à 0 °C comme à −10 °C, à moitié à 5 °C ; aucune chaleur de ce côté.
+    const cold = at(-10).cold;
+    expect(cold).toBeGreaterThan(0);
+    expect(at(0).cold).toBeCloseTo(cold, 12);
+    expect(at(5).cold).toBeCloseTo(cold / 2, 12);
+    for (const temperature of [5, 0, -10]) expect(at(temperature).heat).toBe(0);
+    // La chaleur : pleine à 30 °C comme à 40 °C, à moitié à 25 °C ; aucun froid de ce côté.
+    const heat = at(40).heat;
+    expect(heat).toBeGreaterThan(0);
+    expect(at(30).heat).toBeCloseTo(heat, 12);
+    expect(at(25).heat).toBeCloseTo(heat / 2, 12);
+    for (const temperature of [25, 30, 40]) expect(at(temperature).cold).toBe(0);
+  });
 });
 
 describe('naissances et familles (L-11)', () => {
@@ -533,22 +596,44 @@ describe('naissances et familles (L-11)', () => {
     const woman = person(state, { years: 17 });
     const man = person(state, { sex: MALE, years: 19 });
     marry(state, woman, man);
+    const { gestation, postpartum } = human.fertility;
     const births: number[] = [];
     for (let month = 0; month < 30 * MONTHS_PER_YEAR; month++) {
+      // Le mois de la conception de la grossesse en cours, s'il y en a une.
+      const conceived = state.people.get('conceived', woman);
       lifeCycle(state, calm);
       for (const child of bornAt(state, state.tick)) {
         expect(state.people.get('mother', child)).toBe(idOf(state, woman));
+        // Chaque grossesse dure exactement fertility.gestation mois.
+        expect(state.tick - conceived).toBe(gestation);
         births.push(state.tick);
       }
       state.tick++;
     }
     expect(births.length).toBeGreaterThanOrEqual(4);
-    const { gestation, postpartum } = human.fertility;
     for (let index = 1; index < births.length; index++) {
       expect((births[index] ?? 0) - (births[index - 1] ?? 0)).toBeGreaterThanOrEqual(
         gestation + postpartum,
       );
     }
+  });
+
+  it('fait accoucher au bout de fertility.gestation mois, pas un mois plus tôt', () => {
+    const state = founded(['father']);
+    const woman = person(state);
+    const man = person(state, { sex: MALE, years: 27 });
+    marry(state, woman, man);
+    // Une grossesse conçue il y a gestation − 1 mois : pas d'enfant ce mois-ci.
+    state.people.set('conceived', woman, state.tick - (human.fertility.gestation - 1));
+    state.people.set('pregnantBy', woman, idOf(state, man));
+    lifeCycle(state, calm);
+    expect(bornAt(state, state.tick)).toEqual([]);
+    // Le mois suivant, elle est à terme : l'enfant naît.
+    state.tick++;
+    lifeCycle(state, calm);
+    const born = bornAt(state, state.tick);
+    expect(born).toHaveLength(1);
+    expect(state.people.get('mother', born[0] ?? -1)).toBe(idOf(state, woman));
   });
 
   it("ne donne plus d'enfant à un homme au-delà de fertility.maleTo", () => {

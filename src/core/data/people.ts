@@ -502,9 +502,10 @@ export const NomadsSchema = z
      */
     marriage: z.number().min(0),
     /**
-     * Probabilité mensuelle qu'un célibataire qui ne trouve de conjoint ni dans son groupe
-     * ni dans les groupes voisins de sa culture en trouve un dans un groupe voisin d'une
-     * autre culture : le métissage (ESP-04).
+     * Probabilité qu'une femme seule qui cherche un conjoint ce mois-ci (`pairing` de son
+     * espèce), sans en trouver ni dans son groupe ni dans les groupes voisins de sa culture,
+     * en cherche un dans un groupe voisin d'une autre culture : le métissage (ESP-04). Avec
+     * 0,25, elle le fait quatre fois moins souvent que dans sa culture.
      */
     intermarriage: ShareSchema,
     /** Un groupe de moins de membres rejoint un groupe voisin, à la distance du mariage. */
