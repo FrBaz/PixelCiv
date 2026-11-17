@@ -6,13 +6,17 @@
  * panneau où le joueur navigue au clavier (scrollsPanel).
  */
 import {
+  clampZoom,
   constrain,
   displayScale,
   pan,
+  physicalZoom,
   screenToMap,
   zoomAt,
+  zoomLimits,
   type Camera,
   type Extent,
+  type ZoomLimits,
 } from './camera';
 
 export interface ControlsOptions {
@@ -24,6 +28,8 @@ export interface ControlsOptions {
   readonly resolution: () => number;
   /** Taille du monde, en pixels de carte, ou undefined avant la partie. */
   readonly world: () => Extent | undefined;
+  /** Zoom d'une partie qui s'ouvre, en pixels CSS par pixel de carte (DEFAULT_ZOOM). */
+  readonly defaultZoom: () => number;
   /**
    * Appui bref sur la carte, au point (mapX, mapY) en pixels de carte, qui est le point
    * (screenX, screenY) de l'écran, en pixels physiques.
@@ -42,7 +48,7 @@ export interface ControlsOptions {
 
 /** Vitesse du déplacement au clavier, en pixels physiques par seconde. */
 const KEY_SPEED = 900;
-/** Facteur de zoom d'un appui sur + ou −. */
+/** Facteur de zoom d'un appui sur + ou −, au moins d'un palier entier au-delà de 1. */
 const KEY_ZOOM = 1.25;
 /**
  * Un appui reste bref s'il bouge de moins de 8 pixels CSS et dure moins de 500 ms ; il
@@ -140,13 +146,26 @@ export class CameraControls {
     });
   }
 
-  /** Vise le centre du monde, à un zoom adapté à la densité de l'écran. */
+  /**
+   * Vise le centre du monde, au zoom par défaut (defaultZoom, en pixels CSS par pixel de
+   * carte), converti pour la densité de l'écran (physicalZoom) et ramené entre les bornes.
+   */
   center(world: Extent): void {
+    const resolution = this.options.resolution();
+    const limits = zoomLimits(this.options.viewport(), world, resolution);
     this.camera = {
       x: world.width / 2,
       y: world.height / 2,
-      zoom: Math.max(1, Math.round(this.options.resolution())),
+      zoom: clampZoom(physicalZoom(this.options.defaultZoom(), resolution), limits),
     };
+  }
+
+  /** Bornes du zoom pour l'écran et le monde du moment, ou undefined avant la partie. */
+  private limits(): ZoomLimits | undefined {
+    const world = this.options.world();
+    return world === undefined
+      ? undefined
+      : zoomLimits(this.options.viewport(), world, this.options.resolution());
   }
 
   /** À chaque image : déplacement au clavier, puis retour dans le monde. */
@@ -164,8 +183,17 @@ export class CameraControls {
       const distance = (KEY_SPEED * elapsedMs) / 1000;
       this.camera = pan(this.camera, dx * distance, dy * distance);
     }
+    // Bornes du zoom comprises, recalculées ici à chaque image : un redimensionnement de
+    // l'écran les change aussitôt (2b.1).
     const world = this.options.world();
-    if (world !== undefined) this.camera = constrain(this.camera, this.options.viewport(), world);
+    if (world !== undefined) {
+      this.camera = constrain(
+        this.camera,
+        this.options.viewport(),
+        world,
+        this.options.resolution(),
+      );
+    }
     return this.camera;
   }
 
@@ -239,7 +267,11 @@ export class CameraControls {
     const spanAfter = Math.hypot(point.x - other.x, point.y - other.y);
     const moved = pan(this.camera, after.x - before.x, after.y - before.y);
     const factor = spanBefore > 0 ? spanAfter / spanBefore : 1;
-    this.camera = zoomAt(moved, factor, this.options.viewport(), after.x, after.y);
+    const limits = this.limits();
+    this.camera =
+      limits === undefined
+        ? moved
+        : zoomAt(moved, factor, this.options.viewport(), after.x, after.y, limits);
   }
 
   private readonly onPointerUp = (event: PointerEvent): void => {
@@ -284,8 +316,10 @@ export class CameraControls {
     const pinch =
       event.ctrlKey && event.deltaMode === WheelEvent.DOM_DELTA_PIXEL && Math.abs(delta) < 50;
     const factor = Math.exp(-delta * (pinch ? 0.01 : 0.002));
+    const limits = this.limits();
+    if (limits === undefined) return;
     const point = this.point(event);
-    this.camera = zoomAt(this.camera, factor, this.options.viewport(), point.x, point.y);
+    this.camera = zoomAt(this.camera, factor, this.options.viewport(), point.x, point.y, limits);
   };
 
   private readonly onKeyDown = (event: KeyboardEvent): void => {
@@ -296,25 +330,22 @@ export class CameraControls {
       this.keys.clear();
       return;
     }
-    const { width, height } = this.options.viewport();
     // Le zoom suit le caractère tapé, quelle que soit la disposition du clavier : sur un
     // clavier français, « − » est sur la touche 6.
-    if (event.key === '+' || event.key === '=') {
-      this.camera = zoomAt(
-        this.camera,
-        this.zoomStep(1),
-        this.options.viewport(),
-        width / 2,
-        height / 2,
-      );
-    } else if (event.key === '-') {
-      this.camera = zoomAt(
-        this.camera,
-        this.zoomStep(-1),
-        this.options.viewport(),
-        width / 2,
-        height / 2,
-      );
+    const zoom = event.key === '+' || event.key === '=' ? 1 : event.key === '-' ? -1 : 0;
+    if (zoom !== 0) {
+      const limits = this.limits();
+      if (limits !== undefined) {
+        const viewport = this.options.viewport();
+        this.camera = zoomAt(
+          this.camera,
+          this.zoomStep(zoom),
+          viewport,
+          viewport.width / 2,
+          viewport.height / 2,
+          limits,
+        );
+      }
     } else if (event.code in KEY_DIRECTIONS) {
       if (event.code.startsWith('Arrow')) {
         const vertical = event.code === 'ArrowUp' || event.code === 'ArrowDown';
@@ -331,11 +362,25 @@ export class CameraControls {
     this.keyboardFocus = isElement(target) && target.matches(':focus-visible') ? target : undefined;
   };
 
-  /** Facteur d'un cran de zoom au clavier : d'un palier entier à l'autre au-delà de 1. */
+  /**
+   * Facteur d'un cran de zoom au clavier, qui vise une échelle affichée : sous 1, où
+   * l'échelle est continue, KEY_ZOOM fois plus grande ou plus petite ; au-delà, un autre
+   * palier entier, d'environ KEY_ZOOM fois, et d'au moins un palier, pour aller vite
+   * jusqu'au zoom le plus fort (MAX_ZOOM) : 1, 2, 3, 4, 5, 6, 8, 10, 13, 16, 20, 24 à la
+   * densité 1. Le facteur part du zoom demandé, que la molette laisse entre deux paliers :
+   * il atteint l'échelle visée, et chaque cran change donc l'image, sauf à une borne.
+   */
   private zoomStep(direction: 1 | -1): number {
     const scale = displayScale(this.camera.zoom);
-    if (scale >= 1 && (direction === 1 || scale > 1)) return (scale + direction) / this.camera.zoom;
-    return direction === 1 ? KEY_ZOOM : 1 / KEY_ZOOM;
+    let target: number;
+    if (scale < 1 || (scale === 1 && direction === -1)) {
+      target = direction === 1 ? scale * KEY_ZOOM : scale / KEY_ZOOM;
+    } else if (direction === 1) {
+      target = Math.max(scale + 1, Math.round(scale * KEY_ZOOM));
+    } else {
+      target = Math.max(1, Math.min(scale - 1, Math.round(scale / KEY_ZOOM)));
+    }
+    return target / this.camera.zoom;
   }
 
   private readonly onKeyUp = (event: KeyboardEvent): void => {

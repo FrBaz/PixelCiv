@@ -11,7 +11,7 @@ import { parseColor } from '../render/bake';
 import { CameraControls } from '../render/controls';
 import { MapView } from '../render/map';
 import { legend, overlayTexels } from '../render/mapModes';
-import { cellAt, showAt, TILE_PX, type Camera } from '../render/camera';
+import { cellAt, DEFAULT_ZOOM, showAt, TILE_PX, type Camera } from '../render/camera';
 import { PeopleLayer } from '../render/people';
 import { previewPixels } from '../render/preview';
 import { SPAWN_COUNT } from '../sim/commands';
@@ -79,13 +79,20 @@ function element(id: string): HTMLElement {
 
 /**
  * Débogage : l'adresse peut nommer le monde de la première partie (?seed=abc&size=large),
- * qui commence alors sans passer par l'écran de création.
+ * qui commence alors sans passer par l'écran de création. Elle peut aussi fixer le zoom
+ * des parties qui s'ouvrent (?zoom=4, en pixels CSS par pixel de carte ; startingZoom).
  */
 function startingParams(data: GameData, query: URLSearchParams): WorldParams {
   const size = query.get('size') ?? 'small';
   const seed = query.get('seed') ?? 'pixelciv';
   const sizeId: WorldSizeId = Object.hasOwn(WORLD_SIZES, size) ? (size as WorldSizeId) : 'small';
   return defaultWorldParams(data.worldgen.parameters, seed.slice(0, 64) || 'pixelciv', sizeId);
+}
+
+/** Zoom demandé par l'adresse (?zoom=4), en pixels CSS par pixel de carte, s'il est valable. */
+function startingZoom(query: URLSearchParams): number | undefined {
+  const zoom = Number(query.get('zoom') ?? undefined);
+  return Number.isFinite(zoom) && zoom > 0 ? zoom : undefined;
 }
 
 async function main(): Promise<void> {
@@ -111,6 +118,10 @@ async function main(): Promise<void> {
   // Au doigt seul (téléphone, tablette) : un monde Moyen par défaut, en attendant la
   // mesure sur téléphone, et pas d'Immense, réservé au PC (MON-02).
   const touchOnly = !matchMedia('(any-pointer: fine)').matches;
+  // Téléphone : au doigt seul, sur le petit écran de la mise en page (style.css). Une partie
+  // s'y ouvre au zoom 3, et au zoom 2 ailleurs (2b.1).
+  const smallScreen = matchMedia('(max-width: 34rem), (max-height: 32rem)');
+  const queryZoom = startingZoom(query);
   const setup: CreationSetup = {
     parameters: data.worldgen.parameters,
     sizes: touchOnly ? ['small', 'medium', 'large'] : ['small', 'medium', 'large', 'huge'],
@@ -197,6 +208,8 @@ async function main(): Promise<void> {
     viewport: () => map.viewport,
     resolution: () => app.renderer.resolution,
     world: () => map.world,
+    defaultZoom: () =>
+      queryZoom ?? (touchOnly && smallScreen.matches ? DEFAULT_ZOOM.phone : DEFAULT_ZOOM.desktop),
     onLongPress: (mapX, mapY, screenX, screenY) => {
       designate(mapX, mapY, screenX, screenY, false);
     },
