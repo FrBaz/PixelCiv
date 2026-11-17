@@ -9,6 +9,7 @@
  */
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
+import { SMALL_SCREEN_QUERY } from '../src/render/camera';
 
 // Lue par Node : sous Vitest, l'import d'une feuille de style, même brut, est vide.
 const css = readFileSync(new URL('../src/app/style.css', import.meta.url), 'utf8');
@@ -291,6 +292,14 @@ describe('feuille de style (src/app/style.css)', () => {
     // #map canvas ne décrit pas le portrait, ni .create-frame canvas.
     expect(computed(portrait(false), 'display', SMALL[0], 'inline')).toBe('inline');
     expect(() => computed(slot(true), 'background', SMALL[0], 'none')).toThrow(/sélecteur/);
+  });
+
+  it("repère le téléphone du zoom d'ouverture à la requête média du petit écran (2b.1)", () => {
+    // Au doigt seul, une partie s'ouvre au zoom 3 sur le petit écran de la mise en page :
+    // main.ts l'interroge par SMALL_SCREEN_QUERY, que la feuille emploie telle quelle.
+    expect(RULES.some((rule) => rule.media === SMALL_SCREEN_QUERY)).toBe(true);
+    for (const viewport of SMALL) expect(mediaMatches(SMALL_SCREEN_QUERY, viewport)).toBe(true);
+    for (const viewport of LARGE) expect(mediaMatches(SMALL_SCREEN_QUERY, viewport)).toBe(false);
   });
 
   it('laisse toute la colonne à la chronique et à la légende sur petit écran (9-navigateur/P0)', () => {

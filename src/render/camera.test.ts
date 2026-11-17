@@ -2,10 +2,14 @@ import { describe, expect, it } from 'vitest';
 import { CHUNK_SIZE, chunkGrid, WORLD_SIZES } from '../core/world';
 import {
   cellAt,
+  clampZoom,
   constrain,
+  DEFAULT_ZOOM,
   displayScale,
   MAX_ZOOM,
+  openingZoom,
   pan,
+  parseZoom,
   physicalZoom,
   screenToMap,
   showAt,
@@ -13,6 +17,7 @@ import {
   visibleChunks,
   zoomAt,
   zoomLimits,
+  zoomTo,
   type Camera,
 } from './camera';
 
@@ -50,19 +55,25 @@ describe('zoomLimits (2b.1)', () => {
     expect(zoomLimits({ width: 2340, height: 1080 }, world, 2.75).min).toBe(2);
   });
 
-  it('ne montre jamais rien au-delà des pôles au zoom le plus faible, compte tenu de displayScale', () => {
+  it('ne montre jamais rien au-delà des pôles au zoom le plus faible, ni plus de deux largeurs du monde, compte tenu de displayScale', () => {
     const failures: string[] = [];
     for (const { extent, grid: chunks } of worlds) {
       for (let height = 1; height <= 5000; height++) {
         const screen = { width: 64, height };
         const { min } = zoomLimits(screen, extent, 1);
-        // Hauteur de la carte à l'écran, à l'échelle affichée.
+        // Hauteur de la carte à l'écran, à l'échelle affichée, et largeurs du monde visibles.
         const shown = displayScale(min) * extent.height;
+        const widths = screen.width / (displayScale(min) * extent.width);
+        // Sous 1, la carte remplit tout juste la hauteur, sauf sous 16 pixels de haut, où
+        // l'écran, plus allongé que 4:1, montrerait plus de deux largeurs du monde : elle le
+        // déborde alors, à l'échelle qui en montre deux.
         const fills =
           min < 1
-            ? Math.abs(shown - height) < 1e-6
+            ? Math.abs(shown - height) < 1e-6 || (shown > height && Math.abs(widths - 2) < 1e-9)
             : Number.isInteger(min) && shown >= height && shown - extent.height < height;
-        if (!fills) failures.push(`${String(extent.height)} / ${String(height)} : ${String(min)}`);
+        if (!fills || widths > 2 + 1e-9) {
+          failures.push(`${String(extent.height)} / ${String(height)} : ${String(min)}`);
+        }
         // Les blocs dessinés couvrent toutes les rangées de l'écran, la caméra au pôle nord,
         // au milieu du monde ou au pôle sud.
         if (height % 7 !== 0) continue;
@@ -80,6 +91,23 @@ describe('zoomLimits (2b.1)', () => {
       }
     }
     expect(failures).toEqual([]);
+  });
+
+  it('montre au plus deux largeurs du monde, même dans une fenêtre très basse', () => {
+    const huge = { width: 8192, height: 4096 };
+    // 1 280 × 150 : remplir la hauteur demanderait l'échelle 0,0366, soit 4,27 largeurs du
+    // monde. Le zoom s'arrête à celle qui en montre deux, où la carte déborde l'écran.
+    const { min } = zoomLimits({ width: 1280, height: 150 }, huge, 1);
+    expect(min).toBe(0.078125);
+    expect(1280 / min / huge.width).toBe(2);
+    expect(min * huge.height).toBeGreaterThan(150);
+    // Sous le rapport 4:1, la hauteur seule fixe le zoom le plus faible : 1 280 × 720, ou
+    // le Pixel 5 en paysage, de 806 pixels physiques de haut.
+    expect(zoomLimits({ width: 1280, height: 720 }, huge, 1).min).toBe(720 / 4096);
+    expect(zoomLimits({ width: 2206, height: 806 }, world, 2.75).min).toBe(806 / 1024);
+    // Au-delà de 1, le palier entier : deux largeurs d'un monde Petit dans 5 000 pixels
+    // demandent l'échelle 1,22, donc le palier 2.
+    expect(zoomLimits({ width: 5000, height: 100 }, world, 1).min).toBe(2);
   });
 
   it("suit la taille de l'écran : chaque redimensionnement change le zoom le plus faible", () => {
@@ -120,6 +148,33 @@ describe('zoomLimits (2b.1)', () => {
       y: 300,
       zoom: 4,
     });
+  });
+});
+
+describe("zoom d'une partie qui s'ouvre (2b.1)", () => {
+  it('vaut 3 au doigt seul sur le petit écran de la mise en page, 2 ailleurs, sauf ?zoom', () => {
+    const opening = (touchOnly: boolean, smallScreen: boolean, queryZoom?: number) =>
+      openingZoom({ queryZoom, touchOnly, smallScreen });
+    expect(DEFAULT_ZOOM).toEqual({ desktop: 2, phone: 3 });
+    // Téléphone ; tablette au doigt, sur grand écran ; PC à la fenêtre étroite ; PC.
+    expect(opening(true, true)).toBe(3);
+    expect(opening(true, false)).toBe(2);
+    expect(opening(false, true)).toBe(2);
+    expect(opening(false, false)).toBe(2);
+    // ?zoom=4 l'emporte partout.
+    expect(opening(true, true, 4)).toBe(4);
+    expect(opening(false, false, 4)).toBe(4);
+  });
+
+  it('lit ?zoom : un nombre positif, sinon rien', () => {
+    expect(parseZoom('4')).toBe(4);
+    expect(parseZoom('0.5')).toBe(0.5);
+    for (const value of ['abc', '-2', '0', '', null]) expect(parseZoom(value)).toBeUndefined();
+    // 1e400 vaut l'infini : comme 1e9, il ouvre au zoom le plus fort, et non au zoom par défaut.
+    const limits = zoomLimits({ width: 1280, height: 720 }, world, 1);
+    for (const value of ['1e9', '1e400', 'Infinity']) {
+      expect(clampZoom(physicalZoom(parseZoom(value) ?? 0, 1), limits)).toBe(24);
+    }
   });
 });
 
@@ -171,6 +226,19 @@ describe('gestes', () => {
     const after = screenToMap(zoomed, viewport, 800, 100);
     expect(after.x).toBeCloseTo(before.x, 9);
     expect(after.y).toBeCloseTo(before.y, 9);
+  });
+
+  it('fixent le zoom visé tel quel, le point zoomé toujours fixe', () => {
+    const limits = zoomLimits({ width: 1280, height: 720 }, world, 1);
+    // 1,972, que laissent 7 pixels de molette : un facteur 1 / z y donnerait 0,9999999999999999.
+    const camera: Camera = { x: 500, y: 300, zoom: 2 * Math.exp(-0.014) };
+    const before = screenToMap(camera, viewport, 800, 100);
+    const zoomed = zoomTo(camera, 1, viewport, 800, 100, limits);
+    expect(zoomed.zoom).toBe(1);
+    expect(screenToMap(zoomed, viewport, 800, 100).x).toBeCloseTo(before.x, 9);
+    expect(screenToMap(zoomed, viewport, 800, 100).y).toBeCloseTo(before.y, 9);
+    expect(zoomTo(camera, 100, viewport, 800, 100, limits).zoom).toBe(24);
+    expect(zoomTo(camera, 0.01, viewport, 800, 100, limits).zoom).toBe(720 / 1024);
   });
 
   it("s'arrêtent aux bornes du zoom, le point zoomé toujours fixe", () => {

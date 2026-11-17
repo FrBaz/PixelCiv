@@ -305,30 +305,48 @@ describe('commandes de la caméra : zoom (2b.1)', () => {
 
   /**
    * Les commandes d'une partie qui s'ouvre au zoom `defaultZoom`, en pixels CSS par pixel de
-   * carte, sur un écran qui peut changer d'une image à l'autre : `screen` en donne la taille,
-   * en pixels physiques, et la densité. `key` tape une touche, passe une image et rend
-   * l'échelle affichée.
+   * carte, dans un monde de `extent` pixels de carte, Petit par défaut, sur un écran qui peut
+   * changer d'une image à l'autre : `screen` en donne la taille, en pixels physiques, et la
+   * densité. `key` tape une touche, `wheel` tourne la molette de `deltaY` pixels ; chacun
+   * passe une image et rend l'échelle affichée.
    */
-  function zoomControls(screen: { viewport: Extent; resolution: number }, defaultZoom = 2) {
+  function zoomControls(
+    screen: { viewport: Extent; resolution: number },
+    defaultZoom = 2,
+    extent: Extent = world,
+  ) {
     const element = new FakeElement();
     const controls = new CameraControls({
       element: element as unknown as HTMLElement,
       viewport: () => screen.viewport,
       resolution: () => screen.resolution,
-      world: () => world,
+      world: () => extent,
       defaultZoom: () => defaultZoom,
       onTap: () => undefined,
       onLongPress: () => undefined,
       holdUntilRelease: () => true,
     });
-    controls.center(world);
+    controls.center(extent);
     controls.update(16);
     const key = (name: string): number => {
       listeners.get('keydown')?.({ key: name, code: '', target: null, preventDefault: vi.fn() });
       controls.update(16);
       return displayScale(controls.camera.zoom);
     };
-    return { element, controls, key };
+    const wheel = (deltaY: number): number => {
+      const event = new Event('wheel');
+      Object.defineProperties(event, {
+        deltaY: { value: deltaY },
+        deltaMode: { value: 0 },
+        ctrlKey: { value: false },
+        clientX: { value: 400 },
+        clientY: { value: 300 },
+      });
+      element.dispatchEvent(event);
+      controls.update(16);
+      return displayScale(controls.camera.zoom);
+    };
+    return { element, controls, key, wheel };
   }
 
   /** Un écran de 1 280 × 720 pixels CSS, en pixels physiques à la densité `resolution`. */
@@ -336,7 +354,7 @@ describe('commandes de la caméra : zoom (2b.1)', () => {
     return { width: Math.round(1280 * resolution), height: Math.round(720 * resolution) };
   }
 
-  it('ouvre une partie à 2 pixels CSS par pixel de carte sur PC, 3 sur téléphone, au palier de la densité', () => {
+  it('convertit le zoom par défaut, 2 ou 3 pixels CSS par pixel de carte, au palier de la densité', () => {
     // Densité, puis zooms 2 et 3 en pixels physiques par pixel de carte : à la densité 2,75,
     // 5,5 donne 6, et 8,25 donne 8.
     const cases = [
@@ -404,21 +422,32 @@ describe('commandes de la caméra : zoom (2b.1)', () => {
     expect(key('-')).toBe(1);
   });
 
+  it("fixe exactement l'échelle visée au clavier, même après la molette", () => {
+    const { controls, key, wheel } = zoomControls({ viewport: pc(1), resolution: 1 });
+    // 7 pixels de molette laissent le zoom à 1,972, affiché à l'échelle 2. Le cran − fixe
+    // l'échelle 1, au lieu de la reconstituer par le facteur 1 / 1,972, qui laissait
+    // 0,9999999999999999 : une échelle continue, donc la vue lointaine, à l'échelle 1, puis
+    // un cran + sans effet, à 1,2499999999999998.
+    expect(wheel(7)).toBe(2);
+    expect(controls.camera.zoom).toBeCloseTo(1.9722, 4);
+    key('-');
+    expect(controls.camera.zoom).toBe(1);
+    key('+');
+    expect(controls.camera.zoom).toBe(2);
+    // Tous les zooms affichés à l'échelle 2 que la molette laisse depuis le zoom 2, de 1,5 à
+    // 2,5 : 2 e^(−0,002 k).
+    const misses: number[] = [];
+    for (let k = -111; k <= 143; k++) {
+      controls.camera = { ...controls.camera, zoom: 2 };
+      if (wheel(k) !== 2) throw new Error(`molette de ${String(k)} pixels hors de l'échelle 2`);
+      key('-');
+      if (controls.camera.zoom !== 1) misses.push(k);
+    }
+    expect(misses).toEqual([]);
+  });
+
   it("s'arrête aux mêmes bornes à la molette et au pincement", () => {
-    const { element, controls } = zoomControls({ viewport: pc(1), resolution: 1 });
-    const wheel = (deltaY: number) => {
-      const event = new Event('wheel');
-      Object.defineProperties(event, {
-        deltaY: { value: deltaY },
-        deltaMode: { value: 0 },
-        ctrlKey: { value: false },
-        clientX: { value: 400 },
-        clientY: { value: 300 },
-      });
-      element.dispatchEvent(event);
-      controls.update(16);
-      return displayScale(controls.camera.zoom);
-    };
+    const { element, controls, wheel } = zoomControls({ viewport: pc(1), resolution: 1 });
     const scales = Array.from({ length: 60 }, () => wheel(-100));
     expect(Math.max(...scales)).toBe(24);
     expect(scales.at(-1)).toBe(24);
@@ -434,32 +463,74 @@ describe('commandes de la caméra : zoom (2b.1)', () => {
     expect(controls.camera.zoom).toBe(720 / 1024);
   });
 
-  it("recalcule les bornes quand l'écran change entre deux images", () => {
+  it("recalcule les bornes quand l'écran change entre deux images, sans écraser le zoom demandé", () => {
     const screen = { viewport: pc(1), resolution: 1 };
     const { controls, key } = zoomControls(screen);
     // Au plus faible en 1 280 × 720, la carte remplit la hauteur à l'échelle 0,703125.
     let scale = 0;
     for (let press = 0; press < 20; press++) scale = key('-');
     expect(scale).toBe(720 / 1024);
-    // La fenêtre passe en 1 920 × 1 080 : dès l'image suivante, le palier 2 la remplit.
+    // La fenêtre passe en 1 920 × 1 080 : dès l'image suivante, le palier 2 la remplit, et
+    // un cran − n'y change rien.
     screen.viewport = { width: 1920, height: 1080 };
     controls.update(16);
     expect(controls.camera.zoom).toBe(2);
     expect(key('-')).toBe(2);
-    // Retour en 1 280 × 720 : le zoom reste, puis redescend au nouveau minimum.
+    // Retour en 1 280 × 720 : le zoom demandé revient, celui d'avant le redimensionnement.
     screen.viewport = pc(1);
     controls.update(16);
-    expect(controls.camera.zoom).toBe(2);
-    for (let press = 0; press < 20; press++) scale = key('-');
-    expect(scale).toBe(720 / 1024);
+    expect(controls.camera.zoom).toBe(720 / 1024);
     // Le zoom du navigateur double la densité : le maximum passe à 48 pixels physiques,
     // toujours 24 pixels CSS, puis retombe à 24 quand la densité revient à 1.
-    screen.resolution = 2;
+    Object.assign(screen, { viewport: pc(2), resolution: 2 });
     for (let press = 0; press < 30; press++) scale = key('+');
     expect(scale).toBe(48);
-    screen.resolution = 1;
+    Object.assign(screen, { viewport: pc(1), resolution: 1 });
     controls.update(16);
     expect(controls.camera.zoom).toBe(24);
+    // À la densité 0,5, le maximum tombe à 12 pixels physiques ; de retour à la densité 1,
+    // le zoom remonte à 24.
+    Object.assign(screen, { viewport: pc(0.5), resolution: 0.5 });
+    controls.update(16);
+    expect(controls.camera.zoom).toBe(12);
+    Object.assign(screen, { viewport: pc(1), resolution: 1 });
+    controls.update(16);
+    expect(controls.camera.zoom).toBe(24);
+  });
+
+  it('rend le zoom demandé quand le téléphone revient du portrait au paysage', () => {
+    // Pixel 5, de densité 2,75, et monde Moyen, de 1 536 pixels de carte de haut : 2 206 × 806
+    // pixels physiques en paysage, et 1 080 × 1 999 en portrait.
+    const medium = { width: 3072, height: 1536 };
+    const landscape = { width: 2206, height: 806 };
+    const portrait = { width: 1080, height: 1999 };
+    const screen = { viewport: landscape, resolution: 2.75 };
+    const { controls, key, wheel } = zoomControls(screen, DEFAULT_ZOOM.phone, medium);
+    // Au plus faible en paysage, tout le monde, à l'échelle 806 / 1 536.
+    for (let press = 0; press < 20; press++) key('-');
+    expect(controls.camera.zoom).toBe(806 / 1536);
+    // En portrait, le palier 2 remplit la hauteur ; un cran −, ou une molette sans écart, ne
+    // change rien, et ne touche donc pas au zoom demandé.
+    screen.viewport = portrait;
+    controls.update(16);
+    expect(controls.camera.zoom).toBe(2);
+    expect(key('-')).toBe(2);
+    expect(wheel(0)).toBe(2);
+    // De retour en paysage, le zoom d'avant la rotation.
+    screen.viewport = landscape;
+    controls.update(16);
+    expect(controls.camera.zoom).toBe(806 / 1536);
+    // Un zoom choisi en portrait part du zoom affiché, sans zone morte : le palier 3, gardé
+    // en paysage, puis de nouveau en portrait.
+    screen.viewport = portrait;
+    controls.update(16);
+    expect(key('+')).toBe(3);
+    screen.viewport = landscape;
+    controls.update(16);
+    expect(controls.camera.zoom).toBe(3);
+    screen.viewport = portrait;
+    controls.update(16);
+    expect(controls.camera.zoom).toBe(3);
   });
 
   it('suit la rotation du téléphone, qui est un redimensionnement', () => {
