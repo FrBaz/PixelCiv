@@ -1,0 +1,24 @@
+# Corrections de la phase 2 (phase 2b)
+
+Consignes de l'auteur du 15 novembre 2026, avant la phase 3. Elles tiennent lieu de document de conception pour les tâches 2b.1 à 2b.9 : l'auteur a confirmé que son message suffisait, et les images et scripts de référence qu'il annonçait (`docs/design/corrections/`, `prototypes/corrections/`) n'existent pas. Le texte ci-dessous reprend son message, mis en forme mais sans changement de fond. Les choix d'architecture qui en découlent sont consignés dans les ADR, et le découpage en tâches dans `docs/PLAN.md` et `docs/BACKLOG.md`.
+
+## Méthode
+
+Les tâches 2b.1 à 2b.9 se traitent dans l'ordre, une PR par tâche. Chaque PR montre des captures avant et après aux zooms 1, 2, 4 et 8, sur trois graines, et la tâche est essayée sur PC et sur téléphone. Les choix sont consignés dans un ou plusieurs ADR. Les empreintes de référence sont mises à jour si le déterminisme change.
+
+## Points de vigilance
+
+- **Tuiles de la carte : ne touche à rien.** Le rendu actuel des tuiles convient. Cette phase ne change ni l'ombrage, ni le grain, ni les couleurs du terrain. Les remarques précédentes sur ce sujet sont abandonnées.
+- **Zoom et caméra (2b.1).** Zoom maximal porté à 24. Zoom minimal recalculé à chaque redimensionnement pour que la carte remplisse toujours l'écran en hauteur, sans jamais rien montrer au-delà des pôles ; bouclage est-ouest conservé. Zoom par défaut : 2 sur PC, 3 sur téléphone.
+- **Deux horloges (2b.2).** Garder le pas mensuel pour la démographie, l'économie, les savoirs et les saisons, et le ralentir par défaut. Ajouter un sous-pas quotidien pour le mouvement et les activités des individus. Le rendu interpole encore entre deux jours, pour que rien ne saute à l'image. Le sous-pas ne recalcule que les positions et les activités des individus actifs. Aux vitesses élevées, il regroupe plusieurs jours. Une année dure 40 s en vitesse normale ; vitesses ×½, ×1, ×4 et ×16.
+- **Individus découplés des pixels (2b.3).** Chaque individu a une position continue, en cases et fractions de case : il peut se tenir en (2,37 ; 1,68). Sa taille et sa résolution d'affichage lui sont propres, converties en pixels au rendu selon le zoom, jamais contraintes à un multiple de la case. Même en groupe, chacun est déjà une entité distincte ; à l'écran, les membres d'un groupe ne se rangent plus en grappe.
+- **Mer animée (2b.4).** Par le shader, sans recuire les blocs : une onde claire d'un ou deux pixels qui glisse en diagonale, en boucle lente, et de rares clapots plus sombres. La haute mer bouge moins que les eaux côtières. Tout reste dans la palette de l'eau, et l'animation se fige quand la mer gèle.
+- **Humains (2b.5).** Partir des planches de `sprites/humans/skin/` (sous-dossiers `male/` et `female/`, six teintes chacun ; `sprites/sprite_converter.ipynb` documente leur découpe). Les habiller par substitution exacte des tons, région par région : chaque ton de peau ou de sous-vêtement devient le ton correspondant d'un tissu, en gardant le modelé et le contour d'origine, sans couleur nouvelle. Appliquer le même procédé à toutes les animations. Prévoir des versions réduites pour les zooms faibles.
+- **Décor et gibier (2b.6).** Arbres, conifères, buissons et rochers en objets, posés d'après les couches `trees` et `shrubs` et les gisements, au plus un arbre par case de forêt, avec ombre portée et variantes saisonnières. Pour le gibier (cerf, sanglier, lièvre), s'inspirer du style des animaux de `sprites/animals/` (renard, chien, cheval) : contour sombre, peu de couleurs, vu de profil.
+- **Saisons (2b.7).** Neige avec inertie, qui s'accumule et fond lentement ; feuillages qui changent au fil de l'année ; lumière de saison par les palettes ; et un réglage des effets.
+- **Activités (2b.8).** Chaque individu a une activité : repos au camp, cueillette, chasse, pêche, corvée d'eau, suivi du groupe, jeu. Le mouvement visible est une animation déterministe tirée de l'activité, pour les seuls individus visibles.
+- **Portraits (2b.9).** Abandonner le générateur maison. Porter en TypeScript le générateur Portrait64 du dépôt [FrBaz/AvatarGenerator](https://github.com/FrBaz/AvatarGenerator) : assembler ses calques PNG à l'exécution, recolorés par palettes, avec une configuration déduite des gènes, de l'âge, de la culture et du rang de l'individu, de façon déterministe, et mettre le résultat en cache. Quelques détails restent à polir : les yeux et les lunettes des bébés et des vieillards, les mèches qui débordent. Améliorer ce générateur à l'aide d'agents sceptiques jusqu'à ce qu'il soit parfait.
+
+## Licences
+
+Les planches de `sprites/` ont été versées par l'auteur, qui a vérifié leur licence : elle permet de les modifier, et de les distribuer avec le jeu comme dans ce dépôt public (réponse du 15 novembre 2026). Elles sont créditées dans `CREDITS.md` dès leur intégration. Les calques de Portrait64 viennent d'un dépôt de l'auteur.

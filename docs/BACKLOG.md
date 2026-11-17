@@ -228,6 +228,28 @@ Restent ouverts :
 - au-delà d'une densité d'écran de 3, sous l'échelle 2, la plus grande bannière de groupe fait moins de 12 px CSS de haut (ADR 0010) ;
 - le bloc principal du build dépasse les 500 ko au-delà desquels Vite avertit (520 ko, dont 7 ko pour l'atlas agrandi par les bannières).
 
+## Phase 2b — Corrections avant la phase 3
+
+Objectif : voir vivre chaque individu de près, au fil des jours, dans un monde qui bouge, avant la phase 3 (PLAN, section 7). Les consignes de l'auteur du 15 novembre 2026 font foi (`docs/design/corrections-phase-2.md`). Une PR par tâche, dans l'ordre, chacune sur sa branche, partie de celle de la tâche précédente ; chaque PR montre des captures avant et après aux zooms 1, 2, 4 et 8 sur trois graines, rangées sur la branche `claude/captures`, et la tâche est essayée sur PC et sur téléphone. Le rendu des tuiles de la carte ne change pas.
+
+**Jalon 2b.** De près, on voit chaque humain, habillé selon sa culture, vaquer à ses activités au fil des jours, parmi les arbres, le gibier et une mer qui bouge ; les saisons passent avec leur neige et leurs feuillages ; chaque portrait vient de Portrait64.
+
+| # | Tâche | Exigences | Critère d'acceptation | État |
+|---|---|---|---|---|
+| 2b.1 | Zoom et caméra : zoom maximal 24 ; zoom minimal recalculé à chaque redimensionnement ; bouclage est-ouest ; zoom par défaut 2 sur PC, 3 sur téléphone. | REN-01, IHM-07 | À toute taille de fenêtre, au zoom le plus faible, la carte remplit l'écran en hauteur sans rien montrer au-delà des pôles ; on zoome jusqu'à 24 ; une partie s'ouvre au zoom 2 sur PC et 3 sur téléphone. | à faire |
+| 2b.2 | Deux horloges : pas mensuel ralenti pour la démographie, l'économie, les savoirs et les saisons ; sous-pas quotidien pour le mouvement et les activités des individus actifs, regroupé aux vitesses élevées ; rendu interpolé entre deux jours. | MOD-06 | Une année dure 40 s à ×1 (vitesses ×½, ×1, ×4, ×16) ; rien ne saute à l'image ; le coût d'un jour ne dépend que des individus actifs ; la partie reste déterministe, empreintes à jour. | à faire |
+| 2b.3 | Individus découplés des pixels : position continue en cases ; taille et résolution d'affichage propres, converties au rendu selon le zoom ; plus de grappe. | REN-04, REN-08 | Un individu se tient en (2,37 ; 1,68) et s'affiche à sa propre taille à tout zoom ; les membres d'un groupe ne se rangent plus en grappe. | à faire |
+| 2b.4 | Mer animée par le shader : onde claire en diagonale, clapots rares, haute mer plus calme que les côtes, palette de l'eau, figée par le gel. | REN-10 | La mer bouge sans qu'aucun bloc soit recuit, plus près des côtes qu'au large, sans couleur hors de la palette de l'eau ; elle s'arrête sous la banquise. | à faire |
+| 2b.5 | Humains : planches de `sprites/humans/skin/` habillées par substitution exacte des tons, région par région, pour toutes les animations ; versions réduites pour les zooms faibles. | REN-04, REN-09 | Aucune couleur nouvelle, modelé et contour d'origine gardés, dans chaque animation ; les humains restent lisibles aux zooms faibles. | à faire |
+| 2b.6 | Décor et gibier : arbres, conifères, buissons et rochers en objets, au plus un arbre par case de forêt, ombre portée, variantes saisonnières ; cerf, sanglier et lièvre. | MON-10, FAU-01, REN-03 | Le décor suit les couches `trees` et `shrubs` et les gisements ; le gibier est vu de profil, au contour sombre, avec peu de couleurs. | à faire |
+| 2b.7 | Saisons : neige à inertie, feuillages au fil de l'année, lumière de saison par les palettes, réglage des effets. | REN-10, SAI-02 | La neige s'accumule et fond avec retard ; le feuillage change au fil de l'année ; un réglage atténue ou coupe ces effets. | à faire |
+| 2b.8 | Activités : repos au camp, cueillette, chasse, pêche, corvée d'eau, suivi du groupe, jeu ; animation déterministe tirée de l'activité. | REN-03, REN-04, SAI-03 | Chaque individu a une activité ; son mouvement visible en découle de façon déterministe ; seuls les individus visibles s'animent. | à faire |
+| 2b.9 | Portraits : Portrait64 porté en TypeScript, calques assemblés et recolorés à l'exécution, configuration tirée des gènes, de l'âge, de la culture et du rang, en cache. | REN-07 | Un même individu donne toujours le même portrait ; bébés, vieillards et coiffures sans défaut, de l'avis de relecteurs sceptiques. | à faire |
+
+### Notes
+
+**Écarts au PRD décidés par l'auteur.** Une année dure 40 s en vitesse normale, et non plus environ 10 s (MOD-06). Les individus ont leur propre résolution d'affichage, convertie au rendu selon le zoom (2b.3), alors que REN-08 voulait une seule densité de pixels par vue et REN-04 des mini-sprites à l'échelle de la carte. Le PRD reste à mettre à jour par l'auteur ; les ADR de la phase consignent ces choix.
+
 ## À fournir par l'auteur
 
 | Quoi | Pour | Référence | État |
