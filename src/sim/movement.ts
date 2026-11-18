@@ -66,6 +66,9 @@ const CAMP = -2;
 const NO = -1;
 /** Entiers par emplacement dans Movement.rest. */
 const REST_STRIDE = 4;
+/** Côté des tuiles de la grille des places tenues, 2^TILE_SHIFT cases (Movement.restHead). */
+const TILE_SHIFT = 3;
+const TILE_MASK = (1 << TILE_SHIFT) - 1;
 /**
  * Tirages d'une place : six dans son rayon, puis six dans un rayon 1,6 fois plus grand, puis
  * quatre dans un rayon 2,5 fois plus grand.
@@ -335,9 +338,14 @@ export class Movement {
   /**
    * Places tenues, par case : celle de qui se repose ou va partir, la place visée de qui
    * marche. Premier de chaque case, puis par emplacement le suivant, le précédent, la case
-   * (−1 sans place) et le point.
+   * (−1 sans place) et le point. Les cases s'y rangent par tuiles de 8 × 8 (restIndex), si
+   * bien que les quelques cases voisines que lit une recherche tiennent dans une ou deux lignes
+   * de mémoire, et non dans une par rangée. Ce n'est qu'une autre numérotation des cases du
+   * monde : les listes, et leur ordre, restent les mêmes.
    */
   readonly restHead: Int32Array<ArrayBuffer>;
+  /** Tuiles par rangée de tuiles, dans restHead. */
+  private readonly tilesX: number;
   /**
    * Par emplacement, d'un bloc pour qu'une recherche ne lise qu'une ligne de mémoire : x, y,
    * le suivant de sa case, et 1 si la place est celle de qui part ce mois-ci (REST_STRIDE).
@@ -362,6 +370,10 @@ export class Movement {
   paceValue = new Float64Array(0);
   paceTick = new Int32Array(0);
   paceId = new Uint32Array(0);
+  /** Allure de marche de chaque emplacement, gardée de même (walkingPace). */
+  walkValue = new Float64Array(0);
+  walkTick = new Int32Array(0);
+  walkId = new Uint32Array(0);
   /** Position de la veille de chaque marcheur, et marque de qui arrive ce jour. */
   prevX = new Int32Array(0);
   prevY = new Int32Array(0);
@@ -387,7 +399,33 @@ export class Movement {
   constructor(width: number, height: number) {
     this.width = width;
     this.height = height;
-    this.restHead = new Int32Array(width * height).fill(NO);
+    this.tilesX = (width + TILE_MASK) >> TILE_SHIFT;
+    const tilesY = (height + TILE_MASK) >> TILE_SHIFT;
+    this.restHead = new Int32Array((this.tilesX * tilesY) << (2 * TILE_SHIFT)).fill(NO);
+  }
+
+  /** Rang, dans restHead, de la case (column, row) du monde. */
+  private restIndex(column: number, row: number): number {
+    const tile = (row >> TILE_SHIFT) * this.tilesX + (column >> TILE_SHIFT);
+    return (tile << (2 * TILE_SHIFT)) | ((row & TILE_MASK) << TILE_SHIFT) | (column & TILE_MASK);
+  }
+
+  /**
+   * Rang, dans restHead, de la case de la position (x, y), en unités, toujours dans le monde
+   * (position.ts). Hors du monde, celui de la case que désignait cellOf, sinon −1 : rien ne
+   * change, même alors.
+   */
+  private restCellOf(x: number, y: number): number {
+    const { width, height } = this;
+    const column = Math.floor(x / FIXED);
+    const row = Math.floor(y / FIXED);
+    if (column >= 0 && column < width && row >= 0 && row < height) {
+      return this.restIndex(column, row);
+    }
+    const cell = cellOf(x, y, width);
+    if (!(cell >= 0 && cell < width * height)) return NO;
+    const cellRow = Math.floor(cell / width);
+    return this.restIndex(cell - cellRow * width, cellRow);
   }
 
   /** Assez de place pour `capacity` emplacements. */
@@ -410,6 +448,7 @@ export class Movement {
     this.prevY = grownInt32(this.prevY, size, 0);
     this.arrivingOn = grownInt32(this.arrivingOn, size, -1);
     this.paceTick = grownInt32(this.paceTick, size, 0);
+    this.walkTick = grownInt32(this.walkTick, size, 0);
     if (this.paceValue.length < size) {
       const value = new Float64Array(size);
       value.set(this.paceValue);
@@ -417,6 +456,14 @@ export class Movement {
       const id = new Uint32Array(size);
       id.set(this.paceId);
       this.paceId = id;
+    }
+    if (this.walkValue.length < size) {
+      const value = new Float64Array(size);
+      value.set(this.walkValue);
+      this.walkValue = value;
+      const id = new Uint32Array(size);
+      id.set(this.walkId);
+      this.walkId = id;
     }
     this.capacity = size;
   }
@@ -481,7 +528,7 @@ export class Movement {
    */
   hold(slot: number, x: number, y: number, leaving = false): void {
     this.release(slot);
-    const cell = cellOf(x, y, this.width);
+    const cell = this.restCellOf(x, y);
     const head = this.restHead[cell] ?? NO;
     const at = slot * REST_STRIDE;
     this.rest[at] = x;
@@ -512,24 +559,32 @@ export class Movement {
    * Distance, en cases, de (x, y) à la place tenue la plus proche, hors de celle de `except`,
    * bornée par `limit` : les places qu'on regarde sont celles des cases que touche le carré
    * de côté 2 × limit autour du point (limit < 1/2 : quatre cases au plus). Avec les
-   * intentions `leaving`, la place de qui part ce mois-ci ne compte pas.
+   * intentions `leaving`, la place de qui part ce mois-ci ne compte pas. Avec `below`, la
+   * recherche s'arrête à la première place qu'elle trouve à moins de `below` case, et rend une
+   * distance sous `below`, qui n'est pas toujours la plus courte ; sinon, la même valeur.
    */
-  nearestHeld(x: number, y: number, limit: number, except: number, ignoreLeaving = false): number {
+  nearestHeld(
+    x: number,
+    y: number,
+    limit: number,
+    except: number,
+    ignoreLeaving = false,
+    below = 0,
+  ): number {
     const { restHead: head, rest, width, height } = this;
     const reach = limit * FIXED;
     const top = Math.max(0, Math.floor((y - reach) / FIXED));
     const bottom = Math.min(height - 1, Math.floor((y + reach) / FIXED));
     const left = Math.floor((x - reach) / FIXED);
     const right = Math.floor((x + reach) / FIXED);
-    const span = width * FIXED;
     let best = limit * limit;
     for (let row = top; row <= bottom; row++) {
       for (let column = left; column <= right; column++) {
-        const wrapped = ((column % width) + width) % width;
+        const wrapped = wrapColumn(column, width);
         // Sur un monde étroit, deux colonnes du carré ne désignent jamais la même case.
-        if (column !== left && wrapped === ((left % width) + width) % width) continue;
+        if (column !== left && wrapped === wrapColumn(left, width)) continue;
         // Une liste se parcourt au plus une fois par élément : aucune ne boucle (hold, release).
-        for (let slot = head[row * width + wrapped] ?? NO; slot >= 0;) {
+        for (let slot = head[this.restIndex(wrapped, row)] ?? NO; slot >= 0;) {
           const at = slot * REST_STRIDE;
           const next = rest[at + 2] ?? NO;
           // Qui part ce mois-ci libère sa place : elle ne compte pas pour une place à venir.
@@ -537,14 +592,15 @@ export class Movement {
             slot = next;
             continue;
           }
-          let dx = ((rest[at] ?? 0) - x) % span;
-          if (dx < -span / 2) dx += span;
-          else if (dx >= span / 2) dx -= span;
-          dx /= FIXED;
+          const dx = deltaFixedX(x, rest[at] ?? 0, width) / FIXED;
           const dy = ((rest[at + 1] ?? 0) - y) / FIXED;
           slot = next;
           const squared = dx * dx + dy * dy;
-          if (squared < best) best = squared;
+          if (squared < best) {
+            best = squared;
+            // La distance ne fait plus que décroître : elle restera sous `below`.
+            if (below > 0 && Math.sqrt(best) < below) return Math.sqrt(best);
+          }
         }
       }
     }
@@ -614,7 +670,17 @@ export class Movement {
 /** Coût de la case (cx, cy), cx déroulé ; Infinity au-delà des pôles. */
 function costAt(cost: Float32Array, width: number, height: number, cx: number, cy: number): number {
   if (cy < 0 || cy >= height) return Infinity;
-  return cost[cy * width + (((cx % width) + width) % width)] ?? Infinity;
+  return cost[cy * width + wrapColumn(cx, width)] ?? Infinity;
+}
+
+/**
+ * Colonne entière ramenée dans [0, width[ : ((column % width) + width) % width, que le modulo
+ * ne calcule qu'au-delà d'un tour du monde.
+ */
+function wrapColumn(column: number, width: number): number {
+  if (column >= 0 && column < width) return column;
+  if (column < 0 && column > -width) return column + width;
+  return ((column % width) + width) % width;
 }
 
 /** Résultat d'un parcours de segment (trace), repris d'un appel à l'autre. */
@@ -836,8 +902,26 @@ export function effectiveGregariousness(state: SimState, content: SimContent, sl
  * Allure de marche de `slot` : la sienne, rapprochée de celle du guide de son groupe selon
  * sa grégarité effective, g' × celle du guide + (1 − g') × la sienne ; qui marche depuis un
  * mois précédent presse le pas (camp.hurry).
+ *
+ * Elle aussi se garde le temps du mois, pour l'identifiant qui l'a demandée : les deux allures
+ * propres s'y gardent déjà (ownPace) ; le groupe, son guide et la grégarité ne changent qu'au
+ * pas mensuel, une commande n'ajoutant que des groupes nouveaux ; le bit LATE ne change qu'à
+ * lui, ou à l'arrivée (settle), après laquelle on ne marche plus avant lui.
  */
 export function walkingPace(state: SimState, content: SimContent, slot: number): number {
+  const { movement, tick } = state;
+  const id = state.people.columns.id[slot] ?? 0;
+  if (movement.walkTick[slot] === tick + 1 && movement.walkId[slot] === id) {
+    return movement.walkValue[slot] ?? 0;
+  }
+  const pace = blendedPace(state, content, slot);
+  movement.walkTick[slot] = tick + 1;
+  movement.walkId[slot] = id;
+  movement.walkValue[slot] = pace;
+  return pace;
+}
+
+function blendedPace(state: SimState, content: SimContent, slot: number): number {
   const own = ownPace(state, content, slot);
   const guide = state.movement.guides.get(state.people.columns.group[slot] ?? NONE) ?? NO;
   const g = effectiveGregariousness(state, content, slot);
@@ -998,9 +1082,7 @@ export function pickPlace(
   // Ce qui tombe dans le disque de cases franchissables autour du centre est en vue de lui.
   const open = clearRadius(state, cx, cy);
   movement.counts.places++;
-  let bestX = 0;
-  let bestY = 0;
-  let bestRoom = -1;
+  missed = 0;
   for (const scale of PLACE_REACHES) {
     const reach = radius * scale * FIXED;
     let u: number;
@@ -1015,13 +1097,8 @@ export function pickPlace(
     const ox = deltaFixedX(cx, x, width) / FIXED;
     const oy = (y - cy) / FIXED;
     if (ox * ox + oy * oy >= open * open && !segmentClear(state, cx, cy, x, y)) continue;
-    const room = roomAt(state, x, y, gap, except, others);
-    if (room >= gap) return chosen(x, y);
-    if (room > bestRoom) {
-      bestRoom = room;
-      bestX = x;
-      bestY = y;
-    }
+    if (isFree(state, x, y, gap, except, others)) return chosen(x, y);
+    remember(x, y);
   }
   // Aucun tirage libre : les points d'anneaux autour de l'ancre, de proche en proche, sans
   // tirage ; le premier libre et en vue l'emporte, sinon le plus éloigné des autres.
@@ -1032,16 +1109,26 @@ export function pickPlace(
       const y = ay + Math.round(uy * distance * FIXED);
       if (y < 0 || y >= height * FIXED || !passableAt(state, x, y)) continue;
       if (!segmentClear(state, cx, cy, x, y)) continue;
-      const room = roomAt(state, x, y, gap, except, others);
-      if (room >= gap) return chosen(x, y);
-      if (room > bestRoom) {
-        bestRoom = room;
-        bestX = x;
-        bestY = y;
-      }
+      if (isFree(state, x, y, gap, except, others)) return chosen(x, y);
+      remember(x, y);
     }
   }
   movement.counts.crowded++;
+  // La place libre exacte des points écartés, dans l'ordre où ils sont venus : rien n'a changé
+  // dans la grille depuis.
+  let bestX = 0;
+  let bestY = 0;
+  let bestRoom = -1;
+  for (let index = 0; index < missed; index++) {
+    const mx = missedX[index] ?? 0;
+    const my = missedY[index] ?? 0;
+    const room = roomAt(state, mx, my, gap, except, others);
+    if (room > bestRoom) {
+      bestRoom = room;
+      bestX = mx;
+      bestY = my;
+    }
+  }
   if (bestRoom >= 0) return chosen(bestX, bestY);
   const anchorX = wrapFixedX(ax, width);
   if (passableAt(state, anchorX, ay) && segmentClear(state, cx, cy, anchorX, ay)) {
@@ -1075,6 +1162,20 @@ const RING: readonly (readonly [number, number])[] = (() => {
 const RING_STEPS = 6;
 
 /**
+ * Points en vue que pickPlace a écartés, faute de place, repris d'un appel à l'autre : leur
+ * place libre exacte ne se calcule qu'au repli, s'il vient.
+ */
+const missedX = new Float64Array(PLACE_REACHES.length + RING.length * RING_STEPS);
+const missedY = new Float64Array(missedX.length);
+let missed = 0;
+
+function remember(x: number, y: number): void {
+  missedX[missed] = x;
+  missedY[missed] = y;
+  missed++;
+}
+
+/**
  * Place libre autour de (x, y), en cases, bornée par `gap` : la distance à la plus proche place
  * tenue, hors de celle de `except` et de celles de qui part, et aux points de `others`.
  */
@@ -1095,6 +1196,29 @@ function roomAt(
     room = Math.min(room, Math.sqrt(dx * dx + dy * dy));
   }
   return room;
+}
+
+/**
+ * roomAt(x, y) vaut-il au moins `gap`, la place est-elle libre ? La même réponse, sans calculer
+ * la plus courte distance : la recherche s'arrête au premier voisin à moins de `gap`.
+ */
+function isFree(
+  state: SimState,
+  x: number,
+  y: number,
+  gap: number,
+  except: number,
+  others: { readonly x: number[]; readonly y: number[] } | undefined,
+): boolean {
+  if (state.movement.nearestHeld(x, y, gap, except, true, gap) < gap) return false;
+  if (others === undefined) return true;
+  const { width } = state.size;
+  for (let index = 0; index < others.x.length; index++) {
+    const dx = deltaFixedX(x, others.x[index] ?? 0, width) / FIXED;
+    const dy = ((others.y[index] ?? 0) - y) / FIXED;
+    if (Math.sqrt(dx * dx + dy * dy) < gap) return false;
+  }
+  return true;
 }
 
 /** La place que rend pickPlace, reprise d'un appel à l'autre. */
@@ -1124,7 +1248,7 @@ function clearRadius(state: SimState, cx: number, cy: number): number {
   const row = Math.floor(py);
   // Seul le centre d'une case se garde : c'est celui des camps.
   const centered = cx === column * FIXED + FIXED / 2 && cy === row * FIXED + FIXED / 2;
-  const key = row * width + (((column % width) + width) % width);
+  const key = row * width + wrapColumn(column, width);
   const known = centered ? movement.openings.get(key) : undefined;
   if (known !== undefined) return known;
   let radius = CLEAR_REACH - 0.5;
@@ -1178,7 +1302,7 @@ export function moveDay(state: SimState, content: SimContent): void {
 function departures(state: SimState, content: SimContent, day: number): void {
   const list = state.movement.leaving[state.day] ?? [];
   if (list.length === 0) return;
-  const slots = [...list].sort((a, b) => a - b);
+  const slots = Int32Array.from(list).sort();
   list.length = 0;
   const random = state.rng.stream('sim.camp');
   for (const slot of slots) depart(state, content, slot, random, day);
@@ -1440,7 +1564,7 @@ function planLeg(state: SimState, content: SimContent, slot: number): boolean {
   const passable = (x: number, y: number) =>
     y >= 0 &&
     y < height &&
-    (state.cost[y * width + (((x % width) + width) % width)] ?? Number.POSITIVE_INFINITY) <
+    (state.cost[y * width + wrapColumn(x, width)] ?? Number.POSITIVE_INFINITY) <
       Number.POSITIVE_INFINITY;
   if ((move & DETOUR) === 0) {
     // Jusqu'au bord, si la dernière case libre de la ligne est plus proche de la place.
@@ -1475,7 +1599,7 @@ function planLeg(state: SimState, content: SimContent, slot: number): boolean {
       if (!passable(nx, ny)) continue;
       if (ox !== 0 && oy !== 0 && (!passable(cx + ox, cy) || !passable(cx, cy + oy))) continue;
       const distance = remaining(nx, ny);
-      const cost = state.cost[ny * width + (((nx % width) + width) % width)] ?? 0;
+      const cost = state.cost[ny * width + wrapColumn(nx, width)] ?? 0;
       if (distance < bestDistance - 1e-9 || (distance < bestDistance + 1e-9 && cost < bestCost)) {
         best = k;
         bestDistance = distance;
@@ -1499,7 +1623,7 @@ function planLeg(state: SimState, content: SimContent, slot: number): boolean {
   const group = state.society.groups.get(columns.group[slot] ?? NONE);
   if (group === undefined) return false;
   const field = campField(state, content, group);
-  const value = field.valueAt(((cx % width) + width) % width, cy);
+  const value = field.valueAt(wrapColumn(cx, width), cy);
   if (value === 0) {
     // Au camp, d'où la place est en vue du centre : il gagne le centre, si ce n'est fait.
     if (ax === centerOf(cx) && ay === centerOf(cy)) return false;
@@ -1514,7 +1638,7 @@ function planLeg(state: SimState, content: SimContent, slot: number): boolean {
     const ny = cy + oy;
     if (!passable(nx, ny)) continue;
     if (ox !== 0 && oy !== 0 && (!passable(cx + ox, cy) || !passable(cx, cy + oy))) continue;
-    const next = field.valueAt(((nx % width) + width) % width, ny);
+    const next = field.valueAt(wrapColumn(nx, width), ny);
     if (next < bestValue) {
       best = k;
       bestValue = next;
@@ -1608,7 +1732,6 @@ function spaceWalkers(state: SimState, content: SimContent, day: number): void {
     spaceSlots[at] = slot;
   }
   const reach = gap * gap;
-  const span = width * FIXED;
   const moves: number[] = [];
   for (let g = 0; g < groups; g++) {
     const first = groupStarts[g] ?? 0;
@@ -1618,10 +1741,7 @@ function spaceWalkers(state: SimState, content: SimContent, day: number): void {
     const x0 = x[spaceSlots[first] ?? 0] ?? 0;
     for (let at = first; at < last; at++) {
       const slot = spaceSlots[at] ?? 0;
-      let dx = ((x[slot] ?? 0) - x0) % span;
-      if (dx < -span / 2) dx += span;
-      else if (dx >= span / 2) dx -= span;
-      spaceX[at] = dx / FIXED;
+      spaceX[at] = deltaFixedX(x0, x[slot] ?? 0, width) / FIXED;
       spaceY[at] = (y[slot] ?? 0) / FIXED;
       spaceStepX[at] = (stepX[slot] ?? 0) / FIXED;
       spaceStepY[at] = (stepY[slot] ?? 0) / FIXED;

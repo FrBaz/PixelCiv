@@ -29,6 +29,10 @@ export function fromFixed(units: number): number {
 /** Abscisse ramenée dans [0, width × FIXED[, sur un monde de `width` colonnes. */
 export function wrapFixedX(x: number, width: number): number {
   const span = width * FIXED;
+  // À moins d'un tour du monde, le modulo rendrait x, ou x + span : sans lui, le même
+  // résultat, exact, et plus vite.
+  if (x >= 0 && x < span) return x;
+  if (x < 0 && x > -span) return x + span;
   const wrapped = x % span;
   return wrapped < 0 ? wrapped + span : wrapped;
 }
@@ -39,7 +43,9 @@ export function wrapFixedX(x: number, width: number): number {
  */
 export function deltaFixedX(from: number, to: number, width: number): number {
   const span = width * FIXED;
-  let delta = (to - from) % span;
+  let delta = to - from;
+  // Le modulo ne change qu'un écart d'au moins un tour (si |d| < span, d % span = d).
+  if (delta <= -span || delta >= span) delta %= span;
   if (delta < -span / 2) delta += span;
   else if (delta >= span / 2) delta -= span;
   return delta;
