@@ -36,7 +36,8 @@ import { defaultWorldParams, worldParamsSchema, type WorldParams } from '../core
 import { GameCommandSchema } from '../sim/commands';
 import { MIGRATIONS, restoreState, saveState } from '../sim/save';
 import { cellIndex, createState, takeDirtyChunks, type SimState } from '../sim/state';
-import { applyCommands, step, type RejectedCommand } from '../sim/step';
+import { step } from '../sim/day';
+import { applyCommands, type RejectedCommand } from '../sim/step';
 import { chroniclePage, chronicleViews, groupsFrame, inspect } from '../sim/views';
 import { GENERATOR_VERSION, type GenerationParams } from '../worldgen/generate';
 

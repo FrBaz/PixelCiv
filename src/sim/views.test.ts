@@ -8,7 +8,8 @@ import { FEMALE, GENOME_WORDS, NONE } from './population';
 import { restoreState, saveState } from './save';
 import { spawnGroup } from './spawn';
 import type { SimState } from './state';
-import { step, type SimContent } from './step';
+import { step } from './day';
+import type { SimContent } from './step';
 import { firstCellOf, scatteredGroups, testData, testHuman, testState, withHuman } from './testing';
 import {
   chroniclePage,

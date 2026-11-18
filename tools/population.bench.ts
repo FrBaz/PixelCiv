@@ -20,7 +20,8 @@ import { WORLD_SIZES } from '../src/core/world';
 import { defaultWorldParams } from '../src/core/worldParams';
 import { spawnGroup } from '../src/sim/spawn';
 import { createState, type SimState } from '../src/sim/state';
-import { fingerprint, step } from '../src/sim/step';
+import { step } from '../src/sim/day';
+import { fingerprint } from '../src/sim/step';
 import { groupsFrame } from '../src/sim/views';
 import { generateWorld } from '../src/worldgen/generate';
 

@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import type { GameCommand } from '../core/protocol';
 import { replay } from './replay';
-import { applyCommands, fingerprint, step } from './step';
+import { step } from './day';
+import { applyCommands, fingerprint } from './step';
 import {
   cellsOf,
   firstCellOf,

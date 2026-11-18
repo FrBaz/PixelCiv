@@ -30,6 +30,7 @@ import { MONTHS_PER_YEAR } from './people';
 import { ANCESTRY_SLOTS, ANCESTRY_TOTAL, NONE, type Population } from './population';
 import type { Group } from './society';
 import type { SimState } from './state';
+import type { WalkRecorder } from './walks';
 
 export interface GroupsContent extends ForageContent {
   readonly altitudeLevels: Catalog<AltitudeLevel>;
@@ -99,7 +100,9 @@ function prospect(state: SimState, content: GroupsContent, x: number, y: number)
  * qui rapproche le plus du but, la moins coûteuse à égalité. Un pas en diagonale demande
  * que les deux cases qu'il enjambe soient franchissables : les eaux se touchent par les
  * coins (elles se rangent en 8-connexité), et on ne passe pas entre deux d'entre elles.
- * Renvoie la case atteinte.
+ * Renvoie la case atteinte. `record` reçoit chaque pas, sa case et le coût dépensé depuis
+ * le départ, compté comme budget − reste : il croît à chaque pas et ne dépasse jamais le
+ * budget (ADR 0013). Il ne change rien au chemin.
  */
 export function walk(
   cost: Float32Array,
@@ -107,6 +110,7 @@ export function walk(
   from: { readonly x: number; readonly y: number },
   target: { readonly x: number; readonly y: number },
   budget: number,
+  record?: WalkRecorder,
 ): { x: number; y: number } {
   const { width, height } = size;
   const blocked = (cell: number) => !Number.isFinite(cost[cell] ?? Number.POSITIVE_INFINITY);
@@ -144,6 +148,7 @@ export function walk(
     x = bestX;
     y = bestY;
     left -= bestCost;
+    record?.step(y * width + x, budget - left);
   }
   return { x, y };
 }
@@ -439,7 +444,11 @@ export function moveGroup(
       bestValue = score;
     }
   }
-  const reached = walk(cost, size, group, best, walkBudget(people, members, tick, content));
+  // La marche se note, pour se parcourir jour après jour pendant le mois qui vient.
+  const budget = walkBudget(people, members, tick, content);
+  state.walks.begin(group.id, group.y * width + group.x, budget);
+  const reached = walk(cost, size, group, best, budget, state.walks);
+  state.walks.end();
   group.x = reached.x;
   group.y = reached.y;
   group.targetX = best.x;
@@ -595,14 +604,11 @@ export function splitGroup(
     count: leaving.length,
   });
   // Le nouveau groupe se met en route aussitôt : c'est sa marche du mois (step ne le
-  // déplace plus), avec le budget de ses adultes.
-  const start = walk(
-    cost,
-    size,
-    group,
-    { x: homeX, y: homeY },
-    walkBudget(people, leaving, tick, content),
-  );
+  // déplace plus), avec le budget de ses adultes, partie de la case de la scission.
+  const budget = walkBudget(people, leaving, tick, content);
+  state.walks.begin(child.id, group.y * size.width + group.x, budget);
+  const start = walk(cost, size, group, { x: homeX, y: homeY }, budget, state.walks);
+  state.walks.end();
   child.x = start.x;
   child.y = start.y;
   return child;

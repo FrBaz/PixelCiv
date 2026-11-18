@@ -20,7 +20,8 @@ import { NONE } from './population';
 import { MIGRATIONS, restoreState, saveState } from './save';
 import { spawnGroup } from './spawn';
 import type { SimState } from './state';
-import { fingerprint, step, type SimContent } from './step';
+import { step } from './day';
+import { fingerprint, type SimContent } from './step';
 import { terrainLands } from './terrain';
 import { flatState, flooded, scatteredGroups, testData, testHuman, testState } from './testing';
 

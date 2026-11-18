@@ -7,7 +7,8 @@ import { GENERATOR_VERSION } from '../worldgen/generate';
 import { replay } from './replay';
 import { MIGRATIONS, restoreState, saveState } from './save';
 import type { SimState } from './state';
-import { applyCommands, fingerprint, step } from './step';
+import { step } from './day';
+import { applyCommands, fingerprint } from './step';
 import {
   cellsOf,
   firstCellOf,

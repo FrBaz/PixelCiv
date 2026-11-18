@@ -27,9 +27,9 @@ vi.mock('../sim/step', async (importOriginal) => {
   const original = await importOriginal<typeof import('../sim/step')>();
   return {
     ...original,
-    step: (...args: Parameters<typeof original.step>) => {
+    monthStep: (...args: Parameters<typeof original.monthStep>) => {
       if (failures.step) throw new TypeError('défaut du mois');
-      return original.step(...args);
+      return original.monthStep(...args);
     },
   };
 });

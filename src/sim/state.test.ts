@@ -2,7 +2,8 @@ import { describe, expect, it } from 'vitest';
 import { CHUNK_SIZE, emptyLayers, WORLD_SIZES } from '../core/world';
 import { altitudeLevelIndex } from '../core/altitude';
 import { cellIndex, createState, takeDirtyChunks } from './state';
-import { applyCommand, fingerprint, step, type SimContent } from './step';
+import { step } from './day';
+import { applyCommand, fingerprint, type SimContent } from './step';
 import { terrainLands } from './terrain';
 import {
   firstCellOf,

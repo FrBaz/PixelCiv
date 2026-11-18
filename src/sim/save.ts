@@ -30,7 +30,8 @@ import { terrainCosts, terrainLands } from './terrain';
 import { Population } from './population';
 import { migrateChronicle, restorePeople, savePeople } from './populationSave';
 import { emptySociety } from './society';
-import type { SimState } from './state';
+import { rebuildPositions, type SimState } from './state';
+import { DayPositions, Walks } from './walks';
 
 /**
  * Stocks de nourriture d'une sauvegarde : la liste des cases entamées, sans doublon, et
@@ -346,14 +347,17 @@ export function restoreState(save: SaveData, content: SaveContent): SimState {
   const grid = chunkGrid(size);
   // Couches dérivées du monde et du contenu, comme à la création de la partie.
   const cost = terrainCosts(world, content);
-  return {
+  const state: SimState = {
     params: params.data,
     size,
     tick,
+    day: 0,
     world,
     people,
     society,
     food,
+    walks: new Walks(),
+    dayPositions: new DayPositions(),
     cost,
     land: terrainLands(cost, size),
     commandLog: [...commandLog],
@@ -361,4 +365,7 @@ export function restoreState(save: SaveData, content: SaveContent): SimState {
     rng: new Rng(save.meta.seed, rng),
     dirtyChunks: new Uint8Array(grid.columns * grid.rows),
   };
+  // Les positions du jour, cache que la sauvegarde ne garde pas, se recalculent.
+  rebuildPositions(state);
+  return state;
 }

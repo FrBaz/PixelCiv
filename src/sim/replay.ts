@@ -6,7 +6,8 @@ import type { GameCommand, LoggedCommand } from '../core/protocol';
 import { copyLayers, type WorldLayers } from '../core/world';
 import type { WorldParams } from '../core/worldParams';
 import { createState, type SimState } from './state';
-import { applyCommands, step, type SimContent } from './step';
+import { step } from './day';
+import { applyCommands, type SimContent } from './step';
 
 /**
  * Rejoue `log` sur une copie du monde `world`, généré pour `params`, jusqu'au pas `ticks`.
