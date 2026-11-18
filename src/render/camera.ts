@@ -1,25 +1,72 @@
 /**
- * Caméra de la carte (ADR 0002).
+ * Caméra de la carte (ADR 0002 et 0012).
  *
  * Elle vise un point de la carte, en pixels de carte (une case vaut TILE_PX pixels),
  * et l'affiche à une échelle donnée en pixels physiques de l'écran par pixel de
  * carte. L'abscisse boucle d'est en ouest ; l'ordonnée reste entre les pôles.
  * L'échelle est continue sous 1 et procède par paliers entiers au-delà, pour garder
  * des pixels nets ; les positions à l'écran sont entières.
+ *
+ * Pour le joueur, le zoom se compte en pixels CSS par pixel de carte (tâche 2b.1) : le
+ * zoom 2 montre un pixel de carte sur 2 pixels CSS, quelle que soit la densité de
+ * l'écran. La caméra, elle, tient son zoom en pixels physiques : zoom CSS × densité,
+ * ramené à l'échelle affichée la plus proche (physicalZoom).
  */
 import { wrapX } from '../core/cylinder';
 
 /** Côté d'une case, en pixels de carte (REN-01). */
 export const TILE_PX = 4;
 
-export const MIN_ZOOM = 0.25;
-export const MAX_ZOOM = 12;
+/** Zoom le plus fort, en pixels CSS par pixel de carte (2b.1). */
+export const MAX_ZOOM = 24;
+
+/** Zoom d'une partie qui s'ouvre, en pixels CSS par pixel de carte (2b.1). */
+export const DEFAULT_ZOOM = { desktop: 2, phone: 3 } as const;
+
+/**
+ * Petit écran de la mise en page, en portrait comme en paysage : la requête média qui, dans
+ * `src/app/style.css`, passe l'interface à la mise en page du téléphone.
+ */
+export const SMALL_SCREEN_QUERY = '(max-width: 34rem), (max-height: 32rem)';
+
+/**
+ * Zoom demandé par l'adresse (?zoom=N), en pixels CSS par pixel de carte : un nombre
+ * positif, sinon rien. Un nombre trop grand pour être fini, comme 1e400, vaut l'infini, que
+ * les bornes ramènent au zoom le plus fort, comme 1e9.
+ */
+export function parseZoom(value: string | null): number | undefined {
+  const zoom = value === null ? Number.NaN : Number(value);
+  return zoom > 0 ? zoom : undefined;
+}
+
+/** Ce qui fixe le zoom d'une partie qui s'ouvre (openingZoom). */
+export interface OpeningScreen {
+  /** Zoom demandé par l'adresse (parseZoom), qui l'emporte. */
+  readonly queryZoom: number | undefined;
+  /** Au doigt seul, sans pointeur fin : `(any-pointer: fine)` ne correspond pas. */
+  readonly touchOnly: boolean;
+  /** Petit écran de la mise en page (SMALL_SCREEN_QUERY). */
+  readonly smallScreen: boolean;
+}
+
+/**
+ * Zoom d'une partie qui s'ouvre, en pixels CSS par pixel de carte (2b.1) : celui de
+ * l'adresse, sinon 3 sur téléphone, c'est-à-dire au doigt seul et sur le petit écran de la
+ * mise en page, et 2 ailleurs, sur une tablette au doigt comme sur un PC à la fenêtre
+ * étroite.
+ */
+export function openingZoom({ queryZoom, touchOnly, smallScreen }: OpeningScreen): number {
+  return queryZoom ?? (touchOnly && smallScreen ? DEFAULT_ZOOM.phone : DEFAULT_ZOOM.desktop);
+}
 
 export interface Camera {
   /** Point visé, au centre de l'écran, en pixels de carte. */
   readonly x: number;
   readonly y: number;
-  /** Zoom demandé ; l'échelle affichée en découle (displayScale). */
+  /**
+   * Zoom demandé, en pixels physiques par pixel de carte ; l'échelle affichée en découle
+   * (displayScale).
+   */
   readonly zoom: number;
 }
 
@@ -34,13 +81,71 @@ export function displayScale(zoom: number): number {
   return zoom < 1 ? zoom : Math.round(zoom);
 }
 
+/** Bornes du zoom de la caméra, en pixels physiques par pixel de carte. */
+export interface ZoomLimits {
+  readonly min: number;
+  readonly max: number;
+}
+
 /**
- * Ramène la caméra dans le monde : x modulo la largeur, et y de sorte que les pôles
- * ne quittent pas les bords de l'écran (ou que le monde soit centré s'il tient en
- * entier dans la hauteur).
+ * Bornes du zoom pour un écran de `viewport` pixels physiques, à `resolution` pixels
+ * physiques par pixel CSS, et un monde de `world` pixels de carte (2b.1, ADR 0012).
+ *
+ * Au plus faible, la carte remplit l'écran en hauteur, sans rien montrer au-delà des
+ * pôles : l'échelle vaut la hauteur de l'écran sur celle du monde quand elle tombe sous 1,
+ * où l'échelle est continue ; au-delà, c'est le premier palier entier qui l'atteint, car
+ * une échelle de 1,05 mêlerait des pixels de carte d'un et de deux pixels physiques. On ne
+ * voit pourtant jamais plus de deux largeurs du monde : dans une fenêtre plus allongée que
+ * 4:1, très basse par exemple, le zoom s'arrête plus tôt, à l'échelle qui en montre deux,
+ * où la carte, plus haute que l'écran, le remplit encore sans montrer les pôles.
+ *
+ * Au plus fort, le dernier palier qui ne dépasse pas MAX_ZOOM pixels CSS par pixel de
+ * carte : 66 à la densité 2,75, mais 26 à la densité 1,1 (23,6 pixels CSS), car 27 en
+ * ferait 24,5. Ces bornes suivent la taille de l'écran et sa densité : les commandes les
+ * recalculent à chaque image, donc à chaque redimensionnement.
  */
-export function constrain(camera: Camera, viewport: Extent, world: Extent): Camera {
-  const zoom = Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, camera.zoom));
+export function zoomLimits(viewport: Extent, world: Extent, resolution: number): ZoomLimits {
+  const fill = viewport.height / world.height;
+  // Deux largeurs du monde au plus : sans ce plancher, une fenêtre de 150 pixels de haut en
+  // montrerait plus de quatre, et dessinerait autant de fois chacun de ses blocs.
+  const fit = Math.max(fill, viewport.width / (2 * world.width));
+  // Un écran encore sans hauteur, avant la mise en page, n'a rien à remplir : le zoom le
+  // plus faible vaut alors 1, ce qui laisse le zoom par défaut tel quel.
+  const min = !(fill > 0 && Number.isFinite(fill)) ? 1 : fit <= 1 ? fit : Math.ceil(fit);
+  // La marge absorbe l'arrondi du produit : 24 × 2/3 donne 15,999…, qui vaut bien 16.
+  const top = MAX_ZOOM * resolution;
+  const max = top < 1 ? top : Math.floor(top + 1e-9);
+  return { min, max: Math.max(min, max) };
+}
+
+/**
+ * Zoom de la caméra, en pixels physiques par pixel de carte, pour un zoom de `zoom`
+ * pixels CSS par pixel de carte sur un écran de `resolution` pixels physiques par pixel
+ * CSS : l'échelle affichée la plus proche (displayScale), au palier entier le plus proche
+ * à partir de 1, et telle quelle en dessous. À la densité 2,75, le zoom 3 donne 8 pixels
+ * physiques par pixel de carte, soit 2,9 pixels CSS.
+ */
+export function physicalZoom(zoom: number, resolution: number): number {
+  return displayScale(zoom * resolution);
+}
+
+/** Le zoom ramené entre ses bornes. */
+export function clampZoom(zoom: number, limits: ZoomLimits): number {
+  return Math.min(limits.max, Math.max(limits.min, zoom));
+}
+
+/**
+ * Ramène la caméra dans le monde : zoom entre ses bornes (zoomLimits), x modulo la
+ * largeur, et y de sorte que les pôles ne quittent pas les bords de l'écran. Au zoom le
+ * plus faible sous 1, le monde remplit tout juste la hauteur : il est alors centré.
+ */
+export function constrain(
+  camera: Camera,
+  viewport: Extent,
+  world: Extent,
+  resolution: number,
+): Camera {
+  const zoom = clampZoom(camera.zoom, zoomLimits(viewport, world, resolution));
   const halfHeight = viewport.height / 2 / displayScale(zoom);
   const y =
     2 * halfHeight >= world.height
@@ -100,22 +205,40 @@ export function pan(camera: Camera, deltaX: number, deltaY: number): Camera {
   return { ...camera, x: camera.x - deltaX / scale, y: camera.y - deltaY / scale };
 }
 
-/** Change le zoom en gardant fixe le point de la carte sous (screenX, screenY). */
+/**
+ * Fixe le zoom, ramené entre ses bornes, en gardant fixe le point de la carte sous
+ * (screenX, screenY). Le zoom visé est pris tel quel : un cran du clavier qui vise
+ * l'échelle 1 la donne exactement, quand le produit d'un zoom z par le facteur 1 / z peut
+ * donner 0,9999999999999999, une échelle continue, donc la vue lointaine.
+ */
+export function zoomTo(
+  camera: Camera,
+  zoom: number,
+  viewport: Extent,
+  screenX: number,
+  screenY: number,
+  limits: ZoomLimits,
+): Camera {
+  const anchor = screenToMap(camera, viewport, screenX, screenY);
+  const clamped = clampZoom(zoom, limits);
+  const scale = displayScale(clamped);
+  return {
+    x: anchor.x - (screenX - viewport.width / 2) / scale,
+    y: anchor.y - (screenY - viewport.height / 2) / scale,
+    zoom: clamped,
+  };
+}
+
+/** Change le zoom d'un facteur, comme zoomTo : c'est le zoom de la molette et du pincement. */
 export function zoomAt(
   camera: Camera,
   factor: number,
   viewport: Extent,
   screenX: number,
   screenY: number,
+  limits: ZoomLimits,
 ): Camera {
-  const anchor = screenToMap(camera, viewport, screenX, screenY);
-  const zoom = Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, camera.zoom * factor));
-  const scale = displayScale(zoom);
-  return {
-    x: anchor.x - (screenX - viewport.width / 2) / scale,
-    y: anchor.y - (screenY - viewport.height / 2) / scale,
-    zoom,
-  };
+  return zoomTo(camera, camera.zoom * factor, viewport, screenX, screenY, limits);
 }
 
 /** Emplacement à l'écran d'un bloc visible, en pixels physiques entiers. */

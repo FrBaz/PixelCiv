@@ -15,3 +15,4 @@ Chaque décision d'architecture fait l'objet d'un ADR court (CLAUDE.md, section 
 | [0009](0009-generation-du-monde.md) | Génération du monde | accepté |
 | [0010](0010-rendu-de-la-carte.md) | Rendu de la carte | accepté |
 | [0011](0011-individus-et-demographie.md) | Individus et démographie | accepté |
+| [0012](0012-camera-et-zoom.md) | Caméra et zoom | accepté ; unité du zoom soumise à l'auteur |
