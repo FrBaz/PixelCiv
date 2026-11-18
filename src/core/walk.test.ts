@@ -148,5 +148,22 @@ describe('marche jour après jour (ADR 0013)', () => {
     expect(at(east, 0, 0.5, width)[0]).toBe(0);
     expect(at(east, 0, 0.8, width)[0]).toBeCloseTo(0.3, 12);
     expect(at(west, 0, 0.7, width)[0]).toBeCloseTo(7.8, 12);
+    // Juste après la couture, vers l'ouest, x vaut à peine moins de 0 : ajouté à la largeur,
+    // il s'arrondit à la largeur même, et doit repasser à 0 pour rester dans le monde.
+    const wide = 256;
+    const seam = walks(wide, {
+      group: 9,
+      path: [
+        [0, 5],
+        [wide - 1, 5],
+      ],
+      costs: [0, 1],
+      budget: 30,
+    });
+    for (const k of [0.5000000000000001, 0.5000000000000002, 0.5000000000000003]) {
+      const [x] = at(seam, 0, k, wide);
+      expect(x, String(k)).toBeGreaterThanOrEqual(0);
+      expect(x, String(k)).toBeLessThan(wide);
+    }
   });
 });

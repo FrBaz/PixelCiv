@@ -144,8 +144,10 @@ export function walkPosition(
   if (dx > 1) dx -= width;
   else if (dx < -1) dx += width;
   let x = fromX + 0.5 + dx * share;
+  // Ramené dans [0, width[ : un x à peine négatif donne width une fois ajouté à width,
+  // arrondi compris, et doit alors repasser à 0.
   if (x < 0) x += width;
-  else if (x >= width) x -= width;
+  if (x >= width) x -= width;
   out[offset] = x;
   out[offset + 1] = fromY + 0.5 + (toY - fromY) * share;
 }
