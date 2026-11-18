@@ -1,6 +1,6 @@
 # ADR 0012 — Caméra et zoom
 
-Statut : accepté · 17 novembre 2026 · tâche 2b.1 ; l'unité du zoom est une interprétation des consignes, soumise à l'auteur
+Statut : accepté · 17 novembre 2026 · tâche 2b.1 ; l'unité du zoom est une interprétation des consignes, soumise à l'auteur ; révisé le 18 novembre 2026 (taille des individus et seuil de la vue rapprochée, tâche 2b.3, ADR 0014)
 
 ## Contexte
 
@@ -23,4 +23,4 @@ Les consignes de l'auteur pour la phase 2b (`docs/design/corrections-phase-2.md`
 - **Un écran plus grand peut montrer moins du monde.** Dès que l'écran est plus haut que le monde, en pixels physiques contre pixels de carte, le zoom le plus faible passe au palier 2 ou au-delà. Un monde Petit fait 1 024 pixels de carte de haut : en 1 280 × 720, on le voit en entier, à l'échelle 0,70 ; en 1 920 × 1 080, à l'échelle 2, on n'en voit que 540 pixels de haut, un peu plus de la moitié. C'est le prix des pixels nets ; c'est aussi à signaler à l'auteur.
 - Le monde ne se répète plus quand on dézoome, sauf sur un écran plus allongé que le monde, qui est au format 2:1, comme un téléphone en paysage : au plus faible, la largeur visible vaut au plus la hauteur du monde multipliée par le rapport de la largeur de l'écran à sa hauteur, et jamais plus de deux largeurs du monde.
 - Sur les grands mondes, on dézoome plus loin qu'avant : un monde Immense descend à l'échelle 0,18 en 1 280 × 720, contre 0,25, et montre alors presque toute sa largeur, soit près de deux fois plus de blocs à dessiner. Les images par seconde restent à mesurer sur de vrais appareils, comme celles des tâches 1.8 et 2.9.
-- Au zoom le plus fort, un mini-sprite de 9 pixels de haut en couvre 216 pixels CSS : les tâches 2b.3 et 2b.5 donnent aux individus leur propre résolution d'affichage.
+- Au zoom le plus fort, un mini-sprite de 9 pixels de haut en couvrait 216 pixels CSS. Depuis la tâche 2b.3, les individus ont leur propre densité de pixels, la même pour tous ceux d'une vue (ADR 0014) : au zoom 24, l'adulte moyen fait 72 pixels CSS de haut, à la densité 1 comme sur Pixel 5. Ils se voient dès que l'adulte de référence vise 8 pixels CSS : au zoom 3 à la densité 1, au zoom 2,9 sur Pixel 5, si bien que le zoom 3 d'ouverture du téléphone les montre. La tâche 2b.5 leur donnera des motifs plus fins.

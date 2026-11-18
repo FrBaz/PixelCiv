@@ -16,4 +16,5 @@ Chaque décision d'architecture fait l'objet d'un ADR court (CLAUDE.md, section 
 | [0010](0010-rendu-de-la-carte.md) | Rendu de la carte | accepté |
 | [0011](0011-individus-et-demographie.md) | Individus et démographie | accepté |
 | [0012](0012-camera-et-zoom.md) | Caméra et zoom | accepté ; unité du zoom soumise à l'auteur |
-| [0013](0013-deux-horloges.md) | Deux horloges | accepté ; interprétations soumises à l'auteur |
+| [0013](0013-deux-horloges.md) | Deux horloges | accepté, révisé à la tâche 2b.3 : marche des groupes remplacée par l'ADR 0014 ; interprétations soumises à l'auteur |
+| [0014](0014-individus-hors-de-la-grille.md) | Individus hors de la grille | accepté ; écarts et interprétations soumis à l'auteur |
