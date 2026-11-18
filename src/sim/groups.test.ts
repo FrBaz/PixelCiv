@@ -577,9 +577,10 @@ describe('groupes nomades (tâche 2.5)', () => {
   });
 
   it('ne fait marcher qu’une fois le nouveau groupe le mois de sa scission (F-5, D-8)', () => {
-    // Une aire lointaine, que le nouveau groupe ne peut atteindre en un mois : il marche
-    // tout son budget vers elle, une fois, et l'allure d'environ 30 cases de plaine par
-    // mois se voit.
+    // Une aire lointaine, que le nouveau groupe ne peut atteindre en un mois : son camp est
+    // la case qu'atteint walk vers elle, de tout son budget, une fois, et l'allure d'environ
+    // 30 cases de plaine par mois se voit. Le groupe, lui, part du lieu de son groupe
+    // d'origine (ADR 0014).
     const content: SimContent = { ...testData, nomads: { ...testData.nomads, range: 80 } };
     for (let attempt = 0; attempt < 6; attempt++) {
       const state = flatState(`une marche ${String(attempt)}`);
@@ -590,7 +591,8 @@ describe('groupes nomades (tâche 2.5)', () => {
       if (split === undefined || child === undefined) throw new Error('pas de scission');
       const members = groupMembers(state.people).get(child.id) ?? [];
       const budget = walkBudget(state.people, members, split.tick, content);
-      const covered = cellDistance(state.size.width, split.x, split.y, child.x, child.y);
+      expect([child.x, child.y]).toEqual([split.x, split.y]);
+      const covered = cellDistance(state.size.width, split.x, split.y, child.campX, child.campY);
       expect(covered).toBeLessThanOrEqual(budget + 1e-9);
       expect(covered).toBeGreaterThan(budget - 1.5);
       expect(budget).toBeGreaterThan(content.nomads.walk * 0.8 - 1e-9);

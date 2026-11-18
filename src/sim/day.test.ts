@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { GameCommand } from '../core/protocol';
 import { DAYS_PER_MONTH } from '../core/time';
 import { advanceDay, step } from './day';
-import { DayPositions } from './walks';
+import { describeMovement, rebuildMovement } from './movement';
 import { fingerprint, type SimContent } from './step';
 import type { SimState } from './state';
 import { replay } from './replay';
@@ -35,7 +35,7 @@ function timedCommands(state: SimState): Map<string, GameCommand[]> {
   ]);
 }
 
-describe('sous-pas quotidien (ADR 0013)', () => {
+describe('sous-pas quotidien (ADR 0013, ADR 0014)', () => {
   it('fait passer un jour, et le pas mensuel au soir du trentième', () => {
     const state = testState();
     for (let day = 1; day < DAYS_PER_MONTH; day++) {
@@ -94,33 +94,40 @@ describe('sous-pas quotidien (ADR 0013)', () => {
     expect(fingerprint(replayed)).toBe(fingerprint(monthly));
   });
 
-  it('laisse le jour au dernier du mois si le pas mensuel échoue, et recalcule les positions', () => {
-    // Un contenu qui fait échouer le pas mensuel, avant ou après l'oubli des marches passées.
+  it('laisse le jour au dernier du mois si le pas mensuel échoue, et refait les caches du mouvement', () => {
+    // Un contenu qui fait échouer le pas mensuel au début (la repousse lit les biomes) ou à la
+    // fin (le plan du mois lit camp.lag, que le sous-pas ne lit jamais).
     let armed: 'before' | 'after' | undefined;
-    const state = testState();
+    const camp = {
+      ...testData.nomads.camp,
+      get lag() {
+        if (armed === 'after') throw new TypeError('défaut du plan');
+        return testData.nomads.camp.lag;
+      },
+    };
     const broken = {
       ...testData,
-      get nomads() {
+      get biomes() {
         if (armed === 'before') throw new TypeError('défaut du mois');
-        if (armed === 'after' && state.walks.count === 0) throw new TypeError('défaut du mois');
-        return testData.nomads;
+        return testData.biomes;
       },
+      nomads: { ...testData.nomads, camp },
     } satisfies SimContent;
+    const state = testState();
     step(state, scatteredGroups(state, 40, 30), testData);
     step(state, [], testData);
     for (let day = 1; day < DAYS_PER_MONTH; day++) advanceDay(state, [], testData);
-    expect(state.walks.count).toBeGreaterThan(0);
+    expect(state.movement.activeCount).toBeGreaterThan(0);
     for (const when of ['before', 'after'] as const) {
       armed = when;
       expect(() => advanceDay(state, [], broken), when).toThrow(TypeError);
       expect([state.tick, state.day], when).toEqual([2, DAYS_PER_MONTH - 1]);
-      // Les positions suivent l'état tel qu'il est resté : les marches, si elles restent.
-      const fresh = new DayPositions();
-      fresh.rebuild(state.society.groups.values(), state.walks, state.day, state.size.width);
-      expect(state.dayPositions.positions, when).toEqual(fresh.positions);
-      expect(state.dayPositions.walking, when).toBe(fresh.walking);
+      // Les caches suivent l'état tel qu'il est resté : refaits, ils ne changent pas.
+      const kept = describeMovement(state);
+      expect(kept.problems, when).toEqual([]);
+      rebuildMovement(state);
+      expect(describeMovement(state).text, when).toBe(kept.text);
     }
-    expect(state.walks.count).toBe(0);
     // Le défaut passé, le pas mensuel se refait.
     armed = undefined;
     expect(advanceDay(state, [], broken)).toBeInstanceOf(Map);

@@ -21,12 +21,15 @@ import type { SpawnGroupCommand } from '../core/protocol';
 import type { RandomStream } from '../core/rng';
 import { inheritGenome, pureAncestry, randomGenome } from './genetics';
 import { drawGregariousness } from './temper';
+import { placeGroup } from './movement';
 import {
+  CARRIED,
   FEMALE,
   GENOME_WORDS,
   MALE,
   NONE,
   NEVER,
+  REST,
   type NewPerson,
   type Population,
 } from './population';
@@ -87,9 +90,9 @@ function pickRule(content: SimContent, random: RandomStream): NamingRule {
   return 'father';
 }
 
-/** Un membre prévu du groupe, avant son entrée dans la population. */
+/** Un membre prévu du groupe, avant son entrée dans la population, et avant sa place. */
 interface Planned {
-  readonly person: NewPerson & { readonly genome: Uint32Array };
+  readonly person: Omit<NewPerson, 'x' | 'y' | 'move'> & { readonly genome: Uint32Array };
   /** Son conjoint, par son rang dans le plan, ou -1. */
   partner: number;
   /** Pas de son dernier accouchement, ou NEVER. */
@@ -258,6 +261,25 @@ export function spawnGroup(state: SimState, command: SpawnGroupCommand, content:
     remaining -= 2 + ages.length;
   }
 
+  // Les places de chacun, sur la case de l'apparition, qui devient le camp du groupe
+  // (ADR 0014) : tirées avant que rien ne change, sur `sim.camp`.
+  const places = placeGroup(
+    state,
+    content,
+    planned.map((entry) => {
+      const mother = entry.person.mother - firstId;
+      return {
+        birth: entry.person.birth,
+        species: entry.person.species,
+        partner: entry.partner,
+        mother: mother >= 0 && mother < planned.length ? mother : -1,
+        gregariousness: entry.person.gregariousness,
+      };
+    }),
+    { x, y },
+    state.rng.stream('sim.camp'),
+  );
+
   // Le groupe prend place, d'un bloc : plus rien ne tire au sort ni ne peut échouer.
   society.languages.push(language);
   society.cultures.push(culture);
@@ -269,6 +291,8 @@ export function spawnGroup(state: SimState, command: SpawnGroupCommand, content:
     leader: NONE,
     x,
     y,
+    campX: x,
+    campY: y,
     homeX: x,
     homeY: y,
     targetX: -1,
@@ -276,7 +300,14 @@ export function spawnGroup(state: SimState, command: SpawnGroupCommand, content:
     food: STARTING_FOOD * command.count,
   };
   society.groups.set(group.id, group);
-  const slots = planned.map((entry) => people.add(entry.person));
+  const slots = planned.map((entry, index) =>
+    people.add({
+      ...entry.person,
+      x: places.x[index] ?? 0,
+      y: places.y[index] ?? 0,
+      move: places.carried[index] ? CARRIED : REST,
+    }),
+  );
   planned.forEach((entry, index) => {
     const slot = slots[index] ?? 0;
     if (entry.partner >= 0) people.set('partner', slot, firstId + entry.partner);

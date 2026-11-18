@@ -1,14 +1,13 @@
 /**
- * Disposition des groupes sur la carte (tâches 2.9 et 2b.2 ; REN-03, REN-04, REN-08 ;
- * ADR 0013) : où se tient chaque groupe à l'instant affiché, sur sa marche du mois ou au
- * centre de sa case, quel motif dessine chaque membre, où il se tient autour de la
- * position du groupe, jusqu'où s'étend ce qui se dessine autour d'elle, quelle bannière
- * montre un groupe vu de loin, dans quel ordre les dessins passent les uns devant les
- * autres, et quel groupe se trouve sous un appui. Fonctions pures, sans PixiJS :
- * PeopleLayer dessine avec elles ce que pickGroup retrouve.
+ * Disposition des groupes sur la carte (tâches 2.9, 2b.2 et 2b.3 ; REN-03, REN-04, REN-08 ;
+ * ADR 0013, ADR 0014) : où se tient chaque groupe à l'instant affiché, au barycentre de ses
+ * membres, quel motif dessine chaque membre, à sa position, jusqu'où s'étend ce qui se dessine
+ * autour du groupe, quelle bannière montre un groupe vu de loin, dans quel ordre les dessins
+ * passent les uns devant les autres, et quel groupe se trouve sous un appui. Fonctions pures,
+ * sans PixiJS : PeopleLayer dessine avec elles ce que pickGroup retrouve.
  */
 import { GROUP_STRIDE, type GroupsFrame } from '../core/protocol';
-import { walking, walkPosition } from '../core/walk';
+import { deltaFixedX, FIXED } from '../core/position';
 import { AGE_CLASSES, decodeVisual } from '../core/visual';
 import type { Rgb } from './bake';
 import { displayScale, TILE_PX, type Camera, type Extent } from './camera';
@@ -17,32 +16,59 @@ import { displayScale, TILE_PX, type Camera, type Extent } from './camera';
 export const SPRITE_SCALE = 3;
 
 /**
- * Position, en cases, de chaque groupe de l'image `frame` au jour `k` du mois de ses
- * marches, fractionnaire (de 0 à 30) : sur son chemin s'il marche (walkOf donne l'indice de
- * sa marche), sinon au centre de sa case. Écrit x et y de chaque groupe, dans l'ordre de
- * l'image, dans `positions`, et dans `moving` si le groupe marche encore à cet instant.
+ * Position, en cases, de chaque groupe de l'image `frame` : le barycentre de ses membres, à
+ * leur position de l'image (ADR 0014), les écarts pris au plus court à travers la couture.
+ * Écrit x et y de chaque groupe, dans l'ordre de l'image, dans `positions`, et, dans
+ * `moving`, 0 : en attendant le rendu des étapes (2b.3, étape b), chacun se tient à sa
+ * position de l'image.
  */
 export function groupPositions(
   frame: GroupsFrame,
-  walkOf: ReadonlyMap<number, number>,
-  k: number,
   width: number,
   positions: Float64Array,
   moving: Uint8Array,
 ): void {
-  const { groups, walks } = frame;
+  const { groups } = frame;
+  let first = 0;
   for (let rank = 0; rank * GROUP_STRIDE + GROUP_STRIDE <= groups.length; rank++) {
     const at = rank * GROUP_STRIDE;
-    const walk = walkOf.get(groups[at] ?? 0);
-    if (walk === undefined) {
+    const size = groups[at + 3] ?? 0;
+    moving[rank] = 0;
+    if (size === 0) {
       positions[rank * 2] = (groups[at + 1] ?? 0) + 0.5;
       positions[rank * 2 + 1] = (groups[at + 2] ?? 0) + 0.5;
-      moving[rank] = 0;
-    } else {
-      walkPosition(walks, walk, k, width, positions, rank * 2);
-      moving[rank] = walking(walks, walk, k) ? 1 : 0;
+      continue;
     }
+    const x0 = frame.positions[2 * first] ?? 0;
+    let sumX = 0;
+    let sumY = 0;
+    for (let member = first; member < first + size; member++) {
+      sumX += deltaFixedX(x0, frame.positions[2 * member] ?? 0, width);
+      sumY += frame.positions[2 * member + 1] ?? 0;
+    }
+    let x = (x0 + sumX / size) / FIXED;
+    if (x < 0) x += width;
+    if (x >= width) x -= width;
+    positions[rank * 2] = x;
+    positions[rank * 2 + 1] = sumY / size / FIXED;
+    first += size;
   }
+}
+
+/**
+ * Écart, en pixels de carte, du membre de rang `member` dans l'image à la position (x, y) de
+ * son groupe, en cases : le membre se dessine à sa position de l'image (ADR 0014).
+ */
+export function memberOffset(
+  frame: GroupsFrame,
+  member: number,
+  x: number,
+  y: number,
+  width: number,
+): { readonly dx: number; readonly dy: number } {
+  const dx = deltaFixedX(Math.round(x * FIXED), frame.positions[2 * member] ?? 0, width) / FIXED;
+  const dy = (frame.positions[2 * member + 1] ?? 0) / FIXED - y;
+  return { dx: dx * TILE_PX, dy: dy * TILE_PX };
 }
 
 /** Motif d'une classe d'âge et d'un sexe, à l'image `step` (0 ou 1) de sa marche. */
@@ -253,14 +279,18 @@ export function bannerBox(x: number, y: number, banner: Size, pixel: number): Bo
 }
 
 /**
- * Rectangle du mini-sprite du membre `member`, de `shape` pixels de carte à `scale` pixels
- * physiques chacun : les pieds sur la position du groupe, en grappe autour du point (x, y)
- * de l'écran, arrondi aux pixels physiques. Au repos, au centre de sa case, ses pixels
- * tombent sur ceux de la carte ; en marche, il quitte leur grille, mais chacun de ses
- * pixels reste un pixel de carte (ADR 0013).
+ * Rectangle du mini-sprite d'un membre, de `shape` pixels de carte à `scale` pixels physiques
+ * chacun : les pieds sur sa position, à l'écart `offset` (en pixels de carte, memberOffset)
+ * du point (x, y) de l'écran où se tient son groupe, arrondi aux pixels physiques ; chacun de
+ * ses pixels reste un pixel de carte.
  */
-export function memberBox(x: number, y: number, member: number, shape: Size, scale: number): Box {
-  const offset = clusterOffset(member);
+export function memberBox(
+  x: number,
+  y: number,
+  offset: { readonly dx: number; readonly dy: number },
+  shape: Size,
+  scale: number,
+): Box {
   return {
     left: Math.round(x + (offset.dx - Math.floor(shape.width / 2)) * scale),
     top: Math.round(y + (offset.dy - shape.height + 2) * scale),
@@ -344,6 +374,7 @@ export function pickGroup(
   y: number,
   shapes: PickShapes,
   slop = 0,
+  width = view.world.width / TILE_PX,
 ): number | undefined {
   const scale = displayScale(view.camera.zoom);
   const close = scale >= SPRITE_SCALE;
@@ -389,7 +420,14 @@ export function pickGroup(
       if (close) {
         for (let member = 0; member < size; member++) {
           const shape = shapes.member(frame.sprites[first + member] ?? 0);
-          consider(id, memberBox(screenX, at.y, member, shape, pixel));
+          const offset = memberOffset(
+            frame,
+            first + member,
+            positions[group * 2] ?? 0,
+            positions[group * 2 + 1] ?? 0,
+            width,
+          );
+          consider(id, memberBox(screenX, at.y, offset, shape, pixel));
         }
       } else {
         consider(id, bannerBox(screenX, at.y, banner, pixel));

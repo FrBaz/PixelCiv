@@ -1,21 +1,20 @@
 /**
- * Banc d'essai de la population (tâches 2.11 et 2b.2 ; IND-03, NF-01 ; ADR 0013) : durée
- * du pas mensuel, avec l'image des groupes que le worker envoie après lui, et durée d'un
- * jour du sous-pas quotidien, pour 10 000 puis 50 000 individus répartis en groupes nomades
- * sur un monde Immense, assez espacés pour que chacun trouve de quoi vivre : la population
- * se maintient pendant la mesure (un monde Grand ne nourrit pas 50 000
- * chasseurs-cueilleurs). Il se lance par `npm run bench`, hors des tests. Il échoue si le
- * pas mensuel de 10 000 individus dépasse 52 ms, ou celui de 50 000 individus 208 ms, sur
- * la machine qui le lance, ou si un jour de 50 000 individus dépasse 0,5 ms : ce sont des
- * garde-fous contre les régressions. Les seuils du pas mensuel sont ceux d'avant les deux
- * horloges, quand un mois durait 52 ms à ×16 et 208 ms à ×4 ; ils ne suivent plus
- * monthDuration, qui a quadruplé, car un pas mensuel trop long arrête le mouvement à
- * l'écran. La cible de 50 000 individus à ×16 se mesure sur un vrai PC. Les mesures sont
- * consignées dans docs/BACKLOG.md.
+ * Banc d'essai de la population (tâches 2.11, 2b.2 et 2b.3 ; IND-03, NF-01 ; ADR 0013,
+ * ADR 0014) : durée d'un jour du sous-pas quotidien, du pas mensuel, avec l'image des
+ * groupes que le worker envoie après lui, et du mois entier, ses trente jours et son pas
+ * mensuel, pour 10 000 puis 50 000 individus répartis en groupes nomades sur un monde
+ * Immense, assez espacés pour que chacun trouve de quoi vivre : la population se maintient
+ * pendant la mesure (un monde Grand ne nourrit pas 50 000 chasseurs-cueilleurs). Il se lance
+ * par `npm run bench`, hors des tests. Ce sont des garde-fous contre les régressions, sur la
+ * machine qui le lance : le pas mensuel de 10 000 individus ne dépasse pas 52 ms ; à 50 000,
+ * le budget de l'ADR 0014 : le mois entier tient en 208 ms, la durée d'un mois à ×16, le pas
+ * mensuel en 97 ms, et le jour le plus long en 20 ms. La cible de 50 000 individus à ×16 se
+ * mesure sur un vrai PC. Les mesures sont consignées dans docs/BACKLOG.md.
  *
- * Chaque scénario imprime aussi l'empreinte de l'état au bout de ses trente mois : une
- * optimisation qui ne change pas le déroulement la laisse intacte (ADR 0011), ce que l'on
- * vérifie en comparant la sortie du banc avant et après elle.
+ * Chaque scénario imprime aussi les marcheurs, les étapes commencées par jour et l'empreinte
+ * de l'état au bout de ses trente mois : une optimisation qui ne change pas le déroulement la
+ * laisse intacte (ADR 0011), ce que l'on vérifie en comparant la sortie du banc avant et
+ * après elle.
  */
 import { describe, expect, it } from 'vitest';
 import { loadGameData } from '../src/core/data';
@@ -34,9 +33,11 @@ const data = loadGameData();
 /** Mois de mise en route, puis mois mesurés. */
 const WARMUP = 6;
 const MEASURED = 24;
-/** Seuils du pas mensuel, image comprise, et d'un jour, en millisecondes. */
-const MONTH_LIMIT_MS: Readonly<Record<number, number>> = { 10_000: 52, 50_000: 208 };
-const DAY_LIMIT_MS = 0.5;
+/** Seuils du pas mensuel, image comprise, en millisecondes. */
+const STEP_LIMIT_MS: Readonly<Record<number, number>> = { 10_000: 52, 50_000: 97 };
+/** Budget de 50 000 individus (ADR 0014) : le mois entier, et le jour le plus long. */
+const WHOLE_MONTH_LIMIT_MS = 208;
+const LONGEST_DAY_LIMIT_MS = 20;
 /** Taille des groupes semés. */
 const GROUP_SIZE = 25;
 /** Écart, en cases, entre deux groupes semés : leurs aires de cueillette se touchent à peine. */
@@ -94,15 +95,20 @@ describe('pas mensuel et jours de la population', () => {
       const steps: number[] = [];
       const frames: number[] = [];
       const days: number[] = [];
-      const walks: number[] = [];
+      const wholes: number[] = [];
+      let walkers = 0;
+      const legs = state.movement.counts.legs;
       for (let month = 0; month < MEASURED; month++) {
         // Les jours ordinaires du mois, chacun mesuré, puis, comme l'hôte du worker, le pas
         // mensuel du trentième jour et l'image des groupes, de ses membres.
+        let whole = 0;
         for (let day = 1; day < DAYS_PER_MONTH; day++) {
           const start = performance.now();
           advanceDay(state, [], data);
-          days.push(performance.now() - start);
-          walks.push(state.dayPositions.walking);
+          const time = performance.now() - start;
+          days.push(time);
+          whole += time;
+          walkers += state.movement.activeCount;
         }
         const start = performance.now();
         const members = advanceDay(state, [], data);
@@ -110,13 +116,15 @@ describe('pas mensuel et jours de la population', () => {
         groupsFrame(state, data, members);
         steps.push(middle - start);
         frames.push(performance.now() - middle);
+        wholes.push(whole + middle - start);
       }
       const total = steps.map((time, index) => time + (frames[index] ?? 0));
       const mean = (times: readonly number[]) =>
         times.reduce((sum, time) => sum + time, 0) / times.length;
       const sorted = [...total].sort((a, b) => a - b);
+      const longest = Math.max(...days);
       const format = (time: number) => `${time.toFixed(1)} ms`;
-      const limit = MONTH_LIMIT_MS[people] ?? 0;
+      const limit = STEP_LIMIT_MS[people] ?? 0;
       process.stdout.write(
         `${String(people).padStart(6)} semés, de ${String(before)} à ` +
           `${String(state.people.count)} vivants pendant la mesure, ` +
@@ -124,11 +132,22 @@ describe('pas mensuel et jours de la population', () => {
           `image ${format(mean(frames))}, total moyen ${format(mean(total))}, ` +
           `p95 ${format(percentile(sorted, 0.95))}, max ${format(sorted.at(-1) ?? 0)} ` +
           `(seuil ${format(limit)}) ; jour ${mean(days).toFixed(3)} ms, ` +
-          `${mean(walks).toFixed(0)} marches en cours en moyenne ; ` +
-          `empreinte ${fingerprint(state)}\n`,
+          `p95 ${format(
+            percentile(
+              [...days].sort((a, b) => a - b),
+              0.95,
+            ),
+          )}, ` +
+          `le plus long ${format(longest)} ; mois entier ${format(mean(wholes))}, ` +
+          `${(walkers / days.length).toFixed(0)} marcheurs et ` +
+          `${((state.movement.counts.legs - legs) / (MEASURED * DAYS_PER_MONTH)).toFixed(0)} ` +
+          `étapes par jour en moyenne ; empreinte ${fingerprint(state)}\n`,
       );
       expect(mean(total)).toBeLessThan(limit);
-      if (people === 50_000) expect(mean(days)).toBeLessThan(DAY_LIMIT_MS);
+      if (people === 50_000) {
+        expect(mean(wholes)).toBeLessThan(WHOLE_MONTH_LIMIT_MS);
+        expect(longest).toBeLessThan(LONGEST_DAY_LIMIT_MS);
+      }
     });
   }
 });

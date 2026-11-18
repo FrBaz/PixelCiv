@@ -1,10 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import type { Species } from '../core/data';
-import { CHRONICLE_PAGE, GROUP_STRIDE } from '../core/protocol';
+import { CHRONICLE_PAGE, GROUP_STRIDE, INTENTIONS, NO_CARRIER } from '../core/protocol';
+import { FIXED } from '../core/position';
+import { dayIndex } from '../core/time';
 import { AGE_CLASSES, decodeVisual } from '../core/visual';
 import { groupMembers } from './groups';
 import { GENERATOR_VERSION } from '../worldgen/generate';
-import { FEMALE, GENOME_WORDS, NONE } from './population';
+import { centralMember } from './movement';
+import { CARRIED, FEMALE, GENOME_WORDS, NONE } from './population';
 import { restoreState, saveState } from './save';
 import { spawnGroup } from './spawn';
 import type { SimState } from './state';
@@ -97,7 +100,11 @@ describe('fiches (tâche 2.10 ; IHM-02)', () => {
     const state = testState();
     const group = spawned(state, 12);
     const view = groupView(state, testData, group.id);
-    expect(view).toMatchObject({ id: group.id, x: group.x, y: group.y, size: 12 });
+    // Sa case : celle de son membre le plus proche du barycentre de ses membres (ADR 0014).
+    const cell = centralMember(state, groupMembers(state.people).get(group.id) ?? []);
+    const { width } = state.size;
+    expect(view).toMatchObject({ id: group.id, x: cell % width, y: Math.floor(cell / width) });
+    expect(view?.size).toBe(12);
     expect(view?.members).toHaveLength(12);
     expect(view?.members.map((member) => member.id)).toContain(group.leader);
     expect(view?.name).toBe(groupName(state, group.leader));
@@ -262,6 +269,9 @@ describe('image des groupes pour la carte (tâche 2.9 ; REN-04)', () => {
       familyName: 0,
       familyLanguage: 1,
       gregariousness: 128,
+      x: 0,
+      y: 0,
+      move: 0,
     });
     expect(reused).toBe(slot);
     expect(state.people.get('id', reused)).not.toBe(dead);
@@ -430,32 +440,70 @@ describe("âges de la vie, tirés de l'espèce (D-6, A-10, U-12)", () => {
   });
 });
 
-describe('deux horloges (ADR 0013)', () => {
-  it('envoie avec l’image les marches du mois, et la case du jour dans la fiche', () => {
+describe('individus hors de la grille (ADR 0014)', () => {
+  it("envoie avec l'image la position de chacun, qui le porte, sa stature et les étapes en cours", () => {
     const state = testState();
     step(state, scatteredGroups(state, 30, 30), testData);
-    step(state, [], testData);
+    for (let day = 0; day < 3; day++) advanceDay(state, [], testData);
     const frame = groupsFrame(state, testData);
-    expect(frame.walks).toEqual(state.walks.arrays());
-    expect(frame.walks.groups.length).toBeGreaterThan(5);
-    // Copiées : la suite de la partie ne change pas l'image envoyée.
-    expect(frame.walks.cells.buffer).not.toBe(state.walks.cells.buffer);
-    // Au jour 0, la fiche donne la case de départ ; en cours de mois, celle du jour, sur le
-    // chemin ; au bout, la case du groupe.
-    const id = frame.walks.groups.at(0) ?? 0;
-    const group = state.society.groups.get(id);
-    if (group === undefined) throw new Error('groupe introuvable');
-    const start = state.walks.cells.at(0) ?? 0;
-    const cellOf = () => {
-      const view = inspect(state, testData, { kind: 'group', id }).group;
-      return view === undefined ? -1 : view.y * 512 + view.x;
-    };
-    expect(cellOf()).toBe(start);
-    const path = new Set(Array.from(state.walks.cells.subarray(0, state.walks.ends.at(0) ?? 0)));
-    for (let day = 1; day < 30; day++) {
-      advanceDay(state, [], testData);
-      expect(path.has(cellOf())).toBe(true);
+    const members = groupMembers(state.people);
+    const total = [...members.values()].reduce((sum, list) => sum + list.length, 0);
+    for (const array of [frame.slots, frame.ids, frame.sprites, frame.statures, frame.carriers]) {
+      expect(array.length).toBe(total);
     }
-    expect(cellOf()).toBe(group.y * 512 + group.x);
+    expect(frame.positions.length).toBe(2 * total);
+    const { x, y, id, mother, move } = state.people.columns;
+    let carried = 0;
+    frame.slots.forEach((slot, member) => {
+      expect(frame.ids[member]).toBe(id[slot]);
+      expect(frame.positions[2 * member]).toBe(x[slot]);
+      expect(frame.positions[2 * member + 1]).toBe(y[slot]);
+      const carrier = frame.carriers[member] ?? NO_CARRIER;
+      if ((move[slot] ?? 0) % 8 === CARRIED) {
+        carried++;
+        expect(id[carrier]).toBe(mother[slot]);
+      } else {
+        expect(carrier).toBe(NO_CARRIER);
+      }
+    });
+    expect(carried).toBeGreaterThan(0);
+    // L'adulte de taille moyenne fait 0,75 case : 96 en 1/128 de case, à la taille près.
+    const adults = frame.slots.filter(
+      (slot) => state.tick - (state.people.columns.birth[slot] ?? 0) > 240,
+    );
+    const statures = Array.from(adults, (slot) => frame.statures[frame.slots.indexOf(slot)] ?? 0);
+    expect(Math.min(...statures)).toBeGreaterThan(80);
+    expect(Math.max(...statures)).toBeLessThan(112);
+    // Les étapes en cours, parties de l'instant de l'image, une par marcheur en route.
+    const { legs } = frame;
+    expect(legs.slots.length).toBeGreaterThan(30);
+    legs.slots.forEach((slot, index) => {
+      expect(legs.days[index]).toBe(dayIndex(state));
+      expect(legs.start[2 * index]).toBe(x[slot]);
+      expect(legs.step[2 * index]).toBe(state.people.columns.stepX[slot]);
+      expect(legs.count[index]).toBe(state.people.columns.stepDays[slot]);
+    });
+    // Rangées par emplacements : l'image ne dépend pas de l'ordre des marcheurs.
+    expect([...legs.slots]).toEqual([...legs.slots].sort((a, b) => a - b));
+  });
+
+  it('donne à la fiche du groupe la case de son membre le plus proche du barycentre, et l’intention de chacun', () => {
+    const state = testState();
+    step(state, scatteredGroups(state, 30, 30), testData);
+    const [groupId, list] = [...groupMembers(state.people)].at(0) ?? [0, []];
+    const view = inspect(state, testData, { kind: 'group', id: groupId }).group;
+    if (view === undefined) throw new Error('pas de fiche');
+    const { x, y } = state.people.columns;
+    const cells = list.map((slot) => [
+      Math.floor((x[slot] ?? 0) / FIXED),
+      Math.floor((y[slot] ?? 0) / FIXED),
+    ]);
+    expect(cells).toContainEqual([view.x, view.y]);
+    expect(centralMember(state, list)).toBe(view.y * state.size.width + view.x);
+    const person = inspect(state, testData, {
+      kind: 'person',
+      id: state.people.get('id', list[0] ?? 0),
+    }).person;
+    expect(INTENTIONS).toContain(person?.intention);
   });
 });

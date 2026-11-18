@@ -18,8 +18,8 @@ export interface DebugSample {
   readonly worstMonthMs: number | undefined;
   /** Jours par lot, en moyenne sur les derniers lots. */
   readonly batchDays: number | undefined;
-  /** Marches en cours à la fin du dernier lot. */
-  readonly walks: number | undefined;
+  /** Marcheurs à la fin du dernier lot (ADR 0014). */
+  readonly walkers: number | undefined;
 }
 
 /**
@@ -50,7 +50,7 @@ export class DebugSampler {
   private dayCount = 0;
   private months: number[] = [];
   private batches: number[] = [];
-  private walks: number | undefined;
+  private walkers: number | undefined;
 
   /** Enregistre la durée d'une image. */
   frame(durationMs: number): void {
@@ -77,7 +77,7 @@ export class DebugSampler {
     }
     if (stats.monthMs !== undefined) keep(this.months, stats.monthMs, MONTH_WINDOW);
     if (stats.days > 0) keep(this.batches, stats.days, BATCH_WINDOW);
-    this.walks = stats.walks;
+    this.walkers = stats.walkers;
   }
 
   sample(): DebugSample {
@@ -92,7 +92,7 @@ export class DebugSampler {
       monthMs: mean(this.months),
       worstMonthMs: this.months.length > 0 ? Math.max(...this.months) : undefined,
       batchDays: mean(this.batches),
-      walks: this.walks,
+      walkers: this.walkers,
     };
   }
 }

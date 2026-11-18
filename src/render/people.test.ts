@@ -1,10 +1,10 @@
 import { BufferImageSource, Container, Sprite, type Application } from 'pixi.js';
 import { describe, expect, it } from 'vitest';
 import { loadGameData, type Appearance } from '../core/data';
-import type { GroupsFrame } from '../core/protocol';
+import { NO_CARRIER, type GroupsFrame } from '../core/protocol';
+import { FIXED } from '../core/position';
 import { RandomStream, streamSeed } from '../core/rng';
 import { visualCode } from '../core/visual';
-import { emptyWalks } from '../core/walk';
 import { CHUNK_PX, parseColor } from './bake';
 import { displayScale, TILE_PX, visibleChunks, type Camera } from './camera';
 import type { Box } from './crowd';
@@ -28,18 +28,40 @@ function setup(resolution: number, appearance: Appearance = data.appearance) {
   return { people, layer };
 }
 
-/** Groupes de `size` adultes : [identifiant, colonne, ligne, culture]. */
+/**
+ * Groupes de `size` adultes : [identifiant, colonne, ligne, culture], chacun au centre de la
+ * case de son groupe.
+ */
 function frame(size: number, ...groups: [number, number, number, number][]): GroupsFrame {
+  const total = groups.length * size;
+  const positions = new Int32Array(2 * total);
+  groups.forEach(([, x, y], group) => {
+    for (let member = group * size; member < (group + 1) * size; member++) {
+      positions[2 * member] = x * FIXED + FIXED / 2;
+      positions[2 * member + 1] = y * FIXED + FIXED / 2;
+    }
+  });
   return {
     groups: Uint32Array.from(groups.flatMap(([id, x, y, culture]) => [id, x, y, size, culture])),
-    sprites: new Uint16Array(groups.length * size).fill(visualCode(1, 2, 3, 2, 0)),
-    walks: emptyWalks(),
+    slots: Uint32Array.from({ length: total }, (_, index) => index),
+    ids: Uint32Array.from({ length: total }, (_, index) => index + 1),
+    sprites: new Uint16Array(total).fill(visualCode(1, 2, 3, 2, 0)),
+    statures: new Uint8Array(total).fill(96),
+    positions,
+    carriers: new Uint32Array(total).fill(NO_CARRIER),
+    legs: {
+      slots: new Uint32Array(0),
+      days: new Uint32Array(0),
+      start: new Int32Array(0),
+      step: new Int32Array(0),
+      count: new Uint16Array(0),
+    },
   };
 }
 
-/** Montre une image dont les groupes se tiennent au repos, au centre de leur case. */
+/** Montre une image dont les membres se tiennent au centre de la case de leur groupe. */
 function showResting(people: PeopleLayer, groups: GroupsFrame): void {
-  people.show(groups, new Map(), 0, 512);
+  people.show(groups, 512);
 }
 
 /** Caméra visant la case (x, y), décalée de (dx, dy) pixels de carte. */
@@ -258,54 +280,24 @@ describe('ordre des dessins et groupe sous un appui (W-7)', () => {
   });
 });
 
-describe('groupes en marche (ADR 0013)', () => {
-  it('se dessinent entre deux cases à des positions entières, et ne marchent qu’en route', () => {
+describe('membres à leur position (ADR 0014)', () => {
+  it('dessine chacun à sa position de l’image, à des positions entières de l’écran', () => {
     const { people, layer } = setup(2);
-    const walking: GroupsFrame = {
-      ...frame(4, [1, 101, 50, 1], [2, 90, 50, 1]),
-      walks: {
-        groups: Uint32Array.of(1),
-        ends: Uint32Array.of(2),
-        cells: Uint32Array.of(50 * 512 + 100, 50 * 512 + 101),
-        costs: Float64Array.of(0, 1),
-        budgets: Float64Array.of(30),
-      },
-    };
-    const camera = aimedAt(100, 50, 12, 0.3);
-    const walkOf = new Map([[1, 0]]);
-    /**
-     * Rectangles et textures des sprites des deux groupes, au jour k du mois et à l'instant
-     * `now` : les quatre membres du groupe 1, dessinés d'abord, puis ceux du groupe 2. Les
-     * sprites se réutilisent d'un dessin à l'autre : on les lit aussitôt.
-     */
-    const drawn = (k: number, now: number) => {
-      people.show(walking, walkOf, k, 512);
-      people.draw(camera, viewport, world, now);
-      return layer.children
-        .filter((child): child is Sprite => child instanceof Sprite && child.visible)
-        .slice(0, 8)
-        .map((sprite) => ({ box: boxOf(sprite, 2), texture: sprite.texture }));
-    };
-    // Au quart du chemin, puis à la moitié : un quart de case plus loin, en pixels entiers.
-    const quarter = drawn(0.25, 0);
-    const half = drawn(0.5, 0);
-    const scale = displayScale(12);
-    expect(half).toHaveLength(8);
-    for (const [index, { box }] of half.entries()) {
+    const groups = frame(4, [1, 101, 50, 1]);
+    // Le quatrième membre, un quart de case à l'est des trois autres.
+    groups.positions[6] += FIXED / 4;
+    const camera = aimedAt(101, 50, 12, 0.3);
+    people.show(groups, 512);
+    people.draw(camera, viewport, world, 0);
+    const boxes = layer.children
+      .filter((child): child is Sprite => child instanceof Sprite && child.visible)
+      .map((sprite) => boxOf(sprite, 2));
+    expect(boxes).toHaveLength(4);
+    for (const box of boxes)
       expect(Number.isInteger(box.left) && Number.isInteger(box.top)).toBe(true);
-      const before = quarter[index]?.box ?? box;
-      const shift = index < 4 ? Math.round(0.25 * TILE_PX * scale) : 0;
-      expect(box.left - before.left).toBe(shift);
-    }
-    // En route, les membres du groupe 1 changent d'image de marche ; ceux du groupe 2, au
-    // repos, gardent la première. Arrivé, le groupe 1 s'arrête de marcher aussi.
-    const textures = (sprites: readonly { texture: unknown }[]) =>
-      sprites.map((sprite) => sprite.texture);
-    const early = textures(drawn(0.5, 0));
-    const later = textures(drawn(0.5, 420));
-    expect(early.slice(0, 4)).not.toEqual(later.slice(0, 4));
-    expect(early.slice(4, 8)).toEqual(later.slice(4, 8));
-    const arrived = textures(drawn(2, 0));
-    expect(textures(drawn(2, 420)).slice(0, 4)).toEqual(arrived.slice(0, 4));
+    const lefts = boxes.map((box) => box.left).sort((a, b) => a - b);
+    const shift = (lefts.at(-1) ?? 0) - (lefts.at(0) ?? 0);
+    const scale = displayScale(12);
+    expect(Math.abs(shift - 0.25 * TILE_PX * scale)).toBeLessThanOrEqual(1);
   });
 });

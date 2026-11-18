@@ -26,6 +26,7 @@ import type { RandomStream } from '../core/rng';
 import { inheritGenome, mixAncestry } from './genetics';
 import {
   ANCESTRY_SLOTS,
+  CARRIED,
   FEMALE,
   GENOME_WORDS,
   MALE,
@@ -315,6 +316,10 @@ function giveBirth(
     familyName: family.code,
     familyLanguage: family.language,
     gregariousness,
+    // Porté par sa mère, à sa position (ADR 0014) ; sans elle, le plan du mois le pose là.
+    x: people.get('x', mother),
+    y: people.get('y', mother),
+    move: CARRIED,
   });
   people.set('lastBirth', mother, tick);
   people.set('conceived', mother, NEVER);

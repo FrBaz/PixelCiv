@@ -68,7 +68,7 @@ export function DebugPanel() {
     ['debug.month', milliseconds(info?.monthMs)],
     ['debug.monthMax', milliseconds(info?.worstMonthMs)],
     ['debug.batchDays', number(info?.batchDays, 1)],
-    ['debug.walks', number(info?.walks, 0)],
+    ['debug.walkers', number(info?.walkers, 0)],
     [
       'debug.memory',
       info?.memoryMb === undefined

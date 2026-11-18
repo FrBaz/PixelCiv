@@ -189,8 +189,11 @@ describe('pas', () => {
     // les marches en cours (ADR 0013) ; le déroulement mensuel, qui redonnait d7269069 avec
     // le sous-pas quotidien, ne change pas. Tâche 2b.3, d'abord la seule grégarité (ADR 0014) :
     // deux colonnes de plus, chez les vivants et dans l'archive, sans population ici ; de
-    // 91fb9419 à 107b7392.
-    expect(fingerprint(state)).toBe('107b7392');
+    // 91fb9419 à 107b7392. Puis les positions des individus (ADR 0014) : les marches des
+    // groupes quittent l'empreinte, les colonnes de position et de mouvement des vivants et le
+    // camp de chaque groupe y entrent, vides ici ; rien d'autre ne change (de 107b7392 à
+    // f363d517).
+    expect(fingerprint(state)).toBe('f363d517');
   });
 
   it("redonnent l'empreinte de référence de vingt ans d'une population (ADR 0003)", () => {
@@ -219,8 +222,11 @@ describe('pas', () => {
     // change : avant cette extension, le sous-pas quotidien redonnait 63f71745. Tâche 2b.3,
     // d'abord la seule grégarité (ADR 0014) : une colonne et un flux de plus, `sim.temper`,
     // qui ne décale aucun autre tirage ; le déroulement ne change pas (de 24f9fb6b à
-    // ff30d063).
-    expect(fingerprint(state)).toBe('ff30d063');
+    // ff30d063). Puis les positions des individus (ADR 0014) : chacun marche à son allure
+    // vers sa place au camp, tirée sur un nouveau flux, `sim.camp`, et le lieu du groupe, où
+    // il cueille, chasse et se compte parmi ses voisins, se déduit de ses membres ; le
+    // déroulement change donc, de ff30d063 à 8c0c534a.
+    expect(fingerprint(state)).toBe('8c0c534a');
   });
 
   it("redonnent l'empreinte de référence de trente mois de trois mille individus (ADR 0011)", () => {
@@ -228,20 +234,23 @@ describe('pas', () => {
     // démographie (scatteredGroups) : climat, saisons, biomes, rivières et relief entrent
     // dans l'empreinte, à une échelle où les optimisations de la population comptent.
     // Trop nombreux pour le monde Petit, ils se scindent, et la faim les éclaircit : près
-    // de 2 400 vivants, 177 groupes et plus de 900 morts au bout de trente mois. Comme
+    // de 2 300 vivants, 168 groupes et 970 morts au bout de trente mois. Comme
     // celle des scénarios du banc d'essai, qui l'imprime, l'empreinte ne change que si le
     // déroulement change (D-10) : à la relecture des corrections, par le voisinage à un
     // mois de marche, l'aire des scissions et `pairing` ; à la tâche 2b.2, par le jour et
     // les marches en cours, qui entrent dans l'empreinte (ADR 0013) : avant cette extension,
     // le sous-pas quotidien redonnait 27ee4786. Tâche 2b.3, d'abord la seule grégarité
     // (ADR 0014) : une colonne et un flux de plus, sans autre changement ; les trois graines
-    // gardent leurs vivants et leurs groupes à 120 mois (de 8049a7e6 à f1ddca1e).
+    // gardent leurs vivants et leurs groupes à 120 mois (de 8049a7e6 à f1ddca1e). Puis les
+    // positions des individus : le mouvement individuel et le lieu du groupe tiré de ses
+    // membres changent le déroulement (de f1ddca1e à b4e23dbf) ; à 120 mois, les vivants
+    // varient de −1,6 à +3,6 % selon la graine, les groupes de −3,5 à +3,8 %.
     const state = testState();
     step(state, scatteredGroups(state, 100), testData);
     for (let tick = 1; tick < 30; tick++) step(state, [], testData);
     expect(state.society.groups.size).toBeGreaterThan(100);
     expect(state.people.count).toBeGreaterThan(2000);
     expect(state.people.archive.rows).toBeGreaterThan(500);
-    expect(fingerprint(state)).toBe('f1ddca1e');
+    expect(fingerprint(state)).toBe('b4e23dbf');
   });
 });

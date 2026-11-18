@@ -32,7 +32,7 @@ describe('panneau de débogage (ADR 0013)', () => {
       monthMs: 12.37,
       worstMonthMs: 20.5,
       batchDays: 2.6,
-      walks: 412,
+      walkers: 412,
       memoryMb: 140,
       renderer: { name: 'webgl', resolution: 1 },
       chunks: 0,
@@ -43,15 +43,15 @@ describe('panneau de débogage (ADR 0013)', () => {
     expect(shown.get('Durée moyenne du pas mensuel')).toBe('12,4 ms');
     expect(shown.get('Pas mensuel le plus long')).toBe('20,5 ms');
     expect(shown.get('Jours par lot')).toBe('2,6');
-    expect(shown.get('Marches en cours')).toBe('412');
+    expect(shown.get('Marcheurs')).toBe('412');
     // Sans mesure, chaque ligne le dit.
     debugInfo.value = {
       ...debugInfo.value,
       dayMs: undefined,
       monthMs: undefined,
-      walks: undefined,
+      walkers: undefined,
     };
-    expect(rows().get('Marches en cours')).toBe('indisponible');
+    expect(rows().get('Marcheurs')).toBe('indisponible');
   });
 });
 

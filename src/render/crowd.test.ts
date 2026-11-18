@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { loadGameData } from '../core/data';
-import { GROUP_STRIDE, type GroupsFrame } from '../core/protocol';
+import { GROUP_STRIDE, NO_CARRIER, type GroupsFrame } from '../core/protocol';
+import { FIXED } from '../core/position';
 import { visualCode } from '../core/visual';
-import { emptyWalks } from '../core/walk';
 import { SPAWN_COUNT } from '../sim/commands';
 import { cultureCloth, frameOf, recolor, ROLE, type Palette } from './atlas';
 import { CHUNK_PX, parseColor } from './bake';
@@ -32,6 +32,44 @@ import {
   type MapView,
   type PickShapes,
 } from './crowd';
+
+/**
+ * Une image de groupes [identifiant, colonne, ligne, taille], de membres adultes : chacun au
+ * centre de la case de son groupe, ou, avec `cluster`, à la place de la grappe de 2.9
+ * (clusterOffset), en pixels de carte autour de lui.
+ */
+function groupsOf(
+  groups: readonly [number, number, number, number][],
+  cluster = false,
+): GroupsFrame {
+  const total = groups.reduce((sum, group) => sum + group[3], 0);
+  const positions = new Int32Array(2 * total);
+  let member = 0;
+  for (const [, x, y, size] of groups) {
+    for (let index = 0; index < size; index++) {
+      const offset = cluster ? clusterOffset(index) : { dx: 0, dy: 0 };
+      positions[2 * member] = Math.round((x + 0.5 + offset.dx / TILE_PX) * FIXED);
+      positions[2 * member + 1] = Math.round((y + 0.5 + offset.dy / TILE_PX) * FIXED);
+      member++;
+    }
+  }
+  return {
+    groups: Uint32Array.from(groups.flatMap(([id, x, y, size]) => [id, x, y, size, 1])),
+    slots: Uint32Array.from({ length: total }, (_, index) => index),
+    ids: Uint32Array.from({ length: total }, (_, index) => index + 1),
+    sprites: new Uint16Array(total).fill(visualCode(1, 2, 3, 2, 0)),
+    statures: new Uint8Array(total).fill(96),
+    positions,
+    carriers: new Uint32Array(total).fill(NO_CARRIER),
+    legs: {
+      slots: new Uint32Array(0),
+      days: new Uint32Array(0),
+      start: new Int32Array(0),
+      step: new Int32Array(0),
+      count: new Uint16Array(0),
+    },
+  };
+}
 
 describe('grappe des membres d’un groupe (tâche 2.9)', () => {
   it('place chacun à une position entière, stable, sans superposer les premiers', () => {
@@ -253,15 +291,8 @@ describe('groupe sous un appui (W-7)', () => {
     return points;
   }
   /** L'image de groupes de `size` membres adultes : [identifiant, colonne, ligne, taille]. */
-  function frame(...groups: [number, number, number, number][]): GroupsFrame {
-    const total = groups.reduce((sum, group) => sum + group[3], 0);
-    return {
-      groups: Uint32Array.from(groups.flatMap(([id, x, y, size]) => [id, x, y, size, 1])),
-      sprites: new Uint16Array(total).fill(visualCode(1, 2, 3, 2, 0)),
-      walks: emptyWalks(),
-    };
-  }
-  /** Le groupe sous un point, chaque groupe au repos au centre de sa case (groupPositions). */
+  const frame = (...groups: [number, number, number, number][]) => groupsOf(groups);
+  /** Le groupe sous un point, chaque groupe au barycentre de ses membres (groupPositions). */
   function pick(
     groups: GroupsFrame,
     view: MapView,
@@ -272,7 +303,7 @@ describe('groupe sous un appui (W-7)', () => {
   ): number | undefined {
     const count = groups.groups.length / GROUP_STRIDE;
     const positions = new Float64Array(count * 2);
-    groupPositions(groups, new Map(), 0, 512, positions, new Uint8Array(count));
+    groupPositions(groups, 512, positions, new Uint8Array(count));
     return pickGroup(groups, positions, view, x, y, pickShapes, slop);
   }
   /** Caméra visant le centre de la case (x, y). */
@@ -307,7 +338,7 @@ describe('groupe sous un appui (W-7)', () => {
 
   it('touche chacun des membres, de près, jusqu’au plus éloigné de la grappe', () => {
     const size = SPAWN_COUNT.max;
-    const single = frame([3, 100, 50, size]);
+    const single = groupsOf([[3, 100, 50, size]], true);
     for (const zoom of [SPRITE_SCALE, 6, 12]) {
       const view: MapView = { camera: aimedAt(100, 50, zoom), viewport, world, resolution: 1 };
       const scale = displayScale(zoom);
@@ -316,7 +347,13 @@ describe('groupe sous un appui (W-7)', () => {
         const name = spriteName(2, 1, 0);
         const shape = memberShape(code, frameOf);
         expect(shape).toEqual(frameOf(name));
-        const box = memberBox(viewport.width / 2, viewport.height / 2, member, shape, scale);
+        const box = memberBox(
+          viewport.width / 2,
+          viewport.height / 2,
+          clusterOffset(member),
+          shape,
+          scale,
+        );
         for (const [x, y] of visible(name, box, scale)) {
           expect(pick(single, view, x, y, shapes), `membre ${String(member)}`).toBe(3);
         }
@@ -393,8 +430,15 @@ describe('groupe sous un appui (W-7)', () => {
     // De près, deux membres de groupes voisins aux pieds sur la même ligne.
     const view: MapView = { camera: aimedAt(100, 50, 4), viewport, world, resolution: 1 };
     const shape = memberShape(visualCode(1, 2, 3, 2, 0), frameOf);
-    const first = memberBox(viewport.width / 2, viewport.height / 2, 0, shape, 4);
-    const second = memberBox(viewport.width / 2 + TILE_PX * 4, viewport.height / 2, 0, shape, 4);
+    const still = { dx: 0, dy: 0 };
+    const first = memberBox(viewport.width / 2, viewport.height / 2, still, shape, 4);
+    const second = memberBox(
+      viewport.width / 2 + TILE_PX * 4,
+      viewport.height / 2,
+      still,
+      shape,
+      4,
+    );
     expect(second.left).toBeLessThan(first.left + first.width);
     const [x, y] = [second.left + 0.5, second.top + 0.5];
     expect(pick(frame([1, 100, 50, 1], [2, 101, 50, 1]), view, x, y, shapes)).toBe(2);
@@ -402,34 +446,26 @@ describe('groupe sous un appui (W-7)', () => {
   });
 });
 
-describe('positions des groupes à l’instant affiché (ADR 0013)', () => {
+describe('positions des groupes à l’instant affiché (ADR 0013, ADR 0014)', () => {
   const world = { width: 512 * TILE_PX, height: 256 * TILE_PX };
   const viewport = { width: 1280, height: 720 };
 
-  it('place un groupe au repos au centre de sa case, et un groupe en marche sur son chemin', () => {
-    // Deux groupes : le 4 se repose en (20, 30), le 9 marche de (511, 12) à (1, 12) par la
-    // couture, en (0, 12) au bout de son chemin.
-    const frame: GroupsFrame = {
-      groups: Uint32Array.of(4, 20, 30, 3, 1, 9, 1, 12, 5, 2),
-      sprites: new Uint16Array(8),
-      walks: {
-        groups: Uint32Array.of(9),
-        ends: Uint32Array.of(3),
-        cells: Uint32Array.of(12 * 512 + 511, 12 * 512, 12 * 512 + 1),
-        costs: Float64Array.of(0, 1, 2),
-        budgets: Float64Array.of(30),
-      },
-    };
-    const walkOf = new Map([[9, 0]]);
+  it('place chaque groupe au barycentre de ses membres, au plus court à travers la couture', () => {
+    // Le 4 en (20, 30), ses trois membres au centre de la case ; le 9, deux membres de part
+    // et d'autre de la couture, en 511,75 et 0,25 : son barycentre, sur la couture.
+    const frame = groupsOf([
+      [4, 20, 30, 3],
+      [9, 0, 12, 2],
+    ]);
+    frame.positions[6] = Math.round(511.75 * FIXED);
+    frame.positions[8] = Math.round(0.25 * FIXED);
     const positions = new Float64Array(4);
     const moving = new Uint8Array(2);
-    groupPositions(frame, walkOf, 0.25, 512, positions, moving);
-    expect(Array.from(positions)).toEqual([20.5, 30.5, 511.75, 12.5]);
-    expect(Array.from(moving)).toEqual([0, 1]);
-    groupPositions(frame, walkOf, 0.75, 512, positions, moving);
-    expect(positions[2]).toBeCloseTo(0.25, 12);
-    groupPositions(frame, walkOf, 2, 512, positions, moving);
-    expect(Array.from(positions)).toEqual([20.5, 30.5, 1.5, 12.5]);
+    groupPositions(frame, 512, positions, moving);
+    expect(positions[0]).toBe(20.5);
+    expect(positions[1]).toBe(30.5);
+    expect([0, 512]).toContainEqual(Math.round(positions[2]));
+    expect(positions[3]).toBe(12.5);
     expect(Array.from(moving)).toEqual([0, 0]);
   });
 
@@ -444,11 +480,7 @@ describe('positions des groupes à l’instant affiché (ADR 0013)', () => {
       },
       member: (code) => memberShape(code, frameOf),
     };
-    const single: GroupsFrame = {
-      groups: Uint32Array.of(5, 0, 40, 6, 1),
-      sprites: new Uint16Array(6).fill(visualCode(1, 2, 3, 2, 0)),
-      walks: emptyWalks(),
-    };
+    const single = groupsOf([[5, 0, 40, 6]]);
     for (const zoom of [1, 2, 8, 24]) {
       const scale = displayScale(zoom);
       const pixel = mapPixel(scale);
@@ -473,11 +505,14 @@ describe('positions des groupes à l’instant affiché (ADR 0013)', () => {
         previous = at.x;
         const box =
           scale >= SPRITE_SCALE
-            ? memberBox(at.x, at.y, 3, shapes.largest, pixel)
+            ? memberBox(at.x, at.y, { dx: 0, dy: 0 }, shapes.largest, pixel)
             : bannerBox(at.x, at.y, chooseBanner(banners, pixel, 1), pixel);
         expect(Number.isInteger(box.left) && Number.isInteger(box.top)).toBe(true);
-        // Le groupe se touche là où il se dessine, à sa position fractionnaire.
+        // Le groupe se touche là où il se dessine, ses membres à sa position fractionnaire.
         const positions = Float64Array.of(column, 40.5);
+        for (let member = 0; member < 6; member++) {
+          single.positions[2 * member] = Math.round(column * FIXED);
+        }
         const inside = { x: box.left + 1, y: box.top + box.height - 2 };
         const picked = pickGroup(single, positions, view, inside.x, inside.y, shapes, 2);
         expect(picked, `zoom ${String(zoom)}, x ${x.toFixed(2)}`).toBe(5);

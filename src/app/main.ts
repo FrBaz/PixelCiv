@@ -2,7 +2,13 @@
 // de simulation, puis les relie.
 import { h, render } from 'preact';
 import { loadGameData, type GameData } from '../core/data';
-import { GROUP_STRIDE, PROTOCOL_VERSION, type InspectTarget } from '../core/protocol';
+import {
+  frameBuffers,
+  GROUP_STRIDE,
+  legBuffers,
+  PROTOCOL_VERSION,
+  type InspectTarget,
+} from '../core/protocol';
 import { dayIndex, type GameTime } from '../core/time';
 import { WORLD_SIZES, type WorldLayers, type WorldSize, type WorldSizeId } from '../core/world';
 import { defaultWorldParams, type WorldParams } from '../core/worldParams';
@@ -77,7 +83,7 @@ import { SaveManager, SaveStore } from './saves';
 import { describeCell } from './inspect';
 import { SheetRequests } from './sheets';
 import { OccupiedCells, spawnTarget } from './spawn';
-import { FrameQueue, walkDay } from './frames';
+import { FrameQueue } from './frames';
 import { GameClock } from './gameClock';
 import { PreviewScheduler } from './preview';
 import { SimulationClient } from './simulation';
@@ -118,7 +124,10 @@ async function main(): Promise<void> {
   // Horloge du rendu et images des groupes datées (ADR 0013) : la carte, ses saisons et la
   // date montrent l'instant de l'horloge, un peu en retard sur le dernier état reçu.
   const clock = new GameClock();
-  const frames = new FrameQueue();
+  // Une image oubliée rend ses tampons au worker, qui les reprend (ADR 0014).
+  const frames = new FrameQueue((frame) => {
+    simulation.send({ type: 'recycle', buffers: frameBuffers(frame) });
+  });
   const modeData = {
     biomes: data.biomes.entries,
     altitudeLevels: data.altitudeLevels.entries,
@@ -245,8 +254,7 @@ async function main(): Promise<void> {
     if (latest === undefined) return new Set();
     const count = Math.floor(latest.frame.groups.length / GROUP_STRIDE);
     const positions = new Float64Array(count * 2);
-    const day = walkDay(latest, clock.received);
-    groupPositions(latest.frame, latest.walkOf, day, size.width, positions, new Uint8Array(count));
+    groupPositions(latest.frame, size.width, positions, new Uint8Array(count));
     return positionCells(positions, size);
   };
   /** Fait apparaître un groupe sur la case, si elle le permet ; un avis dit sinon pourquoi. */
@@ -337,7 +345,6 @@ async function main(): Promise<void> {
     if (document.visibilityState === 'visible') returning = true;
   });
   /** Aucune marche : l'image d'un groupe sans image. */
-  const noWalks: ReadonlyMap<number, number> = new Map();
   /** Rang du jour que montre la date, pour ne la changer qu'au jour suivant. */
   let shownIndex = -1;
   app.ticker.add((ticker) => {
@@ -350,8 +357,7 @@ async function main(): Promise<void> {
     map.setSeason(clock.month());
     const dated = frames.at(shown);
     const width = worldInfo.value?.size.width ?? 1;
-    const day = dated === undefined ? 0 : walkDay(dated, shown);
-    people.show(dated?.frame, dated?.walkOf ?? noWalks, day, width);
+    people.show(dated?.frame, width);
     const today: GameTime = clock.today();
     if (dayIndex(today) !== shownIndex && time.value !== undefined) {
       shownIndex = dayIndex(today);
@@ -432,6 +438,11 @@ async function main(): Promise<void> {
       }
       case 'delta': {
         map.updateChunks(message.chunks);
+        // Les étapes du lot attendent le rendu des marches (2b.3, étape b) : leurs tampons
+        // retournent aussitôt au worker.
+        if (message.legs !== undefined) {
+          simulation.send({ type: 'recycle', buffers: legBuffers(message.legs) });
+        }
         // L'image des groupes, quand elle change, vaut à partir de l'instant du delta.
         if (message.frame !== undefined) frames.push(message.frame, message.time);
         const info = worldInfo.value;

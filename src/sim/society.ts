@@ -45,9 +45,19 @@ export interface Group {
    * fondation.
    */
   readonly leader: number;
-  /** Case du groupe : x boucle, y reste dans le monde. */
+  /**
+   * Lieu du groupe, au pas mensuel : la case du membre le plus proche du barycentre de ses
+   * membres (movement.ts, locateGroups), qui se déduit d'eux au début de chaque pas mensuel.
+   * x boucle, y reste dans le monde.
+   */
   x: number;
   y: number;
+  /**
+   * Case du camp, que choisit son guide (ADR 0014) : chacun s'y rend à pied, et s'y pose à
+   * sa place.
+   */
+  campX: number;
+  campY: number;
   /** Centre de son aire, où il revient au fil des saisons. */
   homeX: number;
   homeY: number;

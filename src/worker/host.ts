@@ -17,9 +17,17 @@
  * demandée pendant un chargement porte sur la partie chargée, et la dernière partie
  * demandée est celle qui reste.
  *
+ * Le mouvement des individus (ADR 0014) part avec chaque lot : les étapes commencées pendant
+ * ses jours, que le journal du mouvement note, chacune datée de son jour ; l'image des groupes,
+ * au pas mensuel et après une commande qui change les groupes, porte les positions de tous et
+ * l'étape en cours de chaque marcheur. Image et étapes voyagent en tableaux typés transférés,
+ * pris dans une réserve de tampons que le fil principal remplit en rendant ceux qu'il a lus
+ * (message `recycle`).
+ *
  * L'environnement (messagerie, horloge, minuteries) est injecté : le worker fournit
  * le vrai, les tests une imitation.
  */
+import { BufferPool } from '../core/buffers';
 import type { GameData } from '../core/data';
 import {
   CHRONICLE_RECENT,
@@ -56,6 +64,7 @@ import { GameCommandSchema } from '../sim/commands';
 import { MIGRATIONS, restoreState, saveState } from '../sim/save';
 import { cellIndex, createState, takeDirtyChunks, type SimState } from '../sim/state';
 import { advanceDay } from '../sim/day';
+import { LegJournal } from '../sim/movement';
 import { applyCommands, type RejectedCommand } from '../sim/step';
 import { chroniclePage, chronicleViews, groupsFrame, inspect } from '../sim/views';
 import { GENERATOR_VERSION, type GenerationParams } from '../worldgen/generate';
@@ -148,6 +157,8 @@ export class SimulationHost {
   private operations: Promise<void> = Promise.resolve();
   /** Faits de la chronique déjà envoyés au fil principal. */
   private chronicleSent = 0;
+  /** Réserve des tampons d'images et d'étapes, que le fil principal rend (ADR 0014). */
+  readonly pool = new BufferPool();
 
   constructor(env: HostEnvironment, data: GameData, generate: WorldGenerator) {
     this.env = env;
@@ -218,6 +229,9 @@ export class SimulationHost {
       }
       case 'debugStepCost':
         this.stepCost = Math.max(0, message.milliseconds);
+        break;
+      case 'recycle':
+        this.pool.give(message.buffers);
         break;
     }
   }
@@ -480,7 +494,9 @@ export class SimulationHost {
    */
   private start(state: SimState): void {
     const layers = copyLayers(state.world);
-    const frame = groupsFrame(state, this.data);
+    const frame = groupsFrame(state, this.data, undefined, this.pool);
+    // Les étapes qui commencent désormais partent avec les deltas ; l'image dit celles en cours.
+    state.movement.journal = new LegJournal();
     // Les derniers faits de la chronique ; les suivants viendront avec les deltas, les plus
     // anciens à la demande, par pages.
     const total = state.society.chronicle.length;
@@ -626,7 +642,7 @@ export class SimulationHost {
     }
     const changed = batch.members !== undefined || this.groupsChanged(state, logged);
     if (batch.days === 0 && !changed && state.commandLog.length === logged) return batch;
-    this.sendDelta(state, batch.days, changed, batch.members);
+    const legs = this.sendDelta(state, batch.days, changed, batch.members);
     // Le lot compte son delta : l'image des groupes, la chronique et leur envoi (W-11).
     this.send({
       type: 'stats',
@@ -635,7 +651,8 @@ export class SimulationHost {
         days: batch.days,
         ...(batch.daily > 0 ? { dayMs: batch.dailyMs / batch.daily } : {}),
         ...(batch.monthMs === undefined ? {} : { monthMs: batch.monthMs }),
-        walks: state.dayPositions.walking,
+        walkers: state.movement.activeCount,
+        legs,
       },
     });
     return batch;
@@ -643,25 +660,31 @@ export class SimulationHost {
 
   /**
    * Ce qui a changé depuis le dernier message : temps, jours du lot, blocs, faits nouveaux
-   * de la chronique, et l'image des groupes si `frame` le demande (avec leurs membres s'ils
-   * sont connus).
+   * de la chronique, étapes commencées pendant le lot, et l'image des groupes si `frame` le
+   * demande (avec leurs membres s'ils sont connus). Renvoie le nombre d'étapes envoyées.
    */
   private sendDelta(
     state: SimState,
     days: number,
     frame: boolean,
     members: ReadonlyMap<number, readonly number[]> | undefined,
-  ): void {
+  ): number {
     const total = state.society.chronicle.length;
+    const journal = state.movement.journal;
+    const legs = journal !== undefined && journal.count > 0 ? journal.take(this.pool) : undefined;
+    // Compté avant l'envoi, qui transfère les tampons.
+    const count = legs?.slots.length ?? 0;
     this.send({
       type: 'delta',
       time: this.time(state),
       days,
       chunks: takeDirtyChunks(state),
       chronicle: chronicleViews(state, this.chronicleSent, total),
-      ...(frame ? { frame: groupsFrame(state, this.data, members) } : {}),
+      ...(legs === undefined ? {} : { legs }),
+      ...(frame ? { frame: groupsFrame(state, this.data, members, this.pool) } : {}),
     });
     this.chronicleSent = total;
+    return count;
   }
 
   private sendTime(): void {

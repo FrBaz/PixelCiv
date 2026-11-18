@@ -3,7 +3,9 @@ import type { GameData } from '../core/data';
 import {
   CHRONICLE_PAGE,
   CHRONICLE_RECENT,
+  frameBuffers,
   GROUP_STRIDE,
+  legBuffers,
   PROTOCOL_VERSION,
   type ChronicleView,
   type GameCommand,
@@ -26,6 +28,7 @@ import {
   type GameTime,
 } from '../core/time';
 import { CHUNK_SIZE, GENERATION_STAGES, LAYER_NAMES } from '../core/world';
+import { advanceDay } from '../sim/day';
 import { replay } from '../sim/replay';
 import { MIGRATIONS, restoreState } from '../sim/save';
 import { fingerprint } from '../sim/step';
@@ -166,9 +169,9 @@ describe('partie', () => {
     expect(snapshot?.world).toEqual({ params: testParams(), size: { width: 512, height: 256 } });
     expect(snapshot?.layers.biome).toEqual(testWorld().biome);
     const entry = env.sent.find((sent) => sent.message.type === 'snapshot');
-    // Les couches du monde, plus les deux tableaux de l'image des groupes et les cinq des
-    // marches du mois.
-    expect(entry?.transfer).toHaveLength(LAYER_NAMES.length + 7);
+    // Les couches du monde, plus les sept tableaux de l'image des groupes et les cinq des
+    // étapes en cours (ADR 0014).
+    expect(entry?.transfer).toHaveLength(LAYER_NAMES.length + 12);
     expect(snapshot?.time).toEqual({ tick: 0, day: 0, paused: false, speed: 'normal' });
     expect(entry?.transfer.every((buffer) => buffer instanceof ArrayBuffer)).toBe(true);
   });
@@ -1131,7 +1134,7 @@ describe('deux horloges (ADR 0013)', () => {
     expect(fingerprint(replayed)).toBe(fingerprint(restoreState(saved, testData)));
   });
 
-  it('n’envoie l’image des groupes, avec les marches du mois, que quand elle change', async () => {
+  it('n’envoie l’image des groupes, avec les positions, que quand elle change, et les étapes à chaque lot', async () => {
     const { env, host } = await startedHost();
     host.receive({ type: 'game', command: paint(landCell()) });
     for (const command of spawns(10, 25)) host.receive({ type: 'game', command });
@@ -1144,23 +1147,71 @@ describe('deux horloges (ADR 0013)', () => {
     // Le premier jour, qui fait apparaître les groupes, puis les deux pas mensuels ; ni les
     // coups de pinceau ni les jours ordinaires.
     expect(framed).toEqual([0, DAYS_PER_MONTH - 1, 2 * DAYS_PER_MONTH - 1]);
-    // Chaque marche de l'image, d'un groupe de l'image, finit sur sa case.
+    // Les étapes de chaque lot sont datées de ses jours.
+    const legs = deltas.flatMap((delta) => (delta.legs === undefined ? [] : [delta]));
+    expect(legs.length).toBeGreaterThan(DAYS_PER_MONTH / 2);
+    for (const delta of legs) {
+      const end = dayIndex(delta.time);
+      for (const day of delta.legs?.days ?? []) {
+        expect(day).toBeLessThan(end);
+        expect(day).toBeGreaterThanOrEqual(end - delta.days);
+      }
+    }
+    // L'image porte chaque membre, et l'étape en cours de chaque marcheur.
     const frame = deltas.at(-1)?.frame;
     if (frame === undefined) throw new Error('pas d’image');
-    const { walks } = frame;
-    expect(walks.groups.length).toBeGreaterThan(3);
-    const cells = new Map<number, number>();
-    for (let at = 0; at < frame.groups.length; at += GROUP_STRIDE) {
-      cells.set(
-        frame.groups[at] ?? 0,
-        (frame.groups[at + 2] ?? 0) * 512 + (frame.groups[at + 1] ?? 0),
-      );
-    }
-    walks.groups.forEach((group, index) => {
-      expect(walks.cells[(walks.ends[index] ?? 0) - 1]).toBe(cells.get(group));
-    });
-    // Les tampons des marches voyagent sans copie, avec ceux de l'image.
+    let members = 0;
+    for (let at = 0; at < frame.groups.length; at += GROUP_STRIDE)
+      members += frame.groups[at + 3] ?? 0;
+    expect(frame.positions.length).toBe(2 * members);
+    expect(frame.legs.slots.length).toBe(frame.legs.count.length);
+    // Les tampons de l'image et des étapes voyagent sans copie.
     const entry = env.sent.findLast((sent) => sent.message.type === 'delta');
-    expect(entry?.transfer).toHaveLength(7);
+    expect(entry?.transfer.length).toBeGreaterThanOrEqual(12);
+    // Les statistiques comptent les marcheurs et les étapes du lot.
+    const stats = env.messages('stats');
+    expect(stats.some((message) => message.stats.walkers > 0)).toBe(true);
+    expect(stats.some((message) => message.stats.legs > 0)).toBe(true);
+  });
+
+  it('reprend les tampons que le fil principal lui rend', async () => {
+    const { env, host } = await startedHost();
+    for (const command of spawns(6, 20)) host.receive({ type: 'game', command });
+    // Un mois et trois jours : les groupes, apparus au repos, se mettent en route.
+    env.advance(NORMAL_MONTH_MS + NORMAL_DAY_MS * 3 + WAKE_SLACK_MS);
+    // Ceux que le fil principal a reçus, de l'image et des étapes de chaque delta.
+    const returned = env
+      .messages('delta')
+      .flatMap((delta) => [
+        ...(delta.frame === undefined ? [] : frameBuffers(delta.frame)),
+        ...(delta.legs === undefined ? [] : legBuffers(delta.legs)),
+      ])
+      .filter((buffer) => buffer.byteLength > 0);
+    expect(returned.length).toBeGreaterThan(5);
+    const before = host.pool.reused;
+    // Rendus, ils servent aux envois suivants : moins de tampons neufs.
+    host.receive({ type: 'recycle', buffers: returned });
+    expect(host.pool.size).toBeGreaterThan(0);
+    env.advance(NORMAL_DAY_MS * 3);
+    expect(host.pool.reused).toBeGreaterThan(before);
+  });
+
+  it('donne les mêmes positions à toutes les vitesses', async () => {
+    const prints: string[] = [];
+    for (const speed of ['slow', 'normal', 'fast', 'faster'] as const) {
+      const { env, host } = await startedHost();
+      host.receive({ type: 'setSpeed', speed });
+      for (const command of spawns(6, 20)) host.receive({ type: 'game', command });
+      // Une vingtaine de jours de jeu à chaque vitesse, mouvement et pas mensuel compris.
+      env.advance(daysDuration(20, speed) + WAKE_SLACK_MS);
+      host.receive({ type: 'setPaused', paused: true });
+      const saved = await savedState(env, host, 1);
+      const state = restoreState(saved, testData);
+      expect(dayIndex(state)).toBeGreaterThan(15);
+      // De là, jusqu'à un même instant : la vitesse n'a rien changé à l'état.
+      while (dayIndex(state) < DAYS_PER_MONTH + 10) advanceDay(state, [], testData);
+      prints.push(fingerprint(state));
+    }
+    expect(new Set(prints).size).toBe(1);
   });
 });

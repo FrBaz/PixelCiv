@@ -141,7 +141,7 @@
   "debug.month": "Durée moyenne du pas mensuel",
   "debug.monthMax": "Pas mensuel le plus long",
   "debug.batchDays": "Jours par lot",
-  "debug.walks": "Marches en cours",
+  "debug.walkers": "Marcheurs",
   "debug.memory": "Mémoire",
   "debug.renderer": "Rendu",
   "debug.seed": "Graine",

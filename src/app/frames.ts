@@ -1,36 +1,26 @@
 /**
- * Images des groupes datées (ADR 0013). Le worker envoie l'image des groupes quand elle
- * change, au pas mensuel et après une commande, avec les marches du mois ; elle vaut à
- * partir de l'instant de l'état qui la porte. La carte montre l'image de l'instant affiché
- * par l'horloge du rendu (GameClock), et non la dernière reçue : apparitions, scissions,
- * réunions et extinctions s'y voient à leur instant, en même temps que la date et les
- * saisons, et chaque groupe suit sa marche du mois jusqu'au bout avant de prendre la
- * suivante, de la même case.
+ * Images des groupes datées (ADR 0013, ADR 0014). Le worker envoie l'image des groupes quand
+ * elle change, au pas mensuel et après une commande, avec la position de chaque membre ; elle
+ * vaut à partir de l'instant de l'état qui la porte. La carte montre l'image de l'instant
+ * affiché par l'horloge du rendu (GameClock), et non la dernière reçue : apparitions,
+ * scissions, réunions et extinctions s'y voient à leur instant, en même temps que la date et
+ * les saisons. En attendant le rendu des étapes (2b.3, étape b), chaque membre se dessine à la
+ * position de l'image.
  */
 import type { GroupsFrame } from '../core/protocol';
-import { dayIndex, DAYS_PER_MONTH, type GameTime } from '../core/time';
+import { dayIndex, type GameTime } from '../core/time';
 
 /** Une image des groupes, et l'instant à partir duquel elle vaut. */
 export interface DatedFrame {
   /** Instant, en jours écoulés depuis le début de la partie (dayIndex). */
   readonly at: number;
-  /** Mois de ses marches : au jour fractionnaire t de la partie, elles en sont à t − 30 × tick. */
   readonly tick: number;
   readonly frame: GroupsFrame;
-  /** Indice de la marche de chaque groupe qui en a une, par identifiant de groupe. */
-  readonly walkOf: ReadonlyMap<number, number>;
 }
 
 /** L'image `frame` d'un état de l'instant `time`. */
 export function datedFrame(frame: GroupsFrame, time: GameTime): DatedFrame {
-  const walkOf = new Map<number, number>();
-  frame.walks.groups.forEach((group, index) => walkOf.set(group, index));
-  return { at: dayIndex(time), tick: time.tick, frame, walkOf };
-}
-
-/** Jour du mois des marches d'une image à l'instant `shown`, fractionnaire, de 0 à 30. */
-export function walkDay(dated: DatedFrame, shown: number): number {
-  return Math.min(DAYS_PER_MONTH, Math.max(0, shown - dated.tick * DAYS_PER_MONTH));
+  return { at: dayIndex(time), tick: time.tick, frame };
 }
 
 /**
@@ -42,12 +32,25 @@ export function walkDay(dated: DatedFrame, shown: number): number {
  */
 export const MAX_FRAMES = 16;
 
-/** File des images datées, de la plus ancienne encore utile à la dernière reçue. */
+/**
+ * File des images datées, de la plus ancienne encore utile à la dernière reçue. Une image
+ * oubliée passe à `dropped`, qui rend ses tampons au worker (message `recycle`).
+ */
 export class FrameQueue {
   private frames: DatedFrame[] = [];
+  private readonly dropped: (frame: GroupsFrame) => void;
+
+  constructor(dropped: (frame: GroupsFrame) => void = () => undefined) {
+    this.dropped = dropped;
+  }
+
+  private drop(frames: readonly DatedFrame[]): void {
+    for (const dated of frames) this.dropped(dated.frame);
+  }
 
   /** Instantané d'une partie : sa seule image. */
   reset(frame: GroupsFrame, time: GameTime): void {
+    this.drop(this.frames);
     this.frames = [datedFrame(frame, time)];
   }
 
@@ -55,15 +58,17 @@ export class FrameQueue {
   push(frame: GroupsFrame, time: GameTime): void {
     const dated = datedFrame(frame, time);
     const last = this.frames.at(-1);
-    if (last !== undefined && last.at >= dated.at) this.frames.pop();
+    if (last !== undefined && last.at >= dated.at) this.drop([this.frames.pop() ?? last]);
     this.frames.push(dated);
-    if (this.frames.length > MAX_FRAMES) this.frames.splice(0, this.frames.length - MAX_FRAMES);
+    if (this.frames.length > MAX_FRAMES) {
+      this.drop(this.frames.splice(0, this.frames.length - MAX_FRAMES));
+    }
   }
 
   /** L'image de l'instant `shown` ; celles qu'il a dépassées s'oublient. */
   at(shown: number): DatedFrame | undefined {
     while (this.frames.length > 1 && (this.frames[1]?.at ?? Number.POSITIVE_INFINITY) <= shown) {
-      this.frames.shift();
+      this.drop(this.frames.splice(0, 1));
     }
     return this.frames[0];
   }
@@ -80,6 +85,7 @@ export class FrameQueue {
 
   /** Oublie toutes les images (autre partie). */
   clear(): void {
+    this.drop(this.frames);
     this.frames = [];
   }
 }

@@ -52,9 +52,9 @@ export interface DebugInfo {
   readonly dayMs: number | undefined;
   readonly monthMs: number | undefined;
   readonly worstMonthMs: number | undefined;
-  /** Jours par lot, en moyenne, et marches en cours au dernier lot. */
+  /** Jours par lot, en moyenne, et marcheurs au dernier lot (ADR 0014). */
   readonly batchDays: number | undefined;
-  readonly walks: number | undefined;
+  readonly walkers: number | undefined;
   readonly memoryMb: number | undefined;
   /** Moteur de rendu (webgl, webgpu) et densité de pixels de l'écran. */
   readonly renderer: { readonly name: string; readonly resolution: number };

@@ -3,6 +3,7 @@ import { RandomStream, streamSeed } from '../core/rng';
 import type { Species } from '../core/data';
 import { pureAncestry } from './genetics';
 import { step } from './day';
+import { applyCommands } from './step';
 import { LIVING_COLUMN_NAMES, LIVING_COLUMNS } from './population';
 import { drawGregariousness, meanGregariousness, TEMPER_MAX } from './temper';
 import { flatState, testHuman, withHuman } from './testing';
@@ -70,40 +71,42 @@ describe('grégarité, caractère acquis (IND-07, ADR 0014)', () => {
   });
 
   it('se tire sur son propre flux, sans décaler ceux des apparitions ni des naissances', () => {
-    // Deux répartitions de la grégarité : les mêmes individus, aux mêmes tirages, seule la
-    // grégarité change.
-    const run = (means: readonly number[]) => {
+    // Deux répartitions de la grégarité : les mêmes individus, aux mêmes tirages ; seules la
+    // grégarité et les places, qui en dépendent (ADR 0014), changent.
+    const spawned = (means: readonly number[]) => {
       const content = withHuman(() => tempered(means));
       const state = flatState();
-      step(
+      applyCommands(
         state,
         [{ type: 'spawnGroup', x: 40, y: 60, species: 'human', subspecies: 'plains', count: 30 }],
         content,
       );
-      // Un an : des naissances, dont les grégarités se tirent aussi.
-      for (let month = 1; month < 12; month++) step(state, [], content);
-      return state;
+      return { state, content };
     };
-    const low = run([0.1, 0.1, 0.1]);
-    const high = run([0.9, 0.9, 0.9]);
+    const low = spawned([0.1, 0.1, 0.1]).state;
+    const high = spawned([0.9, 0.9, 0.9]).state;
+    const placed = new Set(['gregariousness', 'x', 'y', 'goalX', 'goalY']);
     for (const name of LIVING_COLUMN_NAMES) {
       const width = LIVING_COLUMNS[name].width;
       const a = low.people.columns[name].subarray(0, low.people.end * width);
       const b = high.people.columns[name].subarray(0, high.people.end * width);
       if (name === 'gregariousness') expect(a).not.toEqual(b);
-      else expect(a, name).toEqual(b);
+      else if (!placed.has(name)) expect(a, name).toEqual(b);
     }
     const streams = (state: typeof low) => {
-      const { 'sim.temper': _temper, ...others } = state.rng.states();
+      const { 'sim.temper': _temper, 'sim.camp': _camp, ...others } = state.rng.states();
       return others;
     };
     expect(streams(low)).toEqual(streams(high));
-    // Chaque grégarité, d'apparition ou de naissance, prend deux tirages de `sim.temper`, et
-    // de lui seul : ce flux a avancé de deux tirages par individu, ni plus ni moins.
-    const reference = new RandomStream(streamSeed(low.params.seed, 'sim.temper'));
-    const persons = low.people.count + low.people.archive.rows;
+    // Un an : des naissances. Chaque grégarité, d'apparition ou de naissance, prend deux
+    // tirages de `sim.temper`, et de lui seul : ce flux a avancé de deux tirages par
+    // individu, ni plus ni moins.
+    const { state, content } = spawned([0.1, 0.1, 0.1]);
+    for (let month = 0; month < 12; month++) step(state, [], content);
+    const reference = new RandomStream(streamSeed(state.params.seed, 'sim.temper'));
+    const persons = state.people.count + state.people.archive.rows;
     expect(persons).toBeGreaterThan(30);
     for (let draw = 0; draw < 2 * persons; draw++) reference.nextFloat();
-    expect(low.rng.states()['sim.temper']).toEqual(reference.state());
+    expect(state.rng.states()['sim.temper']).toEqual(reference.state());
   });
 });

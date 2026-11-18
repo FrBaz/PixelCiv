@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { GameCommand } from '../core/protocol';
 import { dayIndex, timeOfDayIndex } from '../core/time';
 import { advanceDay, step } from './day';
+import { describeMovement } from './movement';
 import { replay } from './replay';
 import { applyCommands, fingerprint } from './step';
 import {
@@ -172,7 +173,9 @@ describe('replay', () => {
     }
     const end = replay(testParams(), testWorld(), state.commandLog, state, testData);
     expect(fingerprint(end)).toBe(fingerprint(state));
-    expect(end.dayPositions.positions).toEqual(state.dayPositions.positions);
+    // Positions et caches du mouvement compris (ADR 0014).
+    expect(end.people.columns.x).toEqual(state.people.columns.x);
+    expect(describeMovement(end).text).toBe(describeMovement(state).text);
   });
 
   it("s'arrête au pas demandé", () => {

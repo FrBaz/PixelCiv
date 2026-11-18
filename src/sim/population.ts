@@ -31,6 +31,32 @@ export const NONE = 0;
 export const NEVER = -0x80000000;
 
 /**
+ * Intentions d'un vivant (colonne `move`, ADR 0014), sur ses trois bits de poids faible : au
+ * repos à sa place ; en partance, le jour `depart` ; en marche vers sa place ; porté par sa
+ * mère, dont il prend la position. PLACE, « à poser », n'existe qu'à la relecture d'une
+ * partie de la version 6, qui le résout aussitôt.
+ */
+export const REST = 0;
+export const LEAVE = 1;
+export const WALK = 2;
+export const CARRIED = 3;
+export const PLACE = 4;
+/** Masque de l'intention dans `move`. */
+export const INTENTION = 0x07;
+/** Sa place était prise à son arrivée : il en a repris une autre. */
+export const RETRY = 0x08;
+/** Il descend le champ de distances du camp de son groupe, pour contourner un obstacle. */
+export const DETOUR = 0x10;
+/** Sa marche a commencé un mois précédent : il presse le pas. */
+export const LATE = 0x20;
+/** Il vient d'un autre groupe, et rejoint le camp du sien. */
+export const JOIN = 0x40;
+/** Il se pose à son arrivée, même trop près d'un autre (sevrage, seconde place reprise). */
+export const SETTLE = 0x80;
+/** Bits connus de `move`, hors de l'intention. */
+export const MOVE_BITS = RETRY | DETOUR | LATE | JOIN | SETTLE;
+
+/**
  * Causes de mort (IND-04, SAI-03), dans l'ordre de leur code dans l'archive : une cause
  * nouvelle s'ajoute à la fin.
  */
@@ -105,6 +131,26 @@ export const LIVING_COLUMNS = {
    * génome, tiré à la naissance ou à l'apparition (temper.ts).
    */
   gregariousness: { type: Uint8Array, width: 1 },
+  /**
+   * Position, en 1/65 536 de case (core/position.ts) : x dans [0, largeur × 2^16[, y dans
+   * [0, hauteur × 2^16[ (ADR 0014).
+   */
+  x: { type: Int32Array, width: 1 },
+  y: { type: Int32Array, width: 1 },
+  /** Intention (REST, LEAVE, WALK, CARRIED), et ses bits (RETRY, DETOUR, LATE, JOIN, SETTLE). */
+  move: { type: Uint8Array, width: 1 },
+  /** Jour du départ de qui est en partance, de 0 à 29. */
+  depart: { type: Uint8Array, width: 1 },
+  /** Place visée par qui marche. */
+  goalX: { type: Int32Array, width: 1 },
+  goalY: { type: Int32Array, width: 1 },
+  /**
+   * Étape en cours de qui marche : le pas de chaque jour, et les jours qui restent. La fin
+   * de l'étape vaut exactement la position plus `stepDays` pas.
+   */
+  stepX: { type: Int32Array, width: 1 },
+  stepY: { type: Int32Array, width: 1 },
+  stepDays: { type: Uint16Array, width: 1 },
 } as const satisfies Record<string, ColumnSpec>;
 
 export type LivingColumn = keyof typeof LIVING_COLUMNS;
@@ -160,6 +206,10 @@ export interface NewPerson {
   readonly familyLanguage: number;
   /** Grégarité, de 0 à 255 (temper.ts). */
   readonly gregariousness: number;
+  /** Position, en unités de core/position.ts, et intention (REST ou CARRIED). */
+  readonly x: number;
+  readonly y: number;
+  readonly move: number;
 }
 
 /** Emplacements alloués au départ, puis doublés au besoin. */
@@ -298,6 +348,15 @@ export class Population {
     columns.pregnantBy[slot] = NONE;
     columns.lastBirth[slot] = NEVER;
     columns.gregariousness[slot] = person.gregariousness;
+    columns.x[slot] = person.x;
+    columns.y[slot] = person.y;
+    columns.move[slot] = person.move;
+    columns.depart[slot] = 0;
+    columns.goalX[slot] = person.x;
+    columns.goalY[slot] = person.y;
+    columns.stepX[slot] = 0;
+    columns.stepY[slot] = 0;
+    columns.stepDays[slot] = 0;
     return slot;
   }
 

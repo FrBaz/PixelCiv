@@ -53,6 +53,7 @@ import {
   groupScreen,
   mapPixel,
   memberBox,
+  memberOffset,
   memberShape,
   onScreen,
   pickGroup,
@@ -93,6 +94,8 @@ export class PeopleLayer {
   /** Position de chaque groupe à l'instant affiché, en cases, et s'il marche encore. */
   private positions = new Float64Array(0);
   private moving = new Uint8Array(0);
+  /** Colonnes du monde. */
+  private width = 1;
 
   constructor(app: Application, data: PeopleData) {
     this.app = app;
@@ -121,24 +124,20 @@ export class PeopleLayer {
   }
 
   /**
-   * L'image des groupes de l'instant affiché, et leur position au jour `k` du mois de ses
-   * marches, fractionnaire (groupPositions) : walkOf donne l'indice de la marche de chaque
-   * groupe qui en a une. Sans image, rien ne se dessine.
+   * L'image des groupes de l'instant affiché, chaque membre à sa position de l'image, et
+   * chaque groupe au barycentre de ses membres (groupPositions), sur un monde de `width`
+   * colonnes. Sans image, rien ne se dessine.
    */
-  show(
-    frame: GroupsFrame | undefined,
-    walkOf: ReadonlyMap<number, number>,
-    k: number,
-    width: number,
-  ): void {
+  show(frame: GroupsFrame | undefined, width: number): void {
     this.frame = frame;
+    this.width = width;
     if (frame === undefined) return;
     const count = Math.floor(frame.groups.length / GROUP_STRIDE);
     if (this.moving.length !== count) {
       this.positions = new Float64Array(count * 2);
       this.moving = new Uint8Array(count);
     }
-    groupPositions(frame, walkOf, k, width, this.positions, this.moving);
+    groupPositions(frame, width, this.positions, this.moving);
   }
 
   /** Cases où se tiennent les groupes dessinés, comptées comme cellIndex. */
@@ -205,8 +204,9 @@ export class PeopleLayer {
   }
 
   /**
-   * Les membres d'un groupe, chacun son mini-sprite, en grappe autour de sa position ; ils
-   * marchent si `moving`, sinon se tiennent sur la première image de leur marche.
+   * Les membres d'un groupe, chacun son mini-sprite, à sa position de l'image, autour de
+   * celle du groupe (`group`, son rang) ; ils marchent si `moving`, sinon se tiennent sur la
+   * première image de leur marche.
    */
   private drawMembers(
     frame: GroupsFrame,
@@ -219,6 +219,7 @@ export class PeopleLayer {
     now: number,
     moving: boolean,
     used: number,
+    group: number,
   ): number {
     const { resolution } = this.app.renderer;
     const cloth = this.cloth(culture);
@@ -239,8 +240,15 @@ export class PeopleLayer {
       const rank = next++;
       const person = this.sprite(rank);
       person.texture = texture;
-      // Les pieds sur la position du groupe, chaque pixel du sprite un pixel de carte.
-      const box = memberBox(screenX, screenY, member, frameOf(name), scale);
+      // Les pieds sur sa position, chaque pixel du sprite un pixel de carte.
+      const offset = memberOffset(
+        frame,
+        first + member,
+        this.positions[group * 2] ?? 0,
+        this.positions[group * 2 + 1] ?? 0,
+        this.width,
+      );
+      const box = memberBox(screenX, screenY, offset, frameOf(name), scale);
       person.scale.set(scale / resolution);
       person.position.set(box.left / resolution, box.top / resolution);
       person.zIndex = depth(box, rank);
@@ -294,6 +302,7 @@ export class PeopleLayer {
               now,
               this.moving[group] === 1,
               used,
+              group,
             );
           } else {
             used = this.drawBanner(banner, culture, screenX, screenY, pixel, used);
@@ -317,7 +326,16 @@ export class PeopleLayer {
     if (frame === undefined || world === undefined) return undefined;
     const { resolution } = this.app.renderer;
     const view = { camera, viewport, world, resolution };
-    return pickGroup(frame, this.positions, view, x, y, this.shapes, TOUCH_SLOP * resolution);
+    return pickGroup(
+      frame,
+      this.positions,
+      view,
+      x,
+      y,
+      this.shapes,
+      TOUCH_SLOP * resolution,
+      this.width,
+    );
   }
 
   /** Vide les textures (changement de monde : rien ne s'y rattache plus). */

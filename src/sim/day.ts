@@ -1,31 +1,31 @@
 /**
- * Sous-pas quotidien (ADR 0013) : la seconde horloge de la simulation. Chaque jour, les
- * commandes reçues s'appliquent, puis les systèmes quotidiens avancent d'un jour, chacun
+ * Sous-pas quotidien (ADR 0013, ADR 0014) : la seconde horloge de la simulation. Chaque jour,
+ * les commandes reçues s'appliquent, puis les systèmes quotidiens avancent d'un jour, chacun
  * sur ses seuls actifs ; au soir du trentième jour vient le pas mensuel (monthStep), qui
  * garde ses systèmes, leur ordre et leurs tirages.
  *
- * En 2b.2, le seul système quotidien est la marche des groupes : les marches en cours
- * avancent d'un jour dans le cache des positions (DayPositions), et rien d'autre ne
- * bouge ; sans commande, un jour ne change de l'état que `day`. L'état ne dépend donc ni
- * de la vitesse ni du regroupement des jours en lots. Viendront, dans cet ordre, les
- * activités des individus (2b.8), puis leurs positions (2b.3), qui en découlent : seuls
- * les systèmes qui agissent sur l'état tournent ici, chacun sur ses actifs et sur son
- * propre flux du générateur ; ceux qui n'en calculent qu'une fonction pure se calculent
- * dans le rendu, pour les seuls visibles.
+ * Le système quotidien de 2b.3 est le mouvement des individus (movement.ts), dans un ordre
+ * fixe : les départs du jour, (2b.8 : les activités), la marche, l'espacement des marcheurs
+ * un jour sur deux, puis les arrivées. Seuls les marcheurs et les partants du jour coûtent ;
+ * ce qu'ils décident ne dépend pas de l'ordre des listes, ou passe dans un ordre canonique, et
+ * ne tire au sort que sur `sim.camp`. L'état ne dépend donc ni de la vitesse ni du
+ * regroupement des jours en lots.
  */
 import type { GameCommand } from '../core/protocol';
 import { DAYS_PER_MONTH } from '../core/time';
-import { rebuildPositions, type SimState } from './state';
+import { moveDay, rebuildMovement } from './movement';
+import type { SimState } from './state';
 import { applyCommands, monthStep, type RejectedCommand, type SimContent } from './step';
 
 /**
  * Fait passer un jour : les commandes s'appliquent d'abord, à l'instant courant (sans
  * `rejected`, l'exception d'une commande remonte ; avec, la commande est écartée et
- * signalée, et le jour continue), puis les marches en cours avancent. Le trentième jour,
- * le pas mensuel suit, et le mois suivant commence à son jour 0 ; advanceDay renvoie
- * alors les membres de chaque groupe, que donne le pas mensuel, et undefined les autres
- * jours. Si le pas mensuel lève une exception, elle remonte : le jour reste le dernier du
- * mois, et les positions du jour se recalculent d'après l'état, peut-être à moitié avancé.
+ * signalée, et le jour continue), puis le mouvement du jour (moveDay) mène chacun de cet
+ * instant au suivant. Le trentième jour, le pas mensuel suit, et le mois suivant commence à
+ * son jour 0 ; advanceDay renvoie alors les membres de chaque groupe, que donne le pas
+ * mensuel, et undefined les autres jours. Si le pas mensuel lève une exception, elle
+ * remonte : le jour reste le dernier du mois, et les caches du mouvement se refont d'après
+ * l'état, peut-être à moitié avancé.
  */
 export function advanceDay(
   state: SimState,
@@ -34,19 +34,25 @@ export function advanceDay(
   rejected?: RejectedCommand,
 ): ReadonlyMap<number, readonly number[]> | undefined {
   applyCommands(state, commands, content, rejected);
+  // Systèmes quotidiens, dans un ordre fixe, chacun sur ses actifs : le mouvement.
+  try {
+    moveDay(state, content);
+  } catch (error) {
+    rebuildMovement(state);
+    throw error;
+  }
   if (state.day < DAYS_PER_MONTH - 1) {
     state.day++;
-    // Systèmes quotidiens, dans un ordre fixe, chacun sur ses actifs : les marches.
-    state.dayPositions.advance(state.walks, state.day, state.size.width);
     return undefined;
   }
-  // Le trentième jour : toutes les marches arrivent, puis vient le pas mensuel.
+  // Le soir du trentième jour vient le pas mensuel.
   try {
     const members = monthStep(state, content);
     state.day = 0;
     return members;
-  } finally {
-    rebuildPositions(state);
+  } catch (error) {
+    rebuildMovement(state);
+    throw error;
   }
 }
 

@@ -21,9 +21,16 @@ import type { Catalog } from '../core/data/catalog';
 import type { Genetics, Species } from '../core/data';
 import { Fingerprint } from '../core/hash';
 import { SaveError, type SaveData, type SavedArray } from '../core/save/format';
+import { FIXED } from '../core/position';
+import { DAYS_PER_MONTH } from '../core/time';
+import { MAX_LEG_DAYS, MAX_STEP } from './movement';
 import {
   ANCESTRY_SLOTS,
   Archive,
+  CARRIED,
+  INTENTION,
+  MOVE_BITS,
+  PLACE,
   ARCHIVE_COLUMN_NAMES,
   ARCHIVE_COLUMNS,
   DEATH_CAUSES,
@@ -71,6 +78,8 @@ const GroupSchema = z
     leader: z.number().int().min(0),
     x: z.number().int().min(0),
     y: z.number().int().min(0),
+    campX: z.number().int().min(0),
+    campY: z.number().int().min(0),
     homeX: z.number().int().min(0),
     homeY: z.number().int().min(0),
     targetX: z.number().int().min(-1),
@@ -295,6 +304,46 @@ function savedArray(save: SaveData, name: string, type: ColumnConstructor, lengt
     throw new SaveError('corrupt', `tableau ${name} absent ou de mauvaise taille`);
   }
   return array;
+}
+
+/**
+ * Position et mouvement d'un vivant, vérifiés sans juger la franchissabilité, qui suit un
+ * contenu qui a pu changer (ADR 0007, ADR 0014) : la position et la place visée dans le monde ;
+ * une intention connue (PLACE ne vient que d'une partie de la version 6, que la relecture
+ * pose aussitôt) et ses seuls bits ; un jour de départ du mois ; une étape d'au plus
+ * MAX_LEG_DAYS jours, de pas bornés, qui finit dans le monde.
+ */
+function checkMovement(
+  people: Population,
+  slot: number,
+  size: { readonly width: number; readonly height: number },
+): void {
+  const { x, y, move, depart, goalX, goalY, stepX, stepY, stepDays } = people.columns;
+  const width = size.width * FIXED;
+  const height = size.height * FIXED;
+  const inside = (px: number, py: number) => px >= 0 && px < width && py >= 0 && py < height;
+  const intention = (move[slot] ?? 0) & INTENTION;
+  const bits = (move[slot] ?? 0) & ~INTENTION;
+  const days = stepDays[slot] ?? 0;
+  const sx = stepX[slot] ?? 0;
+  const sy = stepY[slot] ?? 0;
+  const endY = (y[slot] ?? 0) + days * sy;
+  if (!inside(x[slot] ?? -1, y[slot] ?? -1) || !inside(goalX[slot] ?? -1, goalY[slot] ?? -1)) {
+    throw new SaveError('corrupt', 'position hors du monde');
+  }
+  if (intention > PLACE || (bits & ~MOVE_BITS) !== 0) {
+    throw new SaveError('corrupt', 'intention inconnue');
+  }
+  if ((depart[slot] ?? 0) >= DAYS_PER_MONTH) throw new SaveError('corrupt', 'jour de départ');
+  if (
+    days > MAX_LEG_DAYS ||
+    Math.abs(sx) > MAX_STEP ||
+    Math.abs(sy) > MAX_STEP ||
+    endY < 0 ||
+    endY >= height
+  ) {
+    throw new SaveError('corrupt', 'étape illisible');
+  }
 }
 
 /**
@@ -591,6 +640,7 @@ export function restorePeople(
       groupMap.has(group.id) ||
       group.culture > cultures.length ||
       !inside(group.x, group.y) ||
+      !inside(group.campX, group.campY) ||
       !inside(group.homeX, group.homeY) ||
       (group.targetX >= 0 && !inside(group.targetX, Math.max(0, group.targetY)))
     ) {
@@ -649,6 +699,21 @@ export function restorePeople(
       people.get('birth', slot) > tick
     ) {
       throw new SaveError('corrupt', 'individu incohérent');
+    }
+    checkMovement(people, slot, size);
+  }
+  // Un porté a sa mère dans son groupe : on le vérifie une fois l'index vérifié.
+  for (let slot = 0; slot < end; slot++) {
+    if (people.alive[slot] === 0 || (people.get('move', slot) & INTENTION) !== CARRIED) continue;
+    const motherId = people.get('mother', slot);
+    const mother = motherId === NONE ? -1 : (where[motherId] ?? -1);
+    if (
+      mother < 0 ||
+      people.alive[mother] !== 1 ||
+      people.get('group', mother) !== people.get('group', slot) ||
+      (people.get('move', mother) & INTENTION) === CARRIED
+    ) {
+      throw new SaveError('corrupt', 'porté sans sa mère dans son groupe');
     }
   }
   const freeSet = new Set<number>();
@@ -744,6 +809,8 @@ export function fingerprintPeople(
       group.leader,
       group.x,
       group.y,
+      group.campX,
+      group.campY,
       group.homeX,
       group.homeY,
       group.targetX,
