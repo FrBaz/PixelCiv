@@ -12,9 +12,7 @@ import { testData, testParams } from '../sim/testing';
 import { SimulationHost } from '../worker/host';
 import { FakeEnvironment, testGenerator } from '../worker/testing';
 import { GameClock, JUMP_MS, PAUSE_CATCH_UP_MS } from './gameClock';
-
-/** Durée d'une image à 60 images par seconde, en millisecondes. */
-const FRAME_MS = 1000 / 60;
+import { FRAME_MS, HostedGame } from './testing';
 
 /** Le temps d'un état : `days` jours écoulés depuis le début de la partie. */
 function at(days: number, speed: SpeedId = 'normal', paused = false): TimeInfo {
@@ -171,11 +169,29 @@ describe('horloge du rendu (ADR 0013)', () => {
     expect(shown).toBeGreaterThan(latest - 3);
   });
 
+  it('ne saute pas quand la vitesse change en pause, pendant le rattrapage', () => {
+    // Dix jours de retard à ×16, 69 ms ; la pause, puis ×½, où ils dureraient 2,2 s : le
+    // rattrapage de la pause les finit en 0,3 s, sans saut.
+    const clock = new GameClock();
+    clock.reset(at(0, 'faster'), 0);
+    clock.receive(at(10, 'faster'), 0);
+    clock.receive(at(10, 'faster', true), 0);
+    clock.receive(at(10, 'slow', true), 0);
+    expect(10 * dayDuration('slow')).toBeGreaterThan(JUMP_MS);
+    let shown = clock.instant;
+    for (let now = FRAME_MS; now <= PAUSE_CATCH_UP_MS + FRAME_MS; now += FRAME_MS) {
+      const next = clock.advance(now);
+      expect(next - shown).toBeLessThanOrEqual((10 * FRAME_MS) / PAUSE_CATCH_UP_MS + 1e-9);
+      shown = next;
+    }
+    expect(shown).toBe(10);
+  });
+
   it('saute au dernier état au-delà d’une seconde de retard, comme à l’instantané', () => {
     const clock = new GameClock();
     clock.reset(at(40), 0);
     expect(clock.instant).toBe(40);
-    // Un onglet en arrière-plan : les états arrivent, l'horloge n'avance pas.
+    // Le fil principal arrêté, un onglet gelé par exemple : les états arrivent d'un coup.
     for (let day = 41; day <= 60; day++) clock.receive(at(day), 0);
     expect(dayDuration('normal') * 20).toBeGreaterThan(JUMP_MS);
     expect(clock.advance(FRAME_MS)).toBe(60);
@@ -236,5 +252,53 @@ describe('horloge du rendu (ADR 0013)', () => {
       expect(Math.max(...speeds), speed).toBeLessThan(1.1);
       expect(dayIndex(clock.today()), speed).toBeGreaterThan(0);
     }
+  });
+
+  it('ne saute pas de ×16 à ×½ ni à ×1, avec le vrai hôte, pas mensuel lent compris', async () => {
+    // À ×16, le retard visé couvre le pas mensuel : 7,5 jours pour 52 ms, le seuil du banc
+    // d'essai à 10 000 individus. Ce retard, compté en jours, durerait 1,7 s à ×½ : l'horloge
+    // le résorbe en 0,3 s environ, sans saut. Trente changements par cas, à des instants
+    // différents du mois de jeu.
+    let checked = 0;
+    for (const cost of [0, 20, 52]) {
+      for (const speed of ['slow', 'normal'] as const) {
+        const game = new HostedGame();
+        await game.start();
+        game.env.advancePerRead = 0.01;
+        game.host.receive({ type: 'debugStepCost', milliseconds: cost });
+        const nominal = FRAME_MS / dayDuration(speed);
+        // Instant affiché et retard de l'horloge, quand l'image reçoit chaque changement.
+        const switches: { shown: number; lag: number }[] = [];
+        game.onMessage = (message) => {
+          if (message.type === 'time' && message.time.speed === speed) {
+            const { instant, received } = game.clock;
+            switches.push({ shown: instant, lag: received - instant });
+          }
+        };
+        for (let phase = 0; phase < 30; phase++) {
+          game.host.receive({ type: 'setSpeed', speed: 'faster' });
+          for (const until = game.now + 1000 + phase * 7; game.now < until;) game.frame();
+          game.host.receive({ type: 'setSpeed', speed });
+          let previous: number | undefined;
+          for (const until = game.now + 700; game.now < until;) {
+            const shown = game.frame();
+            const switched = switches.at(phase);
+            if (switched === undefined) continue;
+            // Au plus un jour par image, et pas plus vite que le rattrapage d'une pause du
+            // même retard, plus le jour du premier lot, qui peut arriver aussitôt.
+            const step = shown - (previous ?? switched.shown);
+            const bound = Math.max(
+              2 * nominal,
+              ((switched.lag + 1) * FRAME_MS) / PAUSE_CATCH_UP_MS,
+            );
+            const label = `${speed}, ${cost} ms, phase ${phase}`;
+            expect(step, label).toBeLessThanOrEqual(Math.min(1, bound) + 1e-9);
+            previous = shown;
+            checked++;
+          }
+        }
+      }
+    }
+    expect(checked).toBeGreaterThan(6 * 30 * 30);
   });
 });

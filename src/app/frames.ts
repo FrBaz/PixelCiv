@@ -35,9 +35,10 @@ export function walkDay(dated: DatedFrame, shown: number): number {
 
 /**
  * Images gardées au plus. Le retard de l'horloge reste bien en deçà (une image par mois et
- * par commande) ; la borne tient la mémoire d'un onglet en arrière-plan, où l'horloge
- * n'avance pas et où les images s'entasseraient : à son retour, l'horloge saute au dernier
- * état.
+ * par commande) ; la borne tient la mémoire d'un onglet en arrière-plan. L'horloge y avance
+ * encore, à chaque état reçu, mais la carte ne s'y dessine plus : aucune image n'y est
+ * demandée, et les images reçues s'entasseraient. Au retour de l'onglet, la première image
+ * dessinée fait oublier toutes celles que l'horloge a dépassées.
  */
 export const MAX_FRAMES = 16;
 

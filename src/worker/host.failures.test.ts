@@ -10,7 +10,7 @@ import { MAX_SAVE_BYTES } from '../core/save/format';
 import { DAYS_PER_MONTH, monthDuration, NORMAL_DAY_MS, NORMAL_MONTH_MS } from '../core/time';
 import { testData, testParams, testWorld } from '../sim/testing';
 import { SimulationHost } from './host';
-import { FakeEnvironment } from './testing';
+import { FakeEnvironment, WAKE_SLACK_MS } from './testing';
 
 const failures = vi.hoisted(() => ({ copy: false, save: false, huge: false, step: false }));
 
@@ -80,7 +80,7 @@ describe("défaillances de l'hôte", () => {
 
   it('signale un pas mensuel en défaut, et le refait un mois de jeu plus tard (L-2)', async () => {
     const { env, host } = await playing();
-    env.advance(NORMAL_DAY_MS * (DAYS_PER_MONTH - 1));
+    env.advance(NORMAL_DAY_MS * (DAYS_PER_MONTH - 1) + WAKE_SLACK_MS);
     expect(lastTime(env)).toEqual([0, DAYS_PER_MONTH - 1]);
     failures.step = true;
     env.advance(NORMAL_DAY_MS);
@@ -91,7 +91,7 @@ describe("défaillances de l'hôte", () => {
     expect(env.messages('error')).toHaveLength(1);
     // Le défaut passé, le pas mensuel se refait à l'échéance, un mois de jeu plus tard.
     failures.step = false;
-    env.advance(1);
+    env.advance(1 + WAKE_SLACK_MS);
     expect(lastTime(env)).toEqual([1, 0]);
     expect(env.messages('stats').at(-1)?.stats.monthMs).toBeDefined();
     // Le jour demandé en pause ne lève rien non plus.

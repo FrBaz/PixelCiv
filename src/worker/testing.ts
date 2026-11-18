@@ -19,6 +19,13 @@ export const testGenerator: WorldGenerator = (params, onStage) => {
   return generateWorld(params, testData);
 };
 
+/**
+ * Retard d'un réveil de l'hôte sur l'échéance de son jour, au plus : il arrondit le délai
+ * de sa minuterie à la milliseconde supérieure, setTimeout ne prenant que des
+ * millisecondes entières.
+ */
+export const WAKE_SLACK_MS = 1;
+
 /** Un message envoyé, ses tampons transférés et l'instant de son envoi. */
 export interface SentMessage {
   readonly message: WorkerMessage;
@@ -32,9 +39,19 @@ export class FakeEnvironment implements HostEnvironment {
   advancePerRead = 0;
   /** Durée de l'envoi d'un delta, comme la copie d'une grosse image : l'horloge avance d'autant. */
   deltaCost = 0;
+  /**
+   * Minuteries d'un navigateur : setTimeout tronque son délai à la milliseconde, son
+   * paramètre étant un entier en WebIDL, et ne descend pas sous 1 ms, ni sous 4 ms pour
+   * une minuterie armée pendant le rappel d'une autre. Sans cette option, une minuterie
+   * part à l'instant exact demandé.
+   */
+  browserTimers = false;
+  /** Rappels de minuterie exécutés : les réveils de l'hôte. */
+  fired = 0;
   readonly sent: SentMessage[] = [];
   private readonly timers = new Map<number, { at: number; callback: () => void }>();
   private nextHandle = 1;
+  private firing = false;
 
   /**
    * Comme un vrai worker, un message posté est cloné et ses tampons transférés : ceux
@@ -53,7 +70,8 @@ export class FakeEnvironment implements HostEnvironment {
 
   setTimer(callback: () => void, delay: number): number {
     const handle = this.nextHandle++;
-    this.timers.set(handle, { at: this.time + delay, callback });
+    const wait = this.browserTimers ? Math.max(this.firing ? 4 : 1, Math.trunc(delay)) : delay;
+    this.timers.set(handle, { at: this.time + wait, callback });
     return handle;
   }
 
@@ -73,7 +91,13 @@ export class FakeEnvironment implements HostEnvironment {
       const [handle, timer] = due;
       this.timers.delete(handle);
       this.time = Math.max(this.time, timer.at);
-      timer.callback();
+      this.fired++;
+      this.firing = true;
+      try {
+        timer.callback();
+      } finally {
+        this.firing = false;
+      }
     }
     this.time = Math.max(this.time, end);
   }

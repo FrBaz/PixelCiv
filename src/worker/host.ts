@@ -7,10 +7,10 @@
  * Cadence : l'hôte calcule l'échéance de chaque jour depuis une ancre, réancrée à chaque
  * changement de vitesse et à chaque reprise, plutôt qu'en cumulant des durées : 360 jours
  * durent une année pile. Il se réveille au plus une fois toutes les MIN_BATCH_MS
- * millisecondes, toujours à l'échéance d'un jour, et fait alors tous les jours échus, au
- * plus MAX_BATCH_DAYS, en s'arrêtant après un pas mensuel ; un seul delta part pour le
- * lot. Plus de 2 × MAX_BATCH_DAYS jours de retard après un lot : il repart de maintenant,
- * sans rattraper par rafales.
+ * millisecondes, à l'échéance d'un jour, ou dès que possible s'il a des jours échus en
+ * retard, et fait alors tous les jours échus, au plus MAX_BATCH_DAYS, en s'arrêtant après
+ * un pas mensuel ; un seul delta part pour le lot. Plus de 2 × MAX_BATCH_DAYS jours de
+ * retard après un lot : il repart de maintenant, sans rattraper par rafales.
  *
  * Les opérations sur la partie entière (nouvelle partie, sauvegarde, chargement)
  * passent dans une file, chacune après la fin de la précédente : une sauvegarde
@@ -34,6 +34,7 @@ import {
 import { readSave, SaveError, writeSave } from '../core/save/format';
 import { EXPECTED_WORLD_FINGERPRINT, SELFTEST_WORLD } from '../core/selftest';
 import {
+  batchDays,
   dayIndex,
   DAYS_PER_MONTH,
   daysDuration,
@@ -385,18 +386,22 @@ export class SimulationHost {
   }
 
   /**
-   * Change de vitesse sans perdre l'avancée du jour en cours : l'horaire se réancre au
-   * jour fractionnaire où il en était, et le reste du jour suit la nouvelle vitesse, au
-   * prorata. En pause, l'avancée du jour se garde telle quelle. Redemander la vitesse
-   * courante ne change rien.
+   * Change de vitesse en gardant l'avancée du jour en cours, comme la pause : l'horaire se
+   * réancre sur l'état, plus cette avancée, d'un jour au plus, et le reste du jour suit la
+   * nouvelle vitesse, au prorata. L'avance de l'horaire au-delà d'un jour (près de trois
+   * jours entre deux lots à ×16, sept et demi après un pas mensuel de 52 ms) ne passe pas
+   * à la nouvelle vitesse : à ×½, elle durerait 32 fois plus longtemps, et partirait d'un
+   * coup, en un lot de rattrapage. En pause, l'avancée du jour se garde telle quelle.
+   * Redemander la vitesse courante ne change rien.
    */
   private setSpeed(speed: SpeedId): void {
     if (speed !== this.speed) {
       const now = this.env.now();
-      const days = this.clockDays(now);
+      const state = this.state;
+      const progress = state === undefined ? 0 : this.dayProgress(state, now);
       this.speed = speed;
-      if (!this.paused) {
-        this.anchor(now, days);
+      if (!this.paused && state !== undefined) {
+        this.anchor(now, dayIndex(state) + progress);
         this.reschedule();
       }
     }
@@ -414,7 +419,7 @@ export class SimulationHost {
       const state = this.state;
       if (state !== undefined) {
         if (paused) {
-          this.progress = Math.min(1, Math.max(0, this.clockDays(now) - dayIndex(state)));
+          this.progress = this.dayProgress(state, now);
         } else {
           this.anchor(now, dayIndex(state) + this.progress);
         }
@@ -504,6 +509,14 @@ export class SimulationHost {
     return this.anchorDays + daysIn(now - this.anchorAt, this.speed);
   }
 
+  /**
+   * Avancée du jour en cours à l'instant `now`, de 0 à 1, que gardent la pause et le
+   * changement de vitesse : l'avance de l'horaire sur l'état, d'un jour au plus.
+   */
+  private dayProgress(state: SimState, now: number): number {
+    return Math.min(1, Math.max(0, this.clockDays(now) - dayIndex(state)));
+  }
+
   /** Instant où le jour qui mène au rang `index` (dayIndex) est échu. */
   private dueAt(index: number): number {
     return this.anchorAt + daysDuration(index - this.anchorDays, this.speed);
@@ -518,7 +531,10 @@ export class SimulationHost {
   /**
    * Programme le prochain lot, sauf en pause ou sans partie : à l'échéance du premier jour
    * qui tombe MIN_BATCH_MS au moins après la fin du dernier lot. À ×½, ×1 et ×4, c'est
-   * l'échéance du jour suivant ; à ×16, celle du troisième.
+   * l'échéance du jour suivant ; à ×16, celle du troisième. Un lot qui ferait ainsi plus
+   * de batchDays jours trahit un horaire en avance sur l'état : un rattrapage, ou le jour
+   * entamé qu'un changement de vitesse a gardé. L'hôte se réveille alors dès MIN_BATCH_MS
+   * après le dernier lot, pour les seuls jours déjà échus.
    */
   private reschedule(): void {
     if (this.timer !== undefined) this.env.clearTimer(this.timer);
@@ -526,11 +542,12 @@ export class SimulationHost {
     const state = this.state;
     if (this.paused || state === undefined) return;
     const current = dayIndex(state);
-    const days = Math.max(
-      1,
-      Math.ceil(this.clockDays(this.lastWake + MIN_BATCH_MS) - current - DUE_EPSILON),
-    );
-    const delay = Math.max(0, this.dueAt(current + days) - this.env.now());
+    const earliest = this.lastWake + MIN_BATCH_MS;
+    const days = Math.max(1, Math.ceil(this.clockDays(earliest) - current - DUE_EPSILON));
+    const at = days > batchDays(this.speed) ? earliest : this.dueAt(current + days);
+    // setTimeout tronque son délai à la milliseconde : arrondi au-dessus, le réveil ne
+    // tombe jamais avant l'échéance, où il ne trouverait aucun jour à faire.
+    const delay = Math.max(0, Math.ceil(at - this.env.now()));
     this.timer = this.env.setTimer(() => {
       this.timer = undefined;
       try {

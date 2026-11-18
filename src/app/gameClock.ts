@@ -15,8 +15,14 @@
  * - En pause, elle finit son retard à la vitesse de la partie, en 0,3 s au plus, et
  *   s'arrête sur le dernier état : ce qu'on voit en pause est l'état, et la reprise
  *   repart de là.
- * - Au-delà de max(1 s, 2 × retard visé) de retard, au retour d'un onglet par exemple,
- *   elle saute au dernier état, comme à l'instantané d'une partie.
+ * - Au changement de vitesse en marche, le retard, compté en jours, vient de l'ancienne
+ *   vitesse : six jours font 42 ms à ×16, mais 1,3 s à ×½. Elle le résorbe comme en
+ *   pause, en 0,3 s environ, et au moins au double de la vitesse de la partie, puisque
+ *   les états continuent d'arriver, jusqu'à retomber sous le retard visé et un lot. La
+ *   mesure du retard repart alors de zéro.
+ * - En marche, au-delà de max(1 s, 2 × (retard visé + lot)) de retard, au retour d'un
+ *   onglet par exemple, elle saute au dernier état, comme à l'instantané d'une partie.
+ *   Le rattrapage d'une pause ou d'un changement de vitesse ne saute jamais.
  */
 import type { TimeInfo } from '../core/protocol';
 import {
@@ -48,7 +54,9 @@ export class GameClock {
   /** Retard juste avant l'arrivée d'un état, lissé, en jours, et instant de cette arrivée. */
   private smoothed: number | undefined;
   private lastArrival: number | undefined;
-  /** En pause : rythme du rattrapage, en jours par milliseconde. */
+  /** Résorption du retard hérité d'un changement de vitesse en marche (voir plus haut). */
+  private draining = false;
+  /** En pause ou en résorption : rythme du rattrapage, en jours par milliseconde. */
   private catchUp = 0;
   /** Durée du dernier pas mensuel, en millisecondes. */
   private monthMs = 0;
@@ -62,6 +70,7 @@ export class GameClock {
     this.lastNow = now;
     this.smoothed = undefined;
     this.lastArrival = undefined;
+    this.draining = false;
     this.catchUp = 0;
   }
 
@@ -74,8 +83,9 @@ export class GameClock {
     const index = dayIndex(time);
     if (index > this.latest) {
       // En marche, le retard juste avant l'arrivée de l'état, lissé. Le premier d'une
-      // partie, ou d'une reprise, part du retard visé : la vitesse de la partie.
-      if (!this.paused && !time.paused) {
+      // partie, d'une reprise ou d'une vitesse part du retard visé : la vitesse de la
+      // partie. Une résorption ne compte pas : son retard vient de l'ancienne vitesse.
+      if (!this.paused && !time.paused && !this.draining) {
         const before = this.latest - this.shown;
         if (this.smoothed === undefined || this.lastArrival === undefined) {
           this.smoothed = Math.max(before, this.target());
@@ -87,15 +97,23 @@ export class GameClock {
       }
       this.latest = index;
     }
+    if (time.paused !== this.paused) {
+      this.lastArrival = undefined;
+      this.draining = false;
+    } else if (!time.paused && time.speed !== this.speed) {
+      // Changement de vitesse en marche : le retard hérité se résorbe sans saut, et sa
+      // mesure repart de zéro.
+      this.draining = true;
+      this.smoothed = undefined;
+      this.lastArrival = undefined;
+    }
     this.speed = time.speed;
-    if (time.paused !== this.paused) this.lastArrival = undefined;
     this.paused = time.paused;
-    if (this.paused) {
-      // Le retard se finit à la vitesse de la partie, ou plus vite s'il dépasse 0,3 s.
-      this.catchUp = Math.max(
-        1 / dayDuration(this.speed),
-        (this.latest - this.shown) / PAUSE_CATCH_UP_MS,
-      );
+    if (this.paused || this.draining) {
+      // Le retard se finit en 0,3 s, ou à la vitesse de la partie s'il est plus court ;
+      // en marche, les états continuent d'arriver : au moins au double de cette vitesse.
+      const floor = (this.paused ? 1 : 2) / dayDuration(this.speed);
+      this.catchUp = Math.max(floor, (this.latest - this.shown) / PAUSE_CATCH_UP_MS);
     }
   }
 
@@ -110,17 +128,18 @@ export class GameClock {
     this.lastNow = now;
     const elapsed = now - last;
     const lag = this.latest - this.shown;
-    if (!(elapsed > 0) || lag <= 0) return this.shown;
     const day = dayDuration(this.speed);
     const target = this.target();
     const wanted = target + batchDays(this.speed);
-    if (lag * day > Math.max(JUMP_MS, 2 * wanted * day)) {
+    // Résorption finie : la loi de la marche reprend.
+    if (this.draining && lag <= wanted) this.draining = false;
+    if (!(elapsed > 0) || lag <= 0) return this.shown;
+    let rate: number;
+    if (this.paused || this.draining) {
+      rate = this.catchUp;
+    } else if (lag * day > Math.max(JUMP_MS, 2 * wanted * day)) {
       this.shown = this.latest;
       return this.shown;
-    }
-    let rate: number;
-    if (this.paused) {
-      rate = this.catchUp;
     } else {
       const smoothed = this.smoothed ?? target;
       rate = Math.min(2, Math.max(0.5, 1 + (smoothed - target) / (2 * target))) / day;

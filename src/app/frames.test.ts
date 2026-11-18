@@ -2,18 +2,17 @@ import { describe, expect, it } from 'vitest';
 import { deltaX } from '../core/cylinder';
 import {
   GROUP_STRIDE,
-  PROTOCOL_VERSION,
   type GroupsFrame,
+  type MainMessage,
   type SpawnGroupCommand,
 } from '../core/protocol';
-import { dayIndex, DAYS_PER_MONTH, type GameTime } from '../core/time';
-import { emptyWalks } from '../core/walk';
+import { dayDuration, dayIndex, DAYS_PER_MONTH, type GameTime, type SpeedId } from '../core/time';
+import { emptyWalks, type WalkData } from '../core/walk';
 import { groupPositions } from '../render/crowd';
-import { scatteredGroups, testData, testParams, testState } from '../sim/testing';
-import { SimulationHost } from '../worker/host';
-import { FakeEnvironment, testGenerator } from '../worker/testing';
+import { scatteredGroups, testState } from '../sim/testing';
 import { datedFrame, FrameQueue, MAX_FRAMES, walkDay, type DatedFrame } from './frames';
-import { GameClock } from './gameClock';
+import { PAUSE_CATCH_UP_MS } from './gameClock';
+import { FRAME_MS, HostedGame } from './testing';
 
 /** Une image de groupes au repos, d'identifiants `ids`, sur la ligne 10. */
 function frame(...ids: number[]): GroupsFrame {
@@ -26,11 +25,12 @@ function frame(...ids: number[]): GroupsFrame {
 
 const time = (tick: number, day: number): GameTime => ({ tick, day });
 
+/** Identifiants des groupes d'une image. */
+const groupIds = (frame: GroupsFrame) =>
+  Array.from(frame.groups.filter((_, index) => index % GROUP_STRIDE === 0));
+
 /** Identifiants des groupes d'une image datée. */
-const ids = (dated: DatedFrame | undefined) =>
-  dated === undefined
-    ? []
-    : Array.from(dated.frame.groups.filter((_, index) => index % GROUP_STRIDE === 0));
+const ids = (dated: DatedFrame | undefined) => (dated === undefined ? [] : groupIds(dated.frame));
 
 /** Position de chaque groupe d'une image datée à l'instant `shown`, par identifiant. */
 function positionsAt(
@@ -58,6 +58,24 @@ function positionsAt(
   return map;
 }
 
+/** Vitesse de la marche la plus rapide de `walks`, en cases par jour. */
+function fastestWalk(walks: WalkData, width: number): number {
+  let fastest = 0;
+  for (let index = 0; index < walks.groups.length; index++) {
+    const start = index === 0 ? 0 : (walks.ends[index - 1] ?? 0);
+    const perDay = (walks.budgets[index] ?? 0) / DAYS_PER_MONTH;
+    for (let at = start + 1; at < (walks.ends[index] ?? 0); at++) {
+      const from = walks.cells[at - 1] ?? 0;
+      const to = walks.cells[at] ?? 0;
+      const dx = deltaX(from % width, to % width, width);
+      const dy = Math.floor(to / width) - Math.floor(from / width);
+      const cost = (walks.costs[at] ?? 0) - (walks.costs[at - 1] ?? 0);
+      fastest = Math.max(fastest, (Math.hypot(dx, dy) / cost) * perDay);
+    }
+  }
+  return fastest;
+}
+
 describe('images des groupes datées (ADR 0013)', () => {
   it('montre l’image de l’instant affiché : apparitions et disparitions à leur instant', () => {
     const queue = new FrameQueue();
@@ -78,13 +96,13 @@ describe('images des groupes datées (ADR 0013)', () => {
     expect(ids(queue.latest())).toEqual([1, 3, 4, 5]);
   });
 
-  it('borne la file, comme dans un onglet en arrière-plan où l’horloge n’avance pas', () => {
+  it('borne la file, comme dans un onglet en arrière-plan où la carte ne se dessine plus', () => {
     const queue = new FrameQueue();
     queue.reset(frame(1), time(0, 0));
     for (let month = 1; month <= 40; month++) queue.push(frame(month), time(month, 0));
     expect(queue.size).toBe(MAX_FRAMES);
     expect(ids(queue.latest())).toEqual([40]);
-    // L'horloge saute au dernier état : la dernière image.
+    // Au retour, l'horloge a suivi les états reçus : la dernière image.
     expect(ids(queue.at(40 * DAYS_PER_MONTH))).toEqual([40]);
     expect(queue.size).toBe(1);
   });
@@ -108,13 +126,11 @@ describe('images des groupes datées (ADR 0013)', () => {
     expect(at.get(8)).toEqual([9, 10.5]);
   });
 
-  it('ne fait rien sauter, avec le vrai hôte : ni au pas mensuel, ni à la couture, ni à une scission', async () => {
-    const env = new FakeEnvironment();
-    const host = new SimulationHost(env, testData, testGenerator);
-    host.receive({ type: 'hello', protocol: PROTOCOL_VERSION });
-    host.receive({ type: 'newGame', params: testParams() });
-    await host.idle();
-    // Des groupes nombreux, qui se scindent ; deux au bord de la couture.
+  it('ne fait rien sauter, avec le vrai hôte : vitesses, pause, pas unique, chargement, couture, scissions', async () => {
+    const game = new HostedGame();
+    await game.start();
+    const { env, host, clock, frames } = game;
+    // Des groupes nombreux, qui se scindent ; d'autres au bord de la couture.
     const width = 512;
     const state = testState();
     // Les cases franchissables des deux colonnes de part et d'autre de la couture, une sur
@@ -131,53 +147,131 @@ describe('images des groupes datées (ADR 0013)', () => {
     expect(seam.length).toBeGreaterThan(3);
     const commands = [...scatteredGroups(state, 40, 34), ...seam];
     for (const command of commands) host.receive({ type: 'game', command });
-    const clock = new GameClock();
-    const queue = new FrameQueue();
-    let delivered = 0;
-    const FRAME_MS = 1000 / 60;
+    // Ce que suit chaque image : la vitesse et la pause des derniers temps reçus, le retard
+    // de l'horloge au dernier changement, la marche la plus rapide reçue, et le groupe
+    // d'origine de chaque groupe né d'une scission.
+    let speed: SpeedId = 'normal';
+    let paused = false;
+    let change = { at: 0, lag: 0 };
+    let fastest = 0;
+    const parentOf = new Map<number, number>();
+    let latestIds = new Set<number>();
+    game.onMessage = (message) => {
+      if (message.type !== 'delta' && message.type !== 'time') return;
+      if (message.time.speed !== speed || message.time.paused !== paused) {
+        change = { at: game.now, lag: clock.received - clock.instant };
+      }
+      speed = message.time.speed;
+      paused = message.time.paused;
+      if (message.type !== 'delta' || message.frame === undefined) return;
+      const { frame } = message;
+      fastest = Math.max(fastest, fastestWalk(frame.walks, width));
+      // Les groupes nés d'une scission au pas mensuel, par identifiants croissants, et les
+      // faits de la chronique qui donnent leur groupe d'origine, dans le même ordre.
+      const present = groupIds(frame);
+      const born = present.filter((id) => !latestIds.has(id)).sort((a, b) => a - b);
+      const splits = message.chronicle.filter((fact) => fact.kind === 'groupSplit');
+      if (splits.length > 0) {
+        expect(born).toHaveLength(splits.length);
+        splits.forEach((fact, rank) => parentOf.set(born[rank] ?? 0, fact.groupId));
+      }
+      latestIds = new Set(present);
+    };
+    // Le scénario : à chaque instant (ms), des messages entre deux images. À ×16, un pas
+    // mensuel de 52 ms, le seuil du banc d'essai à 10 000 individus.
+    env.advancePerRead = 0.01;
+    const plan: [number, MainMessage][] = [
+      [3_500, { type: 'setSpeed', speed: 'fast' }],
+      [4_500, { type: 'debugStepCost', milliseconds: 52 }],
+      [4_500, { type: 'setSpeed', speed: 'faster' }],
+      [5_700, { type: 'setSpeed', speed: 'slow' }],
+      [6_500, { type: 'setSpeed', speed: 'faster' }],
+      [7_300, { type: 'setSpeed', speed: 'normal' }],
+      [8_000, { type: 'setPaused', paused: true }],
+      [8_400, { type: 'stepOnce' }],
+      [8_500, { type: 'stepOnce' }],
+      [8_600, { type: 'stepOnce' }],
+      [9_300, { type: 'setPaused', paused: false }],
+      [10_000, { type: 'setSpeed', speed: 'faster' }],
+    ];
+    const load = 9_000;
     let previous = new Map<number, [number, number]>();
+    let previousShown = clock.instant;
+    let previousSpeed: SpeedId = speed;
     let previousFrame: DatedFrame | undefined;
     let crossings = 0;
     let switches = 0;
     let largest = 0;
-    for (let t = FRAME_MS; t < 4 * 3_334; t += FRAME_MS) {
-      env.advance(t - env.time);
-      for (const entry of env.sent.slice(delivered)) {
-        delivered++;
-        const { message } = entry;
-        if (message.type === 'snapshot') {
-          clock.reset(message.time, entry.at);
-          queue.reset(message.frame, message.time);
-        }
-        if (message.type === 'delta') {
-          if (message.frame !== undefined) queue.push(message.frame, message.time);
-          clock.receive(message.time, entry.at);
-        }
-      }
-      const shown = clock.advance(t);
-      const dated = queue.at(shown);
+    let children = 0;
+    let loaded = false;
+    while (game.now < 11_000) {
+      const shown = game.frame();
+      const dated = frames.at(shown);
       if (dated === undefined) continue;
       if (dated !== previousFrame) switches++;
       previousFrame = dated;
+      // L'instant affiché : au plus le double de la vitesse de la partie (de la plus rapide
+      // des deux autour d'un changement), ou, dans la seconde d'un changement de vitesse ou
+      // de pause, le rattrapage en 0,3 s de son retard, plus un jour.
+      const nominal = FRAME_MS / Math.min(dayDuration(speed), dayDuration(previousSpeed));
+      const catchUp =
+        game.now - change.at < 1000 ? ((change.lag + 1) * FRAME_MS) / PAUSE_CATCH_UP_MS : 0;
+      const advance = shown - previousShown;
+      expect(advance).toBeGreaterThanOrEqual(0);
+      expect(advance, `${speed}, à ${game.now.toFixed(0)} ms`).toBeLessThanOrEqual(
+        Math.max(2 * nominal, catchUp) + 1e-9,
+      );
       const now = positionsAt(dated, shown, width);
       for (const [id, [x, y]] of now) {
         expect(x).toBeGreaterThanOrEqual(0);
         expect(x).toBeLessThan(width);
-        const before = previous.get(id);
+        // Un groupe né d'une scission part de la dernière position de son groupe d'origine.
+        const parent = parentOf.get(id);
+        const before =
+          previous.get(id) ?? (parent === undefined ? undefined : previous.get(parent));
         if (before === undefined) continue;
-        // Au plus court, à travers la couture : jamais plus d'une case d'une image à l'autre.
+        if (!previous.has(id)) children++;
+        // Au plus court, à travers la couture : jamais plus loin que la marche la plus rapide
+        // n'irait dans les jours affichés entre les deux images.
         const dx = deltaX(before[0], x, width);
         const step = Math.hypot(dx, y - before[1]);
         largest = Math.max(largest, step);
-        expect(step).toBeLessThan(1);
+        expect(step, `groupe ${id}, à ${game.now.toFixed(0)} ms`).toBeLessThanOrEqual(
+          fastest * advance + 1e-9,
+        );
         if (Math.abs(x - before[0]) > width / 2) crossings++;
       }
       previous = now;
+      previousShown = shown;
+      previousSpeed = speed;
+      for (const [at, message] of plan) {
+        if (at > game.now - FRAME_MS && at <= game.now) host.receive(message);
+      }
+      if (!loaded && game.now >= load) {
+        // En pause, l'horloge arrêtée sur le dernier état : une sauvegarde, rechargée, montre
+        // les mêmes groupes aux mêmes positions.
+        loaded = true;
+        expect(clock.instant).toBe(clock.received);
+        host.receive({ type: 'save', requestId: 1 });
+        await host.idle();
+        const saved = env.messages('saved').at(0);
+        if (saved === undefined) throw new Error('pas de sauvegarde');
+        host.receive({ type: 'load', requestId: 2, data: saved.data });
+        await host.idle();
+        game.flush();
+        expect(env.messages('loaded')).toHaveLength(1);
+        const reloaded = frames.at(clock.instant);
+        if (reloaded === undefined) throw new Error('pas d’image');
+        expect(clock.instant).toBe(previousShown);
+        expect(positionsAt(reloaded, clock.instant, width)).toEqual(previous);
+      }
     }
-    // Quatre mois : quatre pas mensuels, et l'image de l'apparition, chacune à son instant.
-    expect(switches).toBeGreaterThanOrEqual(5);
-    expect(dayIndex(clock.today())).toBeGreaterThan(3 * DAYS_PER_MONTH);
+    // Plus de quinze pas mensuels, et l'image de l'apparition, chacune à son instant.
+    expect(switches).toBeGreaterThanOrEqual(15);
+    expect(dayIndex(clock.today())).toBeGreaterThan(15 * DAYS_PER_MONTH);
+    expect(loaded).toBe(true);
     expect(crossings).toBeGreaterThan(0);
-    expect(largest).toBeGreaterThan(0.05);
+    expect(children).toBeGreaterThan(0);
+    expect(largest).toBeGreaterThan(1);
   });
 });

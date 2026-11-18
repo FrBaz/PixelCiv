@@ -1,8 +1,8 @@
 /**
  * Mesures du panneau de débogage (NF-01, ADR 0013) : images par seconde et image la plus
- * longue sur la dernière seconde ; durée moyenne d'un jour sur les trente derniers ; durée
- * moyenne du pas mensuel et le plus long sur les douze derniers ; jours par lot sur les
- * trente derniers lots ; marches en cours au dernier lot.
+ * longue sur la dernière seconde ; durée moyenne d'un jour sur les mille derniers au moins ;
+ * durée moyenne du pas mensuel et le plus long sur les douze derniers ; jours par lot sur
+ * les trente derniers lots ; marches en cours au dernier lot.
  */
 import type { StepStats } from '../core/protocol';
 
@@ -22,8 +22,13 @@ export interface DebugSample {
   readonly walks: number | undefined;
 }
 
-/** Jours, pas mensuels et lots gardés pour les moyennes. */
-const DAY_WINDOW = 30;
+/**
+ * Jours ordinaires gardés pour leur moyenne, au moins. Hors isolement cross-origin,
+ * l'horloge d'un worker n'avance que par pas de 0,1 ms : un jour de quelques microsecondes
+ * s'y mesure 0 ou 0,1 ms, et seule une moyenne sur un millier de jours en approche la durée.
+ */
+export const DAY_WINDOW = 1000;
+/** Pas mensuels et lots gardés pour les moyennes. */
 const MONTH_WINDOW = 12;
 const BATCH_WINDOW = 30;
 /** Fenêtre des images, en millisecondes. */
@@ -40,7 +45,9 @@ function keep(values: number[], value: number, size: number): void {
 
 export class DebugSampler {
   private frames: number[] = [];
-  private days: number[] = [];
+  /** Durée totale des jours ordinaires de chacun des derniers lots, et leur nombre. */
+  private days: { readonly total: number; readonly count: number }[] = [];
+  private dayCount = 0;
   private months: number[] = [];
   private batches: number[] = [];
   private walks: number | undefined;
@@ -57,9 +64,15 @@ export class DebugSampler {
   /** Enregistre les mesures d'un lot de jours du worker. */
   batch(stats: StepStats): void {
     const ordinary = stats.days - (stats.monthMs === undefined ? 0 : 1);
-    if (stats.dayMs !== undefined) {
-      for (let day = 0; day < Math.min(ordinary, DAY_WINDOW); day++) {
-        keep(this.days, stats.dayMs, DAY_WINDOW);
+    if (stats.dayMs !== undefined && ordinary > 0) {
+      this.days.push({ total: stats.dayMs * ordinary, count: ordinary });
+      this.dayCount += ordinary;
+      // Les lots les plus anciens s'oublient, tant qu'il reste DAY_WINDOW jours sans eux.
+      let first = this.days.at(0);
+      while (first !== undefined && this.dayCount - first.count >= DAY_WINDOW) {
+        this.days.shift();
+        this.dayCount -= first.count;
+        first = this.days.at(0);
       }
     }
     if (stats.monthMs !== undefined) keep(this.months, stats.monthMs, MONTH_WINDOW);
@@ -72,7 +85,10 @@ export class DebugSampler {
     return {
       fps: total > 0 ? (this.frames.length * 1000) / total : 0,
       worstFrameMs: Math.max(0, ...this.frames),
-      dayMs: mean(this.days),
+      dayMs:
+        this.dayCount > 0
+          ? this.days.reduce((sum, batch) => sum + batch.total, 0) / this.dayCount
+          : undefined,
       monthMs: mean(this.months),
       worstMonthMs: this.months.length > 0 ? Math.max(...this.months) : undefined,
       batchDays: mean(this.batches),
