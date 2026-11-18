@@ -12,6 +12,7 @@ import {
   CHRONICLE_PAGE,
   GROUP_STRIDE,
   type ChronicleView,
+  type GroupsFrame,
   type GroupSummary,
   type GroupView,
   type InspectTarget,
@@ -67,10 +68,17 @@ export function groupName(state: SimState, leader: number): string {
   return personName(state.people, state.society, leader).split(' ')[0] ?? '';
 }
 
+/**
+ * Un groupe en quelques mots, à la case où il se tient ce jour-là : en marche, celle de sa
+ * position du jour (ADR 0013), au repos, la sienne.
+ */
 function groupSummary(state: SimState, id: number, size: number): GroupSummary | undefined {
   const group = state.society.groups.get(id);
   if (group === undefined) return undefined;
-  return { id, name: groupName(state, group.leader), x: group.x, y: group.y, size };
+  const at = state.dayPositions.positionOf(id);
+  const x = at === undefined ? group.x : Math.floor(at.x);
+  const y = at === undefined ? group.y : Math.floor(at.y);
+  return { id, name: groupName(state, group.leader), x, y, size };
 }
 
 /** Fiche d'un individu, vivant ou mort. */
@@ -268,14 +276,14 @@ function looks(people: Population): Looks {
 }
 
 /**
- * Image des groupes pour la carte, et un code d'apparence par membre ; `members` évite de
- * recompter les membres que le pas vient de donner.
+ * Image des groupes pour la carte, un code d'apparence par membre, et les marches du mois,
+ * copiées (ADR 0013) ; `members` évite de recompter les membres que le pas vient de donner.
  */
 export function groupsFrame(
   state: SimState,
   content: SimContent,
   members: ReadonlyMap<number, readonly number[]> = groupMembers(state.people),
-): { groups: Uint32Array<ArrayBuffer>; sprites: Uint16Array<ArrayBuffer> } {
+): GroupsFrame {
   const { people, tick } = state;
   const groups = new Uint32Array(state.society.groups.size * GROUP_STRIDE);
   let total = 0;
@@ -320,5 +328,5 @@ export function groupsFrame(
       );
     }
   }
-  return { groups, sprites };
+  return { groups, sprites, walks: state.walks.arrays() };
 }

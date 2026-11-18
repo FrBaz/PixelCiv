@@ -5,6 +5,7 @@
  */
 import { z } from 'zod';
 import type { GameCommand, LoggedCommand } from '../core/protocol';
+import { DAYS_PER_MONTH } from '../core/time';
 
 /** Coordonnée d'une case : un entier sûr, que l'état normalise ensuite (x boucle). */
 const cell = z.number().int();
@@ -32,5 +33,13 @@ export const GameCommandSchema = z.discriminatedUnion('type', [
 ]) satisfies z.ZodType<GameCommand>;
 
 export const LoggedCommandSchema = z
-  .object({ tick: z.number().int().nonnegative(), command: GameCommandSchema })
+  .object({
+    tick: z.number().int().nonnegative(),
+    day: z
+      .number()
+      .int()
+      .min(0)
+      .max(DAYS_PER_MONTH - 1),
+    command: GameCommandSchema,
+  })
   .strict() satisfies z.ZodType<LoggedCommand>;

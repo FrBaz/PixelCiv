@@ -25,9 +25,12 @@ export const SAVE_MAGIC = 'PXCV';
  * place de la grille de test ; 4, la population de la phase 2 (individus, archive des
  * morts, groupes, cultures, langues, chronique) ; 5, les corrections de la relecture de
  * la phase 2 : la langue du nom de famille de chacun, la chronique en colonnes plutôt que
- * dans l'en-tête, l'ordre des sous-espèces de chaque espèce.
+ * dans l'en-tête, l'ordre des sous-espèces de chaque espèce ; 6, les deux horloges de la
+ * tâche 2b.2 : le jour du mois, celui de chaque commande du journal, et les marches du
+ * mois (ADR 0013). Le jour va dans les données JSON, non dans les métadonnées, que
+ * l'en-tête vérifie avant toute migration.
  */
-export const SAVE_FORMAT_VERSION = 5;
+export const SAVE_FORMAT_VERSION = 6;
 
 /**
  * Taille maximale d'une sauvegarde, compressée ou non, en octets. Elle borne la mémoire

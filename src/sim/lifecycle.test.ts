@@ -32,7 +32,8 @@ import { field, personName, recordOf } from './records';
 import { membersOf } from './spawn';
 import type { NamingRule } from './society';
 import type { SimState } from './state';
-import { fingerprint, step, type SimContent } from './step';
+import { step } from './day';
+import { fingerprint, type SimContent } from './step';
 import { groupMembers } from './groups';
 import {
   flatState,

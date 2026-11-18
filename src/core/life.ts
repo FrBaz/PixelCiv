@@ -5,7 +5,7 @@
  * les tirent tous de ces fonctions : la carte et la fiche disent la même chose, et une
  * espèce qui vit autrement que les humains se dessine selon ses propres âges.
  *
- * Le worker donne à chaque pas leur code d'apparence à tous les membres des groupes : il
+ * Le worker donne à chaque image des groupes leur code d'apparence à tous leurs membres : il
  * lit alors ces deux valeurs dans une table par mois d'âge, tirée une fois par espèce de
  * ces mêmes fonctions (lifeTable).
  */

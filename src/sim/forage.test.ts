@@ -21,7 +21,8 @@ import {
 import { groupMembers } from './groups';
 import { spawnGroup } from './spawn';
 import { createState, type SimState } from './state';
-import { fingerprint, step, type SimContent } from './step';
+import { step } from './day';
+import { fingerprint, type SimContent } from './step';
 import { testData, testParams, testState, testWorld, withHuman } from './testing';
 
 /** Première case d'un biome, et sa position. */

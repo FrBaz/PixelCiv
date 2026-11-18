@@ -12,13 +12,23 @@ import type {
   TimeInfo,
   WorldInfo,
 } from '../core/protocol';
+import type { GameTime } from '../core/time';
 import type { GenerationStage, WorldSizeId } from '../core/world';
 import type { WorldParams } from '../core/worldParams';
 import type { MessageKey } from '../i18n';
 import type { SidePanel } from './panels';
 
-/** Temps de la partie, inconnu avant le premier instantané. */
+/**
+ * Temps du dernier état reçu du worker, avec la pause et la vitesse, inconnu avant le
+ * premier instantané.
+ */
 export const time = signal<TimeInfo | undefined>(undefined);
+
+/**
+ * Jour en cours à l'instant que montre la carte (GameClock, ADR 0013) : la date affichée
+ * suit la carte et ses saisons, et non le dernier état reçu, qui la devance un peu.
+ */
+export const shownDay = signal<GameTime | undefined>(undefined);
 
 /** Contenu chargé depuis data/, pour le panneau de débogage. */
 export const content = signal<{ readonly biomes: number } | undefined>(undefined);
@@ -38,8 +48,13 @@ export const generationMs = signal<number | undefined>(undefined);
 export interface DebugInfo {
   readonly fps: number;
   readonly worstFrameMs: number;
-  readonly stepMs: number | undefined;
-  readonly worstStepMs: number | undefined;
+  /** Durée moyenne d'un jour, du pas mensuel et du plus long des pas mensuels récents. */
+  readonly dayMs: number | undefined;
+  readonly monthMs: number | undefined;
+  readonly worstMonthMs: number | undefined;
+  /** Jours par lot, en moyenne, et marches en cours au dernier lot. */
+  readonly batchDays: number | undefined;
+  readonly walks: number | undefined;
   readonly memoryMb: number | undefined;
   /** Moteur de rendu (webgl, webgpu) et densité de pixels de l'écran. */
   readonly renderer: { readonly name: string; readonly resolution: number };

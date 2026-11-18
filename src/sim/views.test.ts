@@ -8,7 +8,8 @@ import { FEMALE, GENOME_WORDS, NONE } from './population';
 import { restoreState, saveState } from './save';
 import { spawnGroup } from './spawn';
 import type { SimState } from './state';
-import { step, type SimContent } from './step';
+import { advanceDay, step } from './day';
+import type { SimContent } from './step';
 import { firstCellOf, scatteredGroups, testData, testHuman, testState, withHuman } from './testing';
 import {
   chroniclePage,
@@ -425,5 +426,35 @@ describe("âges de la vie, tirés de l'espèce (D-6, A-10, U-12)", () => {
     const restored = restoreState(saveState(state, GENERATOR_VERSION, testData), reversed);
     expect([...groupsFrame(restored, reversed).sprites]).toEqual([...before.sprites]);
     expect(heights(reversed, restored)).toEqual(heights(testData, state));
+  });
+});
+
+describe('deux horloges (ADR 0013)', () => {
+  it('envoie avec l’image les marches du mois, et la case du jour dans la fiche', () => {
+    const state = testState();
+    step(state, scatteredGroups(state, 30, 30), testData);
+    step(state, [], testData);
+    const frame = groupsFrame(state, testData);
+    expect(frame.walks).toEqual(state.walks.arrays());
+    expect(frame.walks.groups.length).toBeGreaterThan(5);
+    // Copiées : la suite de la partie ne change pas l'image envoyée.
+    expect(frame.walks.cells.buffer).not.toBe(state.walks.cells.buffer);
+    // Au jour 0, la fiche donne la case de départ ; en cours de mois, celle du jour, sur le
+    // chemin ; au bout, la case du groupe.
+    const id = frame.walks.groups.at(0) ?? 0;
+    const group = state.society.groups.get(id);
+    if (group === undefined) throw new Error('groupe introuvable');
+    const start = state.walks.cells.at(0) ?? 0;
+    const cellOf = () => {
+      const view = inspect(state, testData, { kind: 'group', id }).group;
+      return view === undefined ? -1 : view.y * 512 + view.x;
+    };
+    expect(cellOf()).toBe(start);
+    const path = new Set(Array.from(state.walks.cells.subarray(0, state.walks.ends.at(0) ?? 0)));
+    for (let day = 1; day < 30; day++) {
+      advanceDay(state, [], testData);
+      expect(path.has(cellOf())).toBe(true);
+    }
+    expect(cellOf()).toBe(group.y * 512 + group.x);
   });
 });

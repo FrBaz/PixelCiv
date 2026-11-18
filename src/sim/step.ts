@@ -1,10 +1,11 @@
 /**
- * Avancée de la simulation : un pas vaut un mois. Les commandes de jeu s'appliquent
- * au début du pas, puis les systèmes s'exécutent dans un ordre fixe (ADR 0003, ADR 0011) :
- * la nourriture repousse, les groupes cherchent leur nourriture et mangent, la
- * population vit (morts, naissances, couples), les groupes trop petits rejoignent un
- * voisin, à un mois de marche au plus, les groupes trop grands se scindent, et tous se
- * déplacent, sauf ceux qui viennent de naître d'une scission, déjà partis vers leur aire.
+ * Pas mensuel de la simulation (ADR 0003, ADR 0011, ADR 0013) : les commandes de jeu, et
+ * les systèmes du mois, qui s'exécutent dans un ordre fixe : la nourriture repousse, les
+ * groupes cherchent leur nourriture et mangent, la population vit (morts, naissances,
+ * couples), les groupes trop petits rejoignent un voisin, à un mois de marche au plus, les
+ * groupes trop grands se scindent, et tous décident leur marche du mois qui vient, sauf
+ * ceux qui viennent de naître d'une scission, déjà partis vers leur aire. Le sous-pas
+ * quotidien (day.ts) fait le pas mensuel au soir du trentième jour.
  */
 import type { Cultures, Genetics, Nomads, Species } from '../core/data';
 import type { AltitudeLevel } from '../core/data/schemas';
@@ -20,7 +21,7 @@ import { lifeCycle } from './lifecycle';
 import { NONE } from './population';
 import { fingerprintPeople } from './populationSave';
 import { spawnGroup } from './spawn';
-import { markDirty, type SimState } from './state';
+import { markDirty, rebuildPositions, type SimState } from './state';
 import { cellIndex, walkCost } from './terrain';
 
 /** Contenu dont la simulation se sert. */
@@ -36,7 +37,8 @@ export interface SimContent {
 /**
  * Applique une commande ; une commande sans effet est sans danger. Une commande vérifie et
  * calcule tout avant de toucher à l'état : si elle lève une exception, seul le générateur
- * a pu avancer, et step le ramène en arrière.
+ * a pu avancer, et applyCommands le ramène en arrière. Une commande à venir qui déplacerait
+ * ou retirerait un groupe en cours de mois devra aussi finir sa marche (ADR 0013).
  */
 export function applyCommand(state: SimState, command: GameCommand, content: SimContent): void {
   switch (command.type) {
@@ -75,19 +77,34 @@ function paintBiome(state: SimState, command: PaintBiomeCommand, content: SimCon
 export type RejectedCommand = (command: GameCommand, error: unknown) => void;
 
 /**
- * Applique des commandes, dans l'ordre, et les journalise avec le pas au début duquel
- * elles s'appliquent : le pas courant, qui n'a pas encore commencé. Sans `rejected`,
- * l'exception d'une commande remonte ; avec, la commande est écartée et signalée.
+ * Applique des commandes, dans l'ordre, et les journalise avec l'instant où elles
+ * s'appliquent : le mois et le jour courants, avant que le jour suivant ne passe. Sans `rejected`,
+ * l'exception d'une commande remonte ; avec, la commande est écartée et signalée. Les
+ * positions du jour se recalculent ensuite, un groupe ayant pu apparaître.
  *
- * step les applique au début du mois. L'hôte, en pause, les applique dès leur réception :
- * rien ne change l'état d'ici le pas suivant, qui commence donc là où il aurait commencé
- * après elles, et le rejeu du journal ne voit aucune différence.
+ * advanceDay les applique au début du jour. L'hôte, en pause, les applique dès leur
+ * réception : rien ne change l'état d'ici le jour suivant, qui commence donc là où il
+ * aurait commencé après elles, et le rejeu du journal ne voit aucune différence.
  */
 export function applyCommands(
   state: SimState,
   commands: readonly GameCommand[],
   content: SimContent,
   rejected?: RejectedCommand,
+): void {
+  if (commands.length === 0) return;
+  try {
+    applyEach(state, commands, content, rejected);
+  } finally {
+    rebuildPositions(state);
+  }
+}
+
+function applyEach(
+  state: SimState,
+  commands: readonly GameCommand[],
+  content: SimContent,
+  rejected: RejectedCommand | undefined,
 ): void {
   for (const command of commands) {
     if (rejected === undefined) {
@@ -102,23 +119,21 @@ export function applyCommands(
         continue;
       }
     }
-    state.commandLog.push({ tick: state.tick, command });
+    state.commandLog.push({ tick: state.tick, day: state.day, command });
   }
 }
 
 /**
- * Fait passer un mois. Les commandes reçues s'appliquent d'abord (applyCommands) ; sans
- * `rejected`, l'exception d'une commande remonte ; avec, la commande est écartée et
- * signalée, et le mois continue. Renvoie les membres de chaque groupe à la fin du mois,
- * dans l'ordre des emplacements, tels que les donnerait groupMembers.
+ * Pas mensuel : les systèmes du mois, dans un ordre fixe, puis le mois suivant commence
+ * (`tick` augmente). Les marches du mois passé, toutes finies, s'oublient avant les
+ * scissions, et chaque groupe note la sienne pour le mois qui vient. Renvoie les membres
+ * de chaque groupe à la fin du mois, dans l'ordre des emplacements, tels que les
+ * donnerait groupMembers. Les commandes ne passent pas par lui, mais par advanceDay.
  */
-export function step(
+export function monthStep(
   state: SimState,
-  commands: readonly GameCommand[],
   content: SimContent,
-  rejected?: RejectedCommand,
 ): ReadonlyMap<number, readonly number[]> {
-  applyCommands(state, commands, content, rejected);
   // Systèmes, dans un ordre fixe.
   const { people, society, food, world, size, tick } = state;
   regrowFood(food, world, size, tick, content);
@@ -142,6 +157,8 @@ export function step(
     members.set(into, mergeSlots(members.get(into) ?? [], members.get(from) ?? []));
     members.delete(from);
   }
+  // Les marches du mois passé sont finies : chaque groupe note la sienne ci-dessous.
+  state.walks.clear();
   const random = state.rng.stream('sim.groups');
   const groupOf = people.columns.group;
   for (const group of [...society.groups.values()]) {
@@ -205,5 +222,16 @@ export function fingerprint(state: SimState): string {
     fingerprint.string(name);
     for (const word of words) fingerprint.uint32(word);
   }
+  // Le jour du mois et les marches en cours (ADR 0013) ; les positions du jour s'en déduisent.
+  const walks = state.walks.arrays();
+  fingerprint
+    .uint32(state.day)
+    .uint32(walks.groups.length)
+    .uint32(walks.cells.length)
+    .typedArray(walks.groups)
+    .typedArray(walks.ends)
+    .typedArray(walks.cells)
+    .typedArray(walks.costs)
+    .typedArray(walks.budgets);
   return fingerprint.hex();
 }

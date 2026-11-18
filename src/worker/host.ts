@@ -1,7 +1,16 @@
 /**
- * Hôte de la simulation dans le worker (ADR 0004) : il reçoit les messages, cadence
- * les pas selon la vitesse, les mesure et envoie les résultats. Il est le seul, côté
- * worker, à lire l'horloge ; il ne la transmet jamais à l'état.
+ * Hôte de la simulation dans le worker (ADR 0004, ADR 0013) : il reçoit les messages,
+ * cadence les jours selon la vitesse, les regroupe en lots, les mesure et envoie les
+ * résultats. Il est le seul, côté worker, à lire l'horloge ; il ne la transmet jamais à
+ * l'état, qui ne dépend ni de la vitesse ni du regroupement des jours.
+ *
+ * Cadence : l'hôte calcule l'échéance de chaque jour depuis une ancre, réancrée à chaque
+ * changement de vitesse et à chaque reprise, plutôt qu'en cumulant des durées : 360 jours
+ * durent une année pile. Il se réveille au plus une fois toutes les MIN_BATCH_MS
+ * millisecondes, à l'échéance d'un jour, ou dès que possible s'il a des jours échus en
+ * retard, et fait alors tous les jours échus, au plus MAX_BATCH_DAYS, en s'arrêtant après
+ * un pas mensuel ; un seul delta part pour le lot. Plus de 2 × MAX_BATCH_DAYS jours de
+ * retard après un lot : il repart de maintenant, sans rattraper par rafales.
  *
  * Les opérations sur la partie entière (nouvelle partie, sauvegarde, chargement)
  * passent dans une file, chacune après la fin de la précédente : une sauvegarde
@@ -17,13 +26,23 @@ import {
   PROTOCOL_VERSION,
   transferablesOf,
   type GameCommand,
+  type LoggedCommand,
   type MainMessage,
   type TimeInfo,
   type WorkerMessage,
 } from '../core/protocol';
 import { readSave, SaveError, writeSave } from '../core/save/format';
 import { EXPECTED_WORLD_FINGERPRINT, SELFTEST_WORLD } from '../core/selftest';
-import { monthDuration, type SpeedId } from '../core/time';
+import {
+  batchDays,
+  dayIndex,
+  DAYS_PER_MONTH,
+  daysDuration,
+  daysIn,
+  MAX_BATCH_DAYS,
+  MIN_BATCH_MS,
+  type SpeedId,
+} from '../core/time';
 import {
   copyLayers,
   GENERATION_STAGES,
@@ -36,7 +55,8 @@ import { defaultWorldParams, worldParamsSchema, type WorldParams } from '../core
 import { GameCommandSchema } from '../sim/commands';
 import { MIGRATIONS, restoreState, saveState } from '../sim/save';
 import { cellIndex, createState, takeDirtyChunks, type SimState } from '../sim/state';
-import { applyCommands, step, type RejectedCommand } from '../sim/step';
+import { advanceDay } from '../sim/day';
+import { applyCommands, type RejectedCommand } from '../sim/step';
 import { chroniclePage, chronicleViews, groupsFrame, inspect } from '../sim/views';
 import { GENERATOR_VERSION, type GenerationParams } from '../worldgen/generate';
 
@@ -57,6 +77,37 @@ export type WorldGenerator = (
 /** Largeur d'un aperçu de l'écran de création, en colonnes : bornes et parité. */
 export const PREVIEW_WIDTH = { min: 32, max: 512 } as const;
 
+/** Marge d'arrondi sur les jours échus : un réveil à l'échéance compte son jour. */
+const DUE_EPSILON = 1e-6;
+
+/**
+ * Une commande change-t-elle l'image des groupes ? Seule celle-ci, avec le pas mensuel,
+ * fait partir une nouvelle image : une commande de plus doit le dire.
+ */
+function changesGroups(command: GameCommand): boolean {
+  switch (command.type) {
+    case 'paintBiome':
+      return false;
+    case 'spawnGroup':
+      return true;
+  }
+}
+
+/** Ce qu'a fait un lot de jours. */
+interface Batch {
+  /** Jours passés, pas mensuel compris. */
+  days: number;
+  /** Membres de chaque groupe, que donne le pas mensuel s'il y en a eu un. */
+  members: ReadonlyMap<number, readonly number[]> | undefined;
+  /** Durée totale des jours ordinaires, et leur nombre. */
+  dailyMs: number;
+  daily: number;
+  /** Durée du pas mensuel, s'il y en a eu un. */
+  monthMs: number | undefined;
+  /** Le pas mensuel a levé une exception. */
+  failed: boolean;
+}
+
 /**
  * Un groupe n'apparaît que sur une case du monde franchissable, comme le veut spawnGroup :
  * refusée dès sa réception, la commande le dit au joueur au lieu de rester sans effet.
@@ -76,12 +127,22 @@ export class SimulationHost {
   private greeted = false;
   private paused = false;
   private speed: SpeedId = 'normal';
-  /** Instant prévu du prochain pas, sur l'horloge de l'environnement, hors pause. */
-  private nextStepAt = 0;
-  /** En pause : temps qui restait avant le prochain pas, en millisecondes. */
-  private remaining = 0;
+  /**
+   * Ancre de l'horaire, hors pause : à l'instant anchorAt de l'horloge, la partie en était
+   * à anchorDays jours écoulés depuis son début, fractionnaires. Le jour qui mène au rang
+   * n (dayIndex) est échu à anchorAt + daysDuration(n − anchorDays).
+   */
+  private anchorAt = 0;
+  private anchorDays = 0;
+  /**
+   * Instant de la fin du dernier lot, delta envoyé, ou de l'instantané de la partie : le
+   * lot suivant vient MIN_BATCH_MS plus tard au moins.
+   */
+  private lastWake = 0;
+  /** En pause : avancée du jour en cours, de 0 à 1, qu'il finira à la reprise. */
+  private progress = 0;
   private timer: number | undefined;
-  /** Coût factice ajouté à chaque pas (débogage), en millisecondes. */
+  /** Coût factice ajouté à chaque pas mensuel (débogage), en millisecondes. */
   private stepCost = 0;
   /** File des opérations sur la partie entière. */
   private operations: Promise<void> = Promise.resolve();
@@ -140,9 +201,9 @@ export class SimulationHost {
         break;
       case 'stepOnce':
         if (this.paused && this.state !== undefined) {
-          this.runStep();
-          // Le mois suivant commence : il durera un mois entier à la reprise.
-          this.remaining = monthDuration(this.speed);
+          this.runBatch(this.state, 1);
+          // Le jour suivant commence : il durera un jour entier à la reprise.
+          this.progress = 0;
         }
         break;
       case 'save': {
@@ -256,8 +317,8 @@ export class SimulationHost {
   }
 
   /**
-   * Vérifie une commande de jeu ; elle s'appliquera au début du prochain pas, ou aussitôt
-   * en pause (applyPending).
+   * Vérifie une commande de jeu ; elle s'appliquera au début du prochain jour, le premier
+   * du prochain lot, ou aussitôt en pause (applyPending).
    */
   private command(command: unknown): void {
     const state = this.state;
@@ -279,21 +340,30 @@ export class SimulationHost {
   }
 
   /**
-   * En pause, les commandes en attente s'appliquent sans attendre le pas (U-7) : le joueur
-   * voit aussitôt le groupe apparu. Elles s'appliquent comme au début du pas qui vient, et
-   * se journalisent avec lui (applyCommands) : rien ne change l'état d'ici là, et le rejeu
-   * redonne la même partie. Ce qui a changé part aussitôt, dans un delta sans pas.
+   * En pause, les commandes en attente s'appliquent sans attendre le jour suivant (U-7) :
+   * le joueur voit aussitôt le groupe apparu. Elles s'appliquent comme au début du jour
+   * qui vient, et se journalisent à l'instant courant (applyCommands) : rien ne change
+   * l'état d'ici là, et le rejeu redonne la même partie. Ce qui a changé part aussitôt,
+   * dans un delta sans jour.
    */
   private applyPending(): void {
     const state = this.state;
     if (state === undefined || state.pending.length === 0) return;
     try {
+      const logged = state.commandLog.length;
       applyCommands(state, state.pending.splice(0), this.data, this.rejected);
-      this.sendDelta(state);
+      this.sendDelta(state, 0, this.groupsChanged(state, logged), undefined);
     } catch (error) {
       console.error(error);
       this.send({ type: 'error', code: 'internal', detail: String(error) });
     }
+  }
+
+  /** Les commandes journalisées depuis le rang `logged` ont-elles changé les groupes ? */
+  private groupsChanged(state: SimState, logged: number): boolean {
+    return state.commandLog
+      .slice(logged)
+      .some((entry: LoggedCommand) => changesGroups(entry.command));
   }
 
   /** Commande écartée parce qu'elle a levé une exception (L-2) : elle se signale. */
@@ -316,19 +386,22 @@ export class SimulationHost {
   }
 
   /**
-   * Change de vitesse sans perdre l'avancée du mois en cours : le temps qui reste
-   * jusqu'au prochain pas suit la nouvelle vitesse. Redemander la vitesse courante ne
-   * change rien.
+   * Change de vitesse en gardant l'avancée du jour en cours, comme la pause : l'horaire se
+   * réancre sur l'état, plus cette avancée, d'un jour au plus, et le reste du jour suit la
+   * nouvelle vitesse, au prorata. L'avance de l'horaire au-delà d'un jour (près de trois
+   * jours entre deux lots à ×16, sept et demi après un pas mensuel de 52 ms) ne passe pas
+   * à la nouvelle vitesse : à ×½, elle durerait 32 fois plus longtemps, et partirait d'un
+   * coup, en un lot de rattrapage. En pause, l'avancée du jour se garde telle quelle.
+   * Redemander la vitesse courante ne change rien.
    */
   private setSpeed(speed: SpeedId): void {
     if (speed !== this.speed) {
-      const ratio = monthDuration(speed) / monthDuration(this.speed);
+      const now = this.env.now();
+      const state = this.state;
+      const progress = state === undefined ? 0 : this.dayProgress(state, now);
       this.speed = speed;
-      if (this.paused) {
-        this.remaining *= ratio;
-      } else {
-        const now = this.env.now();
-        this.nextStepAt = now + Math.max(0, this.nextStepAt - now) * ratio;
+      if (!this.paused && state !== undefined) {
+        this.anchor(now, dayIndex(state) + progress);
         this.reschedule();
       }
     }
@@ -336,14 +409,21 @@ export class SimulationHost {
   }
 
   /**
-   * Met en pause ou reprend, là où le mois en était. Les commandes reçues juste avant la
-   * pause s'appliquent alors, sans attendre la reprise.
+   * Met en pause ou reprend, là où le jour en était : la pause garde l'avancée du jour en
+   * cours, et la reprise réancre l'horaire pour finir ce jour. Les commandes reçues juste
+   * avant la pause s'appliquent alors, sans attendre la reprise.
    */
   private setPaused(paused: boolean): void {
     if (paused !== this.paused) {
       const now = this.env.now();
-      if (paused) this.remaining = Math.max(0, this.nextStepAt - now);
-      else this.nextStepAt = now + this.remaining;
+      const state = this.state;
+      if (state !== undefined) {
+        if (paused) {
+          this.progress = this.dayProgress(state, now);
+        } else {
+          this.anchor(now, dayIndex(state) + this.progress);
+        }
+      }
       this.paused = paused;
       this.reschedule();
       if (paused) this.applyPending();
@@ -391,7 +471,7 @@ export class SimulationHost {
   }
 
   private time(state: SimState): TimeInfo {
-    return { tick: state.tick, paused: this.paused, speed: this.speed };
+    return { tick: state.tick, day: state.day, paused: this.paused, speed: this.speed };
   }
 
   /**
@@ -401,7 +481,7 @@ export class SimulationHost {
   private start(state: SimState): void {
     const layers = copyLayers(state.world);
     const frame = groupsFrame(state, this.data);
-    // Les derniers faits de la chronique ; les suivants viendront avec chaque pas, les plus
+    // Les derniers faits de la chronique ; les suivants viendront avec les deltas, les plus
     // anciens à la demande, par pages.
     const total = state.society.chronicle.length;
     const chronicle = chronicleViews(state, total - CHRONICLE_RECENT, total);
@@ -415,83 +495,171 @@ export class SimulationHost {
       frame,
       chronicle,
     });
-    const duration = monthDuration(this.speed);
-    this.nextStepAt = this.env.now() + duration;
-    this.remaining = duration;
+    // Le jour en cours commence : il durera un jour entier, et le premier lot partira
+    // MIN_BATCH_MS au moins après l'instantané.
+    const now = this.env.now();
+    this.anchor(now, dayIndex(state));
+    this.lastWake = now;
+    this.progress = 0;
     this.reschedule();
   }
 
-  /** Programme le prochain pas, sauf en pause ou sans partie. */
+  /** Jours écoulés selon l'horaire à l'instant `now`, fractionnaires. */
+  private clockDays(now: number): number {
+    return this.anchorDays + daysIn(now - this.anchorAt, this.speed);
+  }
+
+  /**
+   * Avancée du jour en cours à l'instant `now`, de 0 à 1, que gardent la pause et le
+   * changement de vitesse : l'avance de l'horaire sur l'état, d'un jour au plus.
+   */
+  private dayProgress(state: SimState, now: number): number {
+    return Math.min(1, Math.max(0, this.clockDays(now) - dayIndex(state)));
+  }
+
+  /** Instant où le jour qui mène au rang `index` (dayIndex) est échu. */
+  private dueAt(index: number): number {
+    return this.anchorAt + daysDuration(index - this.anchorDays, this.speed);
+  }
+
+  /** Réancre l'horaire : à l'instant `now`, la partie en est à `days` jours écoulés. */
+  private anchor(now: number, days: number): void {
+    this.anchorAt = now;
+    this.anchorDays = days;
+  }
+
+  /**
+   * Programme le prochain lot, sauf en pause ou sans partie : à l'échéance du premier jour
+   * qui tombe MIN_BATCH_MS au moins après la fin du dernier lot. À ×½, ×1 et ×4, c'est
+   * l'échéance du jour suivant ; à ×16, celle du troisième. Un lot qui ferait ainsi plus
+   * de batchDays jours trahit un horaire en avance sur l'état : un rattrapage, ou le jour
+   * entamé qu'un changement de vitesse a gardé. L'hôte se réveille alors dès MIN_BATCH_MS
+   * après le dernier lot, pour les seuls jours déjà échus.
+   */
   private reschedule(): void {
     if (this.timer !== undefined) this.env.clearTimer(this.timer);
     this.timer = undefined;
-    if (this.paused || this.state === undefined) return;
-    const delay = Math.max(0, this.nextStepAt - this.env.now());
+    const state = this.state;
+    if (this.paused || state === undefined) return;
+    const current = dayIndex(state);
+    const earliest = this.lastWake + MIN_BATCH_MS;
+    const days = Math.max(1, Math.ceil(this.clockDays(earliest) - current - DUE_EPSILON));
+    const at = days > batchDays(this.speed) ? earliest : this.dueAt(current + days);
+    // setTimeout tronque son délai à la milliseconde : arrondi au-dessus, le réveil ne
+    // tombe jamais avant l'échéance, où il ne trouverait aucun jour à faire.
+    const delay = Math.max(0, Math.ceil(at - this.env.now()));
     this.timer = this.env.setTimer(() => {
       this.timer = undefined;
       try {
-        this.runStep();
+        this.wake();
       } finally {
-        // Quoi qu'il arrive au pas, le suivant est programmé : la partie ne se fige pas.
-        this.advanceSchedule();
+        // Quoi qu'il arrive au lot, le suivant est programmé : la partie ne se fige pas.
         this.reschedule();
       }
     }, delay);
   }
 
-  /**
-   * Avance l'horaire d'un mois. Si la simulation a pris plus d'un mois de retard sur
-   * l'horloge, elle repart de maintenant, sans rattraper par rafales : elle tourne
-   * alors simplement aussi vite qu'elle le peut.
-   */
-  private advanceSchedule(): void {
-    const duration = monthDuration(this.speed);
-    const now = this.env.now();
-    this.nextStepAt += duration;
-    if (this.nextStepAt < now - duration) this.nextStepAt = now;
-  }
-
-  /**
-   * Fait passer un mois, puis envoie son delta et sa durée. Une exception ne fige pas la
-   * partie : celle d'une commande l'écarte, sans effet sur l'état ni place au journal
-   * (step), et se signale en erreur « command » ; celle du mois lui-même se signale en
-   * erreur « internal », et le pas suivant vient à son heure.
-   */
-  private runStep(): void {
+  /** Un réveil : les jours échus, au plus MAX_BATCH_DAYS, puis l'horaire. */
+  private wake(): void {
     const state = this.state;
     if (state === undefined) return;
-    const start = this.env.now();
-    try {
-      // Les commandes en attente s'appliquent au début du pas, qui les horodate.
-      const members = step(state, state.pending.splice(0), this.data, this.rejected);
-      if (this.stepCost > 0) {
-        const end = start + this.stepCost;
-        while (this.env.now() < end) {
-          // Attente active : le pas factice occupe vraiment le worker.
-        }
-      }
-      this.sendDelta(state, members);
-    } catch (error) {
-      console.error(error);
-      this.send({ type: 'error', code: 'internal', detail: String(error) });
-      return;
+    const due = Math.floor(this.clockDays(this.env.now()) + DUE_EPSILON) - dayIndex(state);
+    if (due <= 0) return;
+    const batch = this.runBatch(state, Math.min(due, MAX_BATCH_DAYS));
+    const end = this.env.now();
+    this.lastWake = end;
+    if (batch.failed) {
+      // Le pas mensuel a échoué : il se refait un mois de jeu plus tard, et non à chaque
+      // réveil, sur un état à moitié avancé (ADR 0004, ADR 0013).
+      this.anchor(end, dayIndex(state) + 1 - DAYS_PER_MONTH);
+    } else if (this.clockDays(end) - dayIndex(state) > 2 * MAX_BATCH_DAYS) {
+      // Trop de retard : l'horaire repart de maintenant, sans rafale ; la partie va alors
+      // aussi vite qu'elle le peut.
+      this.anchor(end, dayIndex(state));
     }
-    // Le pas compte son delta : l'image des groupes, la chronique et leur envoi (W-11).
-    this.send({ type: 'stats', stats: { stepMs: this.env.now() - start } });
   }
 
   /**
-   * Ce qui a changé depuis le dernier message : blocs, temps, groupes (avec leurs membres
-   * s'ils sont connus) et faits nouveaux de la chronique.
+   * Fait passer au plus `target` jours, en s'arrêtant après un pas mensuel, puis envoie un
+   * seul delta pour le lot, et ses mesures. Les commandes en attente s'appliquent au début
+   * du premier jour, qui les journalise. Une exception ne fige pas la partie : celle d'une
+   * commande l'écarte, sans effet sur l'état ni place au journal, et se signale en erreur
+   * « command » ; celle du pas mensuel se signale en erreur « internal », le jour restant
+   * le dernier du mois.
    */
-  private sendDelta(state: SimState, members?: ReadonlyMap<number, readonly number[]>): void {
+  private runBatch(state: SimState, target: number): Batch {
+    const start = this.env.now();
+    const logged = state.commandLog.length;
+    const batch: Batch = {
+      days: 0,
+      members: undefined,
+      dailyMs: 0,
+      daily: 0,
+      monthMs: undefined,
+      failed: false,
+    };
+    while (batch.days < target) {
+      const commands = batch.days === 0 ? state.pending.splice(0) : [];
+      const monthly = state.day === DAYS_PER_MONTH - 1;
+      const dayStart = this.env.now();
+      try {
+        batch.members = advanceDay(state, commands, this.data, this.rejected);
+      } catch (error) {
+        console.error(error);
+        this.send({ type: 'error', code: 'internal', detail: String(error) });
+        batch.failed = true;
+        break;
+      }
+      batch.days++;
+      if (monthly) {
+        if (this.stepCost > 0) {
+          const end = dayStart + this.stepCost;
+          while (this.env.now() < end) {
+            // Attente active : le pas factice occupe vraiment le worker.
+          }
+        }
+        batch.monthMs = this.env.now() - dayStart;
+        break;
+      }
+      batch.dailyMs += this.env.now() - dayStart;
+      batch.daily++;
+    }
+    const changed = batch.members !== undefined || this.groupsChanged(state, logged);
+    if (batch.days === 0 && !changed && state.commandLog.length === logged) return batch;
+    this.sendDelta(state, batch.days, changed, batch.members);
+    // Le lot compte son delta : l'image des groupes, la chronique et leur envoi (W-11).
+    this.send({
+      type: 'stats',
+      stats: {
+        batchMs: this.env.now() - start,
+        days: batch.days,
+        ...(batch.daily > 0 ? { dayMs: batch.dailyMs / batch.daily } : {}),
+        ...(batch.monthMs === undefined ? {} : { monthMs: batch.monthMs }),
+        walks: state.dayPositions.walking,
+      },
+    });
+    return batch;
+  }
+
+  /**
+   * Ce qui a changé depuis le dernier message : temps, jours du lot, blocs, faits nouveaux
+   * de la chronique, et l'image des groupes si `frame` le demande (avec leurs membres s'ils
+   * sont connus).
+   */
+  private sendDelta(
+    state: SimState,
+    days: number,
+    frame: boolean,
+    members: ReadonlyMap<number, readonly number[]> | undefined,
+  ): void {
     const total = state.society.chronicle.length;
     this.send({
       type: 'delta',
       time: this.time(state),
+      days,
       chunks: takeDirtyChunks(state),
-      frame: groupsFrame(state, this.data, members),
       chronicle: chronicleViews(state, this.chronicleSent, total),
+      ...(frame ? { frame: groupsFrame(state, this.data, members) } : {}),
     });
     this.chronicleSent = total;
   }

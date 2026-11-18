@@ -1,5 +1,6 @@
 /**
- * Groupes et habitants sur la carte (tâche 2.9 ; REN-03, REN-04, REN-08 ; ADR 0011).
+ * Groupes et habitants sur la carte (tâches 2.9 et 2b.2 ; REN-03, REN-04, REN-08 ;
+ * ADR 0011, ADR 0013).
  *
  * Tout se dessine à la densité de pixels de la carte, sans mélange (REN-08), à des
  * positions entières : à l'échelle s, entière à partir de 1, s pixels physiques par pixel
@@ -12,7 +13,12 @@
  * - De près (à partir de SPRITE_SCALE pixels de l'écran par pixel de carte), un mini-sprite
  *   par membre, rangé en grappe autour de la case du groupe. Il est tiré de l'individu :
  *   sexe, âge, teint, cheveux (grisonnants avec l'âge, comme au portrait), habit de la
- *   culture. Il marche : deux images en alternance.
+ *   culture. Il marche, deux images en alternance, tant que son groupe est en route ; au
+ *   camp, il se tient sur la première.
+ * - Chaque groupe se tient à sa position de l'instant affiché (show), en marche sur son
+ *   chemin, entre les cases : un sprite quitte alors la grille des pixels de la carte, mais
+ *   reste à une position entière de pixels physiques, et un pixel de son motif reste un
+ *   pixel de carte.
  *
  * Un groupe se dessine s'il touche l'écran, grappe ou bannière comprise. Chaque sprite a
  * une profondeur unique (depth, crowd.ts) : le plus bas à l'écran passe devant, puis le
@@ -23,6 +29,7 @@ import { BufferImageSource, Container, Sprite, Texture, type Application } from 
 import type { Appearance, Genetics } from '../core/data';
 import { geneRoles } from '../core/data/people';
 import { GROUP_STRIDE, type GroupsFrame } from '../core/protocol';
+import type { WorldSize } from '../core/world';
 import { decodeVisual, SKIN_TONES } from '../core/visual';
 import {
   alleleColors,
@@ -42,6 +49,7 @@ import {
   chooseBanner,
   clusterReach,
   depth,
+  groupPositions,
   groupScreen,
   mapPixel,
   memberBox,
@@ -82,6 +90,9 @@ export class PeopleLayer {
   /** Les motifs, pour retrouver le groupe sous un appui. */
   private readonly shapes: PickShapes;
   private frame: GroupsFrame | undefined;
+  /** Position de chaque groupe à l'instant affiché, en cases, et s'il marche encore. */
+  private positions = new Float64Array(0);
+  private moving = new Uint8Array(0);
 
   constructor(app: Application, data: PeopleData) {
     this.app = app;
@@ -109,9 +120,30 @@ export class PeopleLayer {
     app.stage.addChild(this.layer);
   }
 
-  /** Nouvelle image des groupes, venue du worker. */
-  setFrame(frame: GroupsFrame | undefined): void {
+  /**
+   * L'image des groupes de l'instant affiché, et leur position au jour `k` du mois de ses
+   * marches, fractionnaire (groupPositions) : walkOf donne l'indice de la marche de chaque
+   * groupe qui en a une. Sans image, rien ne se dessine.
+   */
+  show(
+    frame: GroupsFrame | undefined,
+    walkOf: ReadonlyMap<number, number>,
+    k: number,
+    width: number,
+  ): void {
     this.frame = frame;
+    if (frame === undefined) return;
+    const count = Math.floor(frame.groups.length / GROUP_STRIDE);
+    if (this.moving.length !== count) {
+      this.positions = new Float64Array(count * 2);
+      this.moving = new Uint8Array(count);
+    }
+    groupPositions(frame, walkOf, k, width, this.positions, this.moving);
+  }
+
+  /** Cases où se tiennent les groupes dessinés, comptées comme cellIndex. */
+  occupiedCells(size: WorldSize): Set<number> {
+    return positionCells(this.frame === undefined ? new Float64Array(0) : this.positions, size);
   }
 
   private cloth(culture: number): Rgb {
@@ -172,7 +204,10 @@ export class PeopleLayer {
     return used + 1;
   }
 
-  /** Les membres d'un groupe, chacun son mini-sprite, en grappe autour de la case. */
+  /**
+   * Les membres d'un groupe, chacun son mini-sprite, en grappe autour de sa position ; ils
+   * marchent si `moving`, sinon se tiennent sur la première image de leur marche.
+   */
   private drawMembers(
     frame: GroupsFrame,
     first: number,
@@ -182,6 +217,7 @@ export class PeopleLayer {
     screenY: number,
     scale: number,
     now: number,
+    moving: boolean,
     used: number,
   ): number {
     const { resolution } = this.app.renderer;
@@ -190,7 +226,7 @@ export class PeopleLayer {
     for (let member = 0; member < size; member++) {
       const code = frame.sprites[first + member] ?? 0;
       const visual = decodeVisual(code);
-      const step = Math.floor(now / STEP_MS + member * 0.37) % 2;
+      const step = moving ? Math.floor(now / STEP_MS + member * 0.37) % 2 : 0;
       const name = spriteName(visual.age, visual.sex, step);
       const hair = greyed(this.hairColors[visual.hair] ?? this.grey, this.grey, visual.grey);
       const texture = this.texture(name, textureKey(name, code, cloth), () =>
@@ -203,7 +239,7 @@ export class PeopleLayer {
       const rank = next++;
       const person = this.sprite(rank);
       person.texture = texture;
-      // Les pieds sur la case, les pixels du sprite sur ceux de la carte.
+      // Les pieds sur la position du groupe, chaque pixel du sprite un pixel de carte.
       const box = memberBox(screenX, screenY, member, frameOf(name), scale);
       person.scale.set(scale / resolution);
       person.position.set(box.left / resolution, box.top / resolution);
@@ -230,11 +266,18 @@ export class PeopleLayer {
       for (let index = 0; index + GROUP_STRIDE <= groups.length; index += GROUP_STRIDE) {
         const size = groups[index + 3] ?? 0;
         const culture = groups[index + 4] ?? 1;
-        // Ce qui se dessine autour de la case, grappe ou bannière, en pixels de motif.
+        const group = index / GROUP_STRIDE;
+        // Ce qui se dessine autour du groupe, grappe ou bannière, en pixels de motif.
         const reach = close
           ? clusterReach(size, this.largest.width, this.largest.height)
           : bannerReach;
-        const at = groupScreen(groups[index + 1] ?? 0, groups[index + 2] ?? 0, view, reach, pixel);
+        const at = groupScreen(
+          this.positions[group * 2] ?? 0,
+          this.positions[group * 2 + 1] ?? 0,
+          view,
+          reach,
+          pixel,
+        );
         const screenY = at.y;
         for (let copy = -at.copies; copy <= at.copies; copy++) {
           const screenX = at.x + copy * at.span;
@@ -249,6 +292,7 @@ export class PeopleLayer {
               screenY,
               pixel,
               now,
+              this.moving[group] === 1,
               used,
             );
           } else {
@@ -265,15 +309,15 @@ export class PeopleLayer {
   }
 
   /**
-   * Le groupe dessiné sous le point (x, y) de l'écran, en pixels physiques, d'après la
-   * dernière image des groupes et la caméra du dernier dessin (pickGroup), ou undefined.
+   * Le groupe dessiné sous le point (x, y) de l'écran, en pixels physiques, d'après l'image
+   * des groupes et les positions du dernier dessin, et la caméra (pickGroup), ou undefined.
    */
   pick(camera: Camera, viewport: Extent, world: Extent | undefined, x: number, y: number) {
     const frame = this.frame;
     if (frame === undefined || world === undefined) return undefined;
     const { resolution } = this.app.renderer;
     const view = { camera, viewport, world, resolution };
-    return pickGroup(frame, view, x, y, this.shapes, TOUCH_SLOP * resolution);
+    return pickGroup(frame, this.positions, view, x, y, this.shapes, TOUCH_SLOP * resolution);
   }
 
   /** Vide les textures (changement de monde : rien ne s'y rattache plus). */
@@ -282,4 +326,19 @@ export class PeopleLayer {
     this.textures.clear();
     this.frame = undefined;
   }
+}
+
+/**
+ * Cases où tombent des positions de groupes (deux nombres par groupe, en cases), comptées
+ * comme cellIndex : la case (x, y) couvre [x, x + 1[ × [y, y + 1[.
+ */
+export function positionCells(positions: Float64Array, size: WorldSize): Set<number> {
+  const cells = new Set<number>();
+  for (let rank = 0; rank * 2 + 1 < positions.length; rank++) {
+    const x = Math.floor(positions[rank * 2] ?? 0);
+    const y = Math.floor(positions[rank * 2 + 1] ?? 0);
+    if (y < 0 || y >= size.height) continue;
+    cells.add(y * size.width + (((x % size.width) + size.width) % size.width));
+  }
+  return cells;
 }
