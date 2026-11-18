@@ -188,9 +188,15 @@ button:disabled {
   padding: 0 0.75rem;
 }
 
+/* Le panneau de débogage défile s'il ne tient pas entre la barre du haut et celle du bas :
+   un téléphone en paysage n'en montre que le début. */
 .debug-panel {
   flex-basis: 100%;
   max-width: 24rem;
+  max-height: min(60dvh, calc(100dvh - 9rem - var(--safe-top) - var(--safe-bottom)));
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  touch-action: pan-y;
   font-size: 0.875rem;
 }
 

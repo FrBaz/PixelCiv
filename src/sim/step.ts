@@ -92,11 +92,14 @@ export type RejectedCommand = (command: GameCommand, error: unknown) => void;
  * Applique des commandes, dans l'ordre, et les journalise avec l'instant où elles
  * s'appliquent : le mois et le jour courants, avant que le jour suivant ne passe. Sans `rejected`,
  * l'exception d'une commande remonte ; avec, la commande est écartée et signalée. Les caches
- * du mouvement se refont ensuite d'après l'état, un groupe ayant pu apparaître.
+ * du mouvement se refont d'après l'état après chaque commande appliquée, un groupe ayant pu
+ * apparaître : la commande suivante voit les places qu'il tient. Un lot donne donc l'état
+ * de ses commandes appliquées une à une.
  *
- * advanceDay les applique au début du jour. L'hôte, en pause, les applique dès leur
- * réception : rien ne change l'état d'ici le jour suivant, qui commence donc là où il
- * aurait commencé après elles, et le rejeu du journal ne voit aucune différence.
+ * advanceDay les applique au début du jour, et le rejeu par lots d'un même instant. L'hôte,
+ * en pause, les applique une à une, dès leur réception : rien ne change l'état d'ici le jour
+ * suivant, qui commence donc là où il aurait commencé après elles, et le rejeu du journal ne
+ * voit aucune différence.
  */
 export function applyCommands(
   state: SimState,
@@ -132,6 +135,7 @@ function applyEach(
       }
     }
     state.commandLog.push({ tick: state.tick, day: state.day, command });
+    rebuildMovement(state);
   }
 }
 

@@ -3,10 +3,12 @@
  * la plus longue sur la dernière seconde ; durée moyenne d'un jour sur les mille derniers au
  * moins ; durée moyenne du pas mensuel et le plus long sur les douze derniers ; jours par lot
  * sur les trente derniers lots ; marcheurs au dernier lot ; positions reçues par seconde,
- * étapes et octets ; ce que coûte au fil principal, en moyenne sur la dernière seconde, le
- * dessin des individus (positions, tri, sprites), et ce qu'il dessine : sprites, textures,
- * appels de dessin. Ces dernières mesures ne dépendent pas du GPU : dans un navigateur qui
- * rend en logiciel, les images par seconde ne disent rien de lui.
+ * étapes et octets ; ce que coûte une image au fil principal, en moyenne sur la dernière
+ * seconde : sa mise à jour et son rendu par PixiJS, la chronologie des individus, à
+ * l'affichage et à la réception des messages, et le dessin des individus (positions, tri,
+ * sprites) ; ce que l'image dessine : sprites, textures, appels de dessin. Ces dernières
+ * mesures ne dépendent pas du GPU : dans un navigateur qui rend en logiciel, les images par
+ * seconde ne disent rien de lui.
  */
 import { GROUP_STRIDE, type GroupsFrame, type LegArrays, type StepStats } from '../core/protocol';
 
@@ -28,8 +30,19 @@ export interface DebugSample {
   readonly legsPerSecond: number | undefined;
   readonly positionBytesPerSecond: number | undefined;
   /**
-   * Durée moyenne, par image de la dernière seconde, en millisecondes, des positions et de la
-   * disposition des individus, de leur tri et de la mise à jour des sprites.
+   * Durée moyenne, par image de la dernière seconde, en millisecondes, de sa mise à jour (le
+   * rappel de l'image : horloge, chronologie, carte, individus) et de son rendu par PixiJS,
+   * qui la suit : à elles deux, ce que l'image coûte au fil principal, hors messages.
+   */
+  readonly main: { readonly update: number; readonly render: number };
+  /**
+   * Durée moyenne, par image, de l'instant affiché de la chronologie des individus, compris
+   * dans la mise à jour, et des messages qu'elle reçoit d'une image à l'autre.
+   */
+  readonly timeline: { readonly show: number; readonly receive: number };
+  /**
+   * Durée moyenne, par image, des positions et de la disposition des individus, de leur tri
+   * et de la mise à jour des sprites, comprises dans la mise à jour.
    */
   readonly crowd: { readonly positions: number; readonly sort: number; readonly sprites: number };
   /**
@@ -43,7 +56,11 @@ export interface DebugSample {
   readonly drawCalls: number | undefined;
 }
 
-/** Ce que coûte et dessine une image, pour le panneau (render/people.ts, PeopleStats). */
+/**
+ * Ce que coûte et dessine une image, pour le panneau : le dessin des individus
+ * (render/people.ts, PeopleStats) et, s'ils se mesurent, sa mise à jour, son rendu et la
+ * chronologie (app/main.ts), en millisecondes.
+ */
 export interface FrameCost {
   readonly positionsMs: number;
   readonly sortMs: number;
@@ -55,6 +72,12 @@ export interface FrameCost {
   readonly pages: number;
   /** Appels de dessin de l'image, s'ils se comptent (DrawCallCounter). */
   readonly drawCalls?: number;
+  /** Le rappel de l'image, et le rendu de la scène par PixiJS qui le suit. */
+  readonly updateMs?: number;
+  readonly renderMs?: number;
+  /** L'instant affiché de la chronologie, et les messages qu'elle a reçus depuis l'image d'avant. */
+  readonly showMs?: number;
+  readonly receiveMs?: number;
 }
 
 /** Octets d'une étape dans un message (ADR 0014) : emplacement, jour, départ, pas, jours. */
@@ -164,6 +187,14 @@ export class DebugSampler {
       walkers: this.walkers,
       legsPerSecond: recent?.reduce((sum, entry) => sum + entry.legs, 0),
       positionBytesPerSecond: recent?.reduce((sum, entry) => sum + entry.bytes, 0),
+      main: {
+        update: average((cost) => cost.updateMs ?? 0),
+        render: average((cost) => cost.renderMs ?? 0),
+      },
+      timeline: {
+        show: average((cost) => cost.showMs ?? 0),
+        receive: average((cost) => cost.receiveMs ?? 0),
+      },
       crowd: {
         positions: average((cost) => cost.positionsMs),
         sort: average((cost) => cost.sortMs),

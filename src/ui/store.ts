@@ -59,10 +59,13 @@ export interface DebugInfo {
   readonly legsPerSecond: number | undefined;
   readonly positionBytesPerSecond: number | undefined;
   /**
-   * Durée moyenne par image, en millisecondes, des positions des individus, de leur tri et
-   * de la mise à jour de leurs sprites ; à la dernière image, sprites dessinés, textures
-   * distinctes et gardées, appels de dessin.
+   * Durée moyenne par image, en millisecondes : sa mise à jour et son rendu par PixiJS ;
+   * l'instant affiché de la chronologie des individus et les messages qu'elle reçoit ; les
+   * positions des individus, leur tri et la mise à jour de leurs sprites. À la dernière image,
+   * sprites dessinés, textures distinctes et gardées, appels de dessin.
    */
+  readonly main: { readonly update: number; readonly render: number };
+  readonly timeline: { readonly show: number; readonly receive: number };
   readonly crowd: { readonly positions: number; readonly sort: number; readonly sprites: number };
   readonly drawn: number | undefined;
   readonly textures: number | undefined;

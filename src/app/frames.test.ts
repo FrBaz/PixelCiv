@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
   GROUP_STRIDE,
   NO_CARRIER,
@@ -7,13 +7,22 @@ import {
   type MainMessage,
   type SpawnGroupCommand,
 } from '../core/protocol';
-import { carriedSide, cellOf, FIXED } from '../core/position';
-import { dayDuration, dayIndex, DAYS_PER_MONTH, type GameTime, type SpeedId } from '../core/time';
+import { carriedSide, cellOf, FIXED, wrapFixedX } from '../core/position';
+import {
+  dayDuration,
+  dayIndex,
+  DAYS_PER_MONTH,
+  monthDuration,
+  type GameTime,
+  type SpeedId,
+} from '../core/time';
 import type { SimState } from '../sim/state';
+import { carriedOffset } from '../render/crowd';
 import { scatteredGroups, testHuman, testState } from '../sim/testing';
 import type { SimulationHost } from '../worker/host';
 import {
   CrowdTimeline,
+  datedFrame,
   FrameQueue,
   LegQueue,
   MAX_FRAMES,
@@ -277,9 +286,8 @@ describe('étapes datées et positions de l’instant affiché (ADR 0014)', () =
     timeline.show(31);
     expect(recycled).toEqual(['étapes 1', 'étapes 1', 'image 1']);
     expect(positionsOf(timeline.shown, 31).ys[0]).toBe(2 * FIXED + FIXED / 8);
-    // Le dernier état reçu, à son instant.
+    // Le dernier état reçu, à son instant, que l'outil d'apparition calcule à sa demande.
     expect(timeline.latestAt).toBe(30);
-    expect(positionsOf(timeline.latest, 30).ys[0]).toBe(2 * FIXED);
     expect(timeline.occupied(31, { width: 64, height: 32 })).toEqual(new Set([2 * 64 + 1]));
     timeline.clear();
     expect(recycled.at(-1)).toBe('image 2');
@@ -295,6 +303,107 @@ function hostState(host: SimulationHost): SimState | undefined {
 const copy = <T>(value: T): T => structuredClone(value);
 
 describe('positions du fil principal avec le vrai hôte (ADR 0013, ADR 0014)', () => {
+  it('ne calcule le dernier état reçu qu’à la demande de l’outil d’apparition, aux mêmes cases', async () => {
+    const game = new HostedGame();
+    const { crowd } = game;
+    const reset = vi.spyOn(crowd.latest, 'reset');
+    const apply = vi.spyOn(crowd.latest, 'apply');
+    const touched = () => reset.mock.calls.length + apply.mock.calls.length;
+    // Le dernier état, tel que le suivait la chronologie à chaque message : les étapes reçues,
+    // puis l'image, qui les remplace. Des copies : la chronologie rend ses tampons au worker.
+    const eager = new PositionMirror({ carry: testHuman.display.carry, passable: game.passable });
+    let eagerAt = 0;
+    game.onMessage = (message) => {
+      if (message.type === 'snapshot') {
+        eager.reset(datedFrame(copy(message.frame), message.time), message.world.size.width);
+        eagerAt = dayIndex(message.time);
+      }
+      if (message.type !== 'delta') return;
+      const started = message.legs;
+      for (let index = 0; index < (started?.slots.length ?? 0); index++) {
+        eager.apply(
+          started?.slots[index] ?? 0,
+          started?.days[index] ?? 0,
+          started?.start[2 * index] ?? 0,
+          started?.start[2 * index + 1] ?? 0,
+          started?.step[2 * index] ?? 0,
+          started?.step[2 * index + 1] ?? 0,
+          started?.count[index] ?? 0,
+        );
+      }
+      if (message.frame !== undefined) {
+        eager.reset(datedFrame(copy(message.frame), message.time), game.columns);
+      }
+      eagerAt = Math.max(eagerAt, dayIndex(message.time));
+    };
+    await game.start();
+    const state = testState();
+    for (const command of scatteredGroups(state, 30, 30)) {
+      game.host.receive({ type: 'game', command });
+    }
+    game.host.receive({ type: 'setSpeed', speed: 'faster' });
+    let seen = touched();
+    let asked = 0;
+    let ahead = 0;
+    for (let image = 1; image <= 600; image++) {
+      const shown = game.frame();
+      // Ni les messages ni l'image ne touchent au miroir du dernier état.
+      expect(touched()).toBe(seen);
+      if (image % 25 !== 0) continue;
+      const cells = crowd.occupied(shown, state.size);
+      expect(cells).toEqual(eager.cells(eagerAt, state.size, crowd.shown.cells(shown, state.size)));
+      expect(crowd.latest.frame).toBeUndefined();
+      seen = touched();
+      asked++;
+      if (eagerAt > shown) ahead++;
+    }
+    expect(asked).toBe(24);
+    expect(ahead).toBeGreaterThan(10);
+  });
+
+  it('borne les étapes quand la carte ne se dessine plus, comme dans un onglet en arrière-plan', async () => {
+    const game = new HostedGame();
+    // Les jours des étapes reçues, dès le début de la partie.
+    const days: number[] = [];
+    game.onMessage = (message) => {
+      if (message.type === 'delta') days.push(...(message.legs?.days ?? []));
+    };
+    await game.start();
+    const { env, host, crowd } = game;
+    for (const command of scatteredGroups(testState(), 30, 30)) {
+      host.receive({ type: 'game', command });
+    }
+    host.receive({ type: 'setSpeed', speed: 'faster' });
+    for (let image = 0; image < 30; image++) game.frame();
+    const recycled = game.recycledLegs;
+    // Plus de MAX_FRAMES mois à ×16 : les messages arrivent, mais aucune image ne se dessine.
+    env.advance((MAX_FRAMES + 8) * monthDuration('faster'));
+    game.flush();
+    expect(crowd.frames.size).toBe(MAX_FRAMES);
+    // Ne restent que les étapes parties depuis la plus ancienne image gardée ; les autres
+    // sont rendues au worker.
+    const oldest = crowd.frames.oldest()?.at ?? Number.NaN;
+    expect(crowd.legs.size).toBe(days.filter((day) => day >= oldest).length);
+    expect(crowd.legs.size).toBeLessThan(0.8 * days.length);
+    expect(game.recycledLegs - recycled).toBeGreaterThan(50);
+    // Au retour, la première image montre le dernier état, aux positions du worker.
+    const state = hostState(host);
+    if (state === undefined) throw new Error('pas de partie');
+    expect(dayIndex(state)).toBe(crowd.latestAt);
+    crowd.show(crowd.latestAt);
+    const { shown } = crowd;
+    const { xs, ys } = positionsOf(shown, crowd.latestAt);
+    const { x, y } = state.people.columns;
+    let compared = 0;
+    for (let member = 0; member < (shown.frame?.ids.length ?? 0); member++) {
+      if ((shown.carrierOf[member] ?? -1) >= 0) continue;
+      const slot = shown.frame?.slots[member] ?? 0;
+      expect([xs[member], ys[member]], String(slot)).toEqual([x[slot], y[slot]]);
+      compared++;
+    }
+    expect(compared).toBeGreaterThan(500);
+  });
+
   it('redonne aux jours entiers les positions du worker, interpole sans couper l’eau ni rien faire sauter : vitesses, pause, pas unique, chargement en cours de mois, couture', async () => {
     const game = new HostedGame();
     await game.start();
@@ -407,7 +516,7 @@ describe('positions du fil principal avec le vrai hôte (ADR 0013, ADR 0014)', (
       [10_000, { type: 'setSpeed', speed: 'faster' }],
     ];
     const load = 9_000;
-    let previous = new Map<number, { x: number; y: number; carried: boolean }>();
+    let previous = new Map<number, { x: number; y: number; carried: boolean; edge: boolean }>();
     let previousShown = clock.instant;
     let previousSpeed: SpeedId = speed;
     let previousFrame: GroupsFrame | undefined;
@@ -417,6 +526,7 @@ describe('positions du fil principal avec le vrai hôte (ADR 0013, ADR 0014)', (
     let between = 0;
     let loaded = false;
     let carriedSeen = 0;
+    let squeezed = 0;
     while (game.now < 11_000) {
       const shown = game.frame();
       const mirror = crowd.shown;
@@ -436,7 +546,7 @@ describe('positions du fil principal avec le vrai hôte (ADR 0013, ADR 0014)', (
         Math.max(2 * nominal, catchUp) + 1e-9,
       );
       const { xs, ys } = positionsOf(mirror, shown);
-      const now = new Map<number, { x: number; y: number; carried: boolean }>();
+      const now = new Map<number, { x: number; y: number; carried: boolean; edge: boolean }>();
       if (!Number.isInteger(shown)) between++;
       for (let member = 0; member < frame.ids.length; member++) {
         const x = (xs[member] ?? 0) / FIXED;
@@ -450,7 +560,14 @@ describe('positions du fil principal avec le vrai hôte (ADR 0013, ADR 0014)', (
           throw new Error(`${String(frame.ids[member])} sur l'eau, à ${game.now.toFixed(0)} ms`);
         }
         const id = frame.ids[member] ?? 0;
-        now.set(id, { x, y, carried });
+        // Un porté contre l'eau : à son plein écart, il y serait.
+        const mother = mirror.carrierOf[member] ?? -1;
+        const reach = wrapFixedX(
+          (xs[mother] ?? 0) + carriedOffset(id, testHuman.display.carry),
+          width,
+        );
+        const edge = carried && !game.passable(cellOf(reach, ys[mother] ?? 0, width));
+        now.set(id, { x, y, carried, edge });
         const before = previous.get(id);
         if (before === undefined) continue;
         let dx = Math.abs(x - before.x);
@@ -462,13 +579,17 @@ describe('positions du fil principal avec le vrai hôte (ADR 0013, ADR 0014)', (
         if (moved > 0) moves++;
         // Rien ne saute : au plus l'étape la plus rapide, sur les jours affichés entre deux
         // images.
-        // Un nourrisson porté s'écarte au plus de display.carry case par jour de sa mère.
+        // Un nourrisson porté s'écarte au plus de display.carry case par jour de sa mère ;
+        // contre l'eau, son écart se resserre vers elle d'un coup, de display.carry au plus.
         const aside = carried || before.carried ? testHuman.display.carry : 0;
-        if (moved > (fastest + aside) * advance + 1e-6) {
+        const squeeze = edge || before.edge ? testHuman.display.carry : 0;
+        const bound = (fastest + aside) * advance;
+        if (moved > bound + squeeze + 1e-6) {
           throw new Error(
             `${String(id)} saute de ${moved.toFixed(3)} case à ${game.now.toFixed(0)} ms`,
           );
         }
+        if (moved > bound + 1e-6) squeezed++;
       }
       previous = now;
       previousShown = shown;
@@ -518,7 +639,9 @@ describe('positions du fil principal avec le vrai hôte (ADR 0013, ADR 0014)', (
     expect(fastest).toBeLessThan(4);
     // Les tampons lus sont rendus à l'hôte.
     expect(game.recycled).toBeGreaterThan(100);
-    // Des nourrissons portés, contre leur mère, jamais sur l'eau non plus.
+    // Des nourrissons portés, contre leur mère, jamais sur l'eau non plus ; rares sont ceux
+    // que l'eau a fait se resserrer d'un coup.
     expect(carriedSeen).toBeGreaterThan(10_000);
+    expect(squeezed).toBeLessThan(10);
   });
 });

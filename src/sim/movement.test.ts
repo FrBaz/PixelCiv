@@ -16,7 +16,7 @@ import {
   segmentClear,
   trace,
 } from './movement';
-import { CARRIED, INTENTION, JOIN, LEAVE, REST, WALK } from './population';
+import { CARRIED, INTENTION, JOIN, LATE, LEAVE, NONE, REST, WALK } from './population';
 import { restoreState, saveState } from './save';
 import type { SimState } from './state';
 import { applyCommands, fingerprint, monthStep, type SimContent } from './step';
@@ -168,6 +168,21 @@ describe('mouvement des individus : déterminisme (ADR 0014)', () => {
     // Le lac a demandé des détours, par le champ de distances d'un camp.
     expect(state.movement.counts.detours).toBeGreaterThan(0);
     expect(state.movement.counts.fields).toBeGreaterThan(0);
+  });
+
+  it('compte ses marcheurs sans les arrivés du jour, que sa liste garde jusqu’au lendemain', () => {
+    const state = populated();
+    let kept = 0;
+    for (let day = 0; day < 3 * DAYS_PER_MONTH; day++) {
+      advanceDay(state, [], testData);
+      let walking = 0;
+      state.people.forEach((slot) => {
+        if (intention(state, slot) === WALK) walking++;
+      });
+      expect(state.movement.walkers, `jour ${String(day)}`).toBe(walking);
+      kept += state.movement.activeCount - walking;
+    }
+    expect(kept).toBeGreaterThan(1000);
   });
 });
 
@@ -560,6 +575,50 @@ describe('mouvement des individus : vie, mort et changements de groupe (ADR 0014
     }
     expect(carried).toBeGreaterThan(1000);
     expect(weaned).toBeGreaterThan(3);
+  });
+
+  it('fait partir qui marchait encore, le transféré et le sevré le jour 0, ou avec leur ancre', () => {
+    // Ils n'ont pas de décalage propre : ils partent le jour 0, ou le jour de leur ancre si
+    // elle part plus tard, et l'attendent sur place ; le nourrisson sevré part avec sa mère.
+    const state = populated('pixelciv');
+    const { columns } = state.people;
+    const leaving = (slot: number) => intention(state, slot) === LEAVE;
+    const seen = { late: 0, waiting: 0, joined: 0, withWalker: 0, withLeaver: 0 };
+    for (let month = 0; month < 14; month++) {
+      while (state.day < DAYS_PER_MONTH - 1) advanceDay(state, [], testData);
+      const { groups, carried } = monthEnd(state);
+      // L'ancre d'un mineur dépend de son âge : elle se lit au mois du plan.
+      state.tick--;
+      state.people.forEach((slot) => {
+        if (!leaving(slot)) return;
+        const id = columns.id[slot] ?? 0;
+        const anchor = anchorOf(state, testData, slot);
+        const anchorDay = anchor >= 0 && leaving(anchor) ? (columns.depart[anchor] ?? 0) : 0;
+        const before = groups.get(id);
+        if (carried.has(id)) {
+          // Sevré, sa mère dans son groupe : elle est son ancre, et part ou marche.
+          const mother = state.people.slotOf(columns.mother[slot] ?? NONE);
+          if (mother === undefined || columns.group[mother] !== columns.group[slot]) return;
+          expect(anchor).toBe(mother);
+          if (intention(state, mother) === WALK) seen.withWalker++;
+          else seen.withLeaver++;
+        } else if ((state.people.get('move', slot) & LATE) !== 0) {
+          seen.late++;
+          if (anchorDay > 0) seen.waiting++;
+        } else if (before !== undefined && before !== columns.group[slot]) {
+          seen.joined++;
+        } else {
+          return;
+        }
+        expect(columns.depart[slot], String(id)).toBe(anchorDay);
+      });
+      state.tick++;
+    }
+    expect(seen.late).toBeGreaterThan(1000);
+    expect(seen.waiting).toBeGreaterThan(100);
+    expect(seen.joined).toBeGreaterThan(100);
+    expect(seen.withLeaver).toBeGreaterThan(50);
+    expect(seen.withWalker).toBeGreaterThan(0);
   });
 
   it('ne fait bouger personne au pas mensuel, morts comprises', () => {

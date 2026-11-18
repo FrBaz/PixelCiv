@@ -268,9 +268,10 @@ export function motifTable(
 }
 
 /**
- * Apparence de chaque membre d'une image des groupes, tirée une fois par image : ses deux
- * motifs de marche, à la variante de sa stature, et le déphasage de sa marche, tiré de son
- * identifiant.
+ * Apparence de chaque membre d'une image des groupes : ses deux motifs de marche, à la
+ * variante de sa stature, et le déphasage de sa marche, tiré de son identifiant. Elle se tire
+ * groupe par groupe, une fois par image, à la première qui montre ses membres de près
+ * (lookGroup) : les groupes hors de l'écran ne coûtent rien.
  */
 export interface MemberLooks {
   readonly frame: GroupsFrame | undefined;
@@ -280,8 +281,11 @@ export interface MemberLooks {
   readonly rows: Uint8Array<ArrayBuffer>;
   /** Déphasage de sa marche, de 0 à 1. */
   readonly phase: Float64Array<ArrayBuffer>;
-  /** Son identifiant écrit, étiquette de son sprite (outils de PixiJS, essais). */
-  readonly labels: readonly string[];
+  /** Groupes, par rang, dont l'apparence des membres est tirée (1). */
+  readonly ready: Uint8Array<ArrayBuffer>;
+  readonly table: MotifTable;
+  /** Stature de l'adulte de référence, en cases. */
+  readonly reference: number;
 }
 
 /**
@@ -293,37 +297,47 @@ function hashUnit(id: number): number {
 }
 
 /**
- * L'apparence des membres de `frame` (MemberLooks), d'après leur code d'apparence et leur
- * stature, pour un adulte de référence de `reference` cases.
+ * L'apparence des membres de `frame` (MemberLooks), pour un adulte de référence de
+ * `reference` cases : rien n'en est encore tiré.
  */
 export function memberLooks(
   frame: GroupsFrame | undefined,
-  motifs: MotifTable,
+  table: MotifTable,
   reference: number,
 ): MemberLooks {
   const count = frame?.ids.length ?? 0;
-  const looks = {
+  return {
     frame,
     motifs: new Uint16Array(2 * count),
     rows: new Uint8Array(count),
     phase: new Float64Array(count),
-    labels: Array.from(frame?.ids ?? [], (id) => String(id)),
+    ready: new Uint8Array(Math.floor((frame?.groups.length ?? 0) / GROUP_STRIDE)),
+    table,
+    reference,
   };
-  if (frame === undefined) return looks;
-  for (let member = 0; member < count; member++) {
+}
+
+/**
+ * Tire, s'il ne l'est pas encore, l'apparence des membres du groupe de rang `group`, du
+ * rang `first` au rang `first + size` : d'après leur code d'apparence et leur stature.
+ */
+export function lookGroup(looks: MemberLooks, group: number, first: number, size: number): void {
+  const { frame, table, reference } = looks;
+  if (frame === undefined || looks.ready[group] !== 0) return;
+  looks.ready[group] = 1;
+  for (let member = first; member < first + size; member++) {
     const visual = decodeVisual(frame.sprites[member] ?? 0);
     const rows = statureRows(
       frame.statures[member] ?? 0,
       reference,
-      motifs.referenceRows,
-      motifs.ranges[visual.age] ?? [motifs.referenceRows, motifs.referenceRows],
+      table.referenceRows,
+      table.ranges[visual.age] ?? [table.referenceRows, table.referenceRows],
     );
     looks.rows[member] = rows;
-    looks.motifs[2 * member] = motifs.person(visual.age, visual.sex, 0, rows);
-    looks.motifs[2 * member + 1] = motifs.person(visual.age, visual.sex, 1, rows);
+    looks.motifs[2 * member] = table.person(visual.age, visual.sex, 0, rows);
+    looks.motifs[2 * member + 1] = table.person(visual.age, visual.sex, 1, rows);
     looks.phase[member] = hashUnit(frame.ids[member] ?? 0);
   }
-  return looks;
 }
 
 /** Hauteur à l'écran, en pixels CSS, que doit atteindre la bannière d'un groupe. */
@@ -828,6 +842,7 @@ export function layoutCrowd(
         if (size > 0) {
           source.positions(group, t, xs, ys, moving);
           layout.placed += size;
+          if (close) lookGroup(looks, group, first, size);
         }
       }
       const cloth = options.cloth(groups[group * GROUP_STRIDE + 4] ?? 1);

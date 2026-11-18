@@ -257,6 +257,26 @@ describe('densité de la vue et seuil des individus (ADR 0014, § 6)', () => {
     expect(layout.visibleGroups).toBe(1);
     expect(layout.placed).toBe(2);
     expect(layout.count).toBe(2);
+    // L'apparence ne se tire que pour les groupes que l'écran montre, une fois par image.
+    const source = new PositionMirror({ carry, passable: () => true });
+    source.reset({ at: 0, tick: 0, frame }, world.width / TILE_PX);
+    const looks = memberLooks(frame, motifs, reference);
+    const view = (x: number): MapView => ({
+      camera: aimedAt(x, 50.5, 8),
+      viewport: desktop,
+      world,
+      resolution: 1,
+    });
+    layoutCrowd(new CrowdLayout(), source, looks, view(100.5), 0, options());
+    expect(Array.from(looks.ready)).toEqual([1, 0]);
+    expect(Array.from(looks.rows)).toEqual([9, 9, 0, 0, 0]);
+    const first = looks.motifs.slice(0, 4);
+    layoutCrowd(new CrowdLayout(), source, looks, view(301), 0, options());
+    expect(Array.from(looks.ready)).toEqual([1, 1]);
+    expect(Array.from(looks.rows)).toEqual([9, 9, 9, 9, 9]);
+    expect(looks.motifs.slice(0, 4)).toEqual(first);
+    // Mêmes code d'apparence et stature : mêmes motifs.
+    expect(looks.motifs.slice(4, 6)).toEqual(first.slice(0, 2));
   });
 });
 

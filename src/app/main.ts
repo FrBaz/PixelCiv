@@ -28,7 +28,7 @@ import { previewPixels } from '../render/preview';
 import { SPAWN_COUNT } from '../sim/commands';
 import { walkCost } from '../sim/terrain';
 import type { SheetContent } from '../ui/Sheet';
-import { createRenderer } from '../render/renderer';
+import { createRenderer, timeRendering } from '../render/renderer';
 import { App } from '../ui/App';
 import { escapeKey } from '../ui/escape';
 import {
@@ -399,6 +399,13 @@ async function main(): Promise<void> {
   const sampler = new DebugSampler();
   // Appels de dessin de chaque image, sur WebGL (débogage, ADR 0014).
   const drawCalls = new DrawCallCounter('gl' in app.renderer ? app.renderer.gl : undefined);
+  // Ce que coûte chaque image au fil principal (débogage, ADR 0014) : son rappel, ci-dessous,
+  // dont l'instant affiché de la chronologie ; les messages que celle-ci reçoit d'une image à
+  // l'autre ; le rendu de la scène par PixiJS, qui suit le rappel.
+  const frameCost = { updateMs: 0, renderMs: 0, showMs: 0, receiveMs: 0 };
+  timeRendering(app.ticker, (milliseconds) => {
+    frameCost.renderMs = milliseconds;
+  });
   let sheetRefresh = 0;
   // Au retour d'un onglet masqué, la première image couvre toute l'absence : elle ne
   // compte pas comme une image lente.
@@ -413,17 +420,21 @@ async function main(): Promise<void> {
   let walkMs = 0;
   app.ticker.add((ticker) => {
     // La durée réelle de l'image : deltaMS est plafonné à 100 ms, et cacherait les à-coups.
-    // L'image précédente a coûté ce que mesure son dessin, et ses appels de dessin.
+    // L'image précédente a coûté ce que mesurent son dessin et son rappel, son rendu et les
+    // messages reçus depuis ; elle a fait ses appels de dessin.
     const calls = drawCalls.take();
     if (returning) returning = false;
-    else sampler.frame(ticker.elapsedMS, { ...people.stats, drawCalls: calls });
+    else sampler.frame(ticker.elapsedMS, { ...people.stats, ...frameCost, drawCalls: calls });
+    frameCost.receiveMs = 0;
     const now = performance.now();
     // L'instant affiché : les saisons, les individus et la date le suivent ensemble.
     const shown = clock.advance(now);
     if (shown > shownInstant) walkMs += ticker.elapsedMS;
     shownInstant = shown;
     map.setSeason(clock.month());
+    const showing = performance.now();
     crowd.show(shown);
+    frameCost.showMs = performance.now() - showing;
     const today: GameTime = clock.today();
     if (dayIndex(today) !== shownIndex && time.value !== undefined) {
       shownIndex = dayIndex(today);
@@ -445,6 +456,7 @@ async function main(): Promise<void> {
       map.viewport,
       map.world,
     );
+    frameCost.updateMs = performance.now() - now;
   });
   setInterval(() => {
     const renderer = { name: app.renderer.name, resolution: app.renderer.resolution };
@@ -532,7 +544,9 @@ async function main(): Promise<void> {
           message.legs?.slots.length ?? 0,
           positionBytes(message.legs, message.frame),
         );
+        const receiving = performance.now();
         crowd.receive(message.time, message.legs, message.frame);
+        frameCost.receiveMs += performance.now() - receiving;
         const info = worldInfo.value;
         if (info !== undefined) occupied.update(message.chronicle, info.size);
         // Pendant la lecture des pages plus anciennes, les faits nouveaux se comptent.

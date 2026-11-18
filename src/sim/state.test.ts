@@ -227,8 +227,9 @@ describe('pas', () => {
     // il cueille, chasse et se compte parmi ses voisins, se déduit de ses membres ; le
     // déroulement change donc, de ff30d063 à 8c0c534a. Enfin, l'orphelin d'un nourrisson
     // porté se pose là où on le dessinait, contre sa mère, et non sur elle : rien ne saute à
-    // l'image (de 8c0c534a à 0baafb76).
-    expect(fingerprint(state)).toBe('0baafb76');
+    // l'image (de 8c0c534a à 0baafb76). Relecture de 2b.3 : le nourrisson sevré part avec sa
+    // mère, le même jour qu'elle, ou le jour 0 si elle marche (de 0baafb76 à 567d06a4).
+    expect(fingerprint(state)).toBe('567d06a4');
   });
 
   it("redonnent l'empreinte de référence de trente mois de trois mille individus (ADR 0011)", () => {
@@ -247,13 +248,15 @@ describe('pas', () => {
     // positions des individus : le mouvement individuel et le lieu du groupe tiré de ses
     // membres changent le déroulement (de f1ddca1e à b4e23dbf) ; à 120 mois, les vivants
     // varient de −1,6 à +3,6 % selon la graine, les groupes de −3,5 à +3,8 %. Enfin,
-    // l'orphelin porté se pose là où on le dessinait (de b4e23dbf à 7ae8f749).
+    // l'orphelin porté se pose là où on le dessinait (de b4e23dbf à 7ae8f749). Relecture de
+    // 2b.3 : le nourrisson sevré part avec sa mère (de 7ae8f749 à cd841d8f) ; à 120 mois, les
+    // vivants varient alors de −0,1 à +4,6 % par rapport à 2b.2, les groupes de −6,5 à +6,9 %.
     const state = testState();
     step(state, scatteredGroups(state, 100), testData);
     for (let tick = 1; tick < 30; tick++) step(state, [], testData);
     expect(state.society.groups.size).toBeGreaterThan(100);
     expect(state.people.count).toBeGreaterThan(2000);
     expect(state.people.archive.rows).toBeGreaterThan(500);
-    expect(fingerprint(state)).toBe('7ae8f749');
+    expect(fingerprint(state)).toBe('cd841d8f');
   });
 });

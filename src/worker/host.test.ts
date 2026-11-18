@@ -29,11 +29,13 @@ import {
 } from '../core/time';
 import { CHUNK_SIZE, GENERATION_STAGES, LAYER_NAMES } from '../core/world';
 import { advanceDay } from '../sim/day';
+import { INTENTION, WALK } from '../sim/population';
 import { replay } from '../sim/replay';
 import { MIGRATIONS, restoreState } from '../sim/save';
 import { fingerprint } from '../sim/step';
 import {
   firstCellOf,
+  neighboringGroups,
   scatteredGroups,
   testData,
   testHuman,
@@ -266,6 +268,26 @@ describe('partie', () => {
     env.advance(NORMAL_DAY_MS + WAKE_SLACK_MS);
     expect(env.messages('stats').at(0)?.stats.batchMs).toBeGreaterThanOrEqual(40);
   });
+
+  it('compte les marcheurs à la fin du lot, sans ceux qui viennent d’arriver', async () => {
+    const { env, host } = await startedHost();
+    host.receive({ type: 'setPaused', paused: true });
+    for (const command of spawns(30, 20)) host.receive({ type: 'game', command });
+    // Au second mois, les jours où les marcheurs arrivent au camp.
+    for (let day = 0; day < DAYS_PER_MONTH + 12; day++) host.receive({ type: 'stepOnce' });
+    for (let request = 1; request <= 6; request++) {
+      host.receive({ type: 'stepOnce' });
+      const state = restoreState(await savedState(env, host, request), testData);
+      let walking = 0;
+      state.people.forEach((slot) => {
+        if ((state.people.get('move', slot) & INTENTION) === WALK) walking++;
+      });
+      expect(walking).toBeGreaterThan(0);
+      expect(env.messages('stats').at(-1)?.stats.walkers, `jour ${String(state.day)}`).toBe(
+        walking,
+      );
+    }
+  });
 });
 
 describe('aperçu', () => {
@@ -477,6 +499,30 @@ describe('commandes de jeu', () => {
     host.receive({ type: 'setPaused', paused: true });
     expect(lastTime(env)).toEqual([0, 0]);
     expect(env.messages('delta').at(-1)?.frame?.groups).toHaveLength(GROUP_STRIDE);
+  });
+
+  it('donnent la même partie en pause, en marche et au rejeu, sur des cases voisines (U-7)', async () => {
+    // Le second groupe pose ses membres d'après les places du premier : en pause, chaque
+    // commande s'applique seule ; en marche et au rejeu, les deux d'un lot.
+    const commands = neighboringGroups(testState(), 20);
+    const { env, host } = await startedHost();
+    host.receive({ type: 'setPaused', paused: true });
+    for (const command of commands) host.receive({ type: 'game', command });
+    for (let day = 0; day < 2 * DAYS_PER_MONTH; day++) host.receive({ type: 'stepOnce' });
+    const { env: running, host: other } = await startedHost();
+    for (const command of commands) other.receive({ type: 'game', command });
+    running.advance(NORMAL_MONTH_MS * 2 + WAKE_SLACK_MS);
+    expect(lastTime(env)).toEqual([2, 0]);
+    expect(lastTime(running)).toEqual([2, 0]);
+    const paused = await savedState(env, host, 1);
+    const print = fingerprint(restoreState(paused, testData));
+    expect(fingerprint(restoreState(await savedState(running, other, 1), testData))).toBe(print);
+    const json = paused.json as { day: number; commandLog: LoggedCommand[] };
+    expect(json.commandLog).toEqual(commands.map((command) => ({ tick: 0, day: 0, command })));
+    const until = { tick: paused.meta.tick, day: json.day };
+    expect(fingerprint(replay(testParams(), testWorld(), json.commandLog, until, testData))).toBe(
+      print,
+    );
   });
 });
 

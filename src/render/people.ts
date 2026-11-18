@@ -15,8 +15,9 @@
  * dessine le i-ième dessin, du fond vers l'avant, et PixiJS n'a rien à trier. Les textures
  * recolorées se gardent d'une image à l'autre, une par motif, variante, apparence et couleur
  * d'habit, rangées dans les pages d'un atlas dynamique (pages.ts) : les individus se
- * dessinent en quelques appels. Le calque mesure ce que coûte chaque image : positions, tri,
- * sprites.
+ * dessinent en quelques appels. Le calque est un groupe de rendu de PixiJS : ce qui y change
+ * ne fait pas refaire les instructions de la carte. Il mesure ce que coûte chaque image :
+ * positions, tri, sprites.
  */
 import { Container, Sprite, type Application, type Texture } from 'pixi.js';
 import type { Appearance, Genetics } from '../core/data';
@@ -57,6 +58,13 @@ export const STEP_MS = { slowest: 420, fastest: 200 } as const;
 
 /** Images entre deux comptes des textures distinctes de l'image. */
 const SEEN_EVERY = 16;
+/**
+ * La réserve garde deux fois le pic récent des sprites dessinés, plus POOL_SLACK : ce pic
+ * perd 1 % par image dessinée (PEAK_DECAY), et la réserve d'une foule passée s'oublie en
+ * quelques secondes.
+ */
+const POOL_SLACK = 64;
+const PEAK_DECAY = 0.99;
 
 /** Durée d'une image de la marche à la vitesse de facteur `factor` (SPEED_FACTORS). */
 export function stepDuration(factor: number): number {
@@ -100,7 +108,7 @@ export interface PeopleScene {
 
 export class PeopleLayer {
   private readonly app: Application;
-  private readonly layer = new Container();
+  private readonly layer = new Container({ isRenderGroup: true });
   private readonly data: PeopleData;
   private readonly hairColors: readonly Rgb[];
   private readonly grey: Rgb;
@@ -110,6 +118,9 @@ export class PeopleLayer {
   private readonly textures = new Map<number, Texture>();
   private pages = new TexturePages();
   private readonly sprites: Sprite[] = [];
+  /** Sprites de la dernière image dessinée, et pic récent de ce nombre (PEAK_DECAY). */
+  private shownCount = 0;
+  private peak = 0;
   /**
    * Ce que montre chaque sprite : sa clé de texture, et l'identifiant de son étiquette (outils
    * de PixiJS, essais) ; un sprite qui montre la même chose ne se touche pas.
@@ -122,6 +133,8 @@ export class PeopleLayer {
   private readonly seen = new Set<number>();
   /** Images dessinées : les textures distinctes ne se comptent que toutes les SEEN_EVERY. */
   private draws = 0;
+  /** Le compte des textures distinctes date d'avant la dernière image dessinée. */
+  private texturesStale = false;
   /** Ce que montrait la dernière image ; la même vue, au même instant, ne se refait pas. */
   private drawnWith: readonly unknown[] = [];
   /** Version de ce que le calque ne voit pas changer : la franchissabilité des cases. */
@@ -223,7 +236,11 @@ export class PeopleLayer {
       this.version,
     ];
     if (signature.every((value, index) => value === this.drawnWith[index])) {
-      this.stats = { ...this.stats, positionsMs: 0, sortMs: 0, spritesMs: 0 };
+      // Une image inchangée, en pause : le compte des textures, sauté par la dernière image
+      // dessinée, se fait une fois.
+      const textures = this.texturesStale ? this.countTextures() : this.stats.textures;
+      this.texturesStale = false;
+      this.stats = { ...this.stats, positionsMs: 0, sortMs: 0, spritesMs: 0, textures };
       return;
     }
     this.drawnWith = signature;
@@ -251,6 +268,7 @@ export class PeopleLayer {
     // Les textures distinctes, pour le panneau de débogage : une image sur SEEN_EVERY suffit.
     const seen = this.draws++ % SEEN_EVERY === 0 ? this.seen : undefined;
     seen?.clear();
+    this.texturesStale = seen === undefined;
     if (this.shownIds.length < layout.count) {
       const size = Math.max(layout.count, this.shownIds.length * 2);
       const ids = new Float64Array(size).fill(Number.NaN);
@@ -283,13 +301,16 @@ export class PeopleLayer {
           : -(frame?.groups[(layout.group[drawn] ?? 0) * GROUP_STRIDE] ?? 0);
       if (this.shownIds[index] !== id) {
         this.shownIds[index] = id;
-        sprite.label = member >= 0 ? (looks.labels[member] ?? String(id)) : String(id);
+        sprite.label = String(id);
       }
     }
-    for (let index = layout.count; index < this.sprites.length; index++) {
+    // Ne se cachent que les sprites que montrait la dernière image, et non toute la réserve.
+    for (let index = layout.count; index < this.shownCount; index++) {
       const unused = this.sprites.at(index);
       if (unused !== undefined) unused.visible = false;
     }
+    this.shownCount = layout.count;
+    this.trimPool(layout.count);
     // Les motifs recolorés de cette image partent au GPU avec leurs pages.
     this.pages.flush();
     const finished = performance.now();
@@ -304,6 +325,30 @@ export class PeopleLayer {
       cached: this.textures.size,
       pages: this.pages.count,
     };
+  }
+
+  /** Textures distinctes de la dernière image dessinée. */
+  private countTextures(): number {
+    const { layout, seen } = this;
+    seen.clear();
+    for (let index = 0; index < layout.count; index++) {
+      seen.add(layout.texture[layout.drawn(index)] ?? 0);
+    }
+    return seen.size;
+  }
+
+  /**
+   * Détruit les sprites de la réserve au-delà de deux fois le pic récent de ceux qu'on
+   * dessine, plus POOL_SLACK : après une grande foule, elle ne pèse plus sur chaque image.
+   */
+  private trimPool(count: number): void {
+    this.peak = Math.max(count, Math.floor(this.peak * PEAK_DECAY));
+    const keep = 2 * this.peak + POOL_SLACK;
+    if (this.sprites.length <= keep) return;
+    for (const sprite of this.layer.removeChildren(keep)) sprite.destroy();
+    this.sprites.length = keep;
+    this.shownKeys.fill(Number.NaN, keep);
+    this.shownIds.fill(Number.NaN, keep);
   }
 
   /**
@@ -327,8 +372,15 @@ export class PeopleLayer {
     return this.layout.close;
   }
 
-  /** Vide les textures et leurs pages (changement de monde : rien ne s'y rattache plus). */
+  /**
+   * Vide la réserve des sprites, les textures et leurs pages (changement de monde : rien ne
+   * s'y rattache plus).
+   */
   clear(): void {
+    for (const sprite of this.layer.removeChildren()) sprite.destroy();
+    this.sprites.length = 0;
+    this.shownCount = 0;
+    this.peak = 0;
     for (const texture of this.textures.values()) texture.destroy(false);
     this.textures.clear();
     this.pages.destroy();

@@ -651,7 +651,7 @@ export class SimulationHost {
         days: batch.days,
         ...(batch.daily > 0 ? { dayMs: batch.dailyMs / batch.daily } : {}),
         ...(batch.monthMs === undefined ? {} : { monthMs: batch.monthMs }),
-        walkers: state.movement.activeCount,
+        walkers: state.movement.walkers,
         legs,
       },
     });

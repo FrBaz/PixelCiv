@@ -1,5 +1,5 @@
 import { Container, Sprite, type Application } from 'pixi.js';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { PositionMirror } from '../app/frames';
 import { loadGameData, type Appearance } from '../core/data';
 import { NO_CARRIER, type GroupsFrame, type LegArrays } from '../core/protocol';
@@ -396,6 +396,65 @@ describe('individus à leur position (ADR 0014)', () => {
     people.invalidate();
     people.draw({ ...shown, t: 0.5 }, { ...camera, x: camera.x + 1 }, viewport, world);
     expect(asked).toBe(4);
+  });
+
+  it('compte en pause les textures distinctes de l’image, même quand l’image d’avant ne les a pas comptées', () => {
+    const { people } = setup(1);
+    const camera = aimedAt(100, 50, 8);
+    // Une image comptée : un seul motif pour les cinq adultes de stature moyenne.
+    people.draw(scene(frame(5, [1, 100, 50, 1])), camera, viewport, world);
+    expect(people.stats.textures).toBe(1);
+    // La suivante ne compte pas : trois variantes d'adulte, trois textures.
+    const varied = frame(5, [1, 100, 50, 1]);
+    varied.statures.set([80, 96, 112, 96, 96]);
+    const paused = scene(varied);
+    people.draw(paused, camera, viewport, world);
+    expect(people.stats.drawn).toBe(5);
+    // En pause, l'image inchangée ne se redessine pas, mais se compte une fois.
+    people.draw(paused, camera, viewport, world);
+    expect(people.stats.textures).toBe(3);
+    people.draw(paused, camera, viewport, world);
+    expect(people.stats.textures).toBe(3);
+  });
+
+  it('ne cache que les sprites de l’image d’avant, oublie ceux d’une foule passée, et tous au changement de monde', () => {
+    const { people, layer } = setup(1);
+    const crowd = frame(
+      20,
+      ...Array.from({ length: 10 }, (_, group): [number, number, number, number] => [
+        group + 1,
+        100 + 2 * group,
+        50,
+        1,
+      ]),
+    );
+    // Un groupe de rendu : ce qui y change ne fait pas refaire les instructions de la carte.
+    expect(layer.isRenderGroup).toBe(true);
+    people.draw(scene(crowd), aimedAt(110, 50, 8), viewport, world);
+    expect(people.stats.drawn).toBe(200);
+    expect(layer.children).toHaveLength(200);
+    const shown = vi.spyOn(Container.prototype, 'visible', 'set');
+    try {
+      // Loin de la foule : ses 200 sprites se cachent, une fois.
+      people.draw(scene(crowd), aimedAt(400, 200, 8), viewport, world);
+      expect(people.stats.drawn).toBe(0);
+      expect(shown).toHaveBeenCalledTimes(200);
+      shown.mockClear();
+      people.draw(scene(crowd), aimedAt(401, 200, 8), viewport, world);
+      expect(shown).not.toHaveBeenCalled();
+    } finally {
+      shown.mockRestore();
+    }
+    // La réserve se défait de la foule passée en quelques secondes d'images.
+    for (let image = 0; image < 400; image++) {
+      people.draw(scene(crowd), aimedAt(400 + (image % 2), 200, 8), viewport, world);
+    }
+    expect(layer.children.length).toBeLessThanOrEqual(64);
+    // Elle sert encore : la foule revient.
+    people.draw(scene(crowd), aimedAt(110, 50, 8), viewport, world);
+    expect(rendered(layer)).toHaveLength(200);
+    people.clear();
+    expect(layer.children).toHaveLength(0);
   });
 
   it('partage les textures de deux cultures de même habit, et en garde une par motif, variante et apparence', () => {

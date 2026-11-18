@@ -108,7 +108,7 @@ describe('pas mensuel et jours de la population', () => {
           const time = performance.now() - start;
           days.push(time);
           whole += time;
-          walkers += state.movement.activeCount;
+          walkers += state.movement.walkers;
         }
         const start = performance.now();
         const members = advanceDay(state, [], data);

@@ -44,7 +44,8 @@ export function datedFrame(frame: GroupsFrame, time: GameTime): DatedFrame {
  * Images gardées au plus. Le retard de l'horloge reste bien en deçà (une image par mois et
  * par commande) ; la borne tient la mémoire d'un onglet en arrière-plan. L'horloge y avance
  * encore, à chaque état reçu, mais la carte ne s'y dessine plus : aucune image n'y est
- * demandée, et les images reçues s'entasseraient. Au retour de l'onglet, la première image
+ * demandée, et les images reçues s'entasseraient, comme les étapes, que la chronologie
+ * oublie avec elles (CrowdTimeline.receive). Au retour de l'onglet, la première image
  * dessinée fait oublier toutes celles que l'horloge a dépassées.
  */
 export const MAX_FRAMES = 16;
@@ -71,15 +72,18 @@ export class FrameQueue {
     this.frames = [datedFrame(frame, time)];
   }
 
-  /** Une nouvelle image ; celle d'un même instant (commande en pause) remplace la précédente. */
-  push(frame: GroupsFrame, time: GameTime): void {
+  /**
+   * Une nouvelle image ; celle d'un même instant (commande en pause) remplace la précédente.
+   * Renvoie vrai si la file, pleine, a oublié ses plus anciennes images.
+   */
+  push(frame: GroupsFrame, time: GameTime): boolean {
     const dated = datedFrame(frame, time);
     const last = this.frames.at(-1);
     if (last !== undefined && last.at >= dated.at) this.drop([this.frames.pop() ?? last]);
     this.frames.push(dated);
-    if (this.frames.length > MAX_FRAMES) {
-      this.drop(this.frames.splice(0, this.frames.length - MAX_FRAMES));
-    }
+    if (this.frames.length <= MAX_FRAMES) return false;
+    this.drop(this.frames.splice(0, this.frames.length - MAX_FRAMES));
+    return true;
   }
 
   /** L'image de l'instant `shown` ; celles qu'il a dépassées s'oublient. */
@@ -93,6 +97,11 @@ export class FrameQueue {
   /** La dernière image reçue. */
   latest(): DatedFrame | undefined {
     return this.frames.at(-1);
+  }
+
+  /** La plus ancienne image gardée, celle de l'instant affiché ou la première après lui. */
+  oldest(): DatedFrame | undefined {
+    return this.frames[0];
   }
 
   /** Nombre d'images gardées. */
@@ -171,6 +180,28 @@ export class LegQueue {
       );
       return true;
     });
+  }
+
+  /**
+   * Passe à `target`, dans l'ordre de leur arrivée et sans les ôter de la file, les étapes en
+   * attente parties au jour `from` au plus tôt.
+   */
+  forEachFrom(from: number, target: LegTarget): void {
+    for (const { legs, next } of this.queue) {
+      const { days } = legs;
+      for (let index = next; index < days.length; index++) {
+        if ((days[index] ?? 0) < from) continue;
+        target.apply(
+          legs.slots[index] ?? 0,
+          days[index] ?? 0,
+          legs.start[2 * index] ?? 0,
+          legs.start[2 * index + 1] ?? 0,
+          legs.step[2 * index] ?? 0,
+          legs.step[2 * index + 1] ?? 0,
+          legs.count[index] ?? 0,
+        );
+      }
+    }
   }
 
   /** Passe les étapes, dans l'ordre, tant que `take` les prend. */
@@ -380,6 +411,23 @@ export class PositionMirror implements CrowdSource {
     this.include(group, wrapFixedX(x + stepX * count, this.width), y + stepY * count);
   }
 
+  /**
+   * Reprend les étapes en cours de `other`, un miroir de la même image : celles qu'il a
+   * appliquées depuis elle.
+   */
+  adoptLegs(other: PositionMirror): void {
+    if (other.frame !== this.frame || this.frame === undefined) return;
+    const count = this.frame.ids.length;
+    this.legDay.set(other.legDay.subarray(0, count));
+    this.legX.set(other.legX.subarray(0, count));
+    this.legY.set(other.legY.subarray(0, count));
+    this.stepX.set(other.stepX.subarray(0, count));
+    this.stepY.set(other.stepY.subarray(0, count));
+    this.legCount.set(other.legCount.subarray(0, count));
+    this.box.set(other.box.subarray(0, this.groupCount * BOX_STRIDE));
+    this.applied = other.applied;
+  }
+
   bounds(group: number, out: Float64Array): void {
     const at = group * BOX_STRIDE;
     const reach = Math.abs(carriedOffset(1, this.carry));
@@ -493,28 +541,32 @@ export interface TimelineOptions extends MirrorOptions {
 }
 
 /**
- * Chronologie des individus : les images et les étapes datées, le miroir de l'instant affiché
- * (`shown`), et celui du dernier état reçu (`latest`), que suit l'outil d'apparition.
+ * Chronologie des individus : les images et les étapes datées, et le miroir de l'instant
+ * affiché (`shown`). Le dernier état reçu, que suit l'outil d'apparition, ne se calcule qu'à
+ * sa demande (occupied) : rien ne le tient au fil des messages, qui ne coûtent donc rien par
+ * membre.
  */
 export class CrowdTimeline {
   readonly frames: FrameQueue;
   readonly legs: LegQueue;
   /** Positions à l'instant affiché. */
   readonly shown: PositionMirror;
-  /** Positions au dernier état reçu, à son instant (`latestAt`). */
+  /**
+   * Positions au dernier état reçu, à son instant (`latestAt`) : occupied() le remplit, le
+   * lit, puis le vide ; il ne garde donc aucune image.
+   */
   readonly latest: PositionMirror;
   latestAt = 0;
   private shownFrame: DatedFrame | undefined;
-  private latestFrame: DatedFrame | undefined;
   private width = 1;
-  /** Images oubliées par la file qu'un miroir lit encore : rendues dès qu'il les quitte. */
+  /** Images oubliées par la file que le miroir lit encore : rendues dès qu'il les quitte. */
   private held: GroupsFrame[] = [];
   private readonly recycleFrame: (frame: GroupsFrame) => void;
 
   constructor(options: TimelineOptions) {
     this.recycleFrame = options.recycleFrame ?? (() => undefined);
     this.frames = new FrameQueue((frame) => {
-      if (frame === this.shown.frame || frame === this.latest.frame) this.held.push(frame);
+      if (frame === this.shown.frame) this.held.push(frame);
       else this.recycleFrame(frame);
     });
     this.legs = new LegQueue(options.recycleLegs);
@@ -528,7 +580,6 @@ export class CrowdTimeline {
     this.legs.clear();
     this.frames.reset(frame, time);
     this.latestAt = dayIndex(time);
-    this.syncLatest();
     this.show(this.latestAt);
   }
 
@@ -537,33 +588,15 @@ export class CrowdTimeline {
    * en porte une, qui vaut à partir de cet instant.
    */
   receive(time: GameTime, legs: LegArrays | undefined, frame: GroupsFrame | undefined): void {
-    if (legs !== undefined) {
-      // Le dernier état les a toutes : elles partent avant son instant.
-      for (let index = 0; index < legs.slots.length; index++) {
-        this.latest.apply(
-          legs.slots[index] ?? 0,
-          legs.days[index] ?? 0,
-          legs.start[2 * index] ?? 0,
-          legs.start[2 * index + 1] ?? 0,
-          legs.step[2 * index] ?? 0,
-          legs.step[2 * index + 1] ?? 0,
-          legs.count[index] ?? 0,
-        );
-      }
-      this.legs.push(legs);
+    if (legs !== undefined) this.legs.push(legs);
+    if (frame !== undefined && this.frames.push(frame, time)) {
+      // La file, pleine, a oublié des images que la carte n'a pas montrées : elle ne se
+      // dessine plus (onglet en arrière-plan). Les étapes parties avant la plus ancienne
+      // image gardée ne serviront pas : show() les oublierait en la prenant. Sans quoi elles
+      // s'entasseraient, sans borne.
+      this.legs.dropBefore(this.frames.oldest()?.at ?? 0);
     }
-    if (frame !== undefined) this.frames.push(frame, time);
     this.latestAt = Math.max(this.latestAt, dayIndex(time));
-    this.syncLatest();
-  }
-
-  /** Le miroir du dernier état suit la dernière image reçue. */
-  private syncLatest(): void {
-    const latest = this.frames.latest();
-    if (latest === this.latestFrame) return;
-    this.latestFrame = latest;
-    this.latest.reset(latest, this.width);
-    this.release();
   }
 
   /**
@@ -581,19 +614,31 @@ export class CrowdTimeline {
     this.legs.applyUntil(t, this.shown);
   }
 
-  /** Rend au worker les images oubliées qu'aucun miroir ne lit plus. */
+  /** Rend au worker les images oubliées que le miroir ne lit plus. */
   private release(): void {
     const kept: GroupsFrame[] = [];
     for (const frame of this.held) {
-      if (frame === this.shown.frame || frame === this.latest.frame) kept.push(frame);
+      if (frame === this.shown.frame) kept.push(frame);
       else this.recycleFrame(frame);
     }
     this.held = kept;
   }
 
-  /** Cases où se tient quelqu'un, à l'instant affiché `t` et au dernier état reçu. */
+  /**
+   * Cases où se tient quelqu'un, à l'instant affiché `t` et au dernier état reçu. Celui-ci se
+   * calcule ici : la dernière image reçue, les étapes que le miroir de l'instant affiché en a
+   * déjà appliquées s'il la montre, puis celles de la file parties depuis elle.
+   */
   occupied(t: number, size: WorldSize): Set<number> {
-    return this.latest.cells(this.latestAt, size, this.shown.cells(t, size));
+    const into = this.shown.cells(t, size);
+    const dated = this.frames.latest();
+    if (dated === undefined) return into;
+    this.latest.reset(dated, this.width);
+    if (dated === this.shownFrame) this.latest.adoptLegs(this.shown);
+    this.legs.forEachFrom(dated.at, this.latest);
+    this.latest.cells(this.latestAt, size, into);
+    this.latest.reset(undefined, this.width);
+    return into;
   }
 
   /** Autre partie : plus d'image ni d'étape. */
@@ -601,9 +646,7 @@ export class CrowdTimeline {
     this.legs.clear();
     this.frames.clear();
     this.shownFrame = undefined;
-    this.latestFrame = undefined;
     this.shown.reset(undefined, this.width);
-    this.latest.reset(undefined, this.width);
     this.release();
   }
 }

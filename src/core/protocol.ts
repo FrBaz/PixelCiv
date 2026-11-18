@@ -53,8 +53,8 @@ export interface LoggedCommand {
 }
 
 /**
- * Ce qu'on inspecte (IHM-02) : un individu ou un groupe. Le fil principal choisit le groupe
- * touché d'après ce que la carte dessine (render/crowd.ts, pickGroup).
+ * Ce qu'on inspecte (IHM-02) : un individu ou un groupe. Le fil principal choisit l'individu
+ * ou le groupe touché d'après ce que la carte dessine (render/crowd.ts, pickEntity).
  */
 export type InspectTarget =
   | { readonly kind: 'person'; readonly id: number }

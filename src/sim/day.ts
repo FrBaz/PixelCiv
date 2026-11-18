@@ -6,10 +6,10 @@
  *
  * Le système quotidien de 2b.3 est le mouvement des individus (movement.ts), dans un ordre
  * fixe : les départs du jour, (2b.8 : les activités), la marche, l'espacement des marcheurs
- * un jour sur deux, puis les arrivées. Seuls les marcheurs et les partants du jour coûtent ;
- * ce qu'ils décident ne dépend pas de l'ordre des listes, ou passe dans un ordre canonique, et
- * ne tire au sort que sur `sim.camp`. L'état ne dépend donc ni de la vitesse ni du
- * regroupement des jours en lots.
+ * un jour sur `walkers.every` (trois, data/nomads.json), puis les arrivées. Seuls les
+ * marcheurs et les partants du jour coûtent ; ce qu'ils décident ne dépend pas de l'ordre des
+ * listes, ou passe dans un ordre canonique, et ne tire au sort que sur `sim.camp`. L'état ne
+ * dépend donc ni de la vitesse ni du regroupement des jours en lots.
  */
 import type { GameCommand } from '../core/protocol';
 import { DAYS_PER_MONTH } from '../core/time';

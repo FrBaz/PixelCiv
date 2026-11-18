@@ -7,10 +7,12 @@
  * - État (colonnes des vivants, population.ts) : position, intention, jour du départ, place
  *   visée, étape en cours. Sauvegarde et empreinte le comptent.
  * - Caches (Movement) : marcheurs, départs par jour, grille des places tenues (repos,
- *   partance, places visées), grille des marcheurs, portés de chaque mère, guide et taille de
- *   chaque groupe, champs de distances des camps. Ils se déduisent de l'état
- *   (rebuildMovement), au chargement, après chaque pas mensuel et après les commandes ; entre
- *   deux, le sous-pas les tient à jour, et ce qu'il en tire ne dépend pas de leur ordre.
+ *   partance, places visées), portés de chaque mère, guide et taille de chaque groupe, champs
+ *   de distances et disques franchissables des camps, allure de chacun pour le mois.
+ *   L'espacement des marcheurs n'a pas de grille : il les balaie groupe par groupe. Les caches
+ *   se déduisent de l'état (rebuildMovement), au chargement, après chaque pas mensuel et après
+ *   chaque commande ; entre deux, le sous-pas les tient à jour, et ce qu'il en tire ne dépend
+ *   pas de leur ordre.
  *
  * Tout se calcule en entiers (core/position.ts) et en flottants, par les seules quatre
  * opérations, la racine carrée et les arrondis : aucune trigonométrie, aucun Math.hypot. Les
@@ -443,6 +445,14 @@ export class Movement {
   /** Marche-t-il ? */
   isActive(slot: number): boolean {
     return this.walking[slot] === 1;
+  }
+
+  /**
+   * Nombre de marcheurs, pour les mesures : la liste, moins ceux qui en sont sortis (les
+   * arrivés du jour) depuis qu'elle a été resserrée.
+   */
+  get walkers(): number {
+    return this.activeCount - this.stale;
   }
 
   /** Resserre la liste des marcheurs, puis la range par emplacements croissants. */
@@ -1945,13 +1955,17 @@ export function waiting(
 const STAY = 0;
 const MOVE = 1;
 const JOINS = 2;
+/** Le nourrisson sevré dont la mère part ou marche : il part avec elle. */
+const FOLLOWS = 3;
 
 /**
- * Plan du mois (ADR 0014), à la fin du pas mensuel, sur `sim.camp` : les sevrages, puis qui
- * part (le groupe a changé de camp, ou le membre a changé de groupe), et le jour où il part.
- * Le guide part le jour 0, comme qui rejoint un autre groupe ou marchait déjà ; les autres, le
- * jour ⌊lag × (1 − g') × u⌋, et jamais avant leur ancre. Les places se tirent au départ.
- * Qui marche encore, dans un groupe resté sur place, continue, et presse le pas.
+ * Plan du mois (ADR 0014), à la fin du pas mensuel, sur `sim.camp` : qui part (le groupe a
+ * changé de camp, ou le membre a changé de groupe), les sevrages, puis le jour où chacun
+ * part. Le guide part le jour 0. Qui rejoint un autre groupe, qui marchait encore et le
+ * nourrisson sevré dont la mère part ou marche n'ont pas de décalage propre : ils partent le
+ * jour 0, ou le jour de leur ancre si elle part plus tard, en l'attendant sur place. Les
+ * autres, le jour ⌊lag × (1 − g') × u⌋, et jamais avant leur ancre. Les places se tirent au
+ * départ. Qui marche encore, dans un groupe resté sur place, continue, et presse le pas.
  */
 export function planMonth(
   state: SimState,
@@ -2013,10 +2027,11 @@ export function planMonth(
       continue;
     }
     const motherWalks = ((move[mother] ?? 0) & INTENTION) === WALK;
-    if (plan[mother] !== STAY || motherWalks || plan[slot] !== STAY) {
-      // Sa mère part, ou marche : il part avec elle, et prendra sa place près de la sienne.
+    if (plan[mother] !== STAY || motherWalks) {
+      // Sa mère part, ou marche : il part avec elle, le même jour qu'elle, ou le jour 0 si
+      // elle marche encore, et prendra sa place près de la sienne.
       movement.hold(slot, startX, my);
-      plan[slot] = MOVE;
+      plan[slot] = FOLLOWS;
       continue;
     }
     // Sa mère se repose : une étape d'un jour, le jour 0, jusqu'à sa place, près d'elle.
@@ -2041,7 +2056,11 @@ export function planMonth(
     const u = random.nextFloat();
     const group = columns.group[slot] ?? NONE;
     const walking = ((move[slot] ?? 0) & INTENTION) === WALK;
-    const late = plan[slot] === JOINS || walking || movement.guides.get(group) === slot;
+    const late =
+      plan[slot] === JOINS ||
+      plan[slot] === FOLLOWS ||
+      walking ||
+      movement.guides.get(group) === slot;
     lags[slot] = late
       ? 0
       : Math.floor(lag * (1 - effectiveGregariousness(state, content, slot)) * u);

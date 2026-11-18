@@ -384,7 +384,9 @@ describe('cycle de vie (tâche 2.3)', () => {
     });
     expect(mixed / births).toBeGreaterThan(0.05);
     expect(mixed / births).toBeLessThan(0.25);
-  });
+    // Sa durée suit la population, que trois siècles portent de 480 à un ou deux milliers :
+    // de 20 à 30 s sur quatre cœurs.
+  }, 90_000);
 
   it("tue davantage de froid les fragiles d'une sous-espèce des sables que les nordiques", () => {
     // Des cases dont le mois le plus froid descend sous −10 °C.

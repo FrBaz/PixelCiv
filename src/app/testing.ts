@@ -29,8 +29,9 @@ export class HostedGame {
     this.layers !== undefined && Number.isFinite(walkCost(this.layers, cell, testData));
   /** Colonnes du monde. */
   columns = 1;
-  /** Tampons rendus à l'hôte. */
+  /** Tampons rendus à l'hôte, et lots d'étapes parmi eux. */
   recycled = 0;
+  recycledLegs = 0;
   readonly crowd = new CrowdTimeline({
     carry: testData.species.entries[0]?.display.carry ?? 0,
     passable: this.passable,
@@ -38,6 +39,7 @@ export class HostedGame {
       this.recycle(frameBuffers(frame));
     },
     recycleLegs: (legs) => {
+      this.recycledLegs++;
       this.recycle(legBuffers(legs));
     },
   });

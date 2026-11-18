@@ -147,6 +147,9 @@ describe('DebugSampler', () => {
     const sample = sampler.sample();
     expect(sample.crowd.positions).toBeCloseTo(1, 9);
     expect(sample.crowd.sort).toBeCloseTo(0.5, 9);
+    // Sans mesure de la mise à jour, du rendu ni de la chronologie, rien n'en est compté.
+    expect(sample.main).toEqual({ update: 0, render: 0 });
+    expect(sample.timeline).toEqual({ show: 0, receive: 0 });
     expect(sample).toMatchObject({
       drawn: 1289,
       textures: 300,
@@ -154,6 +157,35 @@ describe('DebugSampler', () => {
       pages: 2,
       drawCalls: 12,
     });
+  });
+
+  it('moyenne ce que coûte une image au fil principal : mise à jour, rendu et chronologie', () => {
+    const sampler = new DebugSampler();
+    const people = {
+      positionsMs: 1,
+      sortMs: 0.25,
+      spritesMs: 2,
+      drawn: 1300,
+      textures: 300,
+      cached: 400,
+      pages: 1,
+    };
+    // Les images lentes de plus d'une seconde ne comptent plus.
+    for (let frameIndex = 0; frameIndex < 90; frameIndex++) {
+      const old = frameIndex < 20;
+      sampler.frame(1000 / 60, {
+        ...people,
+        updateMs: old ? 50 : 6,
+        renderMs: old ? 50 : 5,
+        showMs: old ? 9 : 0.4,
+        receiveMs: old ? 9 : 0.3,
+      });
+    }
+    const sample = sampler.sample();
+    expect(sample.main.update).toBeCloseTo(6, 9);
+    expect(sample.main.render).toBeCloseTo(5, 9);
+    expect(sample.timeline.show).toBeCloseTo(0.4, 9);
+    expect(sample.timeline.receive).toBeCloseTo(0.3, 9);
   });
 
   it('compte les appels de dessin WebGL de chaque image', () => {
