@@ -641,8 +641,59 @@ export const NomadsSchema = z
      * d'un fleuve, ne porte que la pêche de son biome.
      */
     river: z.tuple([z.number().min(0), z.number().min(0), z.number().min(0), z.number().min(0)]),
+    /**
+     * Le camp et le mouvement de chacun (ADR 0014), en cases et en jours :
+     * - `cohesion` : la cohésion d'un groupe nomade, qui porte la grégarité effective à
+     *   g' = 1 − (1 − g) × (1 − cohesion) ;
+     * - `gap` : l'écart, au repos, que chacun garde avec les autres ;
+     * - les places au camp, tirées dans un disque autour d'une ancre : le guide dans le
+     *   rayon `guide` autour du centre du camp ; le chef d'un foyer autour du guide, dans le
+     *   rayon (band[0] + band[1] × (1 − g')) × max(1, spread × √n), n membres ; les autres
+     *   autour de leur conjoint, de leur mère ou, mineurs, de leur père, dans le rayon
+     *   kin[0] + kin[1] × (1 − g') ;
+     * - `lag` : le jour du départ vaut ⌊lag × (1 − g') × u⌋, u tiré au sort ;
+     * - `hurry` : qui marche encore au pas mensuel presse le pas d'autant ;
+     * - `wean` : le nourrisson sevré se pose à cette distance de sa mère ;
+     * - `wait` : un guide ne lève pas le camp tant qu'un membre venu d'un autre groupe se
+     *   tient à plus de `wait` cases du camp ;
+     * - `field` : le demi-côté, en cases, du champ de distances d'un camp (les détours).
+     */
+    camp: z
+      .object({
+        cohesion: ShareSchema,
+        gap: z.number().gt(0).lt(1),
+        guide: z.number().min(0).max(1),
+        kin: z
+          .tuple([z.number().min(0), z.number().min(0)])
+          .refine(([inner, outer]) => inner + outer <= 4, { message: 'kin[0] + kin[1] ≤ 4' }),
+        band: z
+          .tuple([z.number().min(0), z.number().min(0)])
+          .refine(([inner, outer]) => inner + outer <= 8, { message: 'band[0] + band[1] ≤ 8' }),
+        spread: z.number().min(0).max(1),
+        lag: z.number().int().min(0).max(29),
+        hurry: z.number().min(1).max(2),
+        wean: z.number().gt(0).max(1),
+        wait: z.number().min(0).max(30),
+        field: z.number().int().min(8).max(128),
+      })
+      .strict(),
+    /**
+     * Les marcheurs (ADR 0014) : tous les `every` jours, le second d'une paire de marcheurs
+     * d'un même groupe à moins de `gap` case l'un de l'autre, qui le seraient encore le
+     * lendemain, s'écarte de côté, de `aside` case au plus.
+     */
+    walkers: z
+      .object({
+        gap: z.number().gt(0).lt(1),
+        aside: z.number().gt(0).max(0.5),
+        every: z.number().int().min(1).max(30),
+      })
+      .strict(),
   })
-  .strict();
+  .strict()
+  .refine(({ camp, walkers }) => walkers.gap < camp.gap, {
+    message: "l'écart des marcheurs est plus petit que celui du repos",
+  });
 
 export type Nomads = z.infer<typeof NomadsSchema>;
 

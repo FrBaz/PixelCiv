@@ -4,7 +4,15 @@ import biomesJson from '../../../data/biomes.json';
 import fr from '../../i18n/fr.json';
 import { DataError, loadCatalog } from './catalog';
 import { checkContent, loadGameData, type GameData, type Genetics, type Species } from './index';
-import { FACE_BOUNDS, GeneticsSchema, geneRoles, NOSE_BOUNDS, SpeciesSchema } from './people';
+import {
+  FACE_BOUNDS,
+  GeneticsSchema,
+  geneRoles,
+  NomadsSchema,
+  NOSE_BOUNDS,
+  SpeciesSchema,
+  type Nomads,
+} from './people';
 import { AltitudeLevelsSchema, BiomesSchema } from './schemas';
 
 /** Les 32 biomes naturels de la séance C1 (D6), par famille, tels que la séance les nomme. */
@@ -498,5 +506,57 @@ describe('âges de la vie et confort, dans data/species.json (D-6, A-10, U-12)',
     expect(hardship([0, 30], [0, 40])).toBe(false);
     expect(hardship([0, 30], [-20, 30])).toBe(false);
     expect(hardship([30, 0], [-20, 40])).toBe(false);
+  });
+});
+
+describe('réglages du mouvement, dans data/nomads.json (ADR 0014)', () => {
+  const { nomads } = loadGameData();
+  const valid = (variant: unknown) => NomadsSchema.safeParse(variant).success;
+  const camp = (change: Partial<Nomads['camp']>) =>
+    valid({ ...nomads, camp: { ...nomads.camp, ...change } });
+  const walkers = (change: Partial<Nomads['walkers']>) =>
+    valid({ ...nomads, walkers: { ...nomads.walkers, ...change } });
+
+  it('donne au camp et aux marcheurs les réglages livrés', () => {
+    expect(valid(nomads)).toBe(true);
+    expect(nomads.camp).toMatchObject({ cohesion: 0.5, gap: 0.45, lag: 20, hurry: 1.25 });
+    expect(nomads.walkers).toEqual({ gap: 0.25, aside: 0.3, every: 3 });
+  });
+
+  it('refuse des réglages hors de leurs bornes', () => {
+    expect(camp({ cohesion: -0.1 })).toBe(false);
+    expect(camp({ cohesion: 1.1 })).toBe(false);
+    expect(camp({ cohesion: 1 })).toBe(true);
+    expect(camp({ lag: 29 })).toBe(true);
+    expect(camp({ lag: 30 })).toBe(false);
+    expect(camp({ lag: 2.5 })).toBe(false);
+    expect(camp({ lag: -1 })).toBe(false);
+    expect(camp({ hurry: 0.9 })).toBe(false);
+    expect(camp({ hurry: 2.1 })).toBe(false);
+    expect(camp({ kin: [-0.1, 1] })).toBe(false);
+    expect(camp({ kin: [1, 3.5] })).toBe(false);
+    expect(camp({ band: [1, 7] })).toBe(true);
+    expect(camp({ band: [1, 7.5] })).toBe(false);
+    expect(camp({ spread: 1.5 })).toBe(false);
+    expect(camp({ wean: 0 })).toBe(false);
+    expect(camp({ wait: -1 })).toBe(false);
+    expect(camp({ field: 4 })).toBe(false);
+    expect(camp({ field: 48.5 })).toBe(false);
+    expect(walkers({ aside: 0 })).toBe(false);
+    expect(walkers({ aside: 0.5 })).toBe(true);
+    expect(walkers({ aside: 0.6 })).toBe(false);
+    expect(walkers({ every: 0 })).toBe(false);
+    expect(walkers({ every: 30 })).toBe(true);
+    expect(walkers({ every: 31 })).toBe(false);
+    expect(walkers({ every: 1.5 })).toBe(false);
+  });
+
+  it("veut l'écart des marcheurs plus petit que celui du repos, tous deux sous une case", () => {
+    expect(walkers({ gap: 0 })).toBe(false);
+    expect(walkers({ gap: 0.45 })).toBe(false);
+    expect(walkers({ gap: 0.44 })).toBe(true);
+    expect(camp({ gap: 1 })).toBe(false);
+    expect(camp({ gap: 0.2 })).toBe(false);
+    expect(valid({ ...nomads, camp: { ...nomads.camp, gap: 0.9 } })).toBe(true);
   });
 });
