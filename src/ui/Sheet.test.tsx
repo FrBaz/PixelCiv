@@ -274,4 +274,38 @@ describe('fiches (IHM-02)', () => {
     expect(labels.filter((label) => label === t('person.height'))).toHaveLength(1);
     expect(labels).toContain(t('person.gregariousness'));
   });
+
+  it('disent ce que fait un vivant, porté au genre de chacun, et mènent à son groupe (ADR 0014)', () => {
+    // La valeur de la ligne d'intitulé `label`.
+    const value = (tree: unknown, label: string) => {
+      const row = findAll(tree, (element) => element.props.class === 'debug-row').find(
+        (element) => textOf(findAll(element, (inner) => inner.type === 'dt')[0]) === label,
+      );
+      return textOf(findAll(row, (element) => element.type === 'dd')[0]);
+    };
+    const summary = { id: 3, name: 'Waskus', x: 12, y: 30, size: 20 };
+    sheet.value = { kind: 'person', view: person({ intention: 'walk', group: summary }) };
+    const actions = fakeActions();
+    const walking = shown(actions);
+    expect(value(walking, t('person.intention'))).toBe('en marche');
+    sheet.value = { kind: 'person', view: person({ intention: 'carried', sex: 0 }) };
+    expect(value(shown(), t('person.intention'))).toBe('portée par sa mère');
+    sheet.value = { kind: 'person', view: person({ intention: 'carried', sex: 1 }) };
+    expect(value(shown(), t('person.intention'))).toBe('porté par sa mère');
+    // Un mort n'a plus d'intention.
+    sheet.value = { kind: 'person', view: person({ alive: false, death: 12 }) };
+    const labels = findAll(shown(), (element) => element.type === 'dt').map(textOf);
+    expect(labels).not.toContain(t('person.intention'));
+    // Le lien vers le groupe ouvre sa fiche.
+    sheet.value = { kind: 'person', view: person({ intention: 'rest', group: summary }) };
+    const tree = shown(actions);
+    const link = findAll(
+      tree,
+      (element) => element.type === 'button' && textOf(element).includes('Waskus'),
+    ).at(0);
+    const onClick = link?.props.onClick;
+    if (typeof onClick !== 'function') throw new Error('pas de lien vers le groupe');
+    (onClick as () => void)();
+    expect(actions.inspectGroup).toHaveBeenCalledWith(3);
+  });
 });

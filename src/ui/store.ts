@@ -55,6 +55,19 @@ export interface DebugInfo {
   /** Jours par lot, en moyenne, et marcheurs au dernier lot (ADR 0014). */
   readonly batchDays: number | undefined;
   readonly walkers: number | undefined;
+  /** Étapes et octets de positions reçus par seconde. */
+  readonly legsPerSecond: number | undefined;
+  readonly positionBytesPerSecond: number | undefined;
+  /**
+   * Durée moyenne par image, en millisecondes, des positions des individus, de leur tri et
+   * de la mise à jour de leurs sprites ; à la dernière image, sprites dessinés, textures
+   * distinctes et gardées, appels de dessin.
+   */
+  readonly crowd: { readonly positions: number; readonly sort: number; readonly sprites: number };
+  readonly drawn: number | undefined;
+  readonly textures: number | undefined;
+  readonly cachedTextures: number | undefined;
+  readonly drawCalls: number | undefined;
   readonly memoryMb: number | undefined;
   /** Moteur de rendu (webgl, webgpu) et densité de pixels de l'écran. */
   readonly renderer: { readonly name: string; readonly resolution: number };

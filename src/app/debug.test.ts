@@ -1,6 +1,14 @@
 import { describe, expect, it } from 'vitest';
 import { Rng } from '../core/rng';
-import { DAY_WINDOW, DebugSampler } from './debug';
+import { NO_CARRIER, type GroupsFrame, type LegArrays } from '../core/protocol';
+import {
+  DAY_WINDOW,
+  DebugSampler,
+  DrawCallCounter,
+  LEG_BYTES,
+  MEMBER_BYTES,
+  positionBytes,
+} from './debug';
 
 describe('DebugSampler', () => {
   it('compte les images de la dernière seconde', () => {
@@ -87,5 +95,83 @@ describe('DebugSampler', () => {
       expect(shown).toBeGreaterThanOrEqual(0.003);
       expect(shown).toBeLessThanOrEqual(0.005);
     }
+  });
+
+  it('compte les positions reçues sur la dernière seconde, et ce que coûtent les individus à chaque image', () => {
+    const sampler = new DebugSampler();
+    expect(sampler.sample(0)).toMatchObject({ legsPerSecond: 0, positionBytesPerSecond: 0 });
+    expect(sampler.sample().legsPerSecond).toBeUndefined();
+    // Une étape pèse 26 octets, un membre de l'image 23 (ADR 0014).
+    expect([LEG_BYTES, MEMBER_BYTES]).toEqual([26, 23]);
+    const legs = (count: number): LegArrays => ({
+      slots: new Uint32Array(count),
+      days: new Uint32Array(count),
+      start: new Int32Array(2 * count),
+      step: new Int32Array(2 * count),
+      count: new Uint16Array(count),
+    });
+    const frame: GroupsFrame = {
+      groups: new Uint32Array(2 * 5),
+      slots: new Uint32Array(30),
+      ids: new Uint32Array(30),
+      sprites: new Uint16Array(30),
+      statures: new Uint8Array(30),
+      positions: new Int32Array(60),
+      carriers: new Uint32Array(30).fill(NO_CARRIER),
+      legs: legs(4),
+    };
+    expect(positionBytes(legs(10), undefined)).toBe(260);
+    expect(positionBytes(undefined, frame)).toBe(4 * 26 + 30 * 23 + 2 * 5 * 4);
+    // Dix deltas par seconde, de 100 étapes : 1 000 étapes par seconde ; ceux d'il y a plus
+    // d'une seconde ne comptent plus.
+    for (let at = 0; at < 3000; at += 100) sampler.receive(at, 100, 2600);
+    expect(sampler.sample(2950)).toMatchObject({
+      legsPerSecond: 1000,
+      positionBytesPerSecond: 26000,
+    });
+    expect(sampler.sample(4000).legsPerSecond).toBe(0);
+    // Le coût moyen des images de la dernière seconde, et ce que dessine la dernière.
+    for (let frameIndex = 0; frameIndex < 90; frameIndex++) {
+      const slow = frameIndex < 20;
+      sampler.frame(1000 / 60, {
+        positionsMs: slow ? 9 : 1,
+        sortMs: 0.5,
+        spritesMs: 2,
+        drawn: 1200 + frameIndex,
+        textures: 300,
+        cached: 400,
+        drawCalls: 12,
+      });
+    }
+    const sample = sampler.sample();
+    expect(sample.crowd.positions).toBeCloseTo(1, 9);
+    expect(sample.crowd.sort).toBeCloseTo(0.5, 9);
+    expect(sample).toMatchObject({
+      drawn: 1289,
+      textures: 300,
+      cachedTextures: 400,
+      drawCalls: 12,
+    });
+  });
+
+  it('compte les appels de dessin WebGL de chaque image', () => {
+    const calls: string[] = [];
+    const gl = {
+      drawElements: (mode: number) => {
+        calls.push(`elements ${String(mode)}`);
+      },
+      drawArrays: (mode: number) => {
+        calls.push(`arrays ${String(mode)}`);
+      },
+    };
+    const counter = new DrawCallCounter(gl);
+    gl.drawElements(4);
+    gl.drawElements(4);
+    gl.drawArrays(5);
+    expect(counter.take()).toBe(3);
+    expect(counter.take()).toBe(0);
+    // Les appels arrivent toujours au contexte.
+    expect(calls).toEqual(['elements 4', 'elements 4', 'arrays 5']);
+    expect(new DrawCallCounter(undefined).take()).toBe(0);
   });
 });

@@ -2,15 +2,9 @@
 // de simulation, puis les relie.
 import { h, render } from 'preact';
 import { loadGameData, type GameData } from '../core/data';
-import {
-  frameBuffers,
-  GROUP_STRIDE,
-  legBuffers,
-  PROTOCOL_VERSION,
-  type InspectTarget,
-} from '../core/protocol';
-import { dayIndex, type GameTime } from '../core/time';
-import { WORLD_SIZES, type WorldLayers, type WorldSize, type WorldSizeId } from '../core/world';
+import { frameBuffers, legBuffers, PROTOCOL_VERSION, type InspectTarget } from '../core/protocol';
+import { dayIndex, SPEED_FACTORS, type GameTime } from '../core/time';
+import { WORLD_SIZES, type WorldLayers, type WorldSizeId } from '../core/world';
 import { defaultWorldParams, type WorldParams } from '../core/worldParams';
 import { determinismSelfTest } from '../core/selftest';
 import { t } from '../i18n';
@@ -20,6 +14,7 @@ import { MapView } from '../render/map';
 import { legend, overlayTexels } from '../render/mapModes';
 import {
   cellAt,
+  displayScale,
   openingZoom,
   parseZoom,
   showAt,
@@ -27,10 +22,11 @@ import {
   TILE_PX,
   type Camera,
 } from '../render/camera';
-import { groupPositions } from '../render/crowd';
-import { PeopleLayer, positionCells } from '../render/people';
+import { FINGER_SLOP, POINTER_SLOP } from '../render/crowd';
+import { PeopleLayer, stepDuration } from '../render/people';
 import { previewPixels } from '../render/preview';
 import { SPAWN_COUNT } from '../sim/commands';
+import { walkCost } from '../sim/terrain';
 import type { SheetContent } from '../ui/Sheet';
 import { createRenderer } from '../render/renderer';
 import { App } from '../ui/App';
@@ -77,13 +73,13 @@ import {
   receivePage,
   type KeptFacts,
 } from './chronicle';
-import { DebugSampler, usedMemoryMb } from './debug';
+import { DebugSampler, DrawCallCounter, positionBytes, usedMemoryMb } from './debug';
 import { centerOf, visibleArea, type Rect } from './focus';
 import { SaveManager, SaveStore } from './saves';
 import { describeCell } from './inspect';
 import { SheetRequests } from './sheets';
-import { OccupiedCells, spawnTarget } from './spawn';
-import { FrameQueue } from './frames';
+import { crowdCells, crowdGroups, CROWD_GROUP, OccupiedCells, spawnTarget } from './spawn';
+import { CrowdTimeline } from './frames';
 import { GameClock } from './gameClock';
 import { PreviewScheduler } from './preview';
 import { SimulationClient } from './simulation';
@@ -120,13 +116,34 @@ async function main(): Promise<void> {
   const mapElement = element('map');
   const app = await createRenderer(mapElement);
   const map = new MapView(app, data.biomes.entries);
-  const people = new PeopleLayer(app, { genetics: data.genetics, appearance: data.appearance });
-  // Horloge du rendu et images des groupes datées (ADR 0013) : la carte, ses saisons et la
-  // date montrent l'instant de l'horloge, un peu en retard sur le dernier état reçu.
+  // L'espèce de référence : la stature de son adulte moyen fixe la densité des individus de
+  // la vue, et l'écart de ses nourrissons portés (ADR 0014, § 6).
+  const species = data.species.entries.at(0);
+  if (species === undefined) throw new Error('aucune espèce dans les données');
+  const people = new PeopleLayer(app, {
+    genetics: data.genetics,
+    appearance: data.appearance,
+    reference: species.display.stature,
+  });
+  // Couches du monde affiché, pour l'inspection, les légendes et la franchissabilité.
+  let worldLayers: WorldLayers | undefined;
+  /** La case, comptée comme cellIndex, se franchit-elle ? Comme pour la simulation (walkCost). */
+  const passable = (cell: number): boolean =>
+    worldLayers !== undefined && Number.isFinite(walkCost(worldLayers, cell, data));
+  // Horloge du rendu (ADR 0013) : la carte, ses saisons et la date montrent l'instant de
+  // l'horloge, un peu en retard sur le dernier état reçu. Les images des groupes et les
+  // étapes datées donnent la position de chacun à cet instant (ADR 0014) ; leurs tampons
+  // lus retournent au worker, qui les reprend.
   const clock = new GameClock();
-  // Une image oubliée rend ses tampons au worker, qui les reprend (ADR 0014).
-  const frames = new FrameQueue((frame) => {
-    simulation.send({ type: 'recycle', buffers: frameBuffers(frame) });
+  const crowd = new CrowdTimeline({
+    carry: species.display.carry,
+    passable,
+    recycleFrame: (frame) => {
+      simulation.send({ type: 'recycle', buffers: frameBuffers(frame) });
+    },
+    recycleLegs: (legs) => {
+      simulation.send({ type: 'recycle', buffers: legBuffers(legs) });
+    },
   });
   const modeData = {
     biomes: data.biomes.entries,
@@ -181,9 +198,11 @@ async function main(): Promise<void> {
   // Caméra du dernier dessin : un appui désigne ce que la carte montrait.
   let drawnCamera: Camera | undefined;
   /**
-   * Un point de la carte, désigné d'un appui bref (`tap`) ou long : selon l'outil, sa case
-   * reçoit un groupe (CRE-03), se peint (débogage), ou s'inspecte (IHM-07) ; un groupe
-   * dessiné sous le doigt ouvre sa fiche (IHM-02).
+   * Un point de la carte, désigné d'un appui bref (`tap`) ou long, du doigt (`finger`) ou
+   * d'un pointeur fin : selon l'outil, sa case reçoit un groupe (CRE-03), se peint
+   * (débogage), ou s'inspecte (IHM-07). On touche ce qu'on voit : un individu dessiné sous
+   * l'appui ouvre sa fiche, une bannière ou l'espace entre les membres d'un groupe celle du
+   * groupe (IHM-02, render/crowd.ts, pickEntity).
    */
   const designate = (
     mapX: number,
@@ -191,6 +210,7 @@ async function main(): Promise<void> {
     screenX: number,
     screenY: number,
     tap: boolean,
+    finger: boolean,
   ) => {
     const info = worldInfo.value;
     if (info === undefined) return;
@@ -208,17 +228,17 @@ async function main(): Promise<void> {
       });
       return;
     }
-    const group =
+    const picked =
       drawnCamera === undefined
         ? undefined
-        : people.pick(drawnCamera, map.viewport, map.world, screenX, screenY);
-    if (group === undefined) {
+        : people.pick(screenX, screenY, finger ? FINGER_SLOP : POINTER_SLOP);
+    if (picked === undefined) {
       showCell(cell.x, cell.y);
       raise('cell');
     } else {
-      // Le groupe montré, la case qu'on inspectait s'efface.
+      // L'individu ou le groupe montré, la case qu'on inspectait s'efface.
       inspected.value = undefined;
-      openSheet({ kind: 'group', id: group });
+      openSheet(picked);
     }
   };
   const controls = new CameraControls({
@@ -227,41 +247,32 @@ async function main(): Promise<void> {
     resolution: () => app.renderer.resolution,
     world: () => map.world,
     defaultZoom: () => openingZoom({ queryZoom, touchOnly, smallScreen: smallScreen.matches }),
-    onLongPress: (mapX, mapY, screenX, screenY) => {
-      designate(mapX, mapY, screenX, screenY, false);
+    onLongPress: (mapX, mapY, screenX, screenY, finger) => {
+      designate(mapX, mapY, screenX, screenY, false, finger);
     },
-    onTap: (mapX, mapY, screenX, screenY) => {
-      designate(mapX, mapY, screenX, screenY, true);
+    onTap: (mapX, mapY, screenX, screenY, finger) => {
+      designate(mapX, mapY, screenX, screenY, true, finger);
     },
     // Une apparition ne s'annule pas : outil armé, un appui long attend le relâcher, et ne
     // compte pas s'il est devenu un glisser ou un pincement (U-6).
     holdUntilRelease: () => tool.value === 'spawn',
   });
-  // Couches du monde affiché, pour l'inspection et les légendes.
-  let worldLayers: WorldLayers | undefined;
   // Fiches (IHM-02) : demandes du joueur et rafraîchissements, numérotés (app/sheets.ts).
   const sheets = new SheetRequests();
   const openSheet = (target: InspectTarget) => {
     simulation.send({ type: 'inspect', ...sheets.open(target) });
   };
-  // Cases occupées, que l'outil d'apparition refuse : celles où se tiennent les groupes, à
+  // Cases occupées, que l'outil d'apparition refuse : celles où se tient quelqu'un, à
   // l'instant affiché et à celui du dernier état reçu, et celles des apparitions envoyées
   // qu'aucun état n'a encore montrées.
   const occupied = new OccupiedCells();
-  /** Cases des groupes du dernier état reçu, à son instant. */
-  const receivedCells = (size: WorldSize): Set<number> => {
-    const latest = frames.latest();
-    if (latest === undefined) return new Set();
-    const count = Math.floor(latest.frame.groups.length / GROUP_STRIDE);
-    const positions = new Float64Array(count * 2);
-    groupPositions(latest.frame, size.width, positions, new Uint8Array(count));
-    return positionCells(positions, size);
-  };
+  /** Instant affiché, en jours, à la dernière image. */
+  let shownInstant = 0;
   /** Fait apparaître un groupe sur la case, si elle le permet ; un avis dit sinon pourquoi. */
   const spawnAt = (x: number, y: number) => {
     const info = worldInfo.value;
     if (worldLayers === undefined || info === undefined) return;
-    occupied.setGroups(new Set([...people.occupiedCells(info.size), ...receivedCells(info.size)]));
+    occupied.setStanding(crowd.occupied(shownInstant, info.size));
     const target = spawnTarget(worldLayers, info.size, x, y, data, occupied);
     if ('refusal' in target) {
       showNotice(target.refusal);
@@ -277,6 +288,43 @@ async function main(): Promise<void> {
     // La case est prise dès l'envoi : un second appui, avant l'image qui montrera le
     // groupe, ne l'empile pas.
     occupied.add(target.x, target.y, info.size);
+  };
+  /**
+   * Débogage : ?crowd=2000 fait apparaître 2 000 individus dans la première partie, en pause,
+   * par groupes de CROWD_GROUP autour du centre de la vue, assez espacés pour la remplir (le
+   * pire cas du rendu, ADR 0014). Les sous-espèces de la première espèce s'y relaient.
+   */
+  const crowdTotal = Math.floor(Number(query.get('crowd') ?? 0));
+  let crowdSpawned = false;
+  const spawnCrowd = () => {
+    const info = worldInfo.value;
+    const kind = creator.species.at(0);
+    if (crowdSpawned || !(crowdTotal >= SPAWN_COUNT.min) || info === undefined) return;
+    if (kind === undefined || worldLayers === undefined) return;
+    crowdSpawned = true;
+    simulation.send({ type: 'setPaused', paused: true });
+    const sizes = crowdGroups(crowdTotal, CROWD_GROUP, SPAWN_COUNT);
+    const { camera } = controls;
+    const center = cellAt(camera.x, camera.y, info.size.width);
+    const cellPx = TILE_PX * displayScale(camera.zoom);
+    const visible = (map.viewport.width / cellPx) * (map.viewport.height / cellPx);
+    const spacing = Math.max(1, Math.floor(Math.sqrt(visible / sizes.length)));
+    const cells = crowdCells(center, sizes.length, spacing, info.size, passable);
+    cells.forEach((cell, index) => {
+      const subspecies = kind.subspecies.at(index % kind.subspecies.length);
+      if (subspecies === undefined) return;
+      simulation.send({
+        type: 'game',
+        command: {
+          type: 'spawnGroup',
+          x: cell.x,
+          y: cell.y,
+          species: kind.id,
+          subspecies: subspecies.id,
+          count: sizes[index] ?? CROWD_GROUP,
+        },
+      });
+    });
   };
   const uiElement = element('ui');
   /**
@@ -337,6 +385,8 @@ async function main(): Promise<void> {
     pausedForCreation = false;
   };
   const sampler = new DebugSampler();
+  // Appels de dessin de chaque image, sur WebGL (débogage, ADR 0014).
+  const drawCalls = new DrawCallCounter('gl' in app.renderer ? app.renderer.gl : undefined);
   let sheetRefresh = 0;
   // Au retour d'un onglet masqué, la première image couvre toute l'absence : elle ne
   // compte pas comme une image lente.
@@ -344,20 +394,24 @@ async function main(): Promise<void> {
   document.addEventListener('visibilitychange', () => {
     if (document.visibilityState === 'visible') returning = true;
   });
-  /** Aucune marche : l'image d'un groupe sans image. */
   /** Rang du jour que montre la date, pour ne la changer qu'au jour suivant. */
   let shownIndex = -1;
+  // Horloge de la marche du rendu (ADR 0014) : elle n'avance qu'avec l'instant affiché, si
+  // bien que les images de la marche restent figées en pause.
+  let walkMs = 0;
   app.ticker.add((ticker) => {
     // La durée réelle de l'image : deltaMS est plafonné à 100 ms, et cacherait les à-coups.
+    // L'image précédente a coûté ce que mesure son dessin, et ses appels de dessin.
+    const calls = drawCalls.take();
     if (returning) returning = false;
-    else sampler.frame(ticker.elapsedMS);
+    else sampler.frame(ticker.elapsedMS, { ...people.stats, drawCalls: calls });
     const now = performance.now();
-    // L'instant affiché : les saisons, les groupes et la date le suivent ensemble.
+    // L'instant affiché : les saisons, les individus et la date le suivent ensemble.
     const shown = clock.advance(now);
+    if (shown > shownInstant) walkMs += ticker.elapsedMS;
+    shownInstant = shown;
     map.setSeason(clock.month());
-    const dated = frames.at(shown);
-    const width = worldInfo.value?.size.width ?? 1;
-    people.show(dated?.frame, width);
+    crowd.show(shown);
     const today: GameTime = clock.today();
     if (dayIndex(today) !== shownIndex && time.value !== undefined) {
       shownIndex = dayIndex(today);
@@ -366,12 +420,24 @@ async function main(): Promise<void> {
     const camera = controls.update(ticker.deltaMS);
     drawnCamera = camera;
     map.draw(camera);
-    people.draw(camera, map.viewport, map.world, now);
+    const speed = time.value?.speed ?? 'normal';
+    people.draw(
+      {
+        source: crowd.shown,
+        t: shown,
+        walkMs,
+        stepMs: stepDuration(SPEED_FACTORS[speed]),
+        passable,
+      },
+      camera,
+      map.viewport,
+      map.world,
+    );
   });
   setInterval(() => {
     const renderer = { name: app.renderer.name, resolution: app.renderer.resolution };
     debugInfo.value = {
-      ...sampler.sample(),
+      ...sampler.sample(performance.now()),
       memoryMb: usedMemoryMb(),
       renderer,
       chunks: map.pendingChunks,
@@ -420,7 +486,8 @@ async function main(): Promise<void> {
         sheets.close();
         sheet.value = undefined;
         people.clear();
-        frames.reset(message.frame, message.time);
+        crowd.reset(message.frame, message.time, message.world.size.width);
+        sampler.receive(performance.now(), 0, positionBytes(undefined, message.frame));
         occupied.reset();
         chronicleRequest++;
         chronicleLoading.value = false;
@@ -433,18 +500,21 @@ async function main(): Promise<void> {
         time.value = message.time;
         clock.reset(message.time, performance.now());
         shownIndex = dayIndex(message.time);
+        shownInstant = dayIndex(message.time);
         shownDay.value = { tick: message.time.tick, day: message.time.day };
+        spawnCrowd();
         break;
       }
       case 'delta': {
         map.updateChunks(message.chunks);
-        // Les étapes du lot attendent le rendu des marches (2b.3, étape b) : leurs tampons
-        // retournent aussitôt au worker.
-        if (message.legs !== undefined) {
-          simulation.send({ type: 'recycle', buffers: legBuffers(message.legs) });
-        }
-        // L'image des groupes, quand elle change, vaut à partir de l'instant du delta.
-        if (message.frame !== undefined) frames.push(message.frame, message.time);
+        // Les étapes du lot attendent leur jour ; l'image des groupes, quand elle change, vaut
+        // à partir de l'instant du delta (ADR 0014).
+        sampler.receive(
+          performance.now(),
+          message.legs?.slots.length ?? 0,
+          positionBytes(message.legs, message.frame),
+        );
+        crowd.receive(message.time, message.legs, message.frame);
         const info = worldInfo.value;
         if (info !== undefined) occupied.update(message.chronicle, info.size);
         // Pendant la lecture des pages plus anciennes, les faits nouveaux se comptent.

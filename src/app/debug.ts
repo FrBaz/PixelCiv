@@ -1,10 +1,14 @@
 /**
- * Mesures du panneau de débogage (NF-01, ADR 0013) : images par seconde et image la plus
- * longue sur la dernière seconde ; durée moyenne d'un jour sur les mille derniers au moins ;
- * durée moyenne du pas mensuel et le plus long sur les douze derniers ; jours par lot sur
- * les trente derniers lots ; marches en cours au dernier lot.
+ * Mesures du panneau de débogage (NF-01, ADR 0013, ADR 0014) : images par seconde et image
+ * la plus longue sur la dernière seconde ; durée moyenne d'un jour sur les mille derniers au
+ * moins ; durée moyenne du pas mensuel et le plus long sur les douze derniers ; jours par lot
+ * sur les trente derniers lots ; marcheurs au dernier lot ; positions reçues par seconde,
+ * étapes et octets ; ce que coûte au fil principal, en moyenne sur la dernière seconde, le
+ * dessin des individus (positions, tri, sprites), et ce qu'il dessine : sprites, textures,
+ * appels de dessin. Ces dernières mesures ne dépendent pas du GPU : dans un navigateur qui
+ * rend en logiciel, les images par seconde ne disent rien de lui.
  */
-import type { StepStats } from '../core/protocol';
+import { GROUP_STRIDE, type GroupsFrame, type LegArrays, type StepStats } from '../core/protocol';
 
 export interface DebugSample {
   /** Images par seconde, sur la dernière seconde. */
@@ -20,6 +24,43 @@ export interface DebugSample {
   readonly batchDays: number | undefined;
   /** Marcheurs à la fin du dernier lot (ADR 0014). */
   readonly walkers: number | undefined;
+  /** Étapes et octets de positions (étapes et images des groupes) reçus par seconde. */
+  readonly legsPerSecond: number | undefined;
+  readonly positionBytesPerSecond: number | undefined;
+  /**
+   * Durée moyenne, par image de la dernière seconde, en millisecondes, des positions et de la
+   * disposition des individus, de leur tri et de la mise à jour des sprites.
+   */
+  readonly crowd: { readonly positions: number; readonly sort: number; readonly sprites: number };
+  /** À la dernière image : sprites dessinés, textures distinctes et gardées, appels de dessin. */
+  readonly drawn: number | undefined;
+  readonly textures: number | undefined;
+  readonly cachedTextures: number | undefined;
+  readonly drawCalls: number | undefined;
+}
+
+/** Ce que coûte et dessine une image, pour le panneau (render/people.ts, PeopleStats). */
+export interface FrameCost {
+  readonly positionsMs: number;
+  readonly sortMs: number;
+  readonly spritesMs: number;
+  readonly drawn: number;
+  readonly textures: number;
+  readonly cached: number;
+  /** Appels de dessin de l'image, s'ils se comptent (DrawCallCounter). */
+  readonly drawCalls?: number;
+}
+
+/** Octets d'une étape dans un message (ADR 0014) : emplacement, jour, départ, pas, jours. */
+export const LEG_BYTES = 4 + 4 + 8 + 8 + 2;
+/** Octets d'un membre dans l'image des groupes : emplacement, identifiant, apparence, stature, position, porteur. */
+export const MEMBER_BYTES = 4 + 4 + 2 + 1 + 8 + 4;
+
+/** Octets de positions d'un delta ou d'un instantané : ses étapes, et son image s'il en porte une. */
+export function positionBytes(legs: LegArrays | undefined, frame: GroupsFrame | undefined): number {
+  const legCount = (legs?.slots.length ?? 0) + (frame?.legs.slots.length ?? 0);
+  const groups = frame === undefined ? 0 : frame.groups.length / GROUP_STRIDE;
+  return legCount * LEG_BYTES + (frame?.ids.length ?? 0) * MEMBER_BYTES + groups * GROUP_STRIDE * 4;
 }
 
 /**
@@ -43,8 +84,15 @@ function keep(values: number[], value: number, size: number): void {
   if (values.length > size) values.splice(0, values.length - size);
 }
 
+/** Fenêtre des positions reçues, en millisecondes. */
+const RECEIVED_WINDOW_MS = 1000;
+
 export class DebugSampler {
   private frames: number[] = [];
+  /** Coût de chaque image de la fenêtre, dans l'ordre de `frames`. */
+  private costs: (FrameCost | undefined)[] = [];
+  /** Positions reçues : instant (ms), étapes, octets. */
+  private received: { readonly at: number; readonly legs: number; readonly bytes: number }[] = [];
   /** Durée totale des jours ordinaires de chacun des derniers lots, et leur nombre. */
   private days: { readonly total: number; readonly count: number }[] = [];
   private dayCount = 0;
@@ -52,13 +100,21 @@ export class DebugSampler {
   private batches: number[] = [];
   private walkers: number | undefined;
 
-  /** Enregistre la durée d'une image. */
-  frame(durationMs: number): void {
+  /** Enregistre la durée d'une image, et ce qu'y ont coûté les individus. */
+  frame(durationMs: number, cost?: FrameCost): void {
     this.frames.push(durationMs);
+    this.costs.push(cost);
     let total = this.frames.reduce((sum, duration) => sum + duration, 0);
     while (this.frames.length > 1 && total - (this.frames[0] ?? 0) >= FRAME_WINDOW_MS) {
       total -= this.frames.shift() ?? 0;
+      this.costs.shift();
     }
+  }
+
+  /** Des positions reçues à l'instant `at` (ms) : `legs` étapes, `bytes` octets en tout. */
+  receive(at: number, legs: number, bytes: number): void {
+    this.received.push({ at, legs, bytes });
+    while ((this.received[0]?.at ?? at) <= at - RECEIVED_WINDOW_MS) this.received.shift();
   }
 
   /** Enregistre les mesures d'un lot de jours du worker. */
@@ -80,8 +136,15 @@ export class DebugSampler {
     this.walkers = stats.walkers;
   }
 
-  sample(): DebugSample {
+  /** Les mesures ; `now` (ms) date les positions reçues, comptées sur la dernière seconde. */
+  sample(now?: number): DebugSample {
     const total = this.frames.reduce((sum, duration) => sum + duration, 0);
+    const costs = this.costs.filter((cost): cost is FrameCost => cost !== undefined);
+    const average = (pick: (cost: FrameCost) => number) =>
+      costs.length === 0 ? 0 : costs.reduce((sum, cost) => sum + pick(cost), 0) / costs.length;
+    const last = costs.at(-1);
+    const recent =
+      now === undefined ? undefined : this.received.filter((entry) => entry.at > now - 1000);
     return {
       fps: total > 0 ? (this.frames.length * 1000) / total : 0,
       worstFrameMs: Math.max(0, ...this.frames),
@@ -93,6 +156,17 @@ export class DebugSampler {
       worstMonthMs: this.months.length > 0 ? Math.max(...this.months) : undefined,
       batchDays: mean(this.batches),
       walkers: this.walkers,
+      legsPerSecond: recent?.reduce((sum, entry) => sum + entry.legs, 0),
+      positionBytesPerSecond: recent?.reduce((sum, entry) => sum + entry.bytes, 0),
+      crowd: {
+        positions: average((cost) => cost.positionsMs),
+        sort: average((cost) => cost.sortMs),
+        sprites: average((cost) => cost.spritesMs),
+      },
+      drawn: last?.drawn,
+      textures: last?.textures,
+      cachedTextures: last?.cached,
+      drawCalls: last?.drawCalls,
     };
   }
 }
@@ -102,4 +176,39 @@ export function usedMemoryMb(): number | undefined {
   const memory = (performance as Performance & { memory?: { usedJSHeapSize?: number } }).memory;
   const bytes = memory?.usedJSHeapSize;
   return typeof bytes === 'number' ? bytes / (1024 * 1024) : undefined;
+}
+
+/** Ce qu'un contexte WebGL sait dessiner : les appels que compte DrawCallCounter. */
+interface DrawingContext {
+  drawElements: (...args: never[]) => void;
+  drawArrays: (...args: never[]) => void;
+}
+
+/**
+ * Compte les appels de dessin WebGL de chaque image (débogage) : chacun passe par
+ * drawElements ou drawArrays, que le compteur enveloppe une fois pour toutes.
+ */
+export class DrawCallCounter {
+  private count = 0;
+
+  constructor(gl: DrawingContext | undefined) {
+    if (gl === undefined) return;
+    const elements = gl.drawElements.bind(gl);
+    const arrays = gl.drawArrays.bind(gl);
+    gl.drawElements = (...args) => {
+      this.count++;
+      elements(...args);
+    };
+    gl.drawArrays = (...args) => {
+      this.count++;
+      arrays(...args);
+    };
+  }
+
+  /** Les appels depuis le dernier relevé : ceux de l'image rendue entre deux. */
+  take(): number {
+    const count = this.count;
+    this.count = 0;
+    return count;
+  }
 }

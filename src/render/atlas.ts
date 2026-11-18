@@ -29,6 +29,11 @@ export function frameOf(name: string): Frame {
   return atlas.frames[name];
 }
 
+/** L'atlas a-t-il ce motif ? Une variante de hauteur n'existe que si sa source la demande. */
+export function hasFrame(name: string): boolean {
+  return Object.hasOwn(atlas.frames, name);
+}
+
 /** Pixels RGBA d'une image de rôles recolorée, ligne par ligne. */
 export function recolorRoles(
   roles: ArrayLike<number>,
