@@ -373,6 +373,31 @@ describe('individus à leur position (ADR 0014)', () => {
     expect([0.5, 1, 4, 16].map(stepDuration)).toEqual([420, 420, 200, 200]);
   });
 
+  it('ne refait pas une image qui ne change rien : même instant, même caméra, même horloge de marche', () => {
+    const { people } = setup(1);
+    const shown = scene(frame(5, [1, 100, 50, 1]));
+    const source = shown.source as PositionMirror;
+    let asked = 0;
+    const positions = source.positions.bind(source);
+    source.positions = (...args) => {
+      asked++;
+      positions(...args);
+    };
+    const camera = aimedAt(100, 50, 8);
+    people.draw(shown, camera, viewport, world);
+    expect(asked).toBe(1);
+    // En pause, caméra immobile : rien à refaire.
+    people.draw(shown, camera, viewport, world);
+    people.draw({ ...shown }, { ...camera }, viewport, world);
+    expect(asked).toBe(1);
+    // Un autre instant, une autre caméra, une case repeinte : l'image se refait.
+    people.draw({ ...shown, t: 0.5 }, camera, viewport, world);
+    people.draw({ ...shown, t: 0.5 }, { ...camera, x: camera.x + 1 }, viewport, world);
+    people.invalidate();
+    people.draw({ ...shown, t: 0.5 }, { ...camera, x: camera.x + 1 }, viewport, world);
+    expect(asked).toBe(4);
+  });
+
   it('partage les textures de deux cultures de même habit, et en garde une par motif, variante et apparence', () => {
     const clothing = ['#a03030', '#30a030', '#a03030'];
     const { people, layer } = setup(1, { ...data.appearance, clothing });
@@ -386,6 +411,21 @@ describe('individus à leur position (ADR 0014)', () => {
     expect(people.stats.cached).toBe(4);
     // Rangées dans une seule page de l'atlas dynamique : un seul lot de dessin.
     expect(people.stats.pages).toBe(1);
-    expect(new Set(rendered(layer).map((sprite) => sprite.texture.source)).size).toBe(1);
+    const sources = new Set(rendered(layer).map((sprite) => sprite.texture.source));
+    expect(sources.size).toBe(1);
+    // La page part au GPU quand elle reçoit des motifs, et seulement alors.
+    const [page] = [...sources];
+    let updates = 0;
+    page.on('update', () => {
+      updates++;
+    });
+    // Une image nouvelle, où le troisième groupe compte un adulte plus petit : un motif de plus.
+    const next = { ...groups, statures: Uint8Array.from(groups.statures) };
+    next.statures[10] = 84;
+    people.draw(scene(next), aimedAt(104, 50, 8), viewport, world);
+    expect(people.stats.cached).toBe(5);
+    expect(updates).toBe(1);
+    people.draw(scene(next), aimedAt(104, 49, 8), viewport, world);
+    expect(updates).toBe(1);
   });
 });
