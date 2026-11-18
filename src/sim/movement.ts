@@ -1987,33 +1987,31 @@ export function planMonth(
     const mother = movement.carrier[slot] ?? NO;
     if (mother >= 0 && species !== undefined && yearsOf(state, slot) < species.ages.baby) continue;
     movement.uncarry(slot);
-    const sx = x[slot] ?? 0;
-    const sy = y[slot] ?? 0;
+    // La position où on le dessinait, contre sa mère, du côté que dit son identifiant, si la
+    // case se franchit ; sur elle sinon (ADR 0014). Il suivait sa position : orphelin, sa
+    // mère morte ou partie, il part donc de là où elle se tenait. Rien ne saute.
+    const side = carriedSide(id[slot] ?? 0);
+    const reach = (species?.display.carry ?? 0) * FIXED;
+    const mx = mother >= 0 ? (x[mother] ?? 0) : (x[slot] ?? 0);
+    const my = mother >= 0 ? (y[mother] ?? 0) : (y[slot] ?? 0);
+    const drawnX = wrapFixedX(mx + Math.round(side * reach), width);
+    const fromDrawn = passableAt(state, drawnX, my) && segmentClear(state, mx, my, drawnX, my);
+    const startX = fromDrawn ? drawnX : mx;
+    x[slot] = startX;
+    y[slot] = my;
     move[slot] = REST;
-    columns.goalX[slot] = sx;
-    columns.goalY[slot] = sy;
+    columns.goalX[slot] = startX;
+    columns.goalY[slot] = my;
     columns.stepDays[slot] = 0;
     if (mother < 0) {
-      // Orphelin : il se pose là où sa mère se tenait, et part avec son groupe.
-      movement.hold(slot, sx, sy);
+      // Orphelin : il se pose là, et part avec son groupe.
+      movement.hold(slot, startX, my);
       const group = society.groups.get(columns.group[slot] ?? NONE);
       if (group !== undefined && record.camps.get(group.id) !== group.campY * width + group.campX) {
         plan[slot] = MOVE;
       }
       continue;
     }
-    // La position où on le dessinait, contre sa mère, du côté que dit son identifiant.
-    const side = carriedSide(id[slot] ?? 0);
-    const reach = (species?.display.carry ?? 0) * FIXED;
-    const mx = x[mother] ?? 0;
-    const my = y[mother] ?? 0;
-    const drawnX = wrapFixedX(mx + Math.round(side * reach), width);
-    const fromDrawn = passableAt(state, drawnX, my) && segmentClear(state, mx, my, drawnX, my);
-    const startX = fromDrawn ? drawnX : mx;
-    x[slot] = startX;
-    y[slot] = my;
-    columns.goalX[slot] = startX;
-    columns.goalY[slot] = my;
     const motherWalks = ((move[mother] ?? 0) & INTENTION) === WALK;
     if (plan[mother] !== STAY || motherWalks || plan[slot] !== STAY) {
       // Sa mère part, ou marche : il part avec elle, et prendra sa place près de la sienne.

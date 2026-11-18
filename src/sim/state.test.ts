@@ -225,8 +225,10 @@ describe('pas', () => {
     // ff30d063). Puis les positions des individus (ADR 0014) : chacun marche à son allure
     // vers sa place au camp, tirée sur un nouveau flux, `sim.camp`, et le lieu du groupe, où
     // il cueille, chasse et se compte parmi ses voisins, se déduit de ses membres ; le
-    // déroulement change donc, de ff30d063 à 8c0c534a.
-    expect(fingerprint(state)).toBe('8c0c534a');
+    // déroulement change donc, de ff30d063 à 8c0c534a. Enfin, l'orphelin d'un nourrisson
+    // porté se pose là où on le dessinait, contre sa mère, et non sur elle : rien ne saute à
+    // l'image (de 8c0c534a à 0baafb76).
+    expect(fingerprint(state)).toBe('0baafb76');
   });
 
   it("redonnent l'empreinte de référence de trente mois de trois mille individus (ADR 0011)", () => {
@@ -244,13 +246,14 @@ describe('pas', () => {
     // gardent leurs vivants et leurs groupes à 120 mois (de 8049a7e6 à f1ddca1e). Puis les
     // positions des individus : le mouvement individuel et le lieu du groupe tiré de ses
     // membres changent le déroulement (de f1ddca1e à b4e23dbf) ; à 120 mois, les vivants
-    // varient de −1,6 à +3,6 % selon la graine, les groupes de −3,5 à +3,8 %.
+    // varient de −1,6 à +3,6 % selon la graine, les groupes de −3,5 à +3,8 %. Enfin,
+    // l'orphelin porté se pose là où on le dessinait (de b4e23dbf à 7ae8f749).
     const state = testState();
     step(state, scatteredGroups(state, 100), testData);
     for (let tick = 1; tick < 30; tick++) step(state, [], testData);
     expect(state.society.groups.size).toBeGreaterThan(100);
     expect(state.people.count).toBeGreaterThan(2000);
     expect(state.people.archive.rows).toBeGreaterThan(500);
-    expect(fingerprint(state)).toBe('b4e23dbf');
+    expect(fingerprint(state)).toBe('7ae8f749');
   });
 });

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { Species } from '../core/data';
-import { cellOf, deltaFixedX, FIXED } from '../core/position';
+import { carriedSide, cellOf, deltaFixedX, FIXED, wrapFixedX } from '../core/position';
 import { RandomStream, streamSeed } from '../core/rng';
 import { DAYS_PER_MONTH } from '../core/time';
 import { advanceDay, step } from './day';
@@ -566,20 +566,29 @@ describe('mouvement des individus : vie, mort et changements de groupe (ADR 0014
     const state = populated();
     let deaths = 0;
     let kept = 0;
-    for (let month = 0; month < 6; month++) {
+    let released = 0;
+    let orphans = 0;
+    for (let month = 0; month < 12; month++) {
       while (state.day < DAYS_PER_MONTH - 1) advanceDay(state, [], testData);
       // Au soir du dernier jour, après la marche du jour : le pas mensuel ne déplace personne,
-      // sauf les nourrissons sevrés, qu'on dessinait contre leur mère, du côté où ils se posent.
+      // sauf les nourrissons qui quittent les bras de leur mère, sevrés ou orphelins : ils se
+      // posent là où on les dessinait, contre elle, du côté que dit leur identifiant, si la
+      // case se franchit, et sur elle sinon (render, PositionMirror).
       const archived = state.people.archive.rows;
       const { before, carried } = monthEnd(state);
       deaths += state.people.archive.rows - archived;
+      const { width } = state.size;
       for (const [id, now] of positions(state)) {
         const was = before.get(id);
         if (was === undefined) continue;
-        if (carried.has(id)) {
-          expect(apart(state, was[0], was[1], now[0], now[1])).toBeLessThanOrEqual(
-            testHuman.display.carry + 1e-4,
-          );
+        const slot = state.people.slotOf(id);
+        if (carried.has(id) && slot !== undefined && intention(state, slot) !== CARRIED) {
+          const offset = Math.round(carriedSide(id) * testHuman.display.carry * FIXED);
+          const drawn = wrapFixedX(was[0] + offset, width);
+          const dry = Number.isFinite(state.cost[cellOf(drawn, was[1], width)] ?? Number.NaN);
+          expect(now, String(id)).toEqual([dry ? drawn : was[0], was[1]]);
+          released++;
+          if (state.people.slotOf(state.people.get('mother', slot)) === undefined) orphans++;
         } else {
           expect(now, String(id)).toEqual(was);
           kept++;
@@ -588,6 +597,8 @@ describe('mouvement des individus : vie, mort et changements de groupe (ADR 0014
     }
     expect(deaths).toBeGreaterThan(20);
     expect(kept).toBeGreaterThan(10_000);
+    expect(released).toBeGreaterThan(5);
+    expect(orphans).toBeGreaterThan(0);
   });
 
   it('situe un groupe à travers la couture, et prend pour guide son meneur, sinon l’aîné', () => {
