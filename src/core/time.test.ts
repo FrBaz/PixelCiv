@@ -1,10 +1,16 @@
 import { describe, expect, it } from 'vitest';
 import {
+  batchDays,
   dateOfTick,
   dateOfTime,
+  dayDuration,
   dayIndex,
   DAYS_PER_MONTH,
   DAYS_PER_YEAR,
+  daysDuration,
+  daysIn,
+  MAX_BATCH_DAYS,
+  MIN_BATCH_MS,
   monthDuration,
   MONTHS_PER_YEAR,
   SPEEDS,
@@ -46,13 +52,31 @@ describe('instants au jour près (ADR 0013)', () => {
   });
 });
 
-describe('monthDuration', () => {
-  it('fait durer une année 10 s en vitesse normale', () => {
-    expect(monthDuration('normal') * MONTHS_PER_YEAR).toBeCloseTo(10_000);
+describe('durées (2b.2)', () => {
+  it('fait durer une année 40 s en vitesse normale, 80 s, 10 s et 2,5 s aux autres', () => {
+    expect(monthDuration('normal') * MONTHS_PER_YEAR).toBeCloseTo(40_000);
+    expect(dayDuration('normal') * DAYS_PER_YEAR).toBeCloseTo(40_000);
+    // D'un bloc, 360 jours font une année pile, sans erreur d'arrondi.
+    expect(SPEEDS.map((speed) => daysDuration(DAYS_PER_YEAR, speed))).toEqual([
+      80_000, 40_000, 10_000, 2_500,
+    ]);
+    for (const speed of SPEEDS) {
+      expect(daysIn(daysDuration(17.25, speed), speed)).toBeCloseTo(17.25, 12);
+      expect(daysDuration(1, speed)).toBeCloseTo(dayDuration(speed), 12);
+      expect(daysDuration(DAYS_PER_MONTH, speed)).toBeCloseTo(monthDuration(speed), 9);
+    }
   });
 
   it('va de la plus lente à la plus rapide', () => {
     const durations = SPEEDS.map(monthDuration);
     expect([...durations].sort((a, b) => b - a)).toEqual(durations);
+  });
+
+  it('regroupe un jour par lot à ×½, ×1 et ×4, trois à ×16, pour un lot d’au moins 16 ms', () => {
+    expect(SPEEDS.map(batchDays)).toEqual([1, 1, 1, 3]);
+    for (const speed of SPEEDS) {
+      expect(daysDuration(batchDays(speed), speed)).toBeGreaterThanOrEqual(MIN_BATCH_MS);
+      expect(batchDays(speed)).toBeLessThanOrEqual(MAX_BATCH_DAYS);
+    }
   });
 });

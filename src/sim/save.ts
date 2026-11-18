@@ -40,7 +40,8 @@ import { Population } from './population';
 import { migrateChronicle, restorePeople, savePeople } from './populationSave';
 import { emptySociety, type Society } from './society';
 import { rebuildPositions, type SimState } from './state';
-import { DayPositions, Walks, type WalkArrays } from './walks';
+import type { WalkArrays } from '../core/walk';
+import { DayPositions, Walks } from './walks';
 
 /**
  * Stocks de nourriture d'une sauvegarde : la liste des cases entamées, sans doublon, et

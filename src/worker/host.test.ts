@@ -7,12 +7,26 @@ import {
   PROTOCOL_VERSION,
   type ChronicleView,
   type GameCommand,
+  type GroupsFrame,
+  type LoggedCommand,
   type SpawnGroupCommand,
-  type WorkerMessage,
 } from '../core/protocol';
 import { readSave, SaveError } from '../core/save/format';
-import { monthDuration, NORMAL_MONTH_MS } from '../core/time';
+import {
+  batchDays,
+  dayIndex,
+  DAYS_PER_MONTH,
+  daysDuration,
+  MAX_BATCH_DAYS,
+  MIN_BATCH_MS,
+  monthDuration,
+  NORMAL_DAY_MS,
+  NORMAL_MONTH_MS,
+  SPEEDS,
+  type GameTime,
+} from '../core/time';
 import { CHUNK_SIZE, GENERATION_STAGES, LAYER_NAMES } from '../core/world';
+import { replay } from '../sim/replay';
 import { MIGRATIONS, restoreState } from '../sim/save';
 import { fingerprint } from '../sim/step';
 import {
@@ -24,18 +38,10 @@ import {
   testState,
   testWorld,
 } from '../sim/testing';
-import { generateWorld } from '../worldgen/generate';
-import { SimulationHost, type HostEnvironment, type WorldGenerator } from './host';
+import { SimulationHost, type HostEnvironment } from './host';
+import { FakeEnvironment, testGenerator } from './testing';
 
-/**
- * Générateur des tests : le monde Petit de la graine, généré une fois pour toutes ; les
- * aperçus, plus petits, se génèrent vraiment.
- */
-const generate: WorldGenerator = (params, onStage) => {
-  for (const stage of GENERATION_STAGES) onStage(stage);
-  if (params.size.width === 512) return testWorld(params.seed);
-  return generateWorld(params, testData);
-};
+const generate = testGenerator;
 
 function newHost(env: HostEnvironment, data: GameData = testData): SimulationHost {
   return new SimulationHost(env, data, generate);
@@ -55,67 +61,6 @@ function paint(cell: { x: number; y: number }, biome = 'desert'): GameCommand {
   return { type: 'paintBiome', x: cell.x, y: cell.y, biome };
 }
 
-/** Imitation du worker : horloge, minuteries et messages sous contrôle du test. */
-class FakeEnvironment implements HostEnvironment {
-  time = 0;
-  /** Avance de l'horloge à chaque lecture : une attente active finit donc par aboutir. */
-  advancePerRead = 0;
-  /** Durée de l'envoi d'un delta, comme la copie d'une grosse image : l'horloge avance d'autant. */
-  deltaCost = 0;
-  readonly sent: { message: WorkerMessage; transfer: Transferable[] }[] = [];
-  private readonly timers = new Map<number, { at: number; callback: () => void }>();
-  private nextHandle = 1;
-
-  /**
-   * Comme un vrai worker, un message posté est cloné et ses tampons transférés : ceux
-   * de l'hôte sont détachés, et une couche envoyée sans copie le trahirait.
-   */
-  post(message: WorkerMessage, transfer: Transferable[]): void {
-    this.sent.push({ message: structuredClone(message, { transfer }), transfer });
-    if (message.type === 'delta') this.time += this.deltaCost;
-  }
-
-  now(): number {
-    const time = this.time;
-    this.time += this.advancePerRead;
-    return time;
-  }
-
-  setTimer(callback: () => void, delay: number): number {
-    const handle = this.nextHandle++;
-    this.timers.set(handle, { at: this.time + delay, callback });
-    return handle;
-  }
-
-  clearTimer(handle: number): void {
-    this.timers.delete(handle);
-  }
-
-  /** Fait passer `milliseconds`, en déclenchant dans l'ordre les minuteries échues. */
-  advance(milliseconds: number): void {
-    const end = this.time + milliseconds;
-    for (;;) {
-      const due = [...this.timers.entries()]
-        .filter(([, timer]) => timer.at <= end)
-        .sort(([, a], [, b]) => a.at - b.at)
-        .at(0);
-      if (due === undefined) break;
-      const [handle, timer] = due;
-      this.timers.delete(handle);
-      this.time = Math.max(this.time, timer.at);
-      timer.callback();
-    }
-    this.time = Math.max(this.time, end);
-  }
-
-  /** Messages envoyés d'un type donné. */
-  messages<T extends WorkerMessage['type']>(type: T): Extract<WorkerMessage, { type: T }>[] {
-    return this.sent
-      .map((entry) => entry.message)
-      .filter((message): message is Extract<WorkerMessage, { type: T }> => message.type === type);
-  }
-}
-
 function greetedHost(data: GameData = testData) {
   const env = new FakeEnvironment();
   const host = newHost(env, data);
@@ -128,6 +73,31 @@ async function startedHost(seed = 'graine', data: GameData = testData) {
   host.receive({ type: 'newGame', params: testParams(seed) });
   await host.idle();
   return { env, host };
+}
+
+/** La dernière image des groupes envoyée, par l'instantané ou par un delta. */
+function lastFrame(env: FakeEnvironment): GroupsFrame | undefined {
+  let frame: GroupsFrame | undefined;
+  for (const { message } of env.sent) {
+    if (message.type === 'snapshot') frame = message.frame;
+    if (message.type === 'delta' && message.frame !== undefined) frame = message.frame;
+  }
+  return frame;
+}
+
+/** Instant du dernier état envoyé, en jours écoulés (dayIndex). */
+function lastInstant(env: FakeEnvironment): number {
+  let instant = 0;
+  for (const { message } of env.sent) {
+    if (message.type === 'snapshot' || message.type === 'delta') instant = dayIndex(message.time);
+  }
+  return instant;
+}
+
+/** Instant (mois, jour) du dernier delta. */
+function lastTime(env: FakeEnvironment): [number, number] | undefined {
+  const time = env.messages('delta').at(-1)?.time;
+  return time === undefined ? undefined : [time.tick, time.day];
 }
 
 describe('poignée de main', () => {
@@ -196,8 +166,10 @@ describe('partie', () => {
     expect(snapshot?.world).toEqual({ params: testParams(), size: { width: 512, height: 256 } });
     expect(snapshot?.layers.biome).toEqual(testWorld().biome);
     const entry = env.sent.find((sent) => sent.message.type === 'snapshot');
-    // Les couches du monde, plus les deux tableaux de l'image des groupes.
-    expect(entry?.transfer).toHaveLength(LAYER_NAMES.length + 2);
+    // Les couches du monde, plus les deux tableaux de l'image des groupes et les cinq des
+    // marches du mois.
+    expect(entry?.transfer).toHaveLength(LAYER_NAMES.length + 7);
+    expect(snapshot?.time).toEqual({ tick: 0, day: 0, paused: false, speed: 'normal' });
     expect(entry?.transfer.every((buffer) => buffer instanceof ArrayBuffer)).toBe(true);
   });
 
@@ -221,13 +193,14 @@ describe('partie', () => {
     expect(env.messages('snapshot')).toEqual([]);
   });
 
-  it("avance d'un pas par mois, et n'envoie que les blocs modifiés", async () => {
+  it("avance d'un jour à chaque échéance, et n'envoie que les blocs modifiés", async () => {
     const { env, host } = await startedHost();
     const cell = landCell();
     host.receive({ type: 'game', command: paint(cell) });
-    env.advance(NORMAL_MONTH_MS);
+    env.advance(NORMAL_DAY_MS);
     const delta = env.messages('delta').at(0);
-    expect(delta?.time.tick).toBe(1);
+    expect(delta?.time).toEqual({ tick: 0, day: 1, paused: false, speed: 'normal' });
+    expect(delta?.days).toBe(1);
     expect(delta?.chunks).toHaveLength(1);
     const patch = delta?.chunks.at(0);
     expect(patch?.column).toBe(Math.floor(cell.x / CHUNK_SIZE));
@@ -235,31 +208,56 @@ describe('partie', () => {
     expect(patch?.biome[(cell.y % CHUNK_SIZE) * CHUNK_SIZE + (cell.x % CHUNK_SIZE)]).toBe(
       testData.biomes.indexOf('desert'),
     );
-    env.advance(NORMAL_MONTH_MS);
+    env.advance(NORMAL_DAY_MS);
     expect(env.messages('delta').at(1)?.chunks).toEqual([]);
+    expect(lastTime(env)).toEqual([0, 2]);
   });
 
-  it('fait durer une année environ 10 s', async () => {
-    const { env } = await startedHost();
-    env.advance(10_000);
-    expect(env.messages('delta').at(-1)?.time.tick).toBe(12);
+  it('fait durer une année exactement 80 s, 40 s, 10 s et 2,5 s', async () => {
+    for (const [speed, year] of [
+      ['slow', 80_000],
+      ['normal', 40_000],
+      ['fast', 10_000],
+      ['faster', 2_500],
+    ] as const) {
+      const { env, host } = await startedHost();
+      host.receive({ type: 'setSpeed', speed });
+      env.advance(year - 1);
+      expect(lastTime(env), speed).not.toEqual([12, 0]);
+      env.advance(1);
+      expect(lastTime(env), speed).toEqual([12, 0]);
+      expect(env.messages('delta').reduce((sum, delta) => sum + delta.days, 0)).toBe(360);
+      // Les douze pas mensuels tombent chacun à l'échéance de leur jour, sans dérive.
+      const months = env.timed('delta').filter(({ message }) => message.frame !== undefined);
+      expect(months.map(({ at }) => at)).toEqual(
+        months.map((_, month) => daysDuration((month + 1) * DAYS_PER_MONTH, speed)),
+      );
+    }
   });
 
-  it('mesure la durée des pas, coût factice compris', async () => {
+  it('mesure la durée des lots, du jour et du pas mensuel, coût factice compris', async () => {
     const { env, host } = await startedHost();
     host.receive({ type: 'debugStepCost', milliseconds: 200 });
-    env.advancePerRead = 1;
-    env.advance(NORMAL_MONTH_MS);
-    const stats = env.messages('stats').at(0)?.stats;
-    expect(stats?.stepMs).toBeGreaterThanOrEqual(200);
-    expect(stats?.stepMs).toBeLessThan(210);
+    env.advancePerRead = 0.01;
+    env.advance(NORMAL_MONTH_MS + 50);
+    const stats = env.messages('stats');
+    expect(stats.map((entry) => entry.stats.days)).toEqual(stats.map(() => 1));
+    expect(stats).toHaveLength(DAYS_PER_MONTH);
+    const daily = stats.slice(0, -1);
+    expect(daily.every((entry) => entry.stats.monthMs === undefined)).toBe(true);
+    expect(daily.every((entry) => (entry.stats.dayMs ?? 1) < 1)).toBe(true);
+    const monthly = stats.at(-1)?.stats;
+    expect(monthly?.monthMs).toBeGreaterThanOrEqual(200);
+    expect(monthly?.monthMs).toBeLessThan(205);
+    expect(monthly?.dayMs).toBeUndefined();
+    expect(monthly?.batchMs).toBeGreaterThanOrEqual(monthly?.monthMs ?? Number.NaN);
   });
 
-  it("compte dans la durée du pas son delta, jusqu'à son envoi (W-11)", async () => {
+  it("compte dans la durée du lot son delta, jusqu'à son envoi (W-11)", async () => {
     const { env } = await startedHost();
     env.deltaCost = 40;
-    env.advance(NORMAL_MONTH_MS);
-    expect(env.messages('stats').at(0)?.stats.stepMs).toBeGreaterThanOrEqual(40);
+    env.advance(NORMAL_DAY_MS);
+    expect(env.messages('stats').at(0)?.stats.batchMs).toBeGreaterThanOrEqual(40);
   });
 });
 
@@ -303,81 +301,160 @@ describe('temps', () => {
   it('se met en pause, puis reprend', async () => {
     const { env, host } = await startedHost();
     host.receive({ type: 'setPaused', paused: true });
-    expect(env.messages('time').at(-1)?.time).toEqual({ tick: 0, paused: true, speed: 'normal' });
+    expect(env.messages('time').at(-1)?.time).toEqual({
+      tick: 0,
+      day: 0,
+      paused: true,
+      speed: 'normal',
+    });
     env.advance(5_000);
     expect(env.messages('delta')).toEqual([]);
     host.receive({ type: 'setPaused', paused: false });
-    env.advance(NORMAL_MONTH_MS);
-    expect(env.messages('delta').map((delta) => delta.time.tick)).toEqual([1]);
+    env.advance(NORMAL_DAY_MS);
+    expect(env.messages('delta').map((delta) => [delta.time.tick, delta.time.day])).toEqual([
+      [0, 1],
+    ]);
   });
 
-  it('avance plus vite en vitesse rapide', async () => {
+  it('envoie un delta par jour à ×1, et à ×16 un lot de trois jours toutes les 16 ms au moins', async () => {
     const { env, host } = await startedHost();
-    host.receive({ type: 'setSpeed', speed: 'fast' });
-    env.advance(10_000 / 4);
-    expect(env.messages('delta').at(-1)?.time).toEqual({ tick: 12, paused: false, speed: 'fast' });
+    env.advance(NORMAL_MONTH_MS);
+    const daily = env.timed('delta');
+    expect(daily).toHaveLength(DAYS_PER_MONTH);
+    expect(daily.map(({ message }) => message.days)).toEqual(daily.map(() => 1));
+    daily.forEach(({ at }, index) => {
+      expect(at).toBeCloseTo((index + 1) * NORMAL_DAY_MS, 9);
+    });
+    host.receive({ type: 'setSpeed', speed: 'faster' });
+    env.advance(daysDuration(4 * DAYS_PER_MONTH, 'faster'));
+    const batches = env.timed('delta').slice(DAYS_PER_MONTH);
+    expect(batches.length).toBeGreaterThan(30);
+    for (let index = 1; index < batches.length; index++) {
+      const gap = (batches[index]?.at ?? 0) - (batches[index - 1]?.at ?? 0);
+      expect(gap).toBeGreaterThanOrEqual(MIN_BATCH_MS);
+    }
+    const days = batches.map(({ message }) => message.days);
+    expect(days.every((count) => count === 2 || count === 3)).toBe(true);
+    expect(days.filter((count) => count === 3).length).toBeGreaterThan(days.length * 0.8);
+    // Une soixantaine de lots par seconde au plus : 48 à ×16.
+    expect((batches.length * 1000) / daysDuration(4 * DAYS_PER_MONTH, 'faster')).toBeLessThan(
+      1000 / MIN_BATCH_MS,
+    );
   });
 
-  it("n'avance que d'un pas à la demande, et seulement en pause", async () => {
+  it("n'avance que d'un jour à la demande, et seulement en pause, pas mensuel compris le trentième", async () => {
     const { env, host } = await startedHost();
     host.receive({ type: 'stepOnce' });
     expect(env.messages('delta')).toEqual([]);
     host.receive({ type: 'setPaused', paused: true });
     host.receive({ type: 'stepOnce' });
-    expect(env.messages('delta').map((delta) => delta.time.tick)).toEqual([1]);
+    expect(lastTime(env)).toEqual([0, 1]);
+    expect(env.messages('delta').at(-1)?.days).toBe(1);
+    for (let day = 2; day < DAYS_PER_MONTH; day++) host.receive({ type: 'stepOnce' });
+    expect(lastTime(env)).toEqual([0, DAYS_PER_MONTH - 1]);
+    expect(env.messages('delta').filter((delta) => delta.frame !== undefined)).toEqual([]);
+    host.receive({ type: 'stepOnce' });
+    expect(lastTime(env)).toEqual([1, 0]);
+    expect(env.messages('delta').at(-1)?.frame).toBeDefined();
+    expect(env.messages('stats').at(-1)?.stats.monthMs).toBeDefined();
+    // Le jour suivant durera un jour entier à la reprise.
+    host.receive({ type: 'setPaused', paused: false });
+    env.advance(NORMAL_DAY_MS - 1);
+    expect(lastTime(env)).toEqual([1, 0]);
+    env.advance(1);
+    expect(lastTime(env)).toEqual([1, 1]);
   });
 
-  it('ne rattrape pas son retard par rafales', async () => {
+  it('ne rattrape pas son retard par rafales : un pas mensuel de 200 ms à ×16', async () => {
     const { env, host } = await startedHost();
     host.receive({ type: 'setSpeed', speed: 'faster' });
     host.receive({ type: 'debugStepCost', milliseconds: 200 });
-    env.advancePerRead = 1;
-    env.advance(2_000);
-    // Un pas de 200 ms tous les 52 ms demandés : la simulation va aussi vite qu'elle peut.
-    const steps = env.messages('delta').length;
-    expect(monthDuration('faster')).toBeLessThan(200);
-    expect(steps).toBeGreaterThanOrEqual(8);
-    expect(steps).toBeLessThanOrEqual(11);
+    env.advancePerRead = 0.01;
+    env.advance(3_000);
+    const batches = env.timed('delta');
+    // Jamais plus de huit jours par lot, ni deux lots à moins de 16 ms l'un de l'autre. Le
+    // pas laisse plus de seize jours de retard : l'hôte repart de maintenant, et les lots
+    // suivants gardent leurs trois jours, sans rafale de rattrapage.
+    const days = batches.map(({ message }) => message.days);
+    expect(Math.max(...days)).toBeLessThanOrEqual(MAX_BATCH_DAYS);
+    expect(Math.max(...days)).toBe(batchDays('faster'));
+    for (let index = 1; index < batches.length; index++) {
+      const gap = (batches[index]?.at ?? 0) - (batches[index - 1]?.at ?? 0);
+      expect(gap).toBeGreaterThanOrEqual(MIN_BATCH_MS - 1e-6);
+    }
+    // Un pas de 200 ms, un mois de 208 ms à ×16 : la partie va aussi vite qu'elle le peut.
+    expect(monthDuration('faster')).toBeLessThan(400);
+    const months = batches.filter(({ message }) => message.frame !== undefined).length;
+    expect(months).toBeGreaterThanOrEqual(6);
+    expect(months).toBeLessThan(12);
+  });
+
+  it('garde la durée de l’année à ×16 malgré un pas mensuel de 52 ms', async () => {
+    const { env, host } = await startedHost();
+    host.receive({ type: 'setSpeed', speed: 'faster' });
+    host.receive({ type: 'debugStepCost', milliseconds: 52 });
+    env.advancePerRead = 0.01;
+    env.advance(2_600);
+    expect(lastInstant(env)).toBeGreaterThanOrEqual(12 * DAYS_PER_MONTH);
+    // Chaque pas mensuel commence à l'échéance de son jour, à un lot près : le retard
+    // d'un pas se rattrape avant le suivant, au plus huit jours par lot, et ne s'ajoute pas
+    // de mois en mois.
+    const months = env.timed('delta').filter(({ message }) => message.frame !== undefined);
+    expect(months).toHaveLength(12);
+    const lot = MIN_BATCH_MS + daysDuration(1, 'faster');
+    months.forEach(({ at }, month) => {
+      const due = daysDuration((month + 1) * DAYS_PER_MONTH, 'faster');
+      expect(at - 52).toBeGreaterThanOrEqual(due - 1);
+      expect(at - 52).toBeLessThan(due + lot + 1);
+    });
+    expect(Math.max(...env.messages('delta').map((delta) => delta.days))).toBeLessThanOrEqual(
+      MAX_BATCH_DAYS,
+    );
   });
 });
 
 describe('commandes de jeu', () => {
-  it("s'appliquent au début du pas suivant", async () => {
+  it("s'appliquent au début du jour suivant, qui les journalise", async () => {
     const { env, host } = await startedHost();
-    env.advance(NORMAL_MONTH_MS * 3);
+    env.advance(NORMAL_DAY_MS * 3);
     host.receive({ type: 'game', command: paint(landCell(), 'desert') });
     expect(env.messages('delta').at(-1)?.chunks).toEqual([]);
-    env.advance(NORMAL_MONTH_MS);
-    expect(env.messages('delta').at(-1)?.time.tick).toBe(4);
+    expect(env.messages('delta')).toHaveLength(3);
+    env.advance(NORMAL_DAY_MS);
+    expect(lastTime(env)).toEqual([0, 4]);
     expect(env.messages('delta').at(-1)?.chunks).toHaveLength(1);
+    // Un coup de pinceau ne change pas l'image des groupes : elle ne part pas.
+    expect(env.messages('delta').at(-1)?.frame).toBeUndefined();
+    const log = (await savedState(env, host, 1)).json as { commandLog: unknown[] };
+    expect(log.commandLog).toEqual([{ tick: 0, day: 3, command: paint(landCell(), 'desert') }]);
   });
 
-  it("s'appliquent dès leur réception en pause, comme au début du pas suivant (U-7)", async () => {
+  it("s'appliquent dès leur réception en pause, à l'instant courant (U-7)", async () => {
     const commands = spawns(2);
-    // En pause : chaque groupe apparaît aussitôt, dans un delta sans pas, au même mois.
+    // En pause : chaque groupe apparaît aussitôt, dans un delta sans jour, au même instant.
     const { env, host } = await startedHost();
     host.receive({ type: 'setPaused', paused: true });
     for (const [rank, command] of commands.entries()) {
       host.receive({ type: 'game', command });
       const delta = env.messages('delta').at(-1);
       expect(env.messages('delta')).toHaveLength(rank + 1);
-      expect(delta?.time).toEqual({ tick: 0, paused: true, speed: 'normal' });
-      expect(delta?.frame.groups).toHaveLength((rank + 1) * GROUP_STRIDE);
+      expect(delta?.time).toEqual({ tick: 0, day: 0, paused: true, speed: 'normal' });
+      expect(delta?.days).toBe(0);
+      expect(delta?.frame?.groups).toHaveLength((rank + 1) * GROUP_STRIDE);
       expect(delta?.chronicle.map((fact) => fact.kind)).toEqual(['groupAppeared']);
     }
     expect(env.messages('stats')).toEqual([]);
-    // Hors pause, les mêmes commandes attendent le premier pas.
+    // Hors pause, les mêmes commandes attendent le premier jour.
     const { env: running, host: other } = await startedHost();
     for (const command of commands) other.receive({ type: 'game', command });
     expect(running.messages('delta')).toEqual([]);
     // Trois mois plus tard, les deux parties n'en font qu'une : mêmes groupes, même état,
-    // même journal, où les commandes datent du premier pas.
-    for (let month = 0; month < 3; month++) host.receive({ type: 'stepOnce' });
+    // même journal, où les commandes datent du premier instant.
+    for (let day = 0; day < 3 * DAYS_PER_MONTH; day++) host.receive({ type: 'stepOnce' });
     running.advance(NORMAL_MONTH_MS * 3);
-    const last = (environment: FakeEnvironment) => environment.messages('delta').at(-1);
-    expect(last(env)?.time.tick).toBe(3);
-    expect(last(running)?.time.tick).toBe(3);
-    expect(last(env)?.frame).toEqual(last(running)?.frame);
+    expect(lastTime(env)).toEqual([3, 0]);
+    expect(lastTime(running)).toEqual([3, 0]);
+    expect(lastFrame(env)).toEqual(lastFrame(running));
     const paused = await savedState(env, host, 1);
     expect(paused).toEqual(await savedState(running, other, 1));
     expect((paused.json as { commandLog: unknown }).commandLog).toEqual(
@@ -385,13 +462,13 @@ describe('commandes de jeu', () => {
     );
   });
 
-  it("s'appliquent à la mise en pause si elles attendaient encore leur pas (U-7)", async () => {
+  it("s'appliquent à la mise en pause si elles attendaient encore leur jour (U-7)", async () => {
     const { env, host } = await startedHost();
     for (const command of spawns(1)) host.receive({ type: 'game', command });
     expect(env.messages('delta')).toEqual([]);
     host.receive({ type: 'setPaused', paused: true });
-    expect(env.messages('delta').at(-1)?.time.tick).toBe(0);
-    expect(env.messages('delta').at(-1)?.frame.groups).toHaveLength(GROUP_STRIDE);
+    expect(lastTime(env)).toEqual([0, 0]);
+    expect(env.messages('delta').at(-1)?.frame?.groups).toHaveLength(GROUP_STRIDE);
   });
 });
 
@@ -405,7 +482,7 @@ describe('fiches (IHM-02)', () => {
     host.receive({ type: 'setPaused', paused: true });
     for (const command of spawns(1)) host.receive({ type: 'game', command });
     host.receive({ type: 'stepOnce' });
-    const id = env.messages('delta').at(-1)?.frame.groups[0] ?? 0;
+    const id = lastFrame(env)?.groups[0] ?? 0;
     host.receive({ type: 'inspect', requestId: 2, target: { kind: 'group', id } });
     const group = env.messages('inspection').at(-1);
     expect(group).toMatchObject({ requestId: 2, group: { id, size: 12 } });
@@ -450,14 +527,14 @@ describe("apparition d'un groupe (CRE-03)", () => {
     ];
     for (const command of refused) host.receive({ type: 'game', command });
     expect(env.messages('error').map((error) => error.code)).toEqual(refused.map(() => 'command'));
-    // Rien n'attend ni n'entre au journal : le pas suivant ne fait apparaître personne.
+    // Rien n'attend ni n'entre au journal : le jour suivant ne fait apparaître personne.
     host.receive({ type: 'stepOnce' });
-    expect(env.messages('delta').at(-1)?.frame.groups).toHaveLength(0);
+    expect(lastFrame(env)?.groups).toHaveLength(0);
     expect(env.messages('delta').at(-1)?.chronicle).toEqual([]);
     expect(await logOf(env, host, 1)).toMatchObject({ commandLog: [], pending: [] });
     // La même apparition, sur sa case de terre : en pause, le groupe apparaît aussitôt (U-7).
     host.receive({ type: 'game', command: valid });
-    expect(env.messages('delta').at(-1)?.frame.groups).toHaveLength(GROUP_STRIDE);
+    expect(env.messages('delta').at(-1)?.frame?.groups).toHaveLength(GROUP_STRIDE);
     expect(
       env
         .messages('delta')
@@ -486,9 +563,10 @@ describe("apparition d'un groupe (CRE-03)", () => {
     expect(env.messages('error').map((error) => error.code)).toEqual(['command']);
     expect(env.messages('error').at(0)?.detail).toContain('spawnGroup');
     // La partie continue, à sa cadence, sans groupe ni fait ; la commande n'est pas au journal.
-    expect(env.messages('delta').map((delta) => delta.time.tick)).toEqual([1, 2, 3]);
+    expect(env.messages('delta')).toHaveLength(3 * DAYS_PER_MONTH);
+    expect(lastTime(env)).toEqual([3, 0]);
     for (const delta of env.messages('delta')) {
-      expect(delta.frame.groups).toHaveLength(0);
+      expect(delta.frame?.groups ?? []).toHaveLength(0);
       expect(delta.chronicle).toEqual([]);
     }
     expect(await logOf(env, host, 1)).toMatchObject({ commandLog: [], pending: [] });
@@ -642,15 +720,15 @@ describe('sauvegarde', () => {
       const { env, host } = await startedHost();
       env.advance(NORMAL_MONTH_MS * 2);
       play(host);
-      // La commande est au journal, au pas même de la sauvegarde, et rien n'attend plus.
+      // La commande est au journal, à l'instant même de la sauvegarde, et rien n'attend plus.
       const saved = await saveOf(env, host, 1);
       const json = (await readSave(new Uint8Array(saved.data), MIGRATIONS)).json as {
-        readonly commandLog: readonly { readonly tick: number }[];
+        readonly commandLog: readonly { readonly tick: number; readonly day: number }[];
         readonly pending: readonly unknown[];
       };
-      const logged = json.commandLog.map((entry) => entry.tick);
+      const logged = json.commandLog.map((entry) => [entry.tick, entry.day]);
       expect(saved.meta.tick, label).toBe(2);
-      expect(logged, label).toEqual([2]);
+      expect(logged, label).toEqual([[2, 0]]);
       expect(json.pending, label).toEqual([]);
       // Un autre hôte la charge, puis les deux parties avancent de trois mois : même image
       // des groupes, même état.
@@ -660,13 +738,13 @@ describe('sauvegarde', () => {
       await until(() => other.messages('loaded').length + other.messages('loadFailed').length > 0);
       expect(other.messages('loadFailed'), label).toEqual([]);
       expect(other.messages('loaded'), label).toEqual([{ type: 'loaded', requestId: 2 }]);
-      for (let month = 0; month < 3; month++) {
+      for (let day = 0; day < 3 * DAYS_PER_MONTH; day++) {
         host.receive({ type: 'stepOnce' });
         loader.receive({ type: 'stepOnce' });
       }
       expect(last(other)?.time.tick, label).toBe(5);
-      expect(last(other)?.frame.groups, label).toHaveLength(groups * GROUP_STRIDE);
-      expect(last(other)?.frame, label).toEqual(last(env)?.frame);
+      expect(lastFrame(other)?.groups, label).toHaveLength(groups * GROUP_STRIDE);
+      expect(lastFrame(other), label).toEqual(lastFrame(env));
       expect(await fingerprintOf(other, loader, 3), label).toBe(await fingerprintOf(env, host, 3));
     }
   });
@@ -852,35 +930,174 @@ describe('file des opérations', () => {
 });
 
 describe('cadence', () => {
-  it('ne retarde pas le pas quand la vitesse ou la reprise ne changent rien', async () => {
+  it('ne retarde pas le jour quand la vitesse ou la reprise ne changent rien', async () => {
     const { env, host } = await startedHost();
-    for (let month = 0; month < 18; month++) {
-      env.advance(NORMAL_MONTH_MS * 0.9);
+    for (let day = 0; day < 18; day++) {
+      env.advance(NORMAL_DAY_MS * 0.9);
       host.receive({ type: 'setSpeed', speed: 'normal' });
       host.receive({ type: 'setPaused', paused: false });
     }
-    // 18 × 0,9 mois de temps réel : 16 pas.
+    // 18 × 0,9 jour de temps réel : 16 jours.
     expect(env.messages('delta')).toHaveLength(16);
   });
 
-  it("garde l'avancée du mois à travers une pause", async () => {
+  it('garde le reste du jour à travers une pause', async () => {
     const { env, host } = await startedHost();
-    env.advance(NORMAL_MONTH_MS * 0.75);
+    env.advance(NORMAL_DAY_MS * 0.75);
     host.receive({ type: 'setPaused', paused: true });
-    env.advance(NORMAL_MONTH_MS * 10);
+    env.advance(NORMAL_DAY_MS * 10);
     host.receive({ type: 'setPaused', paused: false });
-    env.advance(NORMAL_MONTH_MS * 0.3);
-    expect(env.messages('delta').map((delta) => delta.time.tick)).toEqual([1]);
+    env.advance(NORMAL_DAY_MS * 0.24);
+    expect(env.messages('delta')).toEqual([]);
+    env.advance(NORMAL_DAY_MS * 0.02);
+    expect(env.messages('delta').map((delta) => [delta.time.tick, delta.time.day])).toEqual([
+      [0, 1],
+    ]);
   });
 
-  it('change de vitesse au prorata du mois restant', async () => {
+  it('change de vitesse au prorata du jour restant', async () => {
     const { env, host } = await startedHost();
-    env.advance(NORMAL_MONTH_MS / 2);
+    env.advance(NORMAL_DAY_MS / 2);
     host.receive({ type: 'setSpeed', speed: 'fast' });
-    // Il restait un demi-mois en vitesse normale, soit un huitième de mois à ×4.
-    env.advance(NORMAL_MONTH_MS / 8 - 1);
+    // Il restait un demi-jour en vitesse normale, soit un huitième de jour à ×4.
+    env.advance(NORMAL_DAY_MS / 8 - 1);
     expect(env.messages('delta')).toEqual([]);
     env.advance(2);
     expect(env.messages('delta')).toHaveLength(1);
+    // En pause, le changement de vitesse garde aussi l'avancée du jour.
+    const { env: other, host: paused } = await startedHost();
+    paused.receive({ type: 'setSpeed', speed: 'fast' });
+    other.advance(daysDuration(0.5, 'fast'));
+    paused.receive({ type: 'setPaused', paused: true });
+    paused.receive({ type: 'setSpeed', speed: 'slow' });
+    paused.receive({ type: 'setPaused', paused: false });
+    other.advance(daysDuration(0.5, 'slow') - 1);
+    expect(other.messages('delta')).toEqual([]);
+    other.advance(2);
+    expect(other.messages('delta')).toHaveLength(1);
+  });
+});
+
+describe('deux horloges (ADR 0013)', () => {
+  /**
+   * Joue la partie jusqu'à l'instant `target` : à sa vitesse tant qu'il reste plus de huit
+   * jours, un lot n'en faisant pas plus, puis en pause, jour par jour.
+   */
+  function reach(env: FakeEnvironment, host: SimulationHost, target: GameTime): void {
+    const goal = dayIndex(target);
+    host.receive({ type: 'setPaused', paused: false });
+    while (lastInstant(env) < goal - MAX_BATCH_DAYS) env.advance(1);
+    host.receive({ type: 'setPaused', paused: true });
+    expect(lastInstant(env)).toBeLessThanOrEqual(goal);
+    while (lastInstant(env) < goal) host.receive({ type: 'stepOnce' });
+    expect(lastInstant(env)).toBe(goal);
+  }
+
+  it('donne le même état au même instant à ×½, ×1, ×4 et ×16, pauses et changements de vitesse compris', async () => {
+    const commands = spawns(6, 20);
+    const plan: [GameTime, GameCommand[]][] = [
+      [{ tick: 0, day: 12 }, commands.slice(0, 3)],
+      [{ tick: 1, day: 29 }, commands.slice(3, 5)],
+      [{ tick: 2, day: 9 }, [paint(landCell()), ...commands.slice(5)]],
+    ];
+    const end: GameTime = { tick: 4, day: 3 };
+    const prints: string[] = [];
+    let log: unknown;
+    for (const speed of SPEEDS) {
+      const { env, host } = await startedHost();
+      host.receive({ type: 'setSpeed', speed });
+      const other = speed === 'faster' ? 'slow' : 'faster';
+      for (const [instant, due] of plan) {
+        // En cours de jour : une pause, une reprise, un détour par une autre vitesse.
+        host.receive({ type: 'setPaused', paused: false });
+        env.advance(daysDuration(0.4, speed));
+        host.receive({ type: 'setPaused', paused: true });
+        env.advance(500);
+        host.receive({ type: 'setPaused', paused: false });
+        host.receive({ type: 'setSpeed', speed: other });
+        env.advance(daysDuration(0.3, other));
+        host.receive({ type: 'setSpeed', speed });
+        reach(env, host, instant);
+        // En pause, les commandes s'appliquent à l'instant même.
+        for (const command of due) host.receive({ type: 'game', command });
+      }
+      reach(env, host, end);
+      const saved = await savedState(env, host, 1);
+      expect([saved.meta.tick, (saved.json as { day: number }).day], speed).toEqual([4, 3]);
+      log ??= (saved.json as { commandLog: unknown }).commandLog;
+      expect((saved.json as { commandLog: unknown }).commandLog, speed).toEqual(log);
+      prints.push(fingerprint(restoreState(saved, testData)));
+    }
+    expect(new Set(prints).size).toBe(1);
+    // Le même journal, rejoué jour par jour, redonne cet état.
+    const replayed = replay(testParams(), testWorld(), log as LoggedCommand[], end, testData);
+    expect(fingerprint(replayed)).toBe(prints[0]);
+  });
+
+  it('se rejoue au jour près, commandes reçues en marche et en pause comprises', async () => {
+    const { env, host } = await startedHost();
+    host.receive({ type: 'setSpeed', speed: 'fast' });
+    const commands = spawns(8, 15);
+    const cell = landCell();
+    // En marche, des commandes reçues à toute heure, appliquées au début du jour suivant.
+    for (const [rank, command] of commands.slice(0, 4).entries()) {
+      env.advance(37 + rank * 211);
+      host.receive({ type: 'game', command });
+    }
+    env.advance(300);
+    host.receive({ type: 'game', command: paint(cell, 'steppe') });
+    // En pause, d'autres, appliquées aussitôt ; puis un jour, et une reprise.
+    host.receive({ type: 'setPaused', paused: true });
+    for (const command of commands.slice(4, 6)) host.receive({ type: 'game', command });
+    host.receive({ type: 'stepOnce' });
+    host.receive({ type: 'game', command: commands[6] ?? paint(cell) });
+    host.receive({ type: 'setPaused', paused: false });
+    env.advance(1_234);
+    host.receive({ type: 'game', command: commands[7] ?? paint(cell) });
+    env.advance(daysDuration(17.5, 'fast'));
+    host.receive({ type: 'setPaused', paused: true });
+    const saved = await savedState(env, host, 1);
+    const json = saved.json as { day: number; commandLog: LoggedCommand[] };
+    const instants = json.commandLog.map((entry) => dayIndex(entry));
+    expect(json.commandLog).toHaveLength(9);
+    // Des commandes à plusieurs instants, et en cours de mois.
+    expect(new Set(instants).size).toBeGreaterThan(4);
+    expect(json.commandLog.some((entry) => entry.day !== 0)).toBe(true);
+    const until = { tick: saved.meta.tick, day: json.day };
+    const replayed = replay(testParams(), testWorld(), json.commandLog, until, testData);
+    expect(fingerprint(replayed)).toBe(fingerprint(restoreState(saved, testData)));
+  });
+
+  it('n’envoie l’image des groupes, avec les marches du mois, que quand elle change', async () => {
+    const { env, host } = await startedHost();
+    host.receive({ type: 'game', command: paint(landCell()) });
+    for (const command of spawns(10, 25)) host.receive({ type: 'game', command });
+    env.advance(NORMAL_DAY_MS * 5);
+    host.receive({ type: 'game', command: paint(landCell(), 'steppe') });
+    env.advance(NORMAL_MONTH_MS * 2 - NORMAL_DAY_MS * 5);
+    const deltas = env.messages('delta');
+    expect(deltas).toHaveLength(2 * DAYS_PER_MONTH);
+    const framed = deltas.flatMap((delta, index) => (delta.frame === undefined ? [] : [index]));
+    // Le premier jour, qui fait apparaître les groupes, puis les deux pas mensuels ; ni les
+    // coups de pinceau ni les jours ordinaires.
+    expect(framed).toEqual([0, DAYS_PER_MONTH - 1, 2 * DAYS_PER_MONTH - 1]);
+    // Chaque marche de l'image, d'un groupe de l'image, finit sur sa case.
+    const frame = deltas.at(-1)?.frame;
+    if (frame === undefined) throw new Error('pas d’image');
+    const { walks } = frame;
+    expect(walks.groups.length).toBeGreaterThan(3);
+    const cells = new Map<number, number>();
+    for (let at = 0; at < frame.groups.length; at += GROUP_STRIDE) {
+      cells.set(
+        frame.groups[at] ?? 0,
+        (frame.groups[at + 2] ?? 0) * 512 + (frame.groups[at + 1] ?? 0),
+      );
+    }
+    walks.groups.forEach((group, index) => {
+      expect(walks.cells[(walks.ends[index] ?? 0) - 1]).toBe(cells.get(group));
+    });
+    // Les tampons des marches voyagent sans copie, avec ceux de l'image.
+    const entry = env.sent.findLast((sent) => sent.message.type === 'delta');
+    expect(entry?.transfer).toHaveLength(7);
   });
 });

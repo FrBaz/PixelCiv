@@ -35,6 +35,29 @@ export interface WalkData {
   readonly budgets: Float64Array;
 }
 
+/**
+ * Marches au plus juste, dans leurs propres tampons : celles que gardent une sauvegarde et
+ * l'empreinte, et que le worker envoie au rendu avec l'image des groupes.
+ */
+export interface WalkArrays extends WalkData {
+  readonly groups: Uint32Array<ArrayBuffer>;
+  readonly ends: Uint32Array<ArrayBuffer>;
+  readonly cells: Uint32Array<ArrayBuffer>;
+  readonly costs: Float64Array<ArrayBuffer>;
+  readonly budgets: Float64Array<ArrayBuffer>;
+}
+
+/** Aucune marche : l'état d'un mois où nul ne marche, ou d'une partie de la version 5. */
+export function emptyWalks(): WalkArrays {
+  return {
+    groups: new Uint32Array(0),
+    ends: new Uint32Array(0),
+    cells: new Uint32Array(0),
+    costs: new Float64Array(0),
+    budgets: new Float64Array(0),
+  };
+}
+
 /** Ce qui reçoit une position : x en [offset], y en [offset + 1]. */
 export type Coordinates = Record<number, number>;
 

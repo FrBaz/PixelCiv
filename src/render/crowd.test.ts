@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { loadGameData } from '../core/data';
 import { GROUP_STRIDE, type GroupsFrame } from '../core/protocol';
 import { visualCode } from '../core/visual';
+import { emptyWalks } from '../core/walk';
 import { SPAWN_COUNT } from '../sim/commands';
 import { cultureCloth, frameOf, recolor, ROLE, type Palette } from './atlas';
 import { CHUNK_PX, parseColor } from './bake';
@@ -15,6 +16,7 @@ import {
   clusterOffset,
   clusterReach,
   depth,
+  groupPositions,
   groupScreen,
   mapPixel,
   memberBox,
@@ -256,7 +258,22 @@ describe('groupe sous un appui (W-7)', () => {
     return {
       groups: Uint32Array.from(groups.flatMap(([id, x, y, size]) => [id, x, y, size, 1])),
       sprites: new Uint16Array(total).fill(visualCode(1, 2, 3, 2, 0)),
+      walks: emptyWalks(),
     };
+  }
+  /** Le groupe sous un point, chaque groupe au repos au centre de sa case (groupPositions). */
+  function pick(
+    groups: GroupsFrame,
+    view: MapView,
+    x: number,
+    y: number,
+    pickShapes: PickShapes,
+    slop?: number,
+  ): number | undefined {
+    const count = groups.groups.length / GROUP_STRIDE;
+    const positions = new Float64Array(count * 2);
+    groupPositions(groups, new Map(), 0, 512, positions, new Uint8Array(count));
+    return pickGroup(groups, positions, view, x, y, pickShapes, slop);
   }
   /** Caméra visant le centre de la case (x, y). */
   const aimedAt = (x: number, y: number, zoom: number): Camera => ({
@@ -277,13 +294,13 @@ describe('groupe sous un appui (W-7)', () => {
         const points = visible(banner.name, box, pixel);
         expect(points.length).toBeGreaterThan(20);
         for (const [x, y] of points) {
-          expect(pickGroup(single, view, x, y, shapes), `zoom ${String(zoom)}`).toBe(7);
+          expect(pick(single, view, x, y, shapes), `zoom ${String(zoom)}`).toBe(7);
         }
         // À côté, à la tolérance près : frôlée, puis manquée.
         const slop = TOUCH_SLOP * resolution;
-        expect(pickGroup(single, view, box.left - slop, box.top, shapes, slop)).toBe(7);
-        expect(pickGroup(single, view, box.left - slop - 1, box.top, shapes, slop)).toBeUndefined();
-        expect(pickGroup(single, view, box.left - 1, box.top, shapes)).toBeUndefined();
+        expect(pick(single, view, box.left - slop, box.top, shapes, slop)).toBe(7);
+        expect(pick(single, view, box.left - slop - 1, box.top, shapes, slop)).toBeUndefined();
+        expect(pick(single, view, box.left - 1, box.top, shapes)).toBeUndefined();
       }
     }
   });
@@ -301,7 +318,7 @@ describe('groupe sous un appui (W-7)', () => {
         expect(shape).toEqual(frameOf(name));
         const box = memberBox(viewport.width / 2, viewport.height / 2, member, shape, scale);
         for (const [x, y] of visible(name, box, scale)) {
-          expect(pickGroup(single, view, x, y, shapes), `membre ${String(member)}`).toBe(3);
+          expect(pick(single, view, x, y, shapes), `membre ${String(member)}`).toBe(3);
         }
       }
     }
@@ -315,7 +332,13 @@ describe('groupe sous un appui (W-7)', () => {
     const banner = chooseBanner(banners, pixel, resolution);
     // La caméra vise la dernière colonne : le groupe de la colonne 0 est juste à droite.
     const view: MapView = { camera: aimedAt(511, 60, zoom), viewport, world, resolution };
-    const at = groupScreen(0, 60, view, { left: 0, right: banner.width, up: 0, down: 0 }, pixel);
+    const at = groupScreen(
+      0.5,
+      60.5,
+      view,
+      { left: 0, right: banner.width, up: 0, down: 0 },
+      pixel,
+    );
     expect(at.x).toBeGreaterThan(viewport.width / 2);
     // Le monde, quatre fois plus étroit que l'écran à ce zoom, s'y voit plusieurs fois.
     expect(at.span).toBeLessThan(viewport.width);
@@ -325,7 +348,7 @@ describe('groupe sous un appui (W-7)', () => {
       if (box.left < 0 || box.left + box.width > viewport.width) continue;
       copies++;
       const [x, y] = visible(banner.name, box, pixel)[0] ?? [0, 0];
-      expect(pickGroup(seam, view, x, y, shapes)).toBe(9);
+      expect(pick(seam, view, x, y, shapes)).toBe(9);
     }
     expect(copies).toBeGreaterThanOrEqual(2);
   });
@@ -340,12 +363,12 @@ describe('groupe sous un appui (W-7)', () => {
     const lower = bannerBox(viewport.width / 2, viewport.height / 2 + TILE_PX * 2, banner, 2);
     const inBoth = lower.top + 1;
     expect(inBoth).toBeLessThan(upper.top + upper.height);
-    expect(pickGroup(pair, view, upper.left + 1, inBoth, shapes, 4)).toBe(2);
+    expect(pick(pair, view, upper.left + 1, inBoth, shapes, 4)).toBe(2);
     // Au sommet du premier, hors du second : le premier, même si le second est tout près.
-    expect(pickGroup(pair, view, upper.left + 1, upper.top + 1, shapes, 40)).toBe(1);
+    expect(pick(pair, view, upper.left + 1, upper.top + 1, shapes, 40)).toBe(1);
     // Rien sous le point, ni assez près : aucun groupe.
-    expect(pickGroup(pair, view, 0, 0, shapes, 4)).toBeUndefined();
-    expect(pickGroup(frame(), view, upper.left + 1, upper.top + 1, shapes, 4)).toBeUndefined();
+    expect(pick(pair, view, 0, 0, shapes, 4)).toBeUndefined();
+    expect(pick(frame(), view, upper.left + 1, upper.top + 1, shapes, 4)).toBeUndefined();
   });
 
   it('à pied égal, prend le dernier dessiné, que PixiJS montre devant (depth)', () => {
@@ -363,12 +386,8 @@ describe('groupe sous un appui (W-7)', () => {
         expect(depth(right, 1)).toBeGreaterThan(depth(left, 0));
         const [x, y] = [right.left + 0.5, right.top + 0.5];
         const label = `densité ${String(resolution)}, zoom ${String(zoom)}`;
-        expect(pickGroup(frame([1, 100, 50, 5], [2, 101, 50, 5]), view, x, y, shapes), label).toBe(
-          2,
-        );
-        expect(pickGroup(frame([2, 101, 50, 5], [1, 100, 50, 5]), view, x, y, shapes), label).toBe(
-          1,
-        );
+        expect(pick(frame([1, 100, 50, 5], [2, 101, 50, 5]), view, x, y, shapes), label).toBe(2);
+        expect(pick(frame([2, 101, 50, 5], [1, 100, 50, 5]), view, x, y, shapes), label).toBe(1);
       }
     }
     // De près, deux membres de groupes voisins aux pieds sur la même ligne.
@@ -378,7 +397,91 @@ describe('groupe sous un appui (W-7)', () => {
     const second = memberBox(viewport.width / 2 + TILE_PX * 4, viewport.height / 2, 0, shape, 4);
     expect(second.left).toBeLessThan(first.left + first.width);
     const [x, y] = [second.left + 0.5, second.top + 0.5];
-    expect(pickGroup(frame([1, 100, 50, 1], [2, 101, 50, 1]), view, x, y, shapes)).toBe(2);
-    expect(pickGroup(frame([2, 101, 50, 1], [1, 100, 50, 1]), view, x, y, shapes)).toBe(1);
+    expect(pick(frame([1, 100, 50, 1], [2, 101, 50, 1]), view, x, y, shapes)).toBe(2);
+    expect(pick(frame([2, 101, 50, 1], [1, 100, 50, 1]), view, x, y, shapes)).toBe(1);
+  });
+});
+
+describe('positions des groupes à l’instant affiché (ADR 0013)', () => {
+  const world = { width: 512 * TILE_PX, height: 256 * TILE_PX };
+  const viewport = { width: 1280, height: 720 };
+
+  it('place un groupe au repos au centre de sa case, et un groupe en marche sur son chemin', () => {
+    // Deux groupes : le 4 se repose en (20, 30), le 9 marche de (511, 12) à (1, 12) par la
+    // couture, en (0, 12) au bout de son chemin.
+    const frame: GroupsFrame = {
+      groups: Uint32Array.of(4, 20, 30, 3, 1, 9, 1, 12, 5, 2),
+      sprites: new Uint16Array(8),
+      walks: {
+        groups: Uint32Array.of(9),
+        ends: Uint32Array.of(3),
+        cells: Uint32Array.of(12 * 512 + 511, 12 * 512, 12 * 512 + 1),
+        costs: Float64Array.of(0, 1, 2),
+        budgets: Float64Array.of(30),
+      },
+    };
+    const walkOf = new Map([[9, 0]]);
+    const positions = new Float64Array(4);
+    const moving = new Uint8Array(2);
+    groupPositions(frame, walkOf, 0.25, 512, positions, moving);
+    expect(Array.from(positions)).toEqual([20.5, 30.5, 511.75, 12.5]);
+    expect(Array.from(moving)).toEqual([0, 1]);
+    groupPositions(frame, walkOf, 0.75, 512, positions, moving);
+    expect(positions[2]).toBeCloseTo(0.25, 12);
+    groupPositions(frame, walkOf, 2, 512, positions, moving);
+    expect(Array.from(positions)).toEqual([20.5, 30.5, 1.5, 12.5]);
+    expect(Array.from(moving)).toEqual([0, 0]);
+  });
+
+  it('dessine à des positions entières de l’écran, passe la couture au plus court, et se touche où il se dessine', () => {
+    const banners = bannerShapes(frameOf);
+    const sprites = spriteNames().map((name) => frameOf(name));
+    const shapes: PickShapes = {
+      banners,
+      largest: {
+        width: Math.max(...sprites.map((shape) => shape.width)),
+        height: Math.max(...sprites.map((shape) => shape.height)),
+      },
+      member: (code) => memberShape(code, frameOf),
+    };
+    const single: GroupsFrame = {
+      groups: Uint32Array.of(5, 0, 40, 6, 1),
+      sprites: new Uint16Array(6).fill(visualCode(1, 2, 3, 2, 0)),
+      walks: emptyWalks(),
+    };
+    for (const zoom of [1, 2, 8, 24]) {
+      const scale = displayScale(zoom);
+      const pixel = mapPixel(scale);
+      const reach = { left: 8, right: 8, up: 8, down: 8 };
+      // La caméra vise la couture, un peu au-dessus du groupe.
+      const view: MapView = {
+        camera: { x: 0.37, y: 40 * TILE_PX, zoom },
+        viewport,
+        world,
+        resolution: 1,
+      };
+      let previous: number | undefined;
+      for (let x = 512 - 0.4; x <= 512 + 0.3 + 1e-9; x += 0.05) {
+        const column = x >= 512 ? x - 512 : x;
+        expect(column).toBeGreaterThanOrEqual(0);
+        expect(column).toBeLessThan(512);
+        const at = groupScreen(column, 40.5, view, reach, pixel);
+        // Au plus court : la copie du monde la plus proche de la caméra, sans saut.
+        if (previous !== undefined) {
+          expect(Math.abs(at.x - previous)).toBeLessThanOrEqual(0.05 * TILE_PX * scale + 1e-6);
+        }
+        previous = at.x;
+        const box =
+          scale >= SPRITE_SCALE
+            ? memberBox(at.x, at.y, 3, shapes.largest, pixel)
+            : bannerBox(at.x, at.y, chooseBanner(banners, pixel, 1), pixel);
+        expect(Number.isInteger(box.left) && Number.isInteger(box.top)).toBe(true);
+        // Le groupe se touche là où il se dessine, à sa position fractionnaire.
+        const positions = Float64Array.of(column, 40.5);
+        const inside = { x: box.left + 1, y: box.top + box.height - 2 };
+        const picked = pickGroup(single, positions, view, inside.x, inside.y, shapes, 2);
+        expect(picked, `zoom ${String(zoom)}, x ${x.toFixed(2)}`).toBe(5);
+      }
+    }
   });
 });

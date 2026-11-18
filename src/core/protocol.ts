@@ -7,11 +7,12 @@
 import type { SaveErrorCode, SaveMeta } from './save/format';
 import type { SpeedId } from './time';
 import type { AgeClass } from './visual';
+import type { WalkArrays } from './walk';
 import { LAYER_NAMES, type GenerationStage, type WorldLayers, type WorldSize } from './world';
 import type { WorldParams } from './worldParams';
 
 /** Version du protocole, vérifiée à la poignée de main. */
-export const PROTOCOL_VERSION = 4;
+export const PROTOCOL_VERSION = 5;
 
 /**
  * Pinceau de biome : donne à une case de terre un autre biome de terre. C'est un outil
@@ -75,7 +76,10 @@ export interface PersonSummary {
   readonly alive: boolean;
 }
 
-/** Un groupe en quelques mots : son nom (celui de son meneur), sa case, sa taille. */
+/**
+ * Un groupe en quelques mots : son nom (celui de son meneur), la case où il se tient ce
+ * jour-là, en marche ou au repos (ADR 0013), sa taille.
+ */
 export interface GroupSummary {
   readonly id: number;
   readonly name: string;
@@ -158,16 +162,36 @@ export const CHRONICLE_RECENT = 300;
 /** Faits d'une page de la chronique, au plus. */
 export const CHRONICLE_PAGE = 100;
 
-/** Entiers par groupe dans GroupsFrame.groups : identifiant, x, y, membres, culture. */
+/**
+ * Entiers par groupe dans GroupsFrame.groups : identifiant, x, y, membres, culture. La case
+ * (x, y) est celle où le groupe se tient au pas mensuel, au bout de sa marche du mois.
+ */
 export const GROUP_STRIDE = 5;
 
 /**
- * Groupes du monde, pour la carte : GROUP_STRIDE entiers par groupe, et un code
- * d'apparence par membre (core/visual.ts), groupe après groupe.
+ * Groupes du monde, pour la carte : GROUP_STRIDE entiers par groupe, un code d'apparence
+ * par membre (core/visual.ts), groupe après groupe, et les marches du mois (ADR 0013).
+ * Le rendu en tire la position de chaque groupe à tout instant du mois, fractionnaire
+ * (walkPosition) : un groupe sans marche se tient au centre de sa case.
  */
 export interface GroupsFrame {
   readonly groups: Uint32Array<ArrayBuffer>;
   readonly sprites: Uint16Array<ArrayBuffer>;
+  readonly walks: WalkArrays;
+}
+
+/** Tampons d'une image des groupes, à transférer. */
+function frameBuffers(frame: GroupsFrame): ArrayBuffer[] {
+  const { walks } = frame;
+  return [
+    frame.groups.buffer,
+    frame.sprites.buffer,
+    walks.groups.buffer,
+    walks.ends.buffer,
+    walks.cells.buffer,
+    walks.costs.buffer,
+    walks.budgets.buffer,
+  ];
 }
 
 /** Messages du fil principal vers le worker. */
@@ -186,8 +210,8 @@ export type MainMessage =
       readonly width: number;
     }
   /**
-   * Commande de jeu : elle s'applique au début du prochain pas, ou aussitôt en pause, comme
-   * au début du pas qui vient (U-7).
+   * Commande de jeu : elle s'applique au début du prochain jour, ou aussitôt en pause, à
+   * l'instant courant (U-7, ADR 0013).
    */
   | { readonly type: 'game'; readonly command: GameCommand }
   /** Demande la fiche d'un individu ou d'un groupe ; la réponse porte le même numéro. */
@@ -199,13 +223,13 @@ export type MainMessage =
   | { readonly type: 'chronicle'; readonly requestId: number; readonly before: number }
   | { readonly type: 'setSpeed'; readonly speed: SpeedId }
   | { readonly type: 'setPaused'; readonly paused: boolean }
-  /** Avance d'un seul pas, en pause. */
+  /** Avance d'un seul jour, en pause ; le pas mensuel suit si c'est le dernier du mois. */
   | { readonly type: 'stepOnce' }
   /** Demande une sauvegarde ; la réponse porte le même numéro de requête. */
   | { readonly type: 'save'; readonly requestId: number }
   /** Remplace la partie par celle d'un fichier de sauvegarde. */
   | { readonly type: 'load'; readonly requestId: number; readonly data: ArrayBuffer }
-  /** Coût factice ajouté à chaque pas, en millisecondes (débogage). */
+  /** Coût factice ajouté à chaque pas mensuel, en millisecondes (débogage). */
   | { readonly type: 'debugStepCost'; readonly milliseconds: number };
 
 /**
@@ -224,21 +248,31 @@ export interface WorldInfo {
   readonly size: WorldSize;
 }
 
-/** Temps de la partie. */
+/** Temps de la partie : l'instant de l'état (GameTime), la pause et la vitesse. */
 export interface TimeInfo {
-  /** Nombre de pas, donc de mois, écoulés depuis le début de la partie. */
+  /** Pas mensuels faits, donc mois écoulés, depuis le début de la partie. */
   readonly tick: number;
+  /** Jours écoulés du mois en cours, de 0 à 29 (ADR 0013). */
+  readonly day: number;
   readonly paused: boolean;
   readonly speed: SpeedId;
 }
 
-/** Mesures du worker, pour le panneau de débogage. */
+/** Mesures d'un lot de jours du worker, pour le panneau de débogage et l'horloge du rendu. */
 export interface StepStats {
   /**
-   * Durée du dernier pas, en millisecondes : le mois de la simulation, puis son delta,
-   * de la construction de l'image des groupes et des faits de la chronique à leur envoi.
+   * Durée du lot, en millisecondes : ses jours, son pas mensuel s'il y en a eu un, puis
+   * son delta, de la construction de l'image des groupes et des faits à leur envoi.
    */
-  readonly stepMs: number;
+  readonly batchMs: number;
+  /** Jours du lot, pas mensuel compris. */
+  readonly days: number;
+  /** Durée moyenne d'un jour du lot, hors pas mensuel ; absente sans jour ordinaire. */
+  readonly dayMs?: number;
+  /** Durée du pas mensuel du lot, s'il y en a eu un. */
+  readonly monthMs?: number;
+  /** Marches en cours à la fin du lot. */
+  readonly walks: number;
 }
 
 /** Messages du worker vers le fil principal. */
@@ -270,16 +304,18 @@ export type WorkerMessage =
       readonly chronicle: readonly ChronicleView[];
     }
   /**
-   * Ce qui a changé depuis le dernier message : blocs modifiés, temps, groupes, et faits
-   * nouveaux de la chronique. Il suit un pas, ou, en pause, une commande appliquée aussitôt,
-   * sans que le temps avance.
+   * Ce qui a changé depuis le dernier message : le temps, les `days` jours du lot (0 pour
+   * une commande appliquée en pause, sans que le temps avance), les blocs modifiés, les
+   * faits nouveaux de la chronique, et l'image des groupes quand elle change (pas mensuel,
+   * commande) : elle vaut à partir de l'instant `time`.
    */
   | {
       readonly type: 'delta';
       readonly time: TimeInfo;
+      readonly days: number;
       readonly chunks: readonly ChunkPatch[];
-      readonly frame: GroupsFrame;
       readonly chronicle: readonly ChronicleView[];
+      readonly frame?: GroupsFrame;
     }
   /** Fiche demandée ; ni l'un ni l'autre si la cible n'existe pas. */
   | {
@@ -346,14 +382,12 @@ export function transferablesOf(message: MainMessage | WorkerMessage): ArrayBuff
     case 'snapshot':
       return [
         ...LAYER_NAMES.map((name) => message.layers[name].buffer),
-        message.frame.groups.buffer,
-        message.frame.sprites.buffer,
+        ...frameBuffers(message.frame),
       ];
     case 'delta':
       return [
         ...message.chunks.map((chunk) => chunk.biome.buffer),
-        message.frame.groups.buffer,
-        message.frame.sprites.buffer,
+        ...(message.frame === undefined ? [] : frameBuffers(message.frame)),
       ];
     case 'previewReady':
       return [message.biome.buffer, message.elevation.buffer];

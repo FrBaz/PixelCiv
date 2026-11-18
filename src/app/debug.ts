@@ -1,26 +1,49 @@
 /**
- * Mesures du panneau de débogage (NF-01) : images par seconde et image la plus
- * longue sur la dernière seconde, durée des pas sur les derniers pas reçus.
+ * Mesures du panneau de débogage (NF-01, ADR 0013) : images par seconde et image la plus
+ * longue sur la dernière seconde ; durée moyenne d'un jour sur les trente derniers ; durée
+ * moyenne du pas mensuel et le plus long sur les douze derniers ; jours par lot sur les
+ * trente derniers lots ; marches en cours au dernier lot.
  */
+import type { StepStats } from '../core/protocol';
 
 export interface DebugSample {
   /** Images par seconde, sur la dernière seconde. */
   readonly fps: number;
   /** Image la plus longue de la dernière seconde, en millisecondes. */
   readonly worstFrameMs: number;
-  /** Durée moyenne et plus longue des derniers pas, en millisecondes. */
-  readonly stepMs: number | undefined;
-  readonly worstStepMs: number | undefined;
+  /** Durée moyenne d'un jour ordinaire, hors pas mensuel, en millisecondes. */
+  readonly dayMs: number | undefined;
+  /** Durée moyenne et plus longue des derniers pas mensuels, en millisecondes. */
+  readonly monthMs: number | undefined;
+  readonly worstMonthMs: number | undefined;
+  /** Jours par lot, en moyenne sur les derniers lots. */
+  readonly batchDays: number | undefined;
+  /** Marches en cours à la fin du dernier lot. */
+  readonly walks: number | undefined;
 }
 
-/** Nombre de pas gardés pour la moyenne. */
-const STEP_WINDOW = 30;
+/** Jours, pas mensuels et lots gardés pour les moyennes. */
+const DAY_WINDOW = 30;
+const MONTH_WINDOW = 12;
+const BATCH_WINDOW = 30;
 /** Fenêtre des images, en millisecondes. */
 const FRAME_WINDOW_MS = 1000;
 
+const mean = (values: readonly number[]) =>
+  values.length > 0 ? values.reduce((sum, value) => sum + value, 0) / values.length : undefined;
+
+/** Ajoute une valeur au bout d'une fenêtre, qui ne garde que les `size` dernières. */
+function keep(values: number[], value: number, size: number): void {
+  values.push(value);
+  if (values.length > size) values.splice(0, values.length - size);
+}
+
 export class DebugSampler {
   private frames: number[] = [];
-  private steps: number[] = [];
+  private days: number[] = [];
+  private months: number[] = [];
+  private batches: number[] = [];
+  private walks: number | undefined;
 
   /** Enregistre la durée d'une image. */
   frame(durationMs: number): void {
@@ -31,21 +54,29 @@ export class DebugSampler {
     }
   }
 
-  /** Enregistre la durée d'un pas de simulation. */
-  step(durationMs: number): void {
-    this.steps.push(durationMs);
-    if (this.steps.length > STEP_WINDOW) this.steps.shift();
+  /** Enregistre les mesures d'un lot de jours du worker. */
+  batch(stats: StepStats): void {
+    const ordinary = stats.days - (stats.monthMs === undefined ? 0 : 1);
+    if (stats.dayMs !== undefined) {
+      for (let day = 0; day < Math.min(ordinary, DAY_WINDOW); day++) {
+        keep(this.days, stats.dayMs, DAY_WINDOW);
+      }
+    }
+    if (stats.monthMs !== undefined) keep(this.months, stats.monthMs, MONTH_WINDOW);
+    if (stats.days > 0) keep(this.batches, stats.days, BATCH_WINDOW);
+    this.walks = stats.walks;
   }
 
   sample(): DebugSample {
     const total = this.frames.reduce((sum, duration) => sum + duration, 0);
-    const steps = this.steps;
     return {
       fps: total > 0 ? (this.frames.length * 1000) / total : 0,
       worstFrameMs: Math.max(0, ...this.frames),
-      stepMs:
-        steps.length > 0 ? steps.reduce((sum, value) => sum + value, 0) / steps.length : undefined,
-      worstStepMs: steps.length > 0 ? Math.max(...steps) : undefined,
+      dayMs: mean(this.days),
+      monthMs: mean(this.months),
+      worstMonthMs: this.months.length > 0 ? Math.max(...this.months) : undefined,
+      batchDays: mean(this.batches),
+      walks: this.walks,
     };
   }
 }

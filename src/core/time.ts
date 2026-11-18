@@ -68,10 +68,48 @@ export const SPEED_FACTORS: Readonly<Record<SpeedId, number>> = {
   faster: 16,
 };
 
-/** Durée d'un mois en vitesse normale, en millisecondes : une année dure 10 s. */
-export const NORMAL_MONTH_MS = 10_000 / MONTHS_PER_YEAR;
+/** Durée d'une année en vitesse normale, en millisecondes (consigne de l'auteur, 2b.2). */
+export const NORMAL_YEAR_MS = 40_000;
+
+/** Durées d'un mois et d'un jour en vitesse normale, en millisecondes. */
+export const NORMAL_MONTH_MS = NORMAL_YEAR_MS / MONTHS_PER_YEAR;
+export const NORMAL_DAY_MS = NORMAL_YEAR_MS / DAYS_PER_YEAR;
 
 /** Durée réelle d'un mois à une vitesse donnée, en millisecondes. */
 export function monthDuration(speed: SpeedId): number {
   return NORMAL_MONTH_MS / SPEED_FACTORS[speed];
+}
+
+/** Durée réelle d'un jour à une vitesse donnée, en millisecondes. */
+export function dayDuration(speed: SpeedId): number {
+  return NORMAL_DAY_MS / SPEED_FACTORS[speed];
+}
+
+/**
+ * Durée réelle de `days` jours, fractionnaires, à une vitesse donnée, en millisecondes.
+ * Elle se calcule d'un bloc, et non jour par jour : 360 jours durent une année pile, sans
+ * erreur d'arrondi.
+ */
+export function daysDuration(days: number, speed: SpeedId): number {
+  return (days * NORMAL_YEAR_MS) / (DAYS_PER_YEAR * SPEED_FACTORS[speed]);
+}
+
+/** Jours, fractionnaires, qui passent en `milliseconds` à une vitesse donnée. */
+export function daysIn(milliseconds: number, speed: SpeedId): number {
+  return (milliseconds * DAYS_PER_YEAR * SPEED_FACTORS[speed]) / NORMAL_YEAR_MS;
+}
+
+/**
+ * Cadence des lots de l'hôte (ADR 0013) : il ne se réveille pas plus d'une fois toutes les
+ * MIN_BATCH_MS millisecondes, une image, et fait au plus MAX_BATCH_DAYS jours par réveil.
+ */
+export const MIN_BATCH_MS = 16;
+export const MAX_BATCH_DAYS = 8;
+
+/**
+ * Jours d'un lot quand l'hôte suit son horaire : le moins de jours qui durent au moins
+ * MIN_BATCH_MS, un à ×½, ×1 et ×4, trois à ×16.
+ */
+export function batchDays(speed: SpeedId): number {
+  return Math.max(1, Math.ceil(MIN_BATCH_MS / dayDuration(speed)));
 }

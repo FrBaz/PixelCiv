@@ -13,7 +13,7 @@
  * le groupe se tient au pas mensuel, au bout de sa marche, et aucun calcul mensuel ne lit
  * la position du jour.
  */
-import { walking, walkPosition, type WalkData } from '../core/walk';
+import { walking, walkPosition, type WalkArrays, type WalkData } from '../core/walk';
 import type { Group } from './society';
 
 /** Ce que walk note de sa marche : chaque pas, sa case et le coût dépensé depuis le départ. */
@@ -34,15 +34,6 @@ function grownFloat64(array: Float64Array<ArrayBuffer>, needed: number): Float64
   const next = new Float64Array(Math.max(needed, array.length * 2));
   next.set(array);
   return next;
-}
-
-/** Copies au plus juste des marches, prêtes à sauvegarder, à comparer ou à transférer. */
-export interface WalkArrays extends WalkData {
-  readonly groups: Uint32Array<ArrayBuffer>;
-  readonly ends: Uint32Array<ArrayBuffer>;
-  readonly cells: Uint32Array<ArrayBuffer>;
-  readonly costs: Float64Array<ArrayBuffer>;
-  readonly budgets: Float64Array<ArrayBuffer>;
 }
 
 /**

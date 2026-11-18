@@ -1,7 +1,8 @@
 /**
- * Panneau de débogage (NF-01) : images par seconde, durée des pas, mémoire, monde (graine,
- * taille, durée de la génération, blocs à cuire), contenu et auto-test du déterminisme. Il s'ouvre par son bouton, ou par F3 et la
- * touche ², au-dessus de Tab.
+ * Panneau de débogage (NF-01, ADR 0013) : images par seconde, durée d'un jour et du pas
+ * mensuel, jours par lot, marches en cours, mémoire, monde (graine, taille, durée de la
+ * génération, blocs à cuire), contenu et auto-test du déterminisme. Il s'ouvre par son
+ * bouton, ou par F3 et la touche ², au-dessus de Tab.
  */
 import { useEffect } from 'preact/hooks';
 import { t, type MessageKey } from '../i18n';
@@ -9,8 +10,16 @@ import { content, debugInfo, debugOpen, determinismOk, generationMs, worldInfo }
 
 const round = (value: number, digits = 1) => Math.round(value * 10 ** digits) / 10 ** digits;
 
-function milliseconds(value: number | undefined): string {
-  return value === undefined ? t('debug.unavailable') : t('unit.ms', { value: round(value) });
+function milliseconds(value: number | undefined, digits = 1): string {
+  return value === undefined
+    ? t('debug.unavailable')
+    : t('unit.ms', { value: round(value, digits) });
+}
+
+function number(value: number | undefined, digits: number): string {
+  return value === undefined
+    ? t('debug.unavailable')
+    : t('unit.number', { value: round(value, digits) });
 }
 
 export function DebugToggle() {
@@ -54,8 +63,11 @@ export function DebugPanel() {
       info === undefined ? t('debug.unavailable') : t('unit.number', { value: round(info.fps, 0) }),
     ],
     ['debug.frame', milliseconds(info?.worstFrameMs)],
-    ['debug.step', milliseconds(info?.stepMs)],
-    ['debug.stepMax', milliseconds(info?.worstStepMs)],
+    ['debug.day', milliseconds(info?.dayMs, 2)],
+    ['debug.month', milliseconds(info?.monthMs)],
+    ['debug.monthMax', milliseconds(info?.worstMonthMs)],
+    ['debug.batchDays', number(info?.batchDays, 1)],
+    ['debug.walks', number(info?.walks, 0)],
     [
       'debug.memory',
       info?.memoryMb === undefined

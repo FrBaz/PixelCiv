@@ -19,11 +19,33 @@ describe('DebugSampler', () => {
     expect(sampler.sample().worstFrameMs).toBe(16);
   });
 
-  it('moyenne les derniers pas', () => {
+  it('moyenne les derniers jours, pas mensuels et lots, et garde les marches du dernier lot', () => {
     const sampler = new DebugSampler();
-    expect(sampler.sample().stepMs).toBeUndefined();
-    for (let i = 0; i < 40; i++) sampler.step(i < 10 ? 500 : 200);
-    expect(sampler.sample().stepMs).toBe(200);
-    expect(sampler.sample().worstStepMs).toBe(200);
+    expect(sampler.sample()).toMatchObject({
+      dayMs: undefined,
+      monthMs: undefined,
+      worstMonthMs: undefined,
+      batchDays: undefined,
+      walks: undefined,
+    });
+    // Des lots de trois jours ordinaires, d'abord lents, puis rapides : seuls les trente
+    // derniers jours comptent.
+    for (let batch = 0; batch < 20; batch++) {
+      sampler.batch({ batchMs: 1, days: 3, dayMs: batch < 10 ? 2 : 0.5, walks: 40 + batch });
+    }
+    expect(sampler.sample().dayMs).toBe(0.5);
+    expect(sampler.sample().batchDays).toBe(3);
+    expect(sampler.sample().walks).toBe(59);
+    // Les pas mensuels : leur durée ne compte pas dans celle des jours ; les douze derniers.
+    for (let month = 0; month < 14; month++) {
+      sampler.batch({ batchMs: 60, days: 1, monthMs: month < 2 ? 900 : 50 + month, walks: 7 });
+    }
+    expect(sampler.sample().dayMs).toBe(0.5);
+    expect(sampler.sample().monthMs).toBeCloseTo((52 + 63) / 2, 9);
+    expect(sampler.sample().worstMonthMs).toBe(63);
+    expect(sampler.sample().walks).toBe(7);
+    // Un lot de deux jours et d'un pas mensuel : deux jours ordinaires.
+    sampler.batch({ batchMs: 5, days: 3, dayMs: 1, monthMs: 40, walks: 3 });
+    expect(sampler.sample().batchDays).toBeCloseTo((3 * 15 + 14 + 3) / 30, 9);
   });
 });
