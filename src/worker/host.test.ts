@@ -381,7 +381,7 @@ describe('commandes de jeu', () => {
     const paused = await savedState(env, host, 1);
     expect(paused).toEqual(await savedState(running, other, 1));
     expect((paused.json as { commandLog: unknown }).commandLog).toEqual(
-      commands.map((command) => ({ tick: 0, command })),
+      commands.map((command) => ({ tick: 0, day: 0, command })),
     );
   });
 

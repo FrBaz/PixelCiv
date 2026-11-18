@@ -1,13 +1,20 @@
 import { describe, expect, it } from 'vitest';
 import { loadCatalog } from '../core/data/catalog';
 import { BiomesSchema } from '../core/data/schemas';
-import { encodeSave, readSave, SaveError, writeSave, type SaveData } from '../core/save/format';
+import {
+  encodeSave,
+  readSave,
+  SaveError,
+  writeSave,
+  type SaveData,
+  type SavedArray,
+} from '../core/save/format';
 import { LAYER_NAMES } from '../core/world';
 import { GENERATOR_VERSION } from '../worldgen/generate';
 import { replay } from './replay';
 import { MIGRATIONS, restoreState, saveState } from './save';
 import type { SimState } from './state';
-import { step } from './day';
+import { advanceDay, step } from './day';
 import { applyCommands, fingerprint } from './step';
 import {
   cellsOf,
@@ -111,7 +118,13 @@ describe('sauvegarde de la simulation', () => {
     expect(restored.commandLog).toEqual(original.commandLog);
     expect(restored.society.groups.size).toBe(2);
     // Le rejeu du journal redonne l'état sauvegardé, commandes du pas courant comprises.
-    const replayed = replay(testParams(), testWorld(), restored.commandLog, 2, testData);
+    const replayed = replay(
+      testParams(),
+      testWorld(),
+      restored.commandLog,
+      { tick: 2, day: 0 },
+      testData,
+    );
     expect(fingerprint(replayed)).toBe(fingerprint(original));
     // La partie relue se poursuit à l'identique.
     for (let month = 0; month < 24; month++) {
@@ -209,9 +222,9 @@ describe('sauvegarde de la simulation', () => {
   });
 
   it('refuse les sauvegardes de la phase 0, sans monde à reprendre', async () => {
-    // Seules les versions 3, celle de la phase 1, qui reçoit une population vide, et 4,
-    // celle de la phase 2 avant sa relecture, se migrent.
-    expect(Object.keys(MIGRATIONS)).toEqual(['3', '4']);
+    // Seules les versions 3, celle de la phase 1, qui reçoit une population vide, 4, celle
+    // de la phase 2 avant sa relecture, et 5, celle d'avant les deux horloges, se migrent.
+    expect(Object.keys(MIGRATIONS)).toEqual(['3', '4', '5']);
     for (let version = 1; version < 3; version++) {
       const old = encodeSave(save(played(1)), version);
       await expect(readSave(old, MIGRATIONS)).rejects.toMatchObject({ code: 'obsolete' });
@@ -265,7 +278,7 @@ describe('sauvegarde de la simulation', () => {
     const count = 512 * 256;
     // Témoin : le journal va jusqu'au pas courant compris, où l'hôte journalise une commande
     // appliquée en pause, avant que ce pas ne commence (U-7).
-    const current = [{ tick: data.meta.tick, command: paint }];
+    const current = [{ tick: data.meta.tick, day: 0, command: paint }];
     expect(restore({ ...data, json: { ...json, commandLog: current } }).commandLog).toEqual(
       current,
     );
@@ -290,7 +303,7 @@ describe('sauvegarde de la simulation', () => {
       ],
       [
         'commande future',
-        { json: { ...json, commandLog: [{ tick: data.meta.tick + 1, command: paint }] } },
+        { json: { ...json, commandLog: [{ tick: data.meta.tick + 1, day: 0, command: paint }] } },
       ],
       [
         'journal désordonné',
@@ -298,15 +311,15 @@ describe('sauvegarde de la simulation', () => {
           json: {
             ...json,
             commandLog: [
-              { tick: 2, command: paint },
-              { tick: 1, command: paint },
+              { tick: 2, day: 0, command: paint },
+              { tick: 1, day: 0, command: paint },
             ],
           },
         },
       ],
       [
         'commande inconnue',
-        { json: { ...json, commandLog: [{ tick: 0, command: { type: 'feu' } }] } },
+        { json: { ...json, commandLog: [{ tick: 0, day: 0, command: { type: 'feu' } }] } },
       ],
       ['état du générateur nul', { json: { ...json, rng: { flux: [0, 0, 0, 0] } } }],
       ['commande en attente invalide', { json: { ...json, pending: [{ ...paint, x: 0.5 }] } }],
@@ -314,6 +327,250 @@ describe('sauvegarde de la simulation', () => {
     ];
     for (const [label, patch] of cases) {
       expect(() => restore({ ...data, ...patch }), label).toThrow(SaveError);
+    }
+  });
+});
+
+describe('sauvegarde des deux horloges (ADR 0013)', () => {
+  /** Une partie de groupes nomades, arrêtée au jour `day` d'un mois où ils marchent. */
+  function midMonth(day: number): SimState {
+    const state = testState();
+    step(state, scatteredGroups(state, 30, 30), testData);
+    step(state, [], testData);
+    for (let passed = 0; passed < day; passed++) advanceDay(state, [], testData);
+    return state;
+  }
+
+  it('se relit en cours de mois, marches comprises, et se poursuit à l’identique', async () => {
+    const original = midMonth(11);
+    expect(original.walks.count).toBeGreaterThan(10);
+    expect(original.dayPositions.walking).toBeGreaterThan(0);
+    const data = save(original);
+    expect(data.meta).toEqual({ seed: 'graine', tick: 2 });
+    expect((data.json as { day: number }).day).toBe(11);
+    const restored = restore(await readSave(await writeSave(data), MIGRATIONS));
+    expect([restored.tick, restored.day]).toEqual([2, 11]);
+    expect(restored.walks.arrays()).toEqual(original.walks.arrays());
+    expect(fingerprint(restored)).toBe(fingerprint(original));
+    // Les positions du jour, que la sauvegarde ne garde pas, sont les mêmes.
+    expect(restored.dayPositions.positions).toEqual(original.dayPositions.positions);
+    expect(restored.dayPositions.walking).toBe(original.dayPositions.walking);
+    const cell = firstCellOf(original, land);
+    for (let day = 0; day < 45; day++) {
+      const commands = day === 7 ? [{ type: 'paintBiome' as const, ...cell, biome: 'taiga' }] : [];
+      advanceDay(original, commands, testData);
+      advanceDay(restored, commands, testData);
+      expect(restored.dayPositions.positions).toEqual(original.dayPositions.positions);
+    }
+    expect(fingerprint(restored)).toBe(fingerprint(original));
+  });
+
+  it('refuse un jour, un journal ou des marches abîmés', () => {
+    const original = midMonth(6);
+    const data = save(original);
+    const json = data.json as Record<string, unknown>;
+    const paint = { type: 'paintBiome', x: 1, y: 1, biome: 'desert' };
+    const arrays = data.arrays;
+    const walks = original.walks.arrays();
+    const groups = [...original.society.groups.values()];
+    expect(walks.groups.length).toBeGreaterThan(3);
+    /** La sauvegarde, une marche ou un tableau des marches changé. */
+    const forged = (change: Partial<Record<keyof typeof walks, SavedArray>>): SaveData => ({
+      ...data,
+      arrays: {
+        ...arrays,
+        ...Object.fromEntries(
+          Object.entries(change).map(([name, array]) => [
+            `walk${name.charAt(0).toUpperCase()}${name.slice(1)}`,
+            array,
+          ]),
+        ),
+      },
+    });
+    const firstEnd = walks.ends.at(0) ?? 0;
+    const width = original.size.width;
+    /** Les cases de la première marche, la case `at` changée. */
+    const cells = (at: number, cell: number) => {
+      const copy = walks.cells.slice();
+      copy[at] = cell;
+      return copy;
+    };
+    const costs = (at: number, cost: number) => {
+      const copy = walks.costs.slice();
+      copy[at] = cost;
+      return copy;
+    };
+    const budgets = (budget: number) => {
+      const copy = walks.budgets.slice();
+      copy[0] = budget;
+      return copy;
+    };
+    const ids = (id: number, at = 0) => {
+      const copy = walks.groups.slice();
+      copy[at] = id;
+      return copy;
+    };
+    const unknown = Math.max(...groups.map((group) => group.id)) + 1;
+    // Témoin : la sauvegarde telle quelle, et une commande au jour même de la sauvegarde.
+    expect(restore(data).walks.arrays()).toEqual(walks);
+    const today = [{ tick: data.meta.tick, day: 6, command: paint }];
+    expect(restore({ ...data, json: { ...json, commandLog: today } }).commandLog).toEqual(today);
+    // Chaque sauvegarde abîmée, et la raison du refus : l'en-tête et le journal, puis les
+    // marches, chacune abîmée d'une seule façon.
+    const count = walks.groups.length;
+    const swapped = walks.groups.slice();
+    swapped[0] = walks.groups.at(1) ?? 0;
+    swapped[1] = walks.groups.at(0) ?? 0;
+    const cases: [string, SaveData, string][] = [
+      ['jour 30', { ...data, json: { ...json, day: 30 } }, 'état illisible'],
+      ['jour négatif', { ...data, json: { ...json, day: -1 } }, 'état illisible'],
+      ['jour fractionnaire', { ...data, json: { ...json, day: 1.5 } }, 'état illisible'],
+      ['jour absent', { ...data, json: { ...json, day: undefined } }, 'état illisible'],
+      [
+        'commande du lendemain',
+        {
+          ...data,
+          json: { ...json, commandLog: [{ tick: data.meta.tick, day: 7, command: paint }] },
+        },
+        'journal des commandes incohérent',
+      ],
+      [
+        'commande sans jour',
+        { ...data, json: { ...json, commandLog: [{ tick: 0, command: paint }] } },
+        'journal illisible',
+      ],
+      [
+        'journal désordonné dans le mois',
+        {
+          ...data,
+          json: {
+            ...json,
+            commandLog: [
+              { tick: 1, day: 4, command: paint },
+              { tick: 1, day: 3, command: paint },
+            ],
+          },
+        },
+        'journal des commandes incohérent',
+      ],
+      [
+        'cases non voisines',
+        forged({ cells: cells(1, ((walks.cells.at(0) ?? 0) + 2) % (width * 256)) }),
+        'cases non voisines',
+      ],
+      ['case hors du monde', forged({ cells: cells(1, width * 256) }), 'case hors du monde'],
+      ['case répétée', forged({ cells: cells(1, walks.cells.at(0) ?? 0) }), 'cases non voisines'],
+      ['arrivée hors de la case du groupe', forged({ groups: swapped }), 'arrivée hors de la case'],
+      ['coûts décroissants', forged({ costs: costs(1, -1) }), 'coûts'],
+      ['coût de départ non nul', forged({ costs: costs(0, 0.5) }), 'coût de départ non nul'],
+      ['coût NaN', forged({ costs: costs(1, Number.NaN) }), 'coûts'],
+      [
+        'chemin au-delà du budget',
+        forged({ budgets: budgets((walks.costs[firstEnd - 1] ?? 0) - 0.01) }),
+        'chemin au-delà du budget',
+      ],
+      ['budget nul', forged({ budgets: budgets(0) }), 'budget illisible'],
+      ['budget infini', forged({ budgets: budgets(Number.POSITIVE_INFINITY) }), 'budget illisible'],
+      ['groupe inconnu', forged({ groups: ids(unknown) }), 'groupe inconnu ou en double'],
+      [
+        'groupe en double',
+        forged({ groups: ids(walks.groups.at(0) ?? 0, count - 1) }),
+        'groupe inconnu ou en double',
+      ],
+      [
+        'chemin d’une seule case',
+        forged({ ends: Uint32Array.from(walks.ends, (end, i) => (i === 0 ? 1 : end)) }),
+        'chemin trop court',
+      ],
+      [
+        'cases en trop',
+        forged({
+          cells: Uint32Array.of(...walks.cells, 0),
+          costs: Float64Array.of(...walks.costs, 99),
+        }),
+        'cases en trop',
+      ],
+      [
+        'budgets trop courts',
+        forged({ budgets: walks.budgets.slice(1) }),
+        'tableaux de longueurs différentes',
+      ],
+      [
+        'coûts de mauvais type',
+        forged({ costs: Float32Array.from(walks.costs) }),
+        'costs illisible',
+      ],
+      [
+        'marches absentes',
+        {
+          ...data,
+          arrays: Object.fromEntries(
+            Object.entries(arrays).filter(([name]) => name !== 'walkCells'),
+          ),
+        },
+        'cells illisible',
+      ],
+    ];
+    for (const [label, broken, reason] of cases) {
+      expect(() => restore(broken), label).toThrow(
+        expect.objectContaining({
+          code: 'corrupt',
+          message: expect.stringContaining(reason) as string,
+        }) as Error,
+      );
+    }
+  });
+
+  it('migre une partie de la version 5, qui se poursuit comme son rejeu', async () => {
+    // Une vraie partie de la version 5 : sans jour dans les données ni au journal, et sans
+    // marches ; ses groupes se tiennent sur leur case, à un pas mensuel juste fait.
+    const original = played(8);
+    step(original, scatteredGroups(original, 20, 30), testData);
+    step(original, [], testData);
+    const current = save(original);
+    const { day, commandLog, ...rest } = current.json as {
+      day: number;
+      commandLog: { tick: number; day: number; command: unknown }[];
+    };
+    expect(day).toBe(0);
+    const v5: SaveData = {
+      meta: current.meta,
+      json: { ...rest, commandLog: commandLog.map(({ tick, command }) => ({ tick, command })) },
+      arrays: Object.fromEntries(
+        Object.entries(current.arrays).filter(([name]) => !name.startsWith('walk')),
+      ),
+    };
+    const file = encodeSave(v5, 5);
+    // L'en-tête de la version 5 garde ses métadonnées d'alors : la graine et le mois.
+    const header = JSON.parse(
+      new TextDecoder().decode(
+        file.subarray(10, 10 + new DataView(file.buffer).getUint32(6, true)),
+      ),
+    ) as { meta: object };
+    expect(header.meta).toEqual({ seed: 'graine', tick: 10 });
+    const migrated = restore(await readSave(file, MIGRATIONS));
+    expect([migrated.tick, migrated.day]).toEqual([10, 0]);
+    expect(migrated.walks.count).toBe(0);
+    expect(migrated.commandLog).toEqual(original.commandLog);
+    expect(migrated.commandLog.every((entry) => entry.day === 0)).toBe(true);
+    // Ses groupes se tiennent au centre de leur case jusqu'au pas mensuel suivant.
+    [...migrated.society.groups.values()].forEach((group, rank) => {
+      expect(migrated.dayPositions.positions[rank * 2]).toBe(group.x + 0.5);
+      expect(migrated.dayPositions.positions[rank * 2 + 1]).toBe(group.y + 0.5);
+    });
+    // Après un pas mensuel, la partie migrée et son rejeu ne font plus qu'une : le pas
+    // décide les mêmes marches, de la même case.
+    const replayed = replay(
+      testParams(),
+      testWorld(),
+      migrated.commandLog,
+      { tick: 10, day: 0 },
+      testData,
+    );
+    for (let month = 0; month < 3; month++) {
+      step(migrated, [], testData);
+      step(replayed, [], testData);
+      expect(fingerprint(migrated), `mois ${String(month)}`).toBe(fingerprint(replayed));
     }
   });
 });

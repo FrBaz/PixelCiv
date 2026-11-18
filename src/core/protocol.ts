@@ -39,12 +39,16 @@ export interface SpawnGroupCommand {
   readonly count: number;
 }
 
-/** Commande de jeu : elle modifie l'état, et s'applique au début d'un pas (ADR 0003). */
+/** Commande de jeu : elle modifie l'état, et s'applique au début d'un jour (ADR 0003, 0013). */
 export type GameCommand = PaintBiomeCommand | SpawnGroupCommand;
 
-/** Commande de jeu journalisée : `tick` est le pas au début duquel elle s'est appliquée. */
+/**
+ * Commande de jeu journalisée, avec l'instant où elle s'est appliquée : `tick` mois et
+ * `day` jours écoulés (GameTime), avant que le jour suivant ne passe.
+ */
 export interface LoggedCommand {
   readonly tick: number;
+  readonly day: number;
   readonly command: GameCommand;
 }
 

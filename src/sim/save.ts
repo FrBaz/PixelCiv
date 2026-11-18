@@ -9,13 +9,22 @@
  * tant que ses identifiants existent encore (ADR 0006).
  */
 import { z } from 'zod';
+import { deltaX } from '../core/cylinder';
 import type { Catalog } from '../core/data/catalog';
 import type { Genetics, Species } from '../core/data/people';
 import type { AltitudeLevel, Biome, Resource } from '../core/data/schemas';
 import type { Worldgen } from '../core/data/worldgen';
 import { Rng } from '../core/rng';
 import { SaveError, type Migrations, type SaveData, type SavedArray } from '../core/save/format';
-import { chunkGrid, LAYER_NAMES, LAYER_TYPES, WORLD_SIZES, type WorldLayers } from '../core/world';
+import { dayIndex, DAYS_PER_MONTH } from '../core/time';
+import {
+  chunkGrid,
+  LAYER_NAMES,
+  LAYER_TYPES,
+  WORLD_SIZES,
+  type WorldLayers,
+  type WorldSize,
+} from '../core/world';
 import { worldParamsSchema } from '../core/worldParams';
 import { GameCommandSchema, LoggedCommandSchema } from './commands';
 import {
@@ -29,9 +38,9 @@ import {
 import { terrainCosts, terrainLands } from './terrain';
 import { Population } from './population';
 import { migrateChronicle, restorePeople, savePeople } from './populationSave';
-import { emptySociety } from './society';
+import { emptySociety, type Society } from './society';
 import { rebuildPositions, type SimState } from './state';
-import { DayPositions, Walks } from './walks';
+import { DayPositions, Walks, type WalkArrays } from './walks';
 
 /**
  * Stocks de nourriture d'une sauvegarde : la liste des cases entamées, sans doublon, et
@@ -110,6 +119,12 @@ function fewKeys(value: object, limit: number): boolean {
 const SimJsonSchema = z
   .object({
     params: z.unknown(),
+    /** Jours écoulés du mois en cours (ADR 0013). */
+    day: z
+      .number()
+      .int()
+      .min(0)
+      .max(DAYS_PER_MONTH - 1),
     generator: z.number().int().positive(),
     content: z.object({ biomes: ContentIdsSchema, resources: ContentIdsSchema }).strict(),
     commandLog: z.array(z.unknown()),
@@ -187,6 +202,49 @@ function migrateFamilyNames(save: SaveData): SaveData {
   return { meta: save.meta, json: save.json, arrays };
 }
 
+/** Noms des tableaux des marches du mois, dans une sauvegarde. */
+const WALK_ARRAYS = {
+  groups: 'walkGroups',
+  ends: 'walkEnds',
+  cells: 'walkCells',
+  costs: 'walkCosts',
+  budgets: 'walkBudgets',
+} as const satisfies Record<keyof WalkArrays, string>;
+
+/** Les marches du mois, en tableaux de sauvegarde. */
+function savedWalks(walks: WalkArrays): Record<string, SavedArray> {
+  return {
+    [WALK_ARRAYS.groups]: walks.groups,
+    [WALK_ARRAYS.ends]: walks.ends,
+    [WALK_ARRAYS.cells]: walks.cells,
+    [WALK_ARRAYS.costs]: walks.costs,
+    [WALK_ARRAYS.budgets]: walks.budgets,
+  };
+}
+
+/**
+ * Version 6 (ADR 0013) : la partie et chaque commande de son journal reçoivent le jour 0.
+ * Une commande du mois t s'y appliquait au début du mois, avant tout calcul de ce mois :
+ * c'est l'instant (t, 0). La partie n'a aucune marche en cours : ses groupes restent sur
+ * leur case jusqu'au pas mensuel suivant, qui décide leur marche comme il l'aurait fait.
+ * Un journal mal formé reste tel quel : la relecture le refusera.
+ */
+function migrateDays(save: SaveData): SaveData {
+  const json: unknown = save.json;
+  if (typeof json !== 'object' || json === null) return save;
+  const log: unknown = (json as { commandLog?: unknown }).commandLog;
+  const commandLog = Array.isArray(log)
+    ? (log as unknown[]).map((entry) =>
+        typeof entry === 'object' && entry !== null ? { ...entry, day: 0 } : entry,
+      )
+    : log;
+  return {
+    meta: save.meta,
+    json: { ...json, day: 0, commandLog },
+    arrays: { ...save.arrays, ...savedWalks(new Walks().arrays()) },
+  };
+}
+
 /**
  * Migrations des sauvegardes (ADR 0007) : celle de la clé v mène de la version v à
  * v + 1. Une version sans migration est refusée comme trop ancienne : c'est le cas des
@@ -195,7 +253,8 @@ function migrateFamilyNames(save: SaveData): SaveData {
  * suit la relecture de la phase 2 : la langue des noms de famille (migrateFamilyNames),
  * la chronique en colonnes (migrateChronicle). Elle nomme aussi les sous-espèces de
  * chaque espèce ; une partie de la 4 ne les nommait pas, et suivait l'ordre des données,
- * qui n'a pas changé depuis : la relecture le reprend.
+ * qui n'a pas changé depuis : la relecture le reprend. La version 6 ajoute le jour et les
+ * marches du mois (migrateDays).
  */
 export const MIGRATIONS: Migrations = {
   3: (save) => {
@@ -208,6 +267,7 @@ export const MIGRATIONS: Migrations = {
     };
   },
   4: (save) => migrateChronicle(migrateFamilyNames(save)),
+  5: migrateDays,
 };
 
 /** Copie de l'état, prise d'un coup : la simulation peut repartir aussitôt. */
@@ -225,10 +285,12 @@ export function saveState(state: SimState, generator: number, content: SaveConte
   arrays.foodPlants = stock(0);
   arrays.foodGame = stock(1);
   arrays.foodFish = stock(2);
+  Object.assign(arrays, savedWalks(state.walks.arrays()));
   return {
     meta: { seed: state.params.seed, tick: state.tick },
     json: {
       params: state.params,
+      day: state.day,
       generator,
       content: {
         biomes: content.biomes.entries.map((biome) => biome.id),
@@ -276,11 +338,78 @@ function remapping(
   return table;
 }
 
+/** Un tableau des marches d'une sauvegarde, du type attendu. */
+function walkArray<T extends Uint32Array<ArrayBuffer> | Float64Array<ArrayBuffer>>(
+  save: SaveData,
+  name: keyof WalkArrays,
+  type: new (length: number) => T,
+): T {
+  const array: unknown = save.arrays[WALK_ARRAYS[name]];
+  if (!(array instanceof type)) throw new SaveError('corrupt', `marches : ${name} illisible`);
+  return array;
+}
+
+/**
+ * Marches du mois d'une sauvegarde, vérifiées (ADR 0013) : chacune d'un groupe vivant, qui
+ * n'en a pas d'autre ; deux cases au moins, dans le monde, chacune voisine de la
+ * précédente, à travers la couture s'il le faut ; la dernière, celle du groupe ; des coûts
+ * finis, de 0 au départ, croissants, au plus le budget, fini et positif. Les cases ne sont
+ * pas jugées franchissables ou non : les coûts du terrain se recalculent d'après le contenu
+ * du moment, qui a pu changer depuis la sauvegarde.
+ */
+function restoreWalks(save: SaveData, society: Society, size: WorldSize): WalkArrays {
+  const walks: WalkArrays = {
+    groups: walkArray(save, 'groups', Uint32Array),
+    ends: walkArray(save, 'ends', Uint32Array),
+    cells: walkArray(save, 'cells', Uint32Array),
+    costs: walkArray(save, 'costs', Float64Array),
+    budgets: walkArray(save, 'budgets', Float64Array),
+  };
+  const { groups, ends, cells, costs, budgets } = walks;
+  const corrupt = (reason: string) => new SaveError('corrupt', `marches : ${reason}`);
+  if (ends.length !== groups.length || budgets.length !== groups.length) {
+    throw corrupt('tableaux de longueurs différentes');
+  }
+  if (costs.length !== cells.length) throw corrupt('coûts et cases de longueurs différentes');
+  const { width, height } = size;
+  const seen = new Set<number>();
+  let start = 0;
+  for (let index = 0; index < groups.length; index++) {
+    const id = groups[index] ?? 0;
+    const group = society.groups.get(id);
+    if (group === undefined || seen.has(id)) throw corrupt('groupe inconnu ou en double');
+    seen.add(id);
+    const end = ends[index] ?? 0;
+    if (end < start + 2 || end > cells.length) throw corrupt('chemin trop court ou tronqué');
+    const budget = budgets[index] ?? Number.NaN;
+    if (!(Number.isFinite(budget) && budget > 0)) throw corrupt('budget illisible');
+    if (costs[start] !== 0) throw corrupt('coût de départ non nul');
+    for (let at = start; at < end; at++) {
+      const cell = cells[at] ?? 0;
+      if (cell >= width * height) throw corrupt('case hors du monde');
+      if (at === start) continue;
+      const cost = costs[at] ?? Number.NaN;
+      if (!(Number.isFinite(cost) && cost > (costs[at - 1] ?? 0))) throw corrupt('coûts');
+      const previous = cells[at - 1] ?? 0;
+      const dx = deltaX(previous % width, cell % width, width);
+      const dy = Math.floor(cell / width) - Math.floor(previous / width);
+      if (Math.abs(dx) > 1 || Math.abs(dy) > 1 || (dx === 0 && dy === 0)) {
+        throw corrupt('cases non voisines');
+      }
+    }
+    if (!((costs[end - 1] ?? Number.NaN) <= budget)) throw corrupt('chemin au-delà du budget');
+    if (cells[end - 1] !== group.y * width + group.x) throw corrupt('arrivée hors de la case');
+    start = end;
+  }
+  if (start !== cells.length) throw corrupt('cases en trop');
+  return walks;
+}
+
 /**
  * Reconstruit l'état d'une sauvegarde ; lève une SaveError si elle est incohérente.
  * Les champs sont vérifiés entre eux : paramètres du monde, couches de la bonne taille,
- * indices du contenu connus, journal ordonné, jusqu'au pas courant compris, flux du
- * générateur valides.
+ * indices du contenu connus, journal ordonné, jusqu'à l'instant courant compris, flux du
+ * générateur valides, marches du mois.
  */
 export function restoreState(save: SaveData, content: SaveContent): SimState {
   const parsed = SimJsonSchema.safeParse(save.json);
@@ -302,15 +431,18 @@ export function restoreState(save: SaveData, content: SaveContent): SimState {
   const commandLog = each(parsed.data.commandLog, LoggedCommandSchema, 'journal');
   const pending = each(parsed.data.pending, GameCommandSchema, 'commandes en attente');
   const { tick } = save.meta;
-  // Une commande journalisée au pas t s'applique au début de t, ou en pause dès sa
-  // réception, avant que le temps ne passe à t + 1 (ADR 0003, ADR 0004) : une sauvegarde
-  // prise en pause juste après elle la garde au journal, au pas courant.
+  const { day } = parsed.data;
+  // Une commande journalisée à l'instant (t, j) s'applique au début du jour j + 1, ou en
+  // pause dès sa réception, avant que ce jour ne passe (ADR 0003, ADR 0013) : une
+  // sauvegarde prise en pause juste après elle la garde au journal, à l'instant courant.
+  const now = dayIndex({ tick, day });
   let previous = 0;
   for (const entry of commandLog) {
-    if (entry.tick < previous || entry.tick > tick) {
+    const at = dayIndex(entry);
+    if (at < previous || at > now) {
       throw new SaveError('corrupt', 'journal des commandes incohérent');
     }
-    previous = entry.tick;
+    previous = at;
   }
 
   // Couches, puis indices du contenu ramenés à celui d'aujourd'hui.
@@ -343,6 +475,8 @@ export function restoreState(save: SaveData, content: SaveContent): SimState {
     if (deposit > 0) world.deposit[cell] = (resources[deposit - 1] ?? 0) + 1;
   }
   const { people, society } = restorePeople(save, parsed.data.people, content, size, tick);
+  const walks = new Walks();
+  walks.restore(restoreWalks(save, society, size));
   const food = restoreFood(save, count);
   const grid = chunkGrid(size);
   // Couches dérivées du monde et du contenu, comme à la création de la partie.
@@ -351,12 +485,12 @@ export function restoreState(save: SaveData, content: SaveContent): SimState {
     params: params.data,
     size,
     tick,
-    day: 0,
+    day,
     world,
     people,
     society,
     food,
-    walks: new Walks(),
+    walks,
     dayPositions: new DayPositions(),
     cost,
     land: terrainLands(cost, size),

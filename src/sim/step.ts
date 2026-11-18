@@ -77,8 +77,8 @@ function paintBiome(state: SimState, command: PaintBiomeCommand, content: SimCon
 export type RejectedCommand = (command: GameCommand, error: unknown) => void;
 
 /**
- * Applique des commandes, dans l'ordre, et les journalise avec le pas au début duquel
- * elles s'appliquent : le pas courant, qui n'a pas encore commencé. Sans `rejected`,
+ * Applique des commandes, dans l'ordre, et les journalise avec l'instant où elles
+ * s'appliquent : le mois et le jour courants, avant que le jour suivant ne passe. Sans `rejected`,
  * l'exception d'une commande remonte ; avec, la commande est écartée et signalée. Les
  * positions du jour se recalculent ensuite, un groupe ayant pu apparaître.
  *
@@ -119,7 +119,7 @@ function applyEach(
         continue;
       }
     }
-    state.commandLog.push({ tick: state.tick, command });
+    state.commandLog.push({ tick: state.tick, day: state.day, command });
   }
 }
 
@@ -222,5 +222,16 @@ export function fingerprint(state: SimState): string {
     fingerprint.string(name);
     for (const word of words) fingerprint.uint32(word);
   }
+  // Le jour du mois et les marches en cours (ADR 0013) ; les positions du jour s'en déduisent.
+  const walks = state.walks.arrays();
+  fingerprint
+    .uint32(state.day)
+    .uint32(walks.groups.length)
+    .uint32(walks.cells.length)
+    .typedArray(walks.groups)
+    .typedArray(walks.ends)
+    .typedArray(walks.cells)
+    .typedArray(walks.costs)
+    .typedArray(walks.budgets);
   return fingerprint.hex();
 }
