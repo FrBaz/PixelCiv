@@ -103,7 +103,7 @@ Le `SharedArrayBuffer` est exclu, parce qu'il exige des en-têtes HTTP que GitHu
 
 | Sujet | Choix |
 |---|---|
-| Temps | Pas de temps mensuel. Les systèmes s'exécutent dans un ordre fixe, chacun à sa fréquence (mensuelle, saisonnière, annuelle). |
+| Temps | Deux horloges (ADR 0013) : un pas mensuel pour la démographie, l'économie, les savoirs et les saisons, et un sous-pas quotidien, en mois de 30 jours, pour le mouvement et les activités des seuls individus actifs, regroupé en lots aux vitesses élevées. Une année dure 40 s en vitesse normale. Les systèmes s'exécutent dans un ordre fixe, chacun à sa fréquence (quotidienne, mensuelle, saisonnière, annuelle). |
 | Commandes | Horodatées et appliquées au début d'un pas : rejouer une partie revient à rejouer ses commandes. |
 | Individus | Les individus ordinaires sont stockés en tableaux typés, une colonne par attribut. Les notables sont enrichis par des objets. Les identifiants sont des entiers recyclés. |
 | Relations | Tables de liaison pour les relations multiples : civilisation et cultures, individu et langues, etc. |
