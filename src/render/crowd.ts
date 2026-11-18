@@ -280,6 +280,8 @@ export interface MemberLooks {
   readonly rows: Uint8Array<ArrayBuffer>;
   /** Déphasage de sa marche, de 0 à 1. */
   readonly phase: Float64Array<ArrayBuffer>;
+  /** Son identifiant écrit, étiquette de son sprite (outils de PixiJS, essais). */
+  readonly labels: readonly string[];
 }
 
 /**
@@ -305,6 +307,7 @@ export function memberLooks(
     motifs: new Uint16Array(2 * count),
     rows: new Uint8Array(count),
     phase: new Float64Array(count),
+    labels: Array.from(frame?.ids ?? [], (id) => String(id)),
   };
   if (frame === undefined) return looks;
   for (let member = 0; member < count; member++) {
@@ -458,6 +461,8 @@ export interface CrowdSource {
   /** Colonnes du monde. */
   readonly width: number;
   readonly groupCount: number;
+  /** Étapes appliquées depuis l'image : ce compte change dès qu'une étape change. */
+  readonly applied: number;
   /** Rang du premier membre de chaque groupe dans l'image, et son effectif. */
   readonly firsts: Uint32Array<ArrayBuffer>;
   readonly sizes: Uint32Array<ArrayBuffer>;

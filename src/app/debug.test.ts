@@ -140,6 +140,7 @@ describe('DebugSampler', () => {
         drawn: 1200 + frameIndex,
         textures: 300,
         cached: 400,
+        pages: 2,
         drawCalls: 12,
       });
     }
@@ -150,6 +151,7 @@ describe('DebugSampler', () => {
       drawn: 1289,
       textures: 300,
       cachedTextures: 400,
+      pages: 2,
       drawCalls: 12,
     });
   });

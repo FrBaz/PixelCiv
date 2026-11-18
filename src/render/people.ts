@@ -14,9 +14,11 @@
  * Les sprites se prennent dans une réserve, dans l'ordre de la profondeur : le i-ième sprite
  * dessine le i-ième dessin, du fond vers l'avant, et PixiJS n'a rien à trier. Les textures
  * recolorées se gardent d'une image à l'autre, une par motif, variante, apparence et couleur
- * d'habit. Le calque mesure ce que coûte chaque image : positions, tri, sprites.
+ * d'habit, rangées dans les pages d'un atlas dynamique (pages.ts) : les individus se
+ * dessinent en quelques appels. Le calque mesure ce que coûte chaque image : positions, tri,
+ * sprites.
  */
-import { BufferImageSource, Container, Sprite, Texture, type Application } from 'pixi.js';
+import { Container, Sprite, type Application, type Texture } from 'pixi.js';
 import type { Appearance, Genetics } from '../core/data';
 import { geneRoles } from '../core/data/people';
 import { GROUP_STRIDE } from '../core/protocol';
@@ -32,6 +34,7 @@ import {
   type Palette,
 } from './atlas';
 import { parseColor, type Rgb } from './bake';
+import { TexturePages } from './pages';
 import type { Camera, Extent } from './camera';
 import {
   CrowdLayout,
@@ -51,6 +54,9 @@ import {
  * aux vitesses où l'on avance plus vite à l'écran (ADR 0014, § 6).
  */
 export const STEP_MS = { slowest: 420, fastest: 200 } as const;
+
+/** Images entre deux comptes des textures distinctes de l'image. */
+const SEEN_EVERY = 16;
 
 /** Durée d'une image de la marche à la vitesse de facteur `factor` (SPEED_FACTORS). */
 export function stepDuration(factor: number): number {
@@ -74,9 +80,10 @@ export interface PeopleStats {
   readonly drawn: number;
   readonly placed: number;
   readonly groups: number;
-  /** Textures distinctes de l'image, et textures gardées. */
+  /** Textures distinctes de l'image, textures gardées, et pages de l'atlas dynamique. */
   readonly textures: number;
   readonly cached: number;
+  readonly pages: number;
 }
 
 /** Ce que la carte montre de près ou de loin, à l'instant affiché. */
@@ -101,13 +108,24 @@ export class PeopleLayer {
   /** Rang de la première couleur de même valeur de chaque habit des données. */
   private readonly clothSlots: readonly number[];
   private readonly textures = new Map<number, Texture>();
+  private pages = new TexturePages();
   private readonly sprites: Sprite[] = [];
-  /** Ce que montre chaque sprite, pour son étiquette (outils de PixiJS, essais). */
+  /**
+   * Ce que montre chaque sprite : sa clé de texture, et l'identifiant de son étiquette (outils
+   * de PixiJS, essais) ; un sprite qui montre la même chose ne se touche pas.
+   */
+  private shownKeys = new Float64Array(0);
   private shownIds = new Float64Array(0);
   readonly motifs: MotifTable;
   private looks: MemberLooks | undefined;
   private readonly layout = new CrowdLayout();
   private readonly seen = new Set<number>();
+  /** Images dessinées : les textures distinctes ne se comptent que toutes les SEEN_EVERY. */
+  private draws = 0;
+  /** Ce que montrait la dernière image ; la même vue, au même instant, ne se refait pas. */
+  private drawnWith: readonly unknown[] = [];
+  /** Version de ce que le calque ne voit pas changer : la franchissabilité des cases. */
+  private version = 0;
   stats: PeopleStats = {
     positionsMs: 0,
     sortMs: 0,
@@ -117,6 +135,7 @@ export class PeopleLayer {
     groups: 0,
     textures: 0,
     cached: 0,
+    pages: 0,
   };
 
   constructor(app: Application, data: PeopleData) {
@@ -164,13 +183,7 @@ export class PeopleLayer {
       });
     }
     const frame = frameOf(name);
-    const source = new BufferImageSource({
-      resource: recolor(name, palette),
-      width: frame.width,
-      height: frame.height,
-      scaleMode: 'nearest',
-    });
-    const texture = new Texture({ source });
+    const texture = this.pages.add(recolor(name, palette), frame.width, frame.height);
     this.textures.set(key, texture);
     return texture;
   }
@@ -192,6 +205,28 @@ export class PeopleLayer {
     const { source } = scene;
     const { resolution } = this.app.renderer;
     const frame = world === undefined ? undefined : source.frame;
+    // En pause, caméra immobile : la même image, au même instant, rien à refaire.
+    const signature = [
+      source,
+      frame,
+      scene.t,
+      scene.walkMs,
+      scene.stepMs,
+      source.applied,
+      camera.x,
+      camera.y,
+      camera.zoom,
+      viewport.width,
+      viewport.height,
+      world?.width,
+      resolution,
+      this.version,
+    ];
+    if (signature.every((value, index) => value === this.drawnWith[index])) {
+      this.stats = { ...this.stats, positionsMs: 0, sortMs: 0, spritesMs: 0 };
+      return;
+    }
+    this.drawnWith = signature;
     let looks = this.looks;
     if (looks === undefined || looks.frame !== frame) {
       looks = memberLooks(frame, this.motifs, this.data.reference);
@@ -213,20 +248,27 @@ export class PeopleLayer {
     const laid = performance.now();
     layout.sort();
     const sorted = performance.now();
-    const seen = this.seen;
-    seen.clear();
+    // Les textures distinctes, pour le panneau de débogage : une image sur SEEN_EVERY suffit.
+    const seen = this.draws++ % SEEN_EVERY === 0 ? this.seen : undefined;
+    seen?.clear();
     if (this.shownIds.length < layout.count) {
-      const ids = new Float64Array(Math.max(layout.count, this.shownIds.length * 2));
-      ids.fill(Number.NaN);
+      const size = Math.max(layout.count, this.shownIds.length * 2);
+      const ids = new Float64Array(size).fill(Number.NaN);
+      const keys = new Float64Array(size).fill(Number.NaN);
       ids.set(this.shownIds);
+      keys.set(this.shownKeys);
       this.shownIds = ids;
+      this.shownKeys = keys;
     }
     for (let index = 0; index < layout.count; index++) {
       const drawn = layout.drawn(index);
       const key = layout.texture[drawn] ?? 0;
-      seen.add(key);
+      seen?.add(key);
       const sprite = this.sprite(index);
-      sprite.texture = this.texture(key);
+      if (this.shownKeys[index] !== key) {
+        this.shownKeys[index] = key;
+        sprite.texture = this.texture(key);
+      }
       sprite.scale.set((layout.unit[drawn] ?? 1) / resolution);
       sprite.position.set(
         (layout.left[drawn] ?? 0) / resolution,
@@ -241,13 +283,15 @@ export class PeopleLayer {
           : -(frame?.groups[(layout.group[drawn] ?? 0) * GROUP_STRIDE] ?? 0);
       if (this.shownIds[index] !== id) {
         this.shownIds[index] = id;
-        sprite.label = String(id);
+        sprite.label = member >= 0 ? (looks.labels[member] ?? String(id)) : String(id);
       }
     }
     for (let index = layout.count; index < this.sprites.length; index++) {
       const unused = this.sprites.at(index);
       if (unused !== undefined) unused.visible = false;
     }
+    // Les motifs recolorés de cette image partent au GPU avec leurs pages.
+    this.pages.flush();
     const finished = performance.now();
     this.stats = {
       positionsMs: laid - started,
@@ -256,8 +300,9 @@ export class PeopleLayer {
       drawn: layout.count,
       placed: layout.placed,
       groups: layout.visibleGroups,
-      textures: seen.size,
+      textures: seen === undefined ? this.stats.textures : seen.size,
       cached: this.textures.size,
+      pages: this.pages.count,
     };
   }
 
@@ -269,17 +314,29 @@ export class PeopleLayer {
     return pickEntity(this.layout, x, y, slop * this.app.renderer.resolution);
   }
 
+  /**
+   * Ce que le calque ne voit pas changer a changé : la franchissabilité des cases (pinceau),
+   * où se dessinent les nourrissons portés et les bannières. La prochaine image se refait.
+   */
+  invalidate(): void {
+    this.version++;
+  }
+
   /** Les individus se voyaient-ils, à la dernière image, plutôt que les bannières ? */
   get close(): boolean {
     return this.layout.close;
   }
 
-  /** Vide les textures (changement de monde : rien ne s'y rattache plus). */
+  /** Vide les textures et leurs pages (changement de monde : rien ne s'y rattache plus). */
   clear(): void {
-    for (const texture of this.textures.values()) texture.destroy(true);
+    for (const texture of this.textures.values()) texture.destroy(false);
     this.textures.clear();
+    this.pages.destroy();
+    this.pages = new TexturePages();
     this.looks = undefined;
     this.layout.reset(undefined);
     this.shownIds.fill(Number.NaN);
+    this.shownKeys.fill(Number.NaN);
+    this.drawnWith = [];
   }
 }

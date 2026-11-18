@@ -127,9 +127,19 @@ async function main(): Promise<void> {
   });
   // Couches du monde affiché, pour l'inspection, les légendes et la franchissabilité.
   let worldLayers: WorldLayers | undefined;
-  /** La case, comptée comme cellIndex, se franchit-elle ? Comme pour la simulation (walkCost). */
-  const passable = (cell: number): boolean =>
-    worldLayers !== undefined && Number.isFinite(walkCost(worldLayers, cell, data));
+  /**
+   * La case, comptée comme cellIndex, se franchit-elle ? Comme pour la simulation (walkCost),
+   * gardé par case : 1 oui, 2 non, 0 pas encore lu. Une case repeinte s'oublie.
+   */
+  let passability = new Uint8Array(0);
+  const passable = (cell: number): boolean => {
+    const known = passability[cell] ?? 0;
+    if (known !== 0) return known === 1;
+    if (worldLayers === undefined || cell < 0 || cell >= passability.length) return false;
+    const open = Number.isFinite(walkCost(worldLayers, cell, data));
+    passability[cell] = open ? 1 : 2;
+    return open;
+  };
   // Horloge du rendu (ADR 0013) : la carte, ses saisons et la date montrent l'instant de
   // l'horloge, un peu en retard sur le dernier état reçu. Les images des groupes et les
   // étapes datées donnent la position de chacun à cet instant (ADR 0014) ; leurs tampons
@@ -291,8 +301,9 @@ async function main(): Promise<void> {
   };
   /**
    * Débogage : ?crowd=2000 fait apparaître 2 000 individus dans la première partie, en pause,
-   * par groupes de CROWD_GROUP autour du centre de la vue, assez espacés pour la remplir (le
-   * pire cas du rendu, ADR 0014). Les sous-espèces de la première espèce s'y relaient.
+   * par groupes de CROWD_GROUP autour du centre de la vue, en un carré qui tient dans sa plus
+   * petite dimension (le pire cas du rendu, ADR 0014). Les sous-espèces de la première espèce
+   * s'y relaient.
    */
   const crowdTotal = Math.floor(Number(query.get('crowd') ?? 0));
   let crowdSpawned = false;
@@ -306,9 +317,10 @@ async function main(): Promise<void> {
     const sizes = crowdGroups(crowdTotal, CROWD_GROUP, SPAWN_COUNT);
     const { camera } = controls;
     const center = cellAt(camera.x, camera.y, info.size.width);
+    // Un carré de groupes qui tient dans la plus petite dimension de la vue.
     const cellPx = TILE_PX * displayScale(camera.zoom);
-    const visible = (map.viewport.width / cellPx) * (map.viewport.height / cellPx);
-    const spacing = Math.max(1, Math.floor(Math.sqrt(visible / sizes.length)));
+    const side = Math.min(map.viewport.width, map.viewport.height) / cellPx;
+    const spacing = Math.max(1, Math.floor(side / Math.ceil(Math.sqrt(sizes.length))));
     const cells = crowdCells(center, sizes.length, spacing, info.size, passable);
     cells.forEach((cell, index) => {
       const subspecies = kind.subspecies.at(index % kind.subspecies.length);
@@ -481,6 +493,7 @@ async function main(): Promise<void> {
         worldInfo.value = message.world;
         const layers = message.layers;
         worldLayers = layers;
+        passability = new Uint8Array(layers.biome.length);
         inspected.value = undefined;
         // Une autre partie : les réponses attendues portent sur l'ancienne, et sont ignorées.
         sheets.close();
@@ -507,6 +520,11 @@ async function main(): Promise<void> {
       }
       case 'delta': {
         map.updateChunks(message.chunks);
+        // Une case repeinte change la franchissabilité, où se posent porté et bannière.
+        if (message.chunks.length > 0) {
+          passability.fill(0);
+          people.invalidate();
+        }
         // Les étapes du lot attendent leur jour ; l'image des groupes, quand elle change, vaut
         // à partir de l'instant du delta (ADR 0014).
         sampler.receive(

@@ -97,6 +97,7 @@ export function DebugPanel() {
         ? t('debug.unavailable')
         : t('debug.texturesValue', { used: info.textures, cached: info.cachedTextures }),
     ],
+    ['debug.pages', number(info?.pages, 0)],
     ['debug.drawCalls', number(info?.drawCalls, 0)],
     [
       'debug.memory',

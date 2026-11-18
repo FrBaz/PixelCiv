@@ -67,6 +67,7 @@ export interface DebugInfo {
   readonly drawn: number | undefined;
   readonly textures: number | undefined;
   readonly cachedTextures: number | undefined;
+  readonly pages: number | undefined;
   readonly drawCalls: number | undefined;
   readonly memoryMb: number | undefined;
   /** Moteur de rendu (webgl, webgpu) et densité de pixels de l'écran. */

@@ -375,7 +375,7 @@ describe('individus à leur position (ADR 0014)', () => {
 
   it('partage les textures de deux cultures de même habit, et en garde une par motif, variante et apparence', () => {
     const clothing = ['#a03030', '#30a030', '#a03030'];
-    const { people } = setup(1, { ...data.appearance, clothing });
+    const { people, layer } = setup(1, { ...data.appearance, clothing });
     // Les cultures 1 et 3 portent le même habit, la culture 2 un autre.
     const groups = frame(5, [1, 100, 50, 1], [2, 104, 50, 3], [3, 108, 50, 2]);
     // Trois variantes d'adulte dans le premier groupe, la moyenne ailleurs.
@@ -384,5 +384,8 @@ describe('individus à leur position (ADR 0014)', () => {
     expect(people.stats.drawn).toBe(15);
     expect(people.stats.textures).toBe(4);
     expect(people.stats.cached).toBe(4);
+    // Rangées dans une seule page de l'atlas dynamique : un seul lot de dessin.
+    expect(people.stats.pages).toBe(1);
+    expect(new Set(rendered(layer).map((sprite) => sprite.texture.source)).size).toBe(1);
   });
 });

@@ -39,6 +39,7 @@ describe('panneau de débogage (ADR 0013, ADR 0014)', () => {
       drawn: 1987,
       textures: 140,
       cachedTextures: 412,
+      pages: 1,
       drawCalls: 37,
       memoryMb: 140,
       renderer: { name: 'webgl', resolution: 1 },
@@ -56,6 +57,7 @@ describe('panneau de débogage (ADR 0013, ADR 0014)', () => {
     expect(shown.get('Positions, tri, sprites')).toBe('1,23 + 0,5 + 2,25 ms');
     expect(shown.get('Sprites dessinés')).toBe('1\u202f987');
     expect(shown.get('Textures')).toBe("140 dans l'image, 412 gardées");
+    expect(shown.get("Pages de l'atlas")).toBe('1');
     expect(shown.get('Appels de dessin')).toBe('37');
     // Sans mesure, chaque ligne le dit.
     debugInfo.value = {

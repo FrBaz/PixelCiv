@@ -149,6 +149,7 @@
   "debug.drawn": "Sprites dessinés",
   "debug.textures": "Textures",
   "debug.texturesValue": "{used} dans l'image, {cached} gardées",
+  "debug.pages": "Pages de l'atlas",
   "debug.drawCalls": "Appels de dessin",
   "debug.memory": "Mémoire",
   "debug.renderer": "Rendu",

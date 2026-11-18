@@ -32,10 +32,14 @@ export interface DebugSample {
    * disposition des individus, de leur tri et de la mise à jour des sprites.
    */
   readonly crowd: { readonly positions: number; readonly sort: number; readonly sprites: number };
-  /** À la dernière image : sprites dessinés, textures distinctes et gardées, appels de dessin. */
+  /**
+   * À la dernière image : sprites dessinés, textures distinctes et gardées, pages de l'atlas
+   * dynamique, appels de dessin.
+   */
   readonly drawn: number | undefined;
   readonly textures: number | undefined;
   readonly cachedTextures: number | undefined;
+  readonly pages: number | undefined;
   readonly drawCalls: number | undefined;
 }
 
@@ -47,6 +51,8 @@ export interface FrameCost {
   readonly drawn: number;
   readonly textures: number;
   readonly cached: number;
+  /** Pages de l'atlas dynamique des textures (render/pages.ts). */
+  readonly pages: number;
   /** Appels de dessin de l'image, s'ils se comptent (DrawCallCounter). */
   readonly drawCalls?: number;
 }
@@ -166,6 +172,7 @@ export class DebugSampler {
       drawn: last?.drawn,
       textures: last?.textures,
       cachedTextures: last?.cached,
+      pages: last?.pages,
       drawCalls: last?.drawCalls,
     };
   }
