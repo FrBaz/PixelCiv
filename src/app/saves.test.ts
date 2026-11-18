@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { transferablesOf, type MainMessage, type WorkerMessage } from '../core/protocol';
 import { MAX_SAVE_BYTES } from '../core/save/format';
 import { notice } from '../ui/store';
@@ -104,7 +104,7 @@ Object.assign(globalThis, {
 
 /** Faux worker : il répond aux requêtes de sauvegarde et de chargement comme on le lui dit. */
 class FakeSimulation {
-  saveReply: 'saved' | 'noGame' | 'failed' | 'silent' = 'saved';
+  saveReply: 'saved' | 'noGame' | 'size' | 'failed' | 'silent' = 'saved';
   loadReply: WorkerMessage | 'silent' = { type: 'loaded', requestId: 0 };
   readonly sent: MainMessage[] = [];
   private listener: ((message: WorkerMessage) => void) | undefined;
@@ -124,7 +124,10 @@ class FakeSimulation {
     if (message.type === 'save' && answer === 'saved') {
       const data = new ArrayBuffer(8);
       reply({ type: 'saved', requestId: message.requestId, meta: { seed: 's', tick: 1 }, data });
-    } else if (message.type === 'save' && (answer === 'noGame' || answer === 'failed')) {
+    } else if (
+      message.type === 'save' &&
+      (answer === 'noGame' || answer === 'size' || answer === 'failed')
+    ) {
       reply({ type: 'saveFailed', requestId: message.requestId, reason: answer });
     } else if (message.type === 'load' && this.loadReply !== 'silent') {
       reply({ ...this.loadReply, requestId: message.requestId } as WorkerMessage);
@@ -182,6 +185,73 @@ describe('sauvegarde manuelle', () => {
     simulation.saveReply = 'failed';
     await saves.save();
     expect(shown()).toBe('save.error.failed');
+  });
+
+  it('dit que la partie est trop grande, et garde la sauvegarde précédente', async () => {
+    const { simulation, saves } = await manager();
+    await saves.save();
+    const previous = database.records.get(MANUAL_SLOT);
+    expect(previous).toBeDefined();
+    simulation.saveReply = 'size';
+    await saves.save();
+    expect(shown()).toBe('save.error.tooBig');
+    expect(database.records.get(MANUAL_SLOT)).toBe(previous);
+  });
+});
+
+describe('sauvegarde automatique', () => {
+  /** Lance la sauvegarde automatique, minuterie simulée, sur une page visible. */
+  async function autosaving() {
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
+    vi.stubGlobal('document', { visibilityState: 'visible', addEventListener: () => undefined });
+    const started = await manager();
+    started.saves.startAutosave();
+    return started;
+  }
+
+  /**
+   * Une sauvegarde automatique, puis l'attente de son issue : `settled`, ou un court délai
+   * quand rien ne doit changer. La fausse base et le faux worker répondent par de vraies
+   * minuteries.
+   */
+  async function tick(simulation: FakeSimulation, settled?: () => boolean) {
+    const before = simulation.sent.length;
+    vi.advanceTimersByTime(30_000);
+    expect(simulation.sent.length).toBe(before + 1);
+    for (let wait = 0; wait < (settled === undefined ? 10 : 400); wait++) {
+      if (settled?.() === true) return;
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+    if (settled !== undefined) expect(settled()).toBe(true);
+  }
+
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+  });
+
+  it("dit une fois, sans écraser l'emplacement, que la partie est trop grande", async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    try {
+      const { simulation } = await autosaving();
+      await tick(simulation, () => database.records.has(AUTO_SLOT));
+      const previous = database.records.get(AUTO_SLOT);
+      expect(shown()).toBeUndefined();
+      simulation.saveReply = 'size';
+      await tick(simulation, () => shown() !== undefined);
+      expect(shown()).toBe('save.error.tooBig');
+      expect(database.records.get(AUTO_SLOT)).toBe(previous);
+      // Le même échec, répété, ne se dit plus ; un autre se dit une fois à son tour.
+      notice.value = undefined;
+      await tick(simulation);
+      expect(shown()).toBeUndefined();
+      simulation.saveReply = 'failed';
+      await tick(simulation, () => shown() !== undefined);
+      expect(shown()).toBe('save.error.failed');
+      expect(database.records.get(AUTO_SLOT)).toBe(previous);
+    } finally {
+      warn.mockRestore();
+    }
   });
 });
 

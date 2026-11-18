@@ -113,7 +113,10 @@ export function CreateWorld({ actions, setup }: { actions: UiActions; setup: Cre
       aria-labelledby="create-title"
       tabIndex={-1}
       onKeyDown={(event) => {
-        if (event.key === 'Escape') cancel();
+        if (event.key !== 'Escape') return;
+        // Échap est à l'écran : il ne ferme pas aussi un panneau de la carte (escape.ts).
+        event.preventDefault();
+        cancel();
       }}
     >
       <form

@@ -75,9 +75,47 @@ export function cellTemperature(
   );
 }
 
+/** Mère, père ou conjoint d'un individu, vivant ou mort ; NONE s'il est inconnu. */
+function relativeOf(people: Population, id: number, link: 'mother' | 'father' | 'partner'): number {
+  if (id === NONE) return NONE;
+  const slot = people.slotOf(id);
+  if (slot !== undefined) return people.get(link, slot);
+  const row = people.archivedRow(id);
+  return row === undefined ? NONE : (people.archive.columns[link][row] ?? NONE);
+}
+
+/** Les parents (mère, père) de deux individus en ont-ils un en commun ? */
+function shareParent(motherA: number, fatherA: number, motherB: number, fatherB: number) {
+  return (motherA !== NONE && motherA === motherB) || (fatherA !== NONE && fatherA === fatherB);
+}
+
 /**
- * Proches parents, entre qui il n'y a pas de couple : parent et enfant, frères et sœurs,
- * demi-frères et demi-sœurs.
+ * Le parent `parent` de quelqu'un est-il, pour `other` (de parents `motherOther` et
+ * `fatherOther`), un enfant (`other` est alors son grand-parent), un frère, une sœur, un
+ * demi-frère ou une demi-sœur (`other` est son oncle ou sa tante), ou le conjoint, actuel
+ * ou à sa mort (`other` est son beau-parent) ? On lit les morts dans l'archive.
+ */
+function parentLinked(
+  people: Population,
+  parent: number,
+  other: number,
+  motherOther: number,
+  fatherOther: number,
+): boolean {
+  if (parent === NONE) return false;
+  const mother = relativeOf(people, parent, 'mother');
+  const father = relativeOf(people, parent, 'father');
+  if (mother === other || father === other) return true;
+  if (shareParent(mother, father, motherOther, fatherOther)) return true;
+  return relativeOf(people, parent, 'partner') === other;
+}
+
+/**
+ * Proches parents, entre qui il n'y a pas de couple : parent et enfant, grand-parent et
+ * petit-enfant, frères et sœurs, demi-frères et demi-sœurs, oncle ou tante et neveu ou
+ * nièce (demi-oncles et demi-tantes compris), beau-parent et bel-enfant. Les cousins
+ * peuvent s'épouser. `a` et `b` sont des emplacements de vivants ; leurs ascendants
+ * peuvent être morts.
  */
 export function closeKin(people: Population, a: number, b: number): boolean {
   const idA = people.get('id', a);
@@ -87,5 +125,11 @@ export function closeKin(people: Population, a: number, b: number): boolean {
   const motherB = people.get('mother', b);
   const fatherB = people.get('father', b);
   if (motherA === idB || fatherA === idB || motherB === idA || fatherB === idA) return true;
-  return (motherA !== NONE && motherA === motherB) || (fatherA !== NONE && fatherA === fatherB);
+  if (shareParent(motherA, fatherA, motherB, fatherB)) return true;
+  return (
+    parentLinked(people, motherA, idB, motherB, fatherB) ||
+    parentLinked(people, fatherA, idB, motherB, fatherB) ||
+    parentLinked(people, motherB, idA, motherA, fatherA) ||
+    parentLinked(people, fatherB, idA, motherA, fatherA)
+  );
 }

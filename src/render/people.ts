@@ -1,29 +1,63 @@
 /**
  * Groupes et habitants sur la carte (tâche 2.9 ; REN-03, REN-04, REN-08 ; ADR 0011).
  *
- * - De loin, une bannière par groupe, aux couleurs de l'habit de sa culture, à taille fixe
- *   à l'écran, comme une icône.
+ * Tout se dessine à la densité de pixels de la carte, sans mélange (REN-08), à des
+ * positions entières : à l'échelle s, entière à partir de 1, s pixels physiques par pixel
+ * de motif, un par pixel de carte ; sous l'échelle 1, un pixel physique par pixel de
+ * motif, comme la carte que montrent ses mipmaps (mapPixel, crowd.ts).
+ *
+ * - De loin, une bannière par groupe, aux couleurs de l'habit de sa culture. Sa taille à
+ *   l'écran passe par celle de son motif, et non par celle de ses pixels : la plus petite
+ *   des bannières de 8 à 36 pixels de haut qui atteigne 12 pixels CSS (chooseBanner).
  * - De près (à partir de SPRITE_SCALE pixels de l'écran par pixel de carte), un mini-sprite
  *   par membre, rangé en grappe autour de la case du groupe. Il est tiré de l'individu :
- *   sexe, âge, teint, cheveux (gris avec l'âge), habit de la culture. Il est dessiné à la
- *   densité de pixels de la carte, sans mélange (REN-08), à une position entière, et il
- *   marche : deux images en alternance.
+ *   sexe, âge, teint, cheveux (grisonnants avec l'âge, comme au portrait), habit de la
+ *   culture. Il marche : deux images en alternance.
  *
- * Les textures recolorées se gardent d'une image à l'autre, une par apparence.
+ * Un groupe se dessine s'il touche l'écran, grappe ou bannière comprise. Chaque sprite a
+ * une profondeur unique (depth, crowd.ts) : le plus bas à l'écran passe devant, puis le
+ * dernier dessiné, comme le retrouve pickGroup. Les textures recolorées se gardent d'une
+ * image à l'autre, une par motif, apparence et couleur d'habit.
  */
 import { BufferImageSource, Container, Sprite, Texture, type Application } from 'pixi.js';
 import type { Appearance, Genetics } from '../core/data';
+import { geneRoles } from '../core/data/people';
 import { GROUP_STRIDE, type GroupsFrame } from '../core/protocol';
 import { decodeVisual, SKIN_TONES } from '../core/visual';
-import { personPalette, recolor, frameOf, skinColor, type Palette } from './atlas';
+import {
+  alleleColors,
+  cultureCloth,
+  greyed,
+  personPalette,
+  recolor,
+  frameOf,
+  skinColor,
+  type Palette,
+} from './atlas';
 import { parseColor, type Rgb } from './bake';
-import { displayScale, TILE_PX, type Camera, type Extent } from './camera';
-import { clusterOffset, spriteName } from './crowd';
+import { displayScale, type Camera, type Extent } from './camera';
+import {
+  bannerBox,
+  bannerShapes,
+  chooseBanner,
+  clusterReach,
+  depth,
+  groupScreen,
+  mapPixel,
+  memberBox,
+  memberShape,
+  onScreen,
+  pickGroup,
+  spriteName,
+  spriteNames,
+  SPRITE_SCALE,
+  textureKey,
+  TOUCH_SLOP,
+  type NamedSize,
+  type PickShapes,
+  type Reach,
+} from './crowd';
 
-/** Échelle, en pixels physiques par pixel de carte, à partir de laquelle on voit les gens. */
-export const SPRITE_SCALE = 3;
-/** Taille d'un pixel de bannière à l'écran, en pixels physiques. */
-const ICON_SCALE = 2;
 /** Durée d'une image de la marche, en millisecondes. */
 const STEP_MS = 420;
 
@@ -41,16 +75,36 @@ export class PeopleLayer {
   private readonly clothing: readonly Rgb[];
   private readonly textures = new Map<string, Texture>();
   private readonly sprites: Sprite[] = [];
+  /** Le plus grand des mini-sprites, pour l'étendue d'une grappe. */
+  private readonly largest: { readonly width: number; readonly height: number };
+  /** Les bannières, de la plus petite à la plus grande (BANNERS). */
+  private readonly banners: readonly [NamedSize, ...NamedSize[]];
+  /** Les motifs, pour retrouver le groupe sous un appui. */
+  private readonly shapes: PickShapes;
   private frame: GroupsFrame | undefined;
 
   constructor(app: Application, data: PeopleData) {
     this.app = app;
     this.data = data;
-    const hair = data.genetics.loci.find((locus) => locus.id === 'hair');
-    this.hairColors = (hair?.alleles ?? []).map((allele) => parseColor(allele.color ?? '#000000'));
     this.grey = parseColor(data.appearance.grey);
+    // Les couleurs des cheveux : celles des allèles du locus qui en tient le rôle.
+    this.hairColors = alleleColors(
+      data.genetics.loci[geneRoles(data.genetics).loci.hair],
+      this.grey,
+    );
     this.clothing = data.appearance.clothing.map((color) => parseColor(color));
-    // Les plus bas à l'écran passent devant.
+    const frames = spriteNames().map((name) => frameOf(name));
+    this.largest = {
+      width: Math.max(...frames.map((frame) => frame.width)),
+      height: Math.max(...frames.map((frame) => frame.height)),
+    };
+    this.banners = bannerShapes(frameOf);
+    this.shapes = {
+      banners: this.banners,
+      largest: this.largest,
+      member: (code) => memberShape(code, frameOf),
+    };
+    // Les sprites se rangent par leur profondeur (depth) : le plus bas devant.
     this.layer.sortableChildren = true;
     app.stage.addChild(this.layer);
   }
@@ -61,12 +115,11 @@ export class PeopleLayer {
   }
 
   private cloth(culture: number): Rgb {
-    return this.clothing[(Math.max(1, culture) - 1) % this.clothing.length] ?? [120, 90, 60];
+    return cultureCloth(this.clothing, culture) ?? [120, 90, 60];
   }
 
   /** Texture d'un motif dans une palette, gardée d'une image à l'autre. */
-  private texture(name: string, key: string, palette: () => Palette): Texture {
-    const cacheKey = `${name}|${key}`;
+  private texture(name: string, cacheKey: string, palette: () => Palette): Texture {
     let texture = this.textures.get(cacheKey);
     if (texture === undefined) {
       const frame = frameOf(name);
@@ -93,24 +146,29 @@ export class PeopleLayer {
     return sprite;
   }
 
-  /** Une bannière, à taille fixe ; sa hampe se plante sur la case. */
-  private drawBanner(culture: number, screenX: number, screenY: number, used: number): number {
+  /**
+   * La bannière `banner` d'un groupe, de `pixel` pixels physiques par pixel de son motif ;
+   * sa hampe se plante sur la case. À l'échelle 1 et au-delà, ses pixels tombent sur ceux
+   * de la carte : la case et la bannière sont à des positions entières de pixels de carte.
+   */
+  private drawBanner(
+    banner: NamedSize,
+    culture: number,
+    screenX: number,
+    screenY: number,
+    pixel: number,
+    used: number,
+  ): number {
     const { resolution } = this.app.renderer;
-    const banner = this.sprite(used);
-    banner.texture = this.texture('icons/group', `c${String(culture)}`, () =>
-      personPalette(this.data.appearance, {
-        skin: [0, 0, 0],
-        hair: [0, 0, 0],
-        cloth: this.cloth(culture),
-      }),
+    const sprite = this.sprite(used);
+    const cloth = this.cloth(culture);
+    sprite.texture = this.texture(banner.name, textureKey(banner.name, 0, cloth), () =>
+      personPalette(this.data.appearance, { skin: [0, 0, 0], hair: [0, 0, 0], cloth }),
     );
-    const icon = frameOf('icons/group');
-    banner.scale.set(ICON_SCALE / resolution);
-    banner.position.set(
-      Math.round(screenX) / resolution,
-      Math.round(screenY - icon.height * ICON_SCALE) / resolution,
-    );
-    banner.zIndex = screenY;
+    const box = bannerBox(screenX, screenY, banner, pixel);
+    sprite.scale.set(pixel / resolution);
+    sprite.position.set(box.left / resolution, box.top / resolution);
+    sprite.zIndex = depth(box, used);
     return used + 1;
   }
 
@@ -127,30 +185,29 @@ export class PeopleLayer {
     used: number,
   ): number {
     const { resolution } = this.app.renderer;
+    const cloth = this.cloth(culture);
     let next = used;
     for (let member = 0; member < size; member++) {
       const code = frame.sprites[first + member] ?? 0;
       const visual = decodeVisual(code);
       const step = Math.floor(now / STEP_MS + member * 0.37) % 2;
       const name = spriteName(visual.age, visual.sex, step);
-      const hair = visual.grey ? this.grey : (this.hairColors[visual.hair] ?? this.grey);
-      const texture = this.texture(name, `${String(code)}c${String(culture)}`, () =>
+      const hair = greyed(this.hairColors[visual.hair] ?? this.grey, this.grey, visual.grey);
+      const texture = this.texture(name, textureKey(name, code, cloth), () =>
         personPalette(this.data.appearance, {
           skin: skinColor(this.data.appearance, (visual.skin + 0.5) / SKIN_TONES),
           hair,
-          cloth: this.cloth(culture),
+          cloth,
         }),
       );
-      const person = this.sprite(next++);
+      const rank = next++;
+      const person = this.sprite(rank);
       person.texture = texture;
-      const offset = clusterOffset(member);
-      const shape = frameOf(name);
       // Les pieds sur la case, les pixels du sprite sur ceux de la carte.
-      const left = Math.round(screenX + (offset.dx - Math.floor(shape.width / 2)) * scale);
-      const top = Math.round(screenY + (offset.dy - shape.height + 2) * scale);
+      const box = memberBox(screenX, screenY, member, frameOf(name), scale);
       person.scale.set(scale / resolution);
-      person.position.set(left / resolution, top / resolution);
-      person.zIndex = top + shape.height * scale;
+      person.position.set(box.left / resolution, box.top / resolution);
+      person.zIndex = depth(box, rank);
     }
     return next;
   }
@@ -160,45 +217,42 @@ export class PeopleLayer {
     const frame = this.frame;
     let used = 0;
     if (frame !== undefined && world !== undefined) {
+      const { resolution } = this.app.renderer;
+      const view = { camera, viewport, world, resolution };
       const scale = displayScale(camera.zoom);
       const close = scale >= SPRITE_SCALE;
-      const margin = 16 * Math.max(scale, ICON_SCALE);
-      // Largeur d'une copie du monde à l'écran : quand le monde est plus étroit que l'écran,
-      // chaque groupe se voit dans chacune des copies visibles (monde cylindrique).
-      const span = world.width * scale;
-      const reach = Math.ceil((viewport.width / 2 + margin) / span);
+      // Pixels physiques par pixel de motif, mini-sprite ou bannière : ceux de la carte.
+      const pixel = mapPixel(scale);
+      const banner = chooseBanner(this.banners, pixel, resolution);
+      const bannerReach: Reach = { left: 0, right: banner.width, up: banner.height, down: 0 };
       const groups = frame.groups;
       let first = 0;
       for (let index = 0; index + GROUP_STRIDE <= groups.length; index += GROUP_STRIDE) {
-        const x = groups[index + 1] ?? 0;
-        const y = groups[index + 2] ?? 0;
         const size = groups[index + 3] ?? 0;
         const culture = groups[index + 4] ?? 1;
-        // Centre de la case, dans la copie du monde la plus proche de la caméra.
-        let mapX = x * TILE_PX + TILE_PX / 2;
-        const mapY = y * TILE_PX + TILE_PX / 2;
-        mapX += Math.round((camera.x - mapX) / world.width) * world.width;
-        const nearest = (mapX - camera.x) * scale + viewport.width / 2;
-        const screenY = (mapY - camera.y) * scale + viewport.height / 2;
-        if (screenY > -margin && screenY < viewport.height + margin) {
-          for (let copy = -reach; copy <= reach; copy++) {
-            const screenX = nearest + copy * span;
-            if (screenX <= -margin || screenX >= viewport.width + margin) continue;
-            if (close) {
-              used = this.drawMembers(
-                frame,
-                first,
-                size,
-                culture,
-                screenX,
-                screenY,
-                scale,
-                now,
-                used,
-              );
-            } else {
-              used = this.drawBanner(culture, screenX, screenY, used);
-            }
+        // Ce qui se dessine autour de la case, grappe ou bannière, en pixels de motif.
+        const reach = close
+          ? clusterReach(size, this.largest.width, this.largest.height)
+          : bannerReach;
+        const at = groupScreen(groups[index + 1] ?? 0, groups[index + 2] ?? 0, view, reach, pixel);
+        const screenY = at.y;
+        for (let copy = -at.copies; copy <= at.copies; copy++) {
+          const screenX = at.x + copy * at.span;
+          if (!onScreen(screenX, screenY, reach, pixel, viewport)) continue;
+          if (close) {
+            used = this.drawMembers(
+              frame,
+              first,
+              size,
+              culture,
+              screenX,
+              screenY,
+              pixel,
+              now,
+              used,
+            );
+          } else {
+            used = this.drawBanner(banner, culture, screenX, screenY, pixel, used);
           }
         }
         first += size;
@@ -208,6 +262,18 @@ export class PeopleLayer {
       const unused = this.sprites.at(index);
       if (unused !== undefined) unused.visible = false;
     }
+  }
+
+  /**
+   * Le groupe dessiné sous le point (x, y) de l'écran, en pixels physiques, d'après la
+   * dernière image des groupes et la caméra du dernier dessin (pickGroup), ou undefined.
+   */
+  pick(camera: Camera, viewport: Extent, world: Extent | undefined, x: number, y: number) {
+    const frame = this.frame;
+    if (frame === undefined || world === undefined) return undefined;
+    const { resolution } = this.app.renderer;
+    const view = { camera, viewport, world, resolution };
+    return pickGroup(frame, view, x, y, this.shapes, TOUCH_SLOP * resolution);
   }
 
   /** Vide les textures (changement de monde : rien ne s'y rattache plus). */

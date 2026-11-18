@@ -5,7 +5,8 @@
  *
  * Chaque action du joueur se conclut par un avis, et une écriture ne compte qu'une
  * fois la transaction d'IndexedDB validée. La sauvegarde automatique reste discrète :
- * elle ne signale que le premier échec du stockage, et note les autres dans la console.
+ * elle signale une fois chaque sorte d'échec durable (stockage indisponible, partie trop
+ * grande pour le format, écriture impossible), et note les autres dans la console.
  */
 import type { WorkerMessage } from '../core/protocol';
 import { MAX_SAVE_BYTES, type SaveErrorCode, type SaveMeta } from '../core/save/format';
@@ -133,6 +134,7 @@ type SaveReply = Extract<WorkerMessage, { type: 'saved' | 'saveFailed' | 'loaded
 type Capture =
   | { readonly status: 'saved'; readonly meta: SaveMeta; readonly data: ArrayBuffer }
   | { readonly status: 'noGame' }
+  | { readonly status: 'size' }
   | { readonly status: 'failed' }
   | { readonly status: 'timeout' };
 
@@ -140,16 +142,32 @@ type Capture =
 type SaveOutcome =
   | 'save.done'
   | 'save.error.noGame'
+  | 'save.error.tooBig'
   | 'save.error.failed'
   | 'save.error.timeout'
   | 'save.error.storage';
 
-/** Avis d'une capture manquée. */
+/**
+ * Avis d'une capture manquée. Une partie trop grande pour le format n'est écrite nulle
+ * part : l'emplacement garde sa sauvegarde précédente.
+ */
 const CAPTURE_ERRORS = {
   noGame: 'save.error.noGame',
+  size: 'save.error.tooBig',
   failed: 'save.error.failed',
   timeout: 'save.error.timeout',
 } as const satisfies Record<Exclude<Capture['status'], 'saved'>, MessageKey>;
+
+/**
+ * Échecs de la sauvegarde automatique que le joueur apprend, une fois chacun : ils se
+ * répéteraient à chaque essai. Un délai dépassé est passager ; sans partie, rien n'est à
+ * sauvegarder.
+ */
+const LASTING_FAILURES: ReadonlySet<SaveOutcome> = new Set([
+  'save.error.storage',
+  'save.error.tooBig',
+  'save.error.failed',
+]);
 
 /** Issue d'un chargement : partie chargée, emplacement vide, ou avis d'erreur. */
 type LoadOutcome =
@@ -333,15 +351,15 @@ export class SaveManager {
   startAutosave(): void {
     // Sans stockage local, il n'y a rien où sauvegarder : le démarrage l'a déjà dit.
     if (this.store === undefined) return;
-    let warned = false;
+    const warned = new Set<SaveOutcome>();
     const autosave = () => {
       void this.saveTo(AUTO_SLOT).then((outcome) => {
         // Sans partie (écran de création au démarrage), il n'y a rien à sauvegarder.
         if (outcome === 'save.done' || outcome === 'save.error.noGame') return;
         console.warn('sauvegarde automatique', outcome);
-        // Un échec du stockage est signalé une fois ; le reste est passager.
-        if (outcome === 'save.error.storage' && !warned) {
-          warned = true;
+        // Un échec durable est signalé une fois ; le reste est passager.
+        if (LASTING_FAILURES.has(outcome) && !warned.has(outcome)) {
+          warned.add(outcome);
           showNotice(outcome);
         }
       });

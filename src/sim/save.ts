@@ -1,7 +1,7 @@
 /**
- * Sauvegarde de l'état de la simulation (ADR 0007) : couches du monde et colonnes de la
- * population en binaire, le reste en JSON. Une partie rechargée se poursuit à
- * l'identique (NF-09).
+ * Sauvegarde de l'état de la simulation (ADR 0007) : couches du monde, colonnes de la
+ * population, chronique et stocks entamés en binaire, le reste en JSON. Une partie
+ * rechargée se poursuit à l'identique (NF-09).
  *
  * La sauvegarde garde le monde lui-même, et non sa seule graine : elle reste lisible
  * quand le générateur change. Elle nomme aussi les biomes et les ressources dont ses
@@ -26,9 +26,9 @@ import {
   type FoodStocks,
   type ForageContent,
 } from './forage';
-import { terrainCosts } from './groups';
+import { terrainCosts, terrainLands } from './terrain';
 import { Population } from './population';
-import { restorePeople, savePeople } from './populationSave';
+import { migrateChronicle, restorePeople, savePeople } from './populationSave';
 import { emptySociety } from './society';
 import type { SimState } from './state';
 
@@ -133,7 +133,10 @@ function each<T>(items: readonly unknown[], schema: z.ZodType<T>, name: string):
   });
 }
 
-/** Population vide d'une sauvegarde : ce que la version 4 ajoute à une partie de la 3. */
+/**
+ * Population vide d'une sauvegarde : ce que la version 4 ajoute à une partie de la 3,
+ * dans la forme d'aujourd'hui (les migrations suivantes n'y changent rien).
+ */
 function emptyPeople(): { json: unknown; arrays: SaveData['arrays'] } {
   const empty = savePeople(new Population(), emptySociety(), {
     species: { entries: [], indexOf: () => undefined },
@@ -142,11 +145,56 @@ function emptyPeople(): { json: unknown; arrays: SaveData['arrays'] } {
   return empty;
 }
 
+/** Langue et règle de nommage d'une culture d'une sauvegarde, lues sans s'y fier. */
+function savedCulture(entry: unknown): { language: number; naming: unknown } {
+  if (typeof entry !== 'object' || entry === null) return { language: 0, naming: undefined };
+  const { language, naming } = entry as { language?: unknown; naming?: unknown };
+  return { language: typeof language === 'number' ? language : 0, naming };
+}
+
+/**
+ * Version 5 : chacun reçoit la langue de son nom de famille, celle de sa culture, qui le
+ * rendait jusqu'ici ; ainsi les noms affichés restent les mêmes. Une personne d'une
+ * culture sans nom de famille n'en affichait pas : son code, que rien ne montrait mais
+ * qu'un enfant aurait pu hériter, s'efface. Un tableau absent ou mal formé reste tel quel :
+ * la relecture le refusera.
+ */
+function migrateFamilyNames(save: SaveData): SaveData {
+  const json: unknown = save.json;
+  const people: unknown =
+    typeof json === 'object' && json !== null ? (json as { people?: unknown }).people : undefined;
+  const list: unknown =
+    typeof people === 'object' && people !== null
+      ? (people as { cultures?: unknown }).cultures
+      : undefined;
+  // Les cultures, rangées par identifiant : celui de l'entrée i vaut i + 1.
+  const cultures = (Array.isArray(list) ? (list as unknown[]) : []).map(savedCulture);
+  const arrays: Record<string, SavedArray> = { ...save.arrays };
+  for (const prefix of ['people', 'archive']) {
+    const culture = save.arrays[`${prefix}Culture`];
+    const family = save.arrays[`${prefix}FamilyName`];
+    if (!(culture instanceof Uint16Array) || !(family instanceof Uint32Array)) continue;
+    if (family.length !== culture.length) continue;
+    arrays[`${prefix}FamilyLanguage`] = Uint16Array.from(
+      culture,
+      (id) => cultures[id - 1]?.language ?? 0,
+    );
+    arrays[`${prefix}FamilyName`] = Uint32Array.from(family, (code, index) =>
+      cultures[(culture[index] ?? 0) - 1]?.naming === 'none' ? 0 : code,
+    );
+  }
+  return { meta: save.meta, json: save.json, arrays };
+}
+
 /**
  * Migrations des sauvegardes (ADR 0007) : celle de la clé v mène de la version v à
  * v + 1. Une version sans migration est refusée comme trop ancienne : c'est le cas des
  * versions 1 et 2, parties de test de la phase 0, sans monde à reprendre. La version 4
- * ajoute la population (phase 2) : une partie de la 3 n'en a pas encore.
+ * ajoute la population (phase 2) : une partie de la 3 n'en a pas encore. La version 5
+ * suit la relecture de la phase 2 : la langue des noms de famille (migrateFamilyNames),
+ * la chronique en colonnes (migrateChronicle). Elle nomme aussi les sous-espèces de
+ * chaque espèce ; une partie de la 4 ne les nommait pas, et suivait l'ordre des données,
+ * qui n'a pas changé depuis : la relecture le reprend.
  */
 export const MIGRATIONS: Migrations = {
   3: (save) => {
@@ -158,6 +206,7 @@ export const MIGRATIONS: Migrations = {
       arrays: { ...save.arrays, ...people.arrays },
     };
   },
+  4: (save) => migrateChronicle(migrateFamilyNames(save)),
 };
 
 /** Copie de l'état, prise d'un coup : la simulation peut repartir aussitôt. */
@@ -229,7 +278,7 @@ function remapping(
 /**
  * Reconstruit l'état d'une sauvegarde ; lève une SaveError si elle est incohérente.
  * Les champs sont vérifiés entre eux : paramètres du monde, couches de la bonne taille,
- * indices du contenu connus, journal ordonné et antérieur au pas courant, flux du
+ * indices du contenu connus, journal ordonné, jusqu'au pas courant compris, flux du
  * générateur valides.
  */
 export function restoreState(save: SaveData, content: SaveContent): SimState {
@@ -252,10 +301,12 @@ export function restoreState(save: SaveData, content: SaveContent): SimState {
   const commandLog = each(parsed.data.commandLog, LoggedCommandSchema, 'journal');
   const pending = each(parsed.data.pending, GameCommandSchema, 'commandes en attente');
   const { tick } = save.meta;
-  // Une commande journalisée au pas t s'est appliquée avant que le temps ne passe à t + 1.
+  // Une commande journalisée au pas t s'applique au début de t, ou en pause dès sa
+  // réception, avant que le temps ne passe à t + 1 (ADR 0003, ADR 0004) : une sauvegarde
+  // prise en pause juste après elle la garde au journal, au pas courant.
   let previous = 0;
   for (const entry of commandLog) {
-    if (entry.tick < previous || entry.tick >= tick) {
+    if (entry.tick < previous || entry.tick > tick) {
       throw new SaveError('corrupt', 'journal des commandes incohérent');
     }
     previous = entry.tick;
@@ -293,6 +344,8 @@ export function restoreState(save: SaveData, content: SaveContent): SimState {
   const { people, society } = restorePeople(save, parsed.data.people, content, size, tick);
   const food = restoreFood(save, count);
   const grid = chunkGrid(size);
+  // Couches dérivées du monde et du contenu, comme à la création de la partie.
+  const cost = terrainCosts(world, content);
   return {
     params: params.data,
     size,
@@ -301,7 +354,8 @@ export function restoreState(save: SaveData, content: SaveContent): SimState {
     people,
     society,
     food,
-    cost: terrainCosts(world, content),
+    cost,
+    land: terrainLands(cost, size),
     commandLog: [...commandLog],
     pending: [...pending],
     rng: new Rng(save.meta.seed, rng),

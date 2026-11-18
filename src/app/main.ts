@@ -6,25 +6,29 @@ import { PROTOCOL_VERSION, type InspectTarget } from '../core/protocol';
 import { WORLD_SIZES, type WorldLayers, type WorldSizeId } from '../core/world';
 import { defaultWorldParams, type WorldParams } from '../core/worldParams';
 import { determinismSelfTest } from '../core/selftest';
-import { t, type MessageKey } from '../i18n';
+import { t } from '../i18n';
 import { parseColor } from '../render/bake';
 import { CameraControls } from '../render/controls';
-import { cellAt, MapView } from '../render/map';
+import { MapView } from '../render/map';
 import { legend, overlayTexels } from '../render/mapModes';
-import { TILE_PX } from '../render/camera';
+import { cellAt, showAt, TILE_PX, type Camera } from '../render/camera';
 import { PeopleLayer } from '../render/people';
 import { previewPixels } from '../render/preview';
 import { SPAWN_COUNT } from '../sim/commands';
 import type { SheetContent } from '../ui/Sheet';
 import { createRenderer } from '../render/renderer';
 import { App } from '../ui/App';
+import { escapeKey } from '../ui/escape';
 import {
   chronicle,
-  CHRONICLE_KEPT,
+  chronicleLoading,
+  chronicleNewFacts,
+  chronicleOpen,
   content as contentInfo,
   creationBusy,
   creationOpen,
   creationPending,
+  creatorSetup,
   debugInfo,
   determinismOk,
   generation,
@@ -35,19 +39,33 @@ import {
   PREVIEW_COLUMNS,
   previewImage,
   previewKey,
+  raise,
   sheet,
   showNotice,
+  spawnChoice,
   spawnSettings,
   time,
   tool,
   worldInfo,
   type CreationSetup,
-  type CreatorSetup,
   type MapModeId,
 } from '../ui/store';
+import {
+  freezeFacts,
+  snapshotFacts,
+  latestFacts,
+  newFacts,
+  olderThan,
+  receiveFacts,
+  receivePage,
+  type KeptFacts,
+} from './chronicle';
 import { DebugSampler, usedMemoryMb } from './debug';
+import { centerOf, visibleArea, type Rect } from './focus';
 import { SaveManager, SaveStore } from './saves';
 import { describeCell } from './inspect';
+import { SheetRequests } from './sheets';
+import { OccupiedCells, spawnTarget } from './spawn';
 import { PreviewScheduler } from './preview';
 import { SeasonClock } from './seasonClock';
 import { SimulationClient } from './simulation';
@@ -98,6 +116,8 @@ async function main(): Promise<void> {
     sizes: touchOnly ? ['small', 'medium', 'large'] : ['small', 'medium', 'large', 'huge'],
     defaultSize: touchOnly ? 'medium' : 'large',
   };
+  // Ce que l'outil d'apparition propose : les espèces des données et leurs sous-espèces.
+  const creator = creatorSetup(data.species.entries, SPAWN_COUNT);
   const simulation = new SimulationClient();
   const biomeColors = data.biomes.entries.map((biome) => parseColor(biome.palette.base));
   const biomeWater = data.biomes.entries.map((biome) => biome.tile === 'water');
@@ -129,61 +149,115 @@ async function main(): Promise<void> {
   // Sans IndexedDB (navigation privée, stockage refusé), le jeu tourne sans sauvegarde locale.
   const store = await SaveStore.open().catch(() => undefined);
   const saves = new SaveManager(simulation, store);
+  // Caméra du dernier dessin : un appui désigne ce que la carte montrait.
+  let drawnCamera: Camera | undefined;
+  /**
+   * Un point de la carte, désigné d'un appui bref (`tap`) ou long : selon l'outil, sa case
+   * reçoit un groupe (CRE-03), se peint (débogage), ou s'inspecte (IHM-07) ; un groupe
+   * dessiné sous le doigt ouvre sa fiche (IHM-02).
+   */
+  const designate = (
+    mapX: number,
+    mapY: number,
+    screenX: number,
+    screenY: number,
+    tap: boolean,
+  ) => {
+    const info = worldInfo.value;
+    if (info === undefined) return;
+    // La case du monde, sa colonne ramenée dans le monde, quelle que soit la copie touchée.
+    const cell = cellAt(mapX, mapY, info.size.width);
+    if (tool.value === 'spawn') {
+      spawnAt(cell.x, cell.y);
+      return;
+    }
+    // Débogage : ?brush=desert peint la case touchée de ce biome, par une commande de jeu.
+    if (tap && brush !== null) {
+      simulation.send({
+        type: 'game',
+        command: { type: 'paintBiome', x: cell.x, y: cell.y, biome: brush },
+      });
+      return;
+    }
+    const group =
+      drawnCamera === undefined
+        ? undefined
+        : people.pick(drawnCamera, map.viewport, map.world, screenX, screenY);
+    if (group === undefined) {
+      showCell(cell.x, cell.y);
+      raise('cell');
+    } else {
+      // Le groupe montré, la case qu'on inspectait s'efface.
+      inspected.value = undefined;
+      openSheet({ kind: 'group', id: group });
+    }
+  };
   const controls = new CameraControls({
     element: mapElement,
     viewport: () => map.viewport,
     resolution: () => app.renderer.resolution,
     world: () => map.world,
-    // Appui long au doigt, clic ou appui bref : la case désignée s'inspecte (IHM-07), ou
-    // reçoit le groupe de l'outil d'apparition (CRE-03).
-    onLongPress: (mapX, mapY) => {
-      const cell = cellAt(mapX, mapY);
-      if (tool.value === 'spawn') spawnAt(cell.x, cell.y);
-      else inspect(cell.x, cell.y);
+    onLongPress: (mapX, mapY, screenX, screenY) => {
+      designate(mapX, mapY, screenX, screenY, false);
     },
-    onTap: (mapX, mapY) => {
-      const cell = cellAt(mapX, mapY);
-      if (tool.value === 'spawn') {
-        spawnAt(cell.x, cell.y);
-        return;
-      }
-      // Débogage : ?brush=desert peint la case touchée de ce biome, par une commande de jeu.
-      if (brush !== null) {
-        simulation.send({
-          type: 'game',
-          command: { type: 'paintBiome', x: cell.x, y: cell.y, biome: brush },
-        });
-        return;
-      }
-      inspect(cell.x, cell.y);
+    onTap: (mapX, mapY, screenX, screenY) => {
+      designate(mapX, mapY, screenX, screenY, true);
     },
+    // Une apparition ne s'annule pas : outil armé, un appui long attend le relâcher, et ne
+    // compte pas s'il est devenu un glisser ou un pincement (U-6).
+    holdUntilRelease: () => tool.value === 'spawn',
   });
   // Couches du monde affiché, pour l'inspection et les légendes.
   let worldLayers: WorldLayers | undefined;
-  // Fiches (IHM-02) : la dernière demande, et la cible de la fiche ouverte, qu'on rafraîchit.
-  let inspectRequest = 0;
-  let sheetTarget: InspectTarget | undefined;
-  const requestSheet = (target: InspectTarget) => {
-    inspectRequest++;
-    simulation.send({ type: 'inspect', requestId: inspectRequest, target });
+  // Fiches (IHM-02) : demandes du joueur et rafraîchissements, numérotés (app/sheets.ts).
+  const sheets = new SheetRequests();
+  const openSheet = (target: InspectTarget) => {
+    simulation.send({ type: 'inspect', ...sheets.open(target) });
   };
-  /** Fait apparaître un groupe sur une case de terre ; un avis sinon. */
+  // Cases occupées, que l'outil d'apparition refuse : celles des groupes de la dernière
+  // image, et celles des apparitions envoyées qu'aucune image n'a encore montrées.
+  const occupied = new OccupiedCells();
+  /** Fait apparaître un groupe sur la case, si elle le permet ; un avis dit sinon pourquoi. */
   const spawnAt = (x: number, y: number) => {
     const info = worldInfo.value;
     if (worldLayers === undefined || info === undefined) return;
-    const biome = data.biomes.entries.at(worldLayers.biome[y * info.size.width + x] ?? 0);
-    if (biome === undefined || biome.movementCost === null) {
-      showNotice('creator.water');
+    const target = spawnTarget(worldLayers, info.size, x, y, data, occupied);
+    if ('refusal' in target) {
+      showNotice(target.refusal);
       return;
     }
-    const settings = spawnSettings.value;
-    simulation.send({ type: 'game', command: { type: 'spawnGroup', x, y, ...settings } });
+    // Les réglages choisis, ou ceux tirés des données (U-11).
+    const settings = spawnChoice(creator, spawnSettings.value);
+    if (settings === undefined) return;
+    simulation.send({
+      type: 'game',
+      command: { type: 'spawnGroup', x: target.x, y: target.y, ...settings },
+    });
+    // La case est prise dès l'envoi : un second appui, avant l'image qui montrera le
+    // groupe, ne l'empile pas.
+    occupied.add(target.x, target.y, info.size);
   };
-  const inspect = (x: number, y: number) => {
+  const uiElement = element('ui');
+  /**
+   * Ce qui couvre la carte : les panneaux de l'interface et le bouton du débogage, et la
+   * colonne de droite entière dès qu'un panneau s'y montre, car la fiche qui s'ouvre y
+   * prendra sa place.
+   */
+  const covers = (): Rect[] => {
+    const rects: Rect[] = [...uiElement.querySelectorAll('.panel, .debug-toggle')].map((panel) =>
+      panel.getBoundingClientRect(),
+    );
+    const side = uiElement.querySelector('.hud-side');
+    const shown = [...(side?.querySelectorAll('.panel') ?? [])].some(
+      (panel) => panel.getClientRects().length > 0,
+    );
+    if (side !== null && shown) rects.push(side.getBoundingClientRect());
+    return rects;
+  };
+  /** Montre la case (x, y) dans le panneau d'inspection, au mois courant. */
+  const showCell = (x: number, y: number) => {
     const info = worldInfo.value;
     if (worldLayers === undefined || info === undefined) return;
-    // Un groupe tout près ouvre sa fiche ; la case s'inspecte toujours.
-    requestSheet({ kind: 'place', x, y });
     inspected.value = describeCell(
       worldLayers,
       info.size,
@@ -193,11 +267,32 @@ async function main(): Promise<void> {
       data,
     );
   };
-  // La température du mois de la case inspectée suit le temps qui passe.
+  // La température du mois de la case inspectée suit le temps qui passe ; rien de plus :
+  // une case inspectée n'ouvre jamais d'elle-même la fiche d'un groupe qui passe.
   const refreshInspected = () => {
     const cell = inspected.value;
-    if (cell !== undefined) inspect(cell.x, cell.y);
+    if (cell !== undefined) showCell(cell.x, cell.y);
   };
+  // Chronique : les faits gardés (app/chronicle.ts), et le numéro de la dernière page demandée.
+  let facts = snapshotFacts([]);
+  let chronicleRequest = 0;
+  /** Range les faits gardés, et montre les faits affichés et le compte des faits nouveaux. */
+  const showFacts = (next: KeptFacts) => {
+    facts = next;
+    // Une liste figée garde sa référence : la chronique ne se redessine pas.
+    chronicle.value = next.shown;
+    chronicleNewFacts.value = newFacts(next);
+  };
+  /** Revient aux derniers faits ; une page encore en route sera ignorée. */
+  const latestChronicle = () => {
+    chronicleRequest++;
+    chronicleLoading.value = false;
+    showFacts(latestFacts(facts));
+  };
+  // La chronique refermée revient aux derniers faits.
+  chronicleOpen.subscribe((open) => {
+    if (!open) latestChronicle();
+  });
   // Le jeu se met en pause pendant l'écran de création, et reprend à sa fermeture s'il
   // tournait.
   let pausedForCreation = false;
@@ -221,6 +316,7 @@ async function main(): Promise<void> {
     else sampler.frame(ticker.elapsedMS);
     map.setSeason(seasons.month(performance.now()));
     const camera = controls.update(ticker.deltaMS);
+    drawnCamera = camera;
     map.draw(camera);
     people.draw(camera, map.viewport, map.world, performance.now());
   });
@@ -233,8 +329,12 @@ async function main(): Promise<void> {
       chunks: map.pendingChunks,
     };
     refreshInspected();
-    // La fiche ouverte suit la vie de l'individu ou du groupe, chaque seconde.
-    if (sheetTarget !== undefined && ++sheetRefresh % 4 === 0) requestSheet(sheetTarget);
+    // La fiche ouverte suit la vie de l'individu ou du groupe, chaque seconde, sauf si une
+    // réponse est attendue : un rafraîchissement ne passe pas devant un clic.
+    if (++sheetRefresh % 4 === 0) {
+      const request = sheets.refresh();
+      if (request !== undefined) simulation.send({ type: 'inspect', ...request });
+    }
   }, 250);
 
   simulation.subscribe((message) => {
@@ -268,11 +368,15 @@ async function main(): Promise<void> {
         const layers = message.layers;
         worldLayers = layers;
         inspected.value = undefined;
+        // Une autre partie : les réponses attendues portent sur l'ancienne, et sont ignorées.
+        sheets.close();
         sheet.value = undefined;
-        sheetTarget = undefined;
         people.clear();
         people.setFrame(message.frame);
-        chronicle.value = message.chronicle.slice(-CHRONICLE_KEPT);
+        occupied.reset(message.frame, message.world.size);
+        chronicleRequest++;
+        chronicleLoading.value = false;
+        showFacts(snapshotFacts(message.chronicle));
         const { width } = message.world.size;
         map.setWorld(message.world, layers, (mode) => overlayTexels(mode, layers, modeData, width));
         actions.setMapMode(mapMode.value);
@@ -282,15 +386,17 @@ async function main(): Promise<void> {
         seasons.update(message.time, performance.now());
         break;
       }
-      case 'delta':
+      case 'delta': {
         map.updateChunks(message.chunks);
         people.setFrame(message.frame);
-        if (message.chronicle.length > 0) {
-          chronicle.value = [...chronicle.value, ...message.chronicle].slice(-CHRONICLE_KEPT);
-        }
+        const info = worldInfo.value;
+        if (info !== undefined) occupied.update(message.frame, message.chronicle, info.size);
+        // Pendant la lecture des pages plus anciennes, les faits nouveaux se comptent.
+        showFacts(receiveFacts(facts, message.chronicle));
         time.value = message.time;
         seasons.update(message.time, performance.now());
         break;
+      }
       case 'time':
         time.value = message.time;
         seasons.update(message.time, performance.now());
@@ -309,25 +415,34 @@ async function main(): Promise<void> {
         previews.ready(message);
         break;
       case 'inspection': {
-        // Seule compte la réponse à la dernière demande.
-        if (message.requestId !== inspectRequest) break;
-        if (message.person !== undefined) {
-          sheet.value = { kind: 'person', view: message.person };
-          sheetTarget = { kind: 'person', id: message.person.id };
-        } else if (message.group !== undefined) {
-          sheet.value = { kind: 'group', view: message.group };
-          sheetTarget = { kind: 'group', id: message.group.id };
-          // Le groupe montré, sa case s'efface de l'inspection.
-          inspected.value = undefined;
-        } else if (sheetTarget?.kind === 'group') {
-          // Le groupe n'est plus : sa fiche se ferme.
-          sheet.value = undefined;
-          sheetTarget = undefined;
+        // La fiche demandée, ou sa fermeture si sa cible n'est plus ; si le joueur demandait
+        // une autre cible, qui n'est plus, la fiche en cours reste, et un avis le dit. Une
+        // réponse dépassée (autre cible, autre partie, fiche fermée) ne change rien.
+        const answer = sheets.receive(message);
+        if (answer.type === 'shown') {
+          sheet.value = answer.sheet;
+          // Sur petit écran, la fiche que le joueur demande passe au-dessus à sa réponse,
+          // même si elle était déjà ouverte : une cible qui n'est plus ne remonte pas la
+          // fiche en cours au-dessus du panneau où il l'a demandée.
+          if (answer.requested) raise('sheet');
+        } else if (answer.type === 'missing') {
+          if (answer.close) sheet.value = undefined;
+          if (answer.notice !== undefined) showNotice(answer.notice);
         }
         break;
       }
+      case 'chroniclePage':
+        if (message.requestId !== chronicleRequest) break;
+        chronicleLoading.value = false;
+        showFacts(receivePage(facts, message.facts));
+        break;
       case 'error':
         console.error(`worker : ${message.code} (${message.detail})`);
+        // Une commande refusée ou écartée, comme un groupe sur une case infranchissable.
+        if (message.code === 'command') {
+          showNotice('command.refused');
+          occupied.refused();
+        }
         if (message.code === 'params' || message.code === 'internal') {
           // Un aperçu ou un monde demandé ne viendra pas.
           previews.failed();
@@ -351,21 +466,39 @@ async function main(): Promise<void> {
       simulation.send(message);
     },
     inspectPerson: (id: number) => {
-      requestSheet({ kind: 'person', id });
+      openSheet({ kind: 'person', id });
     },
     inspectGroup: (id: number) => {
-      requestSheet({ kind: 'group', id });
+      openSheet({ kind: 'group', id });
     },
     closeSheet: () => {
+      sheets.close();
       sheet.value = undefined;
-      sheetTarget = undefined;
     },
+    olderChronicle: () => {
+      const before = olderThan(facts);
+      if (before === undefined || chronicleLoading.value) return;
+      // La liste affichée se fige jusqu'au retour aux derniers faits.
+      showFacts(freezeFacts(facts));
+      chronicleLoading.value = true;
+      chronicleRequest++;
+      simulation.send({ type: 'chronicle', requestId: chronicleRequest, before });
+    },
+    latestChronicle,
     focus: (x: number, y: number) => {
-      controls.camera = {
-        ...controls.camera,
-        x: x * TILE_PX + TILE_PX / 2,
-        y: y * TILE_PX + TILE_PX / 2,
-      };
+      // Le lieu au milieu de la partie visible de la carte, et non sous les panneaux (U-5).
+      const hud = uiElement.querySelector('.hud') ?? uiElement;
+      const center = centerOf(visibleArea(hud.getBoundingClientRect(), covers()));
+      const origin = mapElement.getBoundingClientRect();
+      const resolution = app.renderer.resolution;
+      controls.camera = showAt(
+        controls.camera,
+        map.viewport,
+        x * TILE_PX + TILE_PX / 2,
+        y * TILE_PX + TILE_PX / 2,
+        (center.x - origin.left) * resolution,
+        (center.y - origin.top) * resolution,
+      );
     },
     setMapMode: (mode: MapModeId) => {
       mapMode.value = mode;
@@ -408,24 +541,17 @@ async function main(): Promise<void> {
       creationBusy.value = false;
     }
   }
-  const creator: CreatorSetup = {
-    species: data.species.entries.map((species) => ({
-      id: species.id,
-      name: species.name as MessageKey,
-      subspecies: species.subspecies.map((entry) => ({
-        id: entry.id,
-        name: entry.name as MessageKey,
-      })),
-    })),
-    count: SPAWN_COUNT,
-  };
   const content: SheetContent = {
     species: data.species.entries,
-    loci: data.genetics.loci,
-    traits: data.genetics.traits,
+    genetics: data.genetics,
     appearance: data.appearance,
   };
-  render(h(App, { actions, setup, creator, content }), element('ui'));
+  render(h(App, { actions, setup, creator, content }), uiElement);
+  // Échap qu'aucun panneau n'a pris, le focus sur la carte par exemple : il ferme le panneau
+  // du dessus (ui/escape.ts).
+  window.addEventListener('keydown', (event) => {
+    escapeKey(event, actions);
+  });
 
   // La poignée de main d'abord : le worker refuse tout message qui la précède.
   simulation.send({ type: 'hello', protocol: PROTOCOL_VERSION });

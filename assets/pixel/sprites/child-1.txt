@@ -3,5 +3,6 @@
 .ss.
 sccx
 .cc.
+.cc.
 s..s
 o..o

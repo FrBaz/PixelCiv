@@ -2,12 +2,18 @@
  * Survie (tâche 2.4 ; ECO-11, RES-03, RES-04, FAU-01, SAI-03 ; ADR 0011).
  *
  * Chaque case porte trois stocks de nourriture, comptés en besoins mensuels d'un adulte :
- * plantes à cueillir, gibier, poisson. Leur plafond suit le rendement du biome
- * (data/biomes.json) et la saison : les plantes ne se trouvent qu'à la belle saison, moins
- * à la saison sèche des tropiques ; la glace gêne la pêche. Une rivière ajoute la pêche de
- * sa classe à la case qu'elle traverse ; la mer côtière, les lacs et les fleuves se
- * pêchent depuis la rive. Le gibier chassé, c'est la faune, qui s'épuise et se
- * reconstitue (FAU-01) ; plus rare dans le grand froid, il repousse moins vite.
+ * plantes à cueillir, gibier, poisson. Leur plafond et leur repousse suivent le rendement
+ * du biome (data/biomes.json) et la saison du mois (SAI-03) :
+ * - les plantes ne se trouvent qu'à la belle saison, moins à la saison sèche des tropiques ;
+ * - le gibier se raréfie dans le froid, selon data/nomads.json (`stocks.game.cold`) ;
+ * - la pêche baisse sous la couverture que la carte montre (C1, D9 ; core/seasons.ts) : la
+ *   couverture du biome (`seasons.cover` : glace de l'eau douce, banquise de la mer côtière,
+ *   neige des terres), et la glace des rivières pour une rivière qui traverse une case de
+ *   terre. Ce qui reste sous une couverture pleine se lit dans `stocks.fish.covered`.
+ * Une rivière ajoute la pêche de sa classe à la case de terre qu'elle traverse ; la mer
+ * côtière, les lacs et le lit des fleuves portent la pêche de leur biome, et se pêchent
+ * depuis la rive. Le gibier chassé, c'est la faune, qui s'épuise et se reconstitue
+ * (FAU-01). L'hiver, les réserves du groupe font la soudure.
  *
  * Une case que personne n'a entamée tient ses stocks au plafond de la saison : rien à y
  * calculer. Seules les cases entamées sont suivies, marquées une à une : elles repoussent
@@ -22,7 +28,13 @@
  */
 import type { Biome, Catalog, Nomads, Species } from '../core/data';
 import { wrapNearX } from '../core/cylinder';
-import { rainSeasonality, seasonFactor } from '../core/seasons';
+import {
+  COVER_RAMPS,
+  coverShare,
+  rainSeasonality,
+  seasonFactor,
+  type CoverRamp,
+} from '../core/seasons';
 import { riverClass, type WorldLayers, type WorldSize } from '../core/world';
 import { dominantSubspecies, monthOf, MONTHS_PER_YEAR } from './people';
 import type { Population } from './population';
@@ -79,10 +91,10 @@ interface BiomeTable {
   readonly plants: Float32Array;
   readonly game: Float32Array;
   readonly fish: Float32Array;
-  /** Le biome est-il une eau douce, qui gèle ? */
-  readonly freshwater: Uint8Array;
-  /** Pêche du biome « rivière », que chaque classe de rivière reprend en partie. */
-  readonly river: number;
+  /** Couverture saisonnière du biome (`seasons.cover`), qui gêne sa pêche. */
+  readonly cover: readonly CoverRamp[];
+  /** 1 pour une eau, qui ne porte que la pêche de son biome, sans part de rivière. */
+  readonly water: Uint8Array;
 }
 
 const tables = new WeakMap<Catalog<Biome>, BiomeTable>();
@@ -94,10 +106,8 @@ function biomeTable(biomes: Catalog<Biome>): BiomeTable {
     plants: Float32Array.from(biomes.entries, (biome) => biome.forage.plants),
     game: Float32Array.from(biomes.entries, (biome) => biome.forage.game),
     fish: Float32Array.from(biomes.entries, (biome) => biome.forage.fish),
-    freshwater: Uint8Array.from(biomes.entries, (biome) =>
-      biome.id === 'lake' || biome.id === 'river' ? 1 : 0,
-    ),
-    river: biomes.entries.find((biome) => biome.id === 'river')?.forage.fish ?? 0,
+    cover: biomes.entries.map((biome) => COVER_RAMPS[biome.seasons.cover]),
+    water: Uint8Array.from(biomes.entries, (biome) => (biome.family === 'water' ? 1 : 0)),
   };
   tables.set(biomes, table);
   return table;
@@ -109,14 +119,19 @@ export function plantSeason(temperature: number, rain: number): number {
   return warmth * Math.min(1, Math.max(0.3, rain));
 }
 
-/** Part du rendement du gibier : il repousse moins vite dans le grand froid. */
-export function gameSeason(temperature: number): number {
-  return temperature < -5 ? 0.6 : 1;
+/** Part du gibier au mois de température `temperature` : il se raréfie dans le froid. */
+export function gameSeason(temperature: number, cold: Nomads['stocks']['game']['cold']): number {
+  if (temperature >= cold.from) return 1;
+  if (temperature <= cold.to) return cold.share;
+  return 1 - ((cold.from - temperature) / (cold.from - cold.to)) * (1 - cold.share);
 }
 
-/** Part du rendement de la pêche : la glace la gêne sur l'eau douce. */
-export function fishSeason(temperature: number, freshwater: boolean): number {
-  return freshwater && temperature < -1 ? 0.3 : 1;
+/**
+ * Part de la pêche sous une couverture qui prend la part `share` de la case : l'eau libre
+ * rend tout, l'eau couverte la part `covered` (data/nomads.json).
+ */
+export function fishSeason(share: number, covered: number): number {
+  return 1 - share * (1 - covered);
 }
 
 /**
@@ -186,16 +201,23 @@ function cellFoodWith(
   const temperature = ((world.temperature[cell] ?? 0) + (world.amplitude[cell] ?? 0) * season) / 10;
   const biome = world.biome[cell] ?? 0;
   const plants = (table.plants[biome] ?? 0) * plantSeason(temperature, climate.rain[y] ?? 1);
-  const game = table.game[biome] ?? 0;
-  const fish =
-    (table.fish[biome] ?? 0) + (river[riverClass(world.drainage[cell] ?? 0)] ?? 0) * table.river;
-  const frozen = fishSeason(temperature, table.freshwater[biome] === 1);
+  const game = (table.game[biome] ?? 0) * gameSeason(temperature, stocks.game.cold);
+  const { covered } = stocks.fish;
+  const cover = table.cover[biome] ?? COVER_RAMPS.none;
+  let fish = (table.fish[biome] ?? 0) * fishSeason(coverShare(cover, temperature), covered);
+  if (table.water[biome] !== 1) {
+    // La rivière d'une case de terre gèle comme l'eau douce, à la manière de la carte.
+    const stream = river[riverClass(world.drainage[cell] ?? 0)] ?? 0;
+    if (stream > 0) {
+      fish += stream * fishSeason(coverShare(COVER_RAMPS.ice, temperature), covered);
+    }
+  }
   scratch[0] = plants;
-  scratch[1] = game * gameSeason(temperature);
-  scratch[2] = fish * frozen;
+  scratch[1] = game;
+  scratch[2] = fish;
   scratch[3] = plants * stocks.plants.capacity;
   scratch[4] = game * stocks.game.capacity;
-  scratch[5] = fish * stocks.fish.capacity * frozen;
+  scratch[5] = fish * stocks.fish.capacity;
   return scratch;
 }
 
@@ -338,17 +360,25 @@ function diskOffsets(radius: number): Int32Array {
   return offsets;
 }
 
-/** Biomes de prédilection de chaque sous-espèce, en masque par biome (ESP-02). */
-const preferences = new WeakMap<Species, Uint8Array[]>();
+/**
+ * Biomes de prédilection de chaque sous-espèce, en masque par biome (ESP-02) : par
+ * catalogue de biomes, puis par espèce, car un masque se lit aux indices du catalogue.
+ */
+const preferences = new WeakMap<Catalog<Biome>, WeakMap<Species, Uint8Array[]>>();
 
 function preferredBiomes(species: Species, subspecies: number, biomes: Catalog<Biome>) {
-  let masks = preferences.get(species);
+  let bySpecies = preferences.get(biomes);
+  if (bySpecies === undefined) {
+    bySpecies = new WeakMap();
+    preferences.set(biomes, bySpecies);
+  }
+  let masks = bySpecies.get(species);
   if (masks === undefined) {
     masks = species.subspecies.map((entry) => {
       const wanted = new Set(entry.biomes);
       return Uint8Array.from(biomes.entries, (biome) => (wanted.has(biome.id) ? 1 : 0));
     });
-    preferences.set(species, masks);
+    bySpecies.set(species, masks);
   }
   return masks[subspecies];
 }

@@ -8,8 +8,14 @@
  * et ses noms (src/gen/names.ts), à l'identique dans le worker et sur le fil principal.
  */
 
-/** Règle de nommage d'une culture (IND-08) : d'où l'enfant tient son nom de famille. */
-export const NAMING_RULES = ['father', 'mother', 'both', 'none'] as const;
+/**
+ * Règle de nommage d'une culture (IND-08 ; C2, D6) : d'où l'enfant tient son nom de
+ * famille. Il hérite de celui de son père, de sa mère, ou des deux (celui du père, puis,
+ * à l'affichage, celui de la mère) ; ou il n'en a pas ; ou il reçoit à la naissance un nom
+ * obtenu, un surnom propre à lui, tiré dans la langue de sa culture, qu'il ne tient de
+ * personne (« earned » ; le métier et le lieu attendent la phase 3).
+ */
+export const NAMING_RULES = ['father', 'mother', 'both', 'none', 'earned'] as const;
 export type NamingRule = (typeof NAMING_RULES)[number];
 
 export interface Language {
@@ -33,8 +39,10 @@ export interface Group {
   readonly founded: number;
   readonly parent: number;
   /**
-   * Meneur : l'aîné des adultes à sa formation. Le groupe porte son nom (« le groupe
-   * d'Ataru »), même après sa mort : une bande n'a pas d'autre nom avant la fondation.
+   * Meneur : l'aîné de ses membres à sa formation, hors de qui mène déjà un groupe vivant,
+   * si bien que deux groupes vivants n'ont jamais le même. Le groupe porte son nom (« le
+   * groupe d'Ataru »), même après sa mort : une bande n'a pas d'autre nom avant la
+   * fondation.
    */
   readonly leader: number;
   /** Case du groupe : x boucle, y reste dans le monde. */
@@ -50,7 +58,12 @@ export interface Group {
   food: number;
 }
 
-/** Faits de la chronique de base (CHR-01). */
+/**
+ * Faits de la chronique de base (CHR-01), dans l'ordre de leur code dans la sauvegarde :
+ * un genre nouveau s'ajoute à la fin. Chaque groupe formé a le sien, apparition ou
+ * scission : la relecture en déduit le prochain identifiant de groupe (populationSave.ts),
+ * et la chronique ne s'abrège donc pas sans revoir ce contrôle.
+ */
 export const CHRONICLE_KINDS = [
   /** Un groupe apparaît, par l'outil du Créateur (CRE-03). */
   'groupAppeared',

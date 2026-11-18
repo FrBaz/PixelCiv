@@ -14,7 +14,7 @@
  */
 import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { join, relative, sep } from 'node:path';
-import type { Plugin } from 'vite';
+import { normalizePath, type Plugin } from 'vite';
 import { ROLE_CHARACTERS } from '../src/core/visual.ts';
 
 export interface Grid {
@@ -24,28 +24,31 @@ export interface Grid {
   readonly roles: readonly number[];
 }
 
-/** Lit une source ; lève une erreur qui nomme la source et la ligne en défaut. */
+/**
+ * Lit une source ; lève une erreur qui nomme la source et la ligne en défaut, numérotée
+ * comme dans le fichier, commentaires et lignes vides compris. Une marque d'ordre des
+ * octets (BOM) en tête, qu'ajoutent certains éditeurs, est ignorée.
+ */
 export function parseGrid(name: string, text: string): Grid {
   const lines = text
+    .replace(/^\uFEFF/, '')
     .split(/\r?\n/)
-    .map((line) => line.trimEnd())
-    .filter((line) => line !== '' && !line.startsWith('#'));
-  const width = lines[0]?.length ?? 0;
+    .map((line, index) => ({ text: line.trimEnd(), number: index + 1 }))
+    .filter((line) => line.text !== '' && !line.text.startsWith('#'));
+  const width = lines[0]?.text.length ?? 0;
   if (width === 0) throw new Error(`${name} : motif vide`);
   const roles: number[] = [];
-  lines.forEach((line, row) => {
-    if (line.length !== width) {
-      throw new Error(
-        `${name}, ligne ${String(row + 1)} : ${String(line.length)} pixels au lieu de ${String(width)}`,
-      );
+  for (const line of lines) {
+    const where = `${name}, ligne ${String(line.number)}`;
+    if (line.text.length !== width) {
+      throw new Error(`${where} : ${String(line.text.length)} pixels au lieu de ${String(width)}`);
     }
-    for (const character of line) {
+    for (const character of line.text) {
       const role = ROLE_CHARACTERS.indexOf(character);
-      if (role < 0)
-        throw new Error(`${name}, ligne ${String(row + 1)} : rôle inconnu « ${character} »`);
+      if (role < 0) throw new Error(`${where} : rôle inconnu « ${character} »`);
       roles.push(role);
     }
-  });
+  }
   return { width, height: lines.length, roles };
 }
 
@@ -113,11 +116,18 @@ export function readSources(root: string): Record<string, Grid> {
   return grids;
 }
 
-const MODULE = 'virtual:pixel-atlas';
+export const MODULE = 'virtual:pixel-atlas';
 const RESOLVED = `\0${MODULE}`;
 
-/** Extension de Vite : le module virtuel de l'atlas, refait quand une source change. */
+/**
+ * Extension de Vite : le module virtuel de l'atlas, refait quand une source est ajoutée,
+ * modifiée ou supprimée. En développement, la page se recharge alors. Le crochet
+ * hotUpdate reçoit ces trois sortes d'événements, quand handleHotUpdate ne recevait que
+ * les modifications : une source ajoutée n'entrait pas dans l'atlas, même après un
+ * rechargement de la page.
+ */
 export function pixelAtlas(root: string): Plugin {
+  const directory = normalizePath(root).replace(/\/?$/, '/');
   return {
     name: 'pixelciv-pixel-atlas',
     resolveId(id) {
@@ -125,15 +135,19 @@ export function pixelAtlas(root: string): Plugin {
     },
     load(id) {
       if (id !== RESOLVED) return undefined;
-      const atlas = packAtlas(readSources(root));
-      for (const file of Object.keys(readSources(root)))
-        this.addWatchFile(join(root, `${file}.txt`));
-      return `export default ${JSON.stringify(atlas)};`;
+      const sources = readSources(root);
+      for (const name of Object.keys(sources)) this.addWatchFile(join(root, `${name}.txt`));
+      return `export default ${JSON.stringify(packAtlas(sources))};`;
     },
-    handleHotUpdate({ file, server }) {
-      if (!file.startsWith(root) || !file.endsWith('.txt')) return;
-      const module = server.moduleGraph.getModuleById(RESOLVED);
-      if (module !== undefined) server.moduleGraph.invalidateModule(module);
+    hotUpdate({ file }) {
+      const path = normalizePath(file);
+      if (this.environment.name !== 'client' || !path.startsWith(directory)) return;
+      if (!path.endsWith('.txt')) return;
+      const graph = this.environment.moduleGraph;
+      const module = graph.getModuleById(RESOLVED);
+      if (module !== undefined) graph.invalidateModule(module);
+      this.environment.hot.send({ type: 'full-reload' });
+      return [];
     },
   };
 }

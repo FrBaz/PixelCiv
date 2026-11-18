@@ -8,9 +8,9 @@
  * - mots 2 et 3 : huit traits continus, un octet chacun, de 0 à 255. L'enfant reçoit la
  *   moyenne de ses parents, plus une variation (hérédité polygénique).
  *
- * De rares mutations changent un allèle transmis, ou écartent un trait. Les parts
- * d'ascendance de l'enfant sont la moyenne de celles de ses parents (métissage, ESP-04).
- * Tout aléa vient du flux qu'on leur passe.
+ * De rares mutations remplacent un allèle transmis par un allèle tiré au hasard, parfois
+ * le même, ou écartent un trait. Les parts d'ascendance de l'enfant sont la moyenne de
+ * celles de ses parents (métissage, ESP-04). Tout aléa vient du flux qu'on leur passe.
  */
 import type { Genetics, Subspecies } from '../core/data';
 import { cos, log, TAU } from '../core/dmath';
@@ -161,7 +161,11 @@ export function inheritGenome(
 
 /**
  * Ascendance d'un enfant : la moyenne de celles de ses parents, ramenée à un total de
- * ANCESTRY_TOTAL (l'arrondi se corrige sur la plus grande part).
+ * ANCESTRY_TOTAL par la méthode du plus fort reste. Chaque part prend la partie entière de
+ * sa moyenne ; les unités qui manquent vont aux demi-parts, d'abord à la plus grande part,
+ * puis, à égalité, à celle de la mère. Une trace d'une sous-espèce que l'on ne croise plus
+ * finit donc par disparaître, et le métis de deux sous-espèces pures tient un peu plus de
+ * sa mère, quel que soit leur ordre dans les données.
  */
 export function mixAncestry(
   mother: ArrayLike<number>,
@@ -171,18 +175,33 @@ export function mixAncestry(
   out: Record<number, number>,
   offset = 0,
 ): void {
-  let total = 0;
-  let largest = 0;
   const shares: number[] = [];
+  // Parts dont la moyenne tombe sur une demie.
+  const halves: number[] = [];
+  let total = 0;
   for (let index = 0; index < ANCESTRY_SLOTS; index++) {
-    const share = Math.round(
-      ((mother[motherOffset + index] ?? 0) + (father[fatherOffset + index] ?? 0)) / 2,
-    );
+    const sum = (mother[motherOffset + index] ?? 0) + (father[fatherOffset + index] ?? 0);
+    const share = Math.floor(sum / 2);
     shares.push(share);
     total += share;
-    if (share > (shares[largest] ?? 0)) largest = index;
+    if (sum % 2 === 1) halves.push(index);
   }
-  shares[largest] = (shares[largest] ?? 0) + ANCESTRY_TOTAL - total;
+  const maternal = (index: number) => mother[motherOffset + index] ?? 0;
+  halves.sort((a, b) => (shares[b] ?? 0) - (shares[a] ?? 0) || maternal(b) - maternal(a) || a - b);
+  for (const index of halves) {
+    if (total >= ANCESTRY_TOTAL) break;
+    shares[index] = (shares[index] ?? 0) + 1;
+    total++;
+  }
+  // Des parents dont les parts ne font pas le total (données abîmées) : l'écart va à la
+  // plus grande part.
+  if (total !== ANCESTRY_TOTAL) {
+    let largest = 0;
+    shares.forEach((share, index) => {
+      if (share > (shares[largest] ?? 0)) largest = index;
+    });
+    shares[largest] = Math.max(0, (shares[largest] ?? 0) + ANCESTRY_TOTAL - total);
+  }
   for (let index = 0; index < ANCESTRY_SLOTS; index++) out[offset + index] = shares[index] ?? 0;
 }
 

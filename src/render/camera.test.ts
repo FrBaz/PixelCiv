@@ -1,9 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import {
+  cellAt,
   constrain,
   displayScale,
   pan,
   screenToMap,
+  showAt,
+  TILE_PX,
   visibleChunks,
   zoomAt,
   type Camera,
@@ -51,6 +54,46 @@ describe('gestes', () => {
     const after = screenToMap(zoomed, viewport, 800, 100);
     expect(after.x).toBeCloseTo(before.x, 9);
     expect(after.y).toBeCloseTo(before.y, 9);
+  });
+});
+
+describe('showAt', () => {
+  it("montre le point de la carte au point de l'écran demandé, au même zoom (U-5)", () => {
+    for (const zoom of [0.5, 1, 3]) {
+      const camera: Camera = { x: 100, y: 200, zoom };
+      // Au milieu de la partie visible, à gauche de la colonne de droite, et non au centre.
+      const shown = showAt(camera, viewport, 1500, 700, 300, 250);
+      expect(shown.zoom).toBe(zoom);
+      const point = screenToMap(shown, viewport, 300, 250);
+      expect(point.x).toBeCloseTo(1500, 9);
+      expect(point.y).toBeCloseTo(700, 9);
+    }
+    // Au centre de l'écran, la caméra vise le point lui-même.
+    expect(showAt({ x: 0, y: 0, zoom: 2 }, viewport, 42, 24, 500, 300)).toEqual({
+      x: 42,
+      y: 24,
+      zoom: 2,
+    });
+  });
+});
+
+describe('cellAt', () => {
+  it('ramène dans le monde la colonne touchée dans une copie voisine du monde (W-3, U-2)', () => {
+    const columns = 512;
+    const width = columns * TILE_PX;
+    for (let copy = -2; copy <= 2; copy++) {
+      // Le milieu de la case (5, 60), puis celui de la dernière colonne, dans chaque copie.
+      expect(cellAt(copy * width + 5.5 * TILE_PX, 60.5 * TILE_PX, columns)).toEqual({
+        x: 5,
+        y: 60,
+      });
+      expect(cellAt(copy * width - 0.5 * TILE_PX, 60.5 * TILE_PX, columns)).toEqual({
+        x: columns - 1,
+        y: 60,
+      });
+    }
+    // Au-delà des pôles, la ligne sort du monde : c'est à l'appelant de la refuser.
+    expect(cellAt(5.5 * TILE_PX, -0.5 * TILE_PX, columns).y).toBe(-1);
   });
 });
 

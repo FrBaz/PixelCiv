@@ -1,13 +1,22 @@
 import { describe, expect, it } from 'vitest';
 import { loadCatalog } from '../core/data/catalog';
 import { BiomesSchema } from '../core/data/schemas';
-import { encodeSave, readSave, SaveError, writeSave } from '../core/save/format';
+import { encodeSave, readSave, SaveError, writeSave, type SaveData } from '../core/save/format';
 import { LAYER_NAMES } from '../core/world';
 import { GENERATOR_VERSION } from '../worldgen/generate';
+import { replay } from './replay';
 import { MIGRATIONS, restoreState, saveState } from './save';
 import type { SimState } from './state';
-import { fingerprint, step } from './step';
-import { cellsOf, firstCellOf, testData, testState } from './testing';
+import { applyCommands, fingerprint, step } from './step';
+import {
+  cellsOf,
+  firstCellOf,
+  scatteredGroups,
+  testData,
+  testParams,
+  testState,
+  testWorld,
+} from './testing';
 import biomesJson from '../../data/biomes.json';
 
 const land = (family: string) => family !== 'water';
@@ -81,6 +90,36 @@ describe('sauvegarde de la simulation', () => {
     expect(fingerprint(restored)).toBe(fingerprint(original));
   });
 
+  it('se relit, prise en pause juste après des commandes appliquées aussitôt (U-7)', async () => {
+    const original = testState();
+    step(original, [], testData);
+    step(original, [], testData);
+    // En pause, l'hôte applique les commandes dès leur réception (applyCommands) : elles se
+    // journalisent au pas courant, qui n'a pas encore commencé, et la sauvegarde aussi.
+    const cell = firstCellOf(original, land);
+    applyCommands(
+      original,
+      [...scatteredGroups(original, 2, 12), { type: 'paintBiome', ...cell, biome: 'desert' }],
+      testData,
+    );
+    const data = save(original);
+    expect(data.meta.tick).toBe(2);
+    expect(original.commandLog.map((entry) => entry.tick)).toEqual([2, 2, 2]);
+    const restored = restore(await readSave(await writeSave(data), MIGRATIONS));
+    expect(fingerprint(restored)).toBe(fingerprint(original));
+    expect(restored.commandLog).toEqual(original.commandLog);
+    expect(restored.society.groups.size).toBe(2);
+    // Le rejeu du journal redonne l'état sauvegardé, commandes du pas courant comprises.
+    const replayed = replay(testParams(), testWorld(), restored.commandLog, 2, testData);
+    expect(fingerprint(replayed)).toBe(fingerprint(original));
+    // La partie relue se poursuit à l'identique.
+    for (let month = 0; month < 24; month++) {
+      step(original, [], testData);
+      step(restored, [], testData);
+    }
+    expect(fingerprint(restored)).toBe(fingerprint(original));
+  });
+
   it('se relit après un changement du contenu, en suivant les identifiants', () => {
     const state = played(2);
     // Le contenu de demain : les mêmes biomes, dans l'ordre inverse.
@@ -116,9 +155,62 @@ describe('sauvegarde de la simulation', () => {
     }
   });
 
+  it('relit les stocks des cases entamées, et refuse des stocks forgés', () => {
+    const data = save(played(1));
+    const count = 512 * 256;
+    const stocks = (
+      cells: SaveData['arrays'][string],
+      plants: number[],
+      arrays: SaveData['arrays'] = {},
+    ): SaveData => ({
+      ...data,
+      arrays: {
+        ...data.arrays,
+        foodCells: cells,
+        foodPlants: Float32Array.from(plants),
+        foodGame: Float32Array.of(2, 0),
+        foodFish: Float32Array.of(0, 0.5),
+        ...arrays,
+      },
+    });
+    const valid = stocks(Int32Array.of(5, 9), [1, 3]);
+    const noFish = Object.fromEntries(
+      Object.entries(valid.arrays).filter(([name]) => name !== 'foodFish'),
+    );
+    // Témoin : deux cases entamées, relues à leur place.
+    const restored = restore(valid);
+    expect(restored.food.count).toBe(2);
+    expect(Array.from(restored.food.stocks.subarray(9 * 3, 9 * 3 + 3))).toEqual([3, 0, 0.5]);
+    const cases: [string, SaveData][] = [
+      ['case en double', stocks(Int32Array.of(5, 5), [1, 3])],
+      ['case négative', stocks(Int32Array.of(-1, 9), [1, 3])],
+      ['case hors du monde', stocks(Int32Array.of(5, count), [1, 3])],
+      ['stock NaN', stocks(Int32Array.of(5, 9), [Number.NaN, 3])],
+      ['stock infini', stocks(Int32Array.of(5, 9), [Number.POSITIVE_INFINITY, 3])],
+      ['stock négatif', stocks(Int32Array.of(5, 9), [-1, 3])],
+      ['stock démesuré', stocks(Int32Array.of(5, 9), [1e7, 3])],
+      ['gibier trop court', stocks(Int32Array.of(5, 9), [1, 3], { foodGame: Float32Array.of(2) })],
+      ['poisson absent', { ...valid, arrays: noFish }],
+      [
+        'plantes de mauvais type',
+        stocks(Int32Array.of(5, 9), [1, 3], { foodPlants: Float64Array.of(1, 3) }),
+      ],
+      [
+        'cases de mauvais type',
+        stocks(Int32Array.of(5, 9), [1, 3], { foodCells: Uint32Array.of(5, 9) }),
+      ],
+    ];
+    for (const [label, forged] of cases) {
+      expect(() => restore(forged), label).toThrow(
+        expect.objectContaining({ code: 'corrupt' }) as Error,
+      );
+    }
+  });
+
   it('refuse les sauvegardes de la phase 0, sans monde à reprendre', async () => {
-    // Seule la version 3, celle de la phase 1, se migre : elle reçoit une population vide.
-    expect(Object.keys(MIGRATIONS)).toEqual(['3']);
+    // Seules les versions 3, celle de la phase 1, qui reçoit une population vide, et 4,
+    // celle de la phase 2 avant sa relecture, se migrent.
+    expect(Object.keys(MIGRATIONS)).toEqual(['3', '4']);
     for (let version = 1; version < 3; version++) {
       const old = encodeSave(save(played(1)), version);
       await expect(readSave(old, MIGRATIONS)).rejects.toMatchObject({ code: 'obsolete' });
@@ -170,6 +262,12 @@ describe('sauvegarde de la simulation', () => {
     const params = json.params as Record<string, unknown>;
     const paint = { type: 'paintBiome', x: 1, y: 1, biome: 'desert' };
     const count = 512 * 256;
+    // Témoin : le journal va jusqu'au pas courant compris, où l'hôte journalise une commande
+    // appliquée en pause, avant que ce pas ne commence (U-7).
+    const current = [{ tick: data.meta.tick, command: paint }];
+    expect(restore({ ...data, json: { ...json, commandLog: current } }).commandLog).toEqual(
+      current,
+    );
     const cases: [string, object][] = [
       ['taille inconnue', { json: { ...json, params: { ...params, size: 'géante' } } }],
       ['paramètre hors bornes', { json: { ...json, params: { ...params, relief: 7 } } }],
@@ -189,7 +287,10 @@ describe('sauvegarde de la simulation', () => {
         'écoulement illisible',
         { arrays: { ...data.arrays, drainage: new Uint8Array(count).fill(9) } },
       ],
-      ['commande future', { json: { ...json, commandLog: [{ tick: 3, command: paint }] } }],
+      [
+        'commande future',
+        { json: { ...json, commandLog: [{ tick: data.meta.tick + 1, command: paint }] } },
+      ],
       [
         'journal désordonné',
         {

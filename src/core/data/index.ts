@@ -22,14 +22,21 @@ import { classifiedBiomes, WorldgenSchema } from './worldgen';
 
 export type { Catalog } from './catalog';
 export type {
+  Allele,
   Appearance,
   Cultures,
+  FaceShape,
+  GeneRoles,
   Genetics,
   Locus,
+  LocusRole,
   Nomads,
+  NoseShape,
   Species,
+  SpeciesAges,
   Subspecies,
   Trait,
+  TraitRole,
 } from './people';
 export type { AltitudeLevel, Biome, Flora, Resource } from './schemas';
 export type { Parameter, ParameterName, Worldgen } from './worldgen';

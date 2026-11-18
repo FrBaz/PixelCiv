@@ -80,11 +80,19 @@ export const LIVING_COLUMNS = {
   partner: { type: Uint32Array, width: 1 },
   /** Groupe nomade : identifiant, NONE hors d'un groupe. */
   group: { type: Uint32Array, width: 1 },
-  /** Culture : identifiant (D2 de C2 : celle du foyer, à la naissance). */
+  /**
+   * Culture : identifiant, reçue à la naissance (C2, D2) : celle des parents, ou, s'ils en
+   * ont deux, la plus répandue dans le groupe de naissance.
+   */
   culture: { type: Uint16Array, width: 1 },
-  /** Codes du prénom et du nom de famille, que la langue de la culture rend en texte. */
+  /**
+   * Codes du prénom et du nom de famille (0 : aucun nom de famille). La langue de la
+   * culture rend le prénom en texte ; le nom de famille garde la langue où il est né,
+   * `familyLanguage`, d'une génération à l'autre.
+   */
   givenName: { type: Uint32Array, width: 1 },
   familyName: { type: Uint32Array, width: 1 },
+  familyLanguage: { type: Uint16Array, width: 1 },
   /** État nutritionnel : 255 rassasié, 0 affamé. */
   nutrition: { type: Uint8Array, width: 1 },
   /** Grossesse : pas de la conception (NEVER sans grossesse), et père de l'enfant. */
@@ -117,6 +125,7 @@ export const ARCHIVE_COLUMNS = {
   culture: { type: Uint16Array, width: 1 },
   givenName: { type: Uint32Array, width: 1 },
   familyName: { type: Uint32Array, width: 1 },
+  familyLanguage: { type: Uint16Array, width: 1 },
 } as const satisfies Record<string, ColumnSpec>;
 
 export type ArchiveColumn = keyof typeof ARCHIVE_COLUMNS;
@@ -140,6 +149,8 @@ export interface NewPerson {
   readonly culture: number;
   readonly givenName: number;
   readonly familyName: number;
+  /** Langue du nom de famille : celle de la culture d'un fondateur, ou du nom hérité. */
+  readonly familyLanguage: number;
 }
 
 /** Emplacements alloués au départ, puis doublés au besoin. */
@@ -272,6 +283,7 @@ export class Population {
     columns.culture[slot] = person.culture;
     columns.givenName[slot] = person.givenName;
     columns.familyName[slot] = person.familyName;
+    columns.familyLanguage[slot] = person.familyLanguage;
     columns.nutrition[slot] = 255;
     columns.conceived[slot] = NEVER;
     columns.pregnantBy[slot] = NONE;

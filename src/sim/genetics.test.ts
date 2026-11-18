@@ -149,6 +149,34 @@ describe('génétique', () => {
     expect(grandchild.reduce((sum, share) => sum + share, 0)).toBe(ANCESTRY_TOTAL);
   });
 
+  it("arrondit l'ascendance au plus fort reste : une trace finit par disparaître (L-9)", () => {
+    // Le métis de deux sous-espèces pures tient un peu plus de sa mère, quel que soit
+    // l'ordre des sous-espèces dans les données.
+    const mix = (mother: ArrayLike<number>, father: ArrayLike<number>) => {
+      const child = new Uint8Array(4);
+      mixAncestry(mother, 0, father, 0, child);
+      return Array.from(child);
+    };
+    expect(mix(pureAncestry(0), pureAncestry(1))).toEqual([128, 127, 0, 0]);
+    expect(mix(pureAncestry(1), pureAncestry(0))).toEqual([127, 128, 0, 0]);
+    // Trente générations de croisements avec des nordiques purs ramènent la lignée à 255,
+    // dans un sens comme dans l'autre, sans que le total change jamais.
+    for (const mother of [true, false]) {
+      let line = mix(pureAncestry(0), pureAncestry(2));
+      for (let generation = 0; generation < 30; generation++) {
+        line = mother ? mix(line, pureAncestry(0)) : mix(pureAncestry(0), line);
+        expect(line.reduce((sum, share) => sum + share, 0)).toBe(ANCESTRY_TOTAL);
+      }
+      expect(line).toEqual([255, 0, 0, 0]);
+    }
+    // Trois sous-espèces : chaque part reste à moins d'une unité de la moyenne exacte.
+    const three = mix([85, 85, 85, 0], [0, 127, 128, 0]);
+    expect(three.reduce((sum, share) => sum + share, 0)).toBe(ANCESTRY_TOTAL);
+    [42.5, 106, 106.5, 0].forEach((exact, index) => {
+      expect(Math.abs((three[index] ?? 0) - exact)).toBeLessThan(1);
+    });
+  });
+
   it('est déterministe, et suit une loi normale', () => {
     const a = new Uint32Array(GENOME_WORDS);
     const b = new Uint32Array(GENOME_WORDS);

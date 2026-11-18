@@ -2,7 +2,8 @@
  * Commandes de la caméra (IHM-07) : glisser et pincer, au doigt comme à la souris
  * (événements de pointeur, bouton principal seulement), molette, flèches ou ZQSD et
  * touches + et −. Un appui bref, sans glissement, désigne un point de la carte ; un appui
- * long, aussi, au doigt surtout, pour l'inspecter.
+ * long, aussi, au doigt surtout, pour l'inspecter. Les flèches vont à la carte, sauf au
+ * panneau où le joueur navigue au clavier (scrollsPanel).
  */
 import {
   constrain,
@@ -23,10 +24,20 @@ export interface ControlsOptions {
   readonly resolution: () => number;
   /** Taille du monde, en pixels de carte, ou undefined avant la partie. */
   readonly world: () => Extent | undefined;
-  /** Appui bref sur la carte, au point (mapX, mapY) en pixels de carte. */
-  readonly onTap: (mapX: number, mapY: number) => void;
-  /** Appui long, sans glissement, au point (mapX, mapY) en pixels de carte. */
-  readonly onLongPress: (mapX: number, mapY: number) => void;
+  /**
+   * Appui bref sur la carte, au point (mapX, mapY) en pixels de carte, qui est le point
+   * (screenX, screenY) de l'écran, en pixels physiques.
+   */
+  readonly onTap: (mapX: number, mapY: number, screenX: number, screenY: number) => void;
+  /** Appui long, sans glissement, aux mêmes points. */
+  readonly onLongPress: (mapX: number, mapY: number, screenX: number, screenY: number) => void;
+  /**
+   * Vrai quand un appui long doit attendre le relâcher : il ne se déclare alors que si le
+   * geste n'est devenu ni un glisser ni un pincement. Sinon, il part dès que le doigt est
+   * resté en place assez longtemps, comme pour inspecter une case. L'outil d'apparition
+   * attend, car une apparition ne s'annule pas (U-6).
+   */
+  readonly holdUntilRelease?: () => boolean;
 }
 
 /** Vitesse du déplacement au clavier, en pixels physiques par seconde. */
@@ -57,6 +68,34 @@ interface Point {
   readonly y: number;
 }
 
+function isElement(target: EventTarget | null): target is Element {
+  return typeof Element !== 'undefined' && target instanceof Element;
+}
+
+/**
+ * Un panneau de l'interface prend-il cette flèche, pour défiler ? Le navigateur fait
+ * défiler le plus proche ancêtre de l'élément focalisé qui défile, une fiche longue par
+ * exemple, qui prend le focus à son ouverture (U-14). La carte ne lui laisse la touche que
+ * si le joueur navigue au clavier (`keyboard`) : une fiche ouverte d'un clic sur la carte,
+ * ou un bouton cliqué, a le focus, mais les flèches restent à la carte. La barre du bas,
+ * qui défile au doigt sur petit écran, ne les prend jamais. Un dialogue modal, l'écran de
+ * création, qui recouvre la carte, les prend dès qu'il défile, au clavier comme à la souris.
+ */
+function scrollsPanel(target: EventTarget | null, keyboard: boolean, vertical: boolean): boolean {
+  if (!isElement(target)) return false;
+  const modal = target.closest('[aria-modal="true"]') !== null;
+  if (!modal && (!keyboard || target.closest('.hud-actions') !== null)) return false;
+  for (let node: Element | null = target; node !== null; node = node.parentElement) {
+    const style = getComputedStyle(node);
+    const overflow = vertical ? style.overflowY : style.overflowX;
+    const room = vertical
+      ? node.scrollHeight > node.clientHeight
+      : node.scrollWidth > node.clientWidth;
+    if (room && (overflow === 'auto' || overflow === 'scroll')) return true;
+  }
+  return false;
+}
+
 export class CameraControls {
   camera: Camera = { x: 0, y: 0, zoom: 1 };
   private readonly options: ControlsOptions;
@@ -64,6 +103,12 @@ export class CameraControls {
   private tap: { id: number; start: Point; time: number } | undefined;
   private longPress: number | undefined;
   private readonly keys = new Set<string>();
+  /**
+   * Élément qui a reçu le focus au clavier : il correspondait alors à :focus-visible. Ce
+   * sélecteur se lit à l'arrivée du focus, et non à la touche : dans Chromium, une flèche
+   * pressée fait correspondre l'élément focalisé à :focus-visible, avant même son keydown.
+   */
+  private keyboardFocus: Element | undefined;
 
   constructor(options: ControlsOptions) {
     this.options = options;
@@ -89,6 +134,7 @@ export class CameraControls {
     );
     window.addEventListener('keydown', this.onKeyDown);
     window.addEventListener('keyup', this.onKeyUp);
+    window.addEventListener('focusin', this.onFocusIn);
     window.addEventListener('blur', () => {
       this.keys.clear();
     });
@@ -144,7 +190,8 @@ export class CameraControls {
         ? { id: event.pointerId, start: point, time: event.timeStamp }
         : undefined;
     this.cancelLongPress();
-    if (this.tap !== undefined) {
+    // Un appui long qui attend le relâcher n'a pas de minuteur : onPointerUp le déclare.
+    if (this.tap !== undefined && this.options.holdUntilRelease?.() !== true) {
       const tap = this.tap;
       this.longPress = window.setTimeout(() => {
         this.longPress = undefined;
@@ -154,7 +201,7 @@ export class CameraControls {
         this.tap = undefined;
         const point = this.pointers.get(tap.id) ?? tap.start;
         const target = screenToMap(this.camera, this.options.viewport(), point.x, point.y);
-        this.options.onLongPress(target.x, target.y);
+        this.options.onLongPress(target.x, target.y, point.x, point.y);
       }, TAP_DURATION);
     }
   };
@@ -199,11 +246,15 @@ export class CameraControls {
     const tap = this.tap;
     this.pointers.delete(event.pointerId);
     if (tap?.id === event.pointerId) {
-      // Un geste encore en cours est bref, ou long si son minuteur n'a pas encore sonné.
+      // Un geste encore en cours est bref, ou long : son minuteur n'a pas encore sonné, ou
+      // il attendait le relâcher.
       const point = this.point(event);
       const target = screenToMap(this.camera, this.options.viewport(), point.x, point.y);
-      if (event.timeStamp - tap.time < TAP_DURATION) this.options.onTap(target.x, target.y);
-      else this.options.onLongPress(target.x, target.y);
+      if (event.timeStamp - tap.time < TAP_DURATION) {
+        this.options.onTap(target.x, target.y, point.x, point.y);
+      } else {
+        this.options.onLongPress(target.x, target.y, point.x, point.y);
+      }
     }
     this.tap = undefined;
     this.cancelLongPress();
@@ -265,8 +316,19 @@ export class CameraControls {
         height / 2,
       );
     } else if (event.code in KEY_DIRECTIONS) {
+      if (event.code.startsWith('Arrow')) {
+        const vertical = event.code === 'ArrowUp' || event.code === 'ArrowDown';
+        if (scrollsPanel(event.target, event.target === this.keyboardFocus, vertical)) return;
+        // La flèche est à la carte : le panneau qui a le focus ne défile pas en même temps.
+        event.preventDefault();
+      }
       this.keys.add(event.code);
     }
+  };
+
+  private readonly onFocusIn = (event: FocusEvent): void => {
+    const target = event.target;
+    this.keyboardFocus = isElement(target) && target.matches(':focus-visible') ? target : undefined;
   };
 
   /** Facteur d'un cran de zoom au clavier : d'un palier entier à l'autre au-delà de 1. */

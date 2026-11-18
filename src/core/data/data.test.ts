@@ -3,7 +3,8 @@ import altitudeLevelsJson from '../../../data/altitude-levels.json';
 import biomesJson from '../../../data/biomes.json';
 import fr from '../../i18n/fr.json';
 import { DataError, loadCatalog } from './catalog';
-import { checkContent, loadGameData, type GameData } from './index';
+import { checkContent, loadGameData, type GameData, type Genetics, type Species } from './index';
+import { FACE_BOUNDS, GeneticsSchema, geneRoles, NOSE_BOUNDS, SpeciesSchema } from './people';
 import { AltitudeLevelsSchema, BiomesSchema } from './schemas';
 
 /** Les 32 biomes naturels de la séance C1 (D6), par famille, tels que la séance les nomme. */
@@ -243,5 +244,162 @@ describe('data/species.json et data/genetics.json', () => {
       "data/species.json (human, nordic) : aucun allèle du locus eyes n'a de fréquence",
       'data/species.json (human, nordic) : traits inconnus : charm',
     ]);
+  });
+});
+
+describe('rôles des gènes et formes des allèles (D-6, A-10, W-12)', () => {
+  const { genetics } = loadGameData();
+  /** Les problèmes que le schéma relève dans une variante de data/genetics.json. */
+  const problems = (variant: unknown) => {
+    const result = GeneticsSchema.safeParse(variant);
+    return result.success
+      ? []
+      : result.error.issues.map((issue) => `${issue.path.join('.')} : ${issue.message}`);
+  };
+  /** La génétique des données, dont le locus `id` est remplacé. */
+  const withLocus = (id: string, change: (locus: Genetics['loci'][number]) => object) => ({
+    ...genetics,
+    loci: genetics.loci.map((locus) => (locus.id === id ? change(locus) : locus)),
+  });
+
+  it('désigne par un rôle les yeux, les cheveux, le visage, le nez, le teint et la taille', () => {
+    expect(problems(genetics)).toEqual([]);
+    const roles = geneRoles(genetics);
+    expect(genetics.loci[roles.loci.hair]?.role).toBe('hair');
+    expect(genetics.loci[roles.loci.eyes]?.role).toBe('eyes');
+    expect(genetics.loci[roles.loci.face]?.role).toBe('face');
+    expect(genetics.loci[roles.loci.nose]?.role).toBe('nose');
+    expect(genetics.traits[roles.traits.skin]?.role).toBe('skin');
+    expect(genetics.traits[roles.traits.height]?.role).toBe('height');
+  });
+
+  it('exige que chaque rôle soit tenu, et par un seul gène', () => {
+    const anonymous = {
+      ...genetics,
+      traits: genetics.traits.map(({ role: _role, ...entry }) => entry),
+    };
+    expect(problems(anonymous)).toEqual([
+      'traits : aucun trait ne tient le rôle skin',
+      'traits : aucun trait ne tient le rôle height',
+    ]);
+    expect(() => geneRoles(anonymous)).toThrow(DataError);
+    const twice = {
+      ...genetics,
+      traits: genetics.traits.map((entry) => ({ ...entry, role: entry.role ?? 'skin' })),
+    };
+    expect(problems(twice)).toEqual(['traits : plusieurs traits tiennent le rôle skin']);
+    const unknown = withLocus('eyes', (locus) => ({ ...locus, role: 'horns' }));
+    expect(problems(unknown).at(0)).toMatch(/^loci\.0\.role : /);
+  });
+
+  it('refuse un allèle de visage ou de nez sans forme, et des cheveux sans couleur', () => {
+    const faceless = withLocus('face', (locus) => ({
+      ...locus,
+      alleles: [...locus.alleles, { id: 'heart', name: 'gene.face.oval', dominance: 0 }],
+    }));
+    expect(problems(faceless)).toEqual(['loci.2.alleles.4.face : demandé par le rôle face']);
+    const noseless = withLocus('nose', (locus) => ({
+      ...locus,
+      alleles: locus.alleles.map((allele, index) =>
+        index === 1 ? { ...allele, nose: undefined } : allele,
+      ),
+    }));
+    expect(problems(noseless)).toEqual(['loci.3.alleles.1.nose : demandé par le rôle nose']);
+    const colorless = withLocus('hair', (locus) => ({
+      ...locus,
+      alleles: locus.alleles.map(({ color: _color, ...allele }) => allele),
+    }));
+    expect(problems(colorless)).toHaveLength(4);
+    // Une forme hors de son rôle, ou hors des bornes du portrait.
+    const misplaced = withLocus('eyes', (locus) => ({
+      ...locus,
+      alleles: locus.alleles.map((allele, index) =>
+        index === 0 ? { ...allele, face: { width: 12, height: 16, power: 2, jaw: 0.2 } } : allele,
+      ),
+    }));
+    expect(problems(misplaced)).toEqual(['loci.0.alleles.0.face : sans emploi pour le rôle eyes']);
+    const roleless = withLocus('eyes', ({ role: _role, ...locus }) => locus);
+    expect(problems(roleless)).toContain(
+      'loci.0.alleles.0.color : sans emploi pour un locus sans rôle',
+    );
+  });
+
+  it('borne les formes à ce que le portrait sait dessiner', () => {
+    /** Les problèmes d'une forme donnée au premier allèle du visage, ou du nez. */
+    const shaped = (role: 'face' | 'nose', shape: object) =>
+      problems(
+        withLocus(role, (locus) => ({
+          ...locus,
+          alleles: locus.alleles.map((allele, index) =>
+            index === 0 ? { ...allele, [role]: { ...allele[role], ...shape } } : allele,
+          ),
+        })),
+      );
+    const { width, height, jaw } = FACE_BOUNDS;
+    for (const shape of [
+      { width: width[0], height: height[0], power: 4, jaw: jaw[1] },
+      { width: width[1], height: height[1], power: 2, jaw: jaw[0] },
+    ]) {
+      expect(shaped('face', shape)).toEqual([]);
+    }
+    for (const shape of [
+      { width: width[0] - 1 },
+      { width: width[1] + 1 },
+      { height: height[0] - 1 },
+      { height: height[1] + 1 },
+      { jaw: jaw[1] + 0.01 },
+      { jaw: -0.01 },
+      { power: 3 },
+      { width: 12.5 },
+    ]) {
+      expect(shaped('face', shape), JSON.stringify(shape)).toHaveLength(1);
+    }
+    const { length, wing } = NOSE_BOUNDS;
+    expect(shaped('nose', { length: length[1], wing: wing[1] })).toEqual([]);
+    for (const shape of [
+      { length: length[0] - 1 },
+      { length: length[1] + 1 },
+      { wing: wing[0] - 1 },
+      { wing: wing[1] + 1 },
+    ]) {
+      expect(shaped('nose', shape), JSON.stringify(shape)).toHaveLength(1);
+    }
+  });
+});
+
+describe('âges de la vie et confort, dans data/species.json (D-6, A-10, U-12)', () => {
+  const human = loadGameData().species.entries.at(0);
+  if (human === undefined) throw new Error('pas d’humains');
+  const valid = (species: Species) => SpeciesSchema.safeParse(species).success;
+
+  it('donne aux humains les âges de leur apparence et de leur confort', () => {
+    expect(valid(human)).toBe(true);
+    expect(human.ages).toMatchObject({ baby: 3, elder: 55, grey: [40, 70], beard: 18, bald: 48 });
+    expect(human.hardship).toMatchObject({ comfort: [0, 30], extremes: [-20, 40] });
+  });
+
+  it('refuse des âges de la vie qui ne se suivent pas', () => {
+    expect(valid({ ...human, ages: { ...human.ages, baby: human.maturity } })).toBe(false);
+    expect(valid({ ...human, ages: { ...human.ages, elder: human.maturity } })).toBe(false);
+    expect(valid({ ...human, ages: { ...human.ages, elder: human.longevity } })).toBe(false);
+    expect(valid({ ...human, ages: { ...human.ages, grey: [70, 40] } })).toBe(false);
+    // Une espèce qui mûrit à 30 ans, vit 400 ans et devient aînée à 300 ans.
+    expect(
+      valid({
+        ...human,
+        maturity: 30,
+        longevity: 400,
+        ages: { ...human.ages, baby: 6, elder: 300, grey: [250, 380] },
+      }),
+    ).toBe(true);
+  });
+
+  it('refuse un confort qui ne tient pas entre ses deux extrêmes', () => {
+    const hardship = (comfort: [number, number], extremes: [number, number]) =>
+      valid({ ...human, hardship: { ...human.hardship, comfort, extremes } });
+    expect(hardship([-10, 25], [-30, 35])).toBe(true);
+    expect(hardship([0, 30], [0, 40])).toBe(false);
+    expect(hardship([0, 30], [-20, 30])).toBe(false);
+    expect(hardship([30, 0], [-20, 40])).toBe(false);
   });
 });

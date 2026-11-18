@@ -1,11 +1,12 @@
 /**
  * Lecture d'un individu, vivant ou mort (tâche 2.10 ; IND-03) : les vivants dans leurs
- * colonnes, les morts dans l'archive, sous un même accès. Et son nom, que la langue de sa
- * culture rend à partir de ses codes (src/gen/names.ts).
+ * colonnes, les morts dans l'archive, sous un même accès. Et son nom, rendu à partir de
+ * ses codes (src/gen/names.ts) : le prénom dans la langue de sa culture, le nom de famille
+ * dans la langue où il est né, qu'il garde d'une génération à l'autre.
  */
 import { familyName, givenName, phonology, type Phonology } from '../gen/names';
 import { ANCESTRY_SLOTS, GENOME_WORDS, NONE, type Population } from './population';
-import { cultureOf, languageOf, type Society } from './society';
+import { cultureOf, languageOf, type Language, type Society } from './society';
 
 /** Champs communs aux vivants et aux morts. */
 type Field =
@@ -19,7 +20,8 @@ type Field =
   | 'group'
   | 'culture'
   | 'givenName'
-  | 'familyName';
+  | 'familyName'
+  | 'familyLanguage';
 
 /** Un individu, vivant (emplacement) ou mort (ligne de l'archive). */
 export interface PersonRecord {
@@ -68,9 +70,25 @@ export function phonologyOf(seed: number): Phonology {
 }
 
 /**
- * Nom complet d'un individu : son prénom, puis son nom de famille selon la règle de sa
- * culture (IND-08) ; « les deux » joint ceux de son père et de sa mère. Chaîne vide pour
- * un identifiant inconnu.
+ * Nom de famille d'un individu, dans sa langue (`fallback`, celle de sa culture, si elle
+ * est inconnue) ; chaîne vide s'il n'en a pas.
+ */
+function familyText(
+  people: Population,
+  society: Society,
+  record: PersonRecord,
+  fallback: Language,
+): string {
+  const code = field(people, record, 'familyName');
+  if (code === 0) return '';
+  const language = languageOf(society, field(people, record, 'familyLanguage')) ?? fallback;
+  return familyName(phonologyOf(language.seed), code);
+}
+
+/**
+ * Nom complet d'un individu : son prénom, puis son nom de famille, s'il en a un (IND-08) ;
+ * si sa culture suit la règle « les deux », celui de son père, puis celui de sa mère, s'il
+ * diffère, chacun dans sa langue. Chaîne vide pour un identifiant inconnu.
  */
 export function personName(people: Population, society: Society, id: number): string {
   const record = recordOf(people, id);
@@ -80,16 +98,14 @@ export function personName(people: Population, society: Society, id: number): st
   if (language === undefined) return '';
   const words = phonologyOf(language.seed);
   const given = givenName(words, field(people, record, 'sex'), field(people, record, 'givenName'));
-  const code = field(people, record, 'familyName');
-  if (culture?.naming === 'none' || code === 0) return given;
-  const family = familyName(words, code);
+  const family = familyText(people, society, record, language);
+  if (family === '') return given;
   if (culture?.naming !== 'both') return `${given} ${family}`;
-  // « Les deux » : le nom du père, puis celui de la mère, s'il diffère.
   const mother = recordOf(people, field(people, record, 'mother'));
-  const maternal = mother === undefined ? 0 : field(people, mother, 'familyName');
-  return maternal === 0 || maternal === code
+  const maternal = mother === undefined ? '' : familyText(people, society, mother, language);
+  return maternal === '' || maternal === family
     ? `${given} ${family}`
-    : `${given} ${family} ${familyName(words, maternal)}`;
+    : `${given} ${family} ${maternal}`;
 }
 
 /** Enfants d'un individu, vivants ou morts, dans l'ordre de leurs identifiants. */

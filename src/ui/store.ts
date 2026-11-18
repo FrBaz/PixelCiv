@@ -3,7 +3,7 @@
  * worker lui envoie, et les composants se mettent à jour d'eux-mêmes.
  */
 import { signal } from '@preact/signals';
-import type { Worldgen } from '../core/data';
+import type { Species, Worldgen } from '../core/data';
 import type {
   ChronicleView,
   GroupView,
@@ -15,6 +15,7 @@ import type {
 import type { GenerationStage, WorldSizeId } from '../core/world';
 import type { WorldParams } from '../core/worldParams';
 import type { MessageKey } from '../i18n';
+import type { SidePanel } from './panels';
 
 /** Temps de la partie, inconnu avant le premier instantané. */
 export const time = signal<TimeInfo | undefined>(undefined);
@@ -87,35 +88,106 @@ export interface UiActions {
   inspectPerson(id: number): void;
   inspectGroup(id: number): void;
   closeSheet(): void;
+  /**
+   * Demande au worker la page de faits de la chronique qui précède les faits affichés : la
+   * liste affichée se fige jusqu'au retour aux derniers faits (app/chronicle.ts).
+   */
+  olderChronicle(): void;
+  /** Revient aux derniers faits de la chronique (« N faits nouveaux »). */
+  latestChronicle(): void;
   /** Centre la carte sur une case. */
   focus(x: number, y: number): void;
+}
+
+/**
+ * Demandes du joueur de voir un panneau de la colonne, numérotées : chacune remet le
+ * panneau au-dessus des autres sur petit écran (panels.ts), même s'il montrait déjà la même
+ * chose, comme un fait de la chronique touché deux fois.
+ */
+export const raised = signal<Readonly<Partial<Record<SidePanel, number>>>>({});
+
+export function raise(panel: SidePanel): void {
+  raised.value = { ...raised.value, [panel]: (raised.value[panel] ?? 0) + 1 };
+}
+
+/**
+ * Le panneau est-il ouvert mais caché sous un autre, sur petit écran ? Son bouton le
+ * remonte alors, au lieu de le fermer.
+ */
+export function buried(panel: Element | null): boolean {
+  return panel !== null && panel.getClientRects().length === 0;
 }
 
 /** Outil de la carte : inspecter (appui, clic), ou faire apparaître un groupe (CRE-03). */
 export type Tool = 'inspect' | 'spawn';
 export const tool = signal<Tool>('inspect');
 
-/** Réglages de l'outil d'apparition : la sous-espèce et le nombre de personnes. */
+/** Réglages de l'outil d'apparition : l'espèce, la sous-espèce et le nombre de personnes. */
 export interface SpawnSettings {
   readonly species: string;
   readonly subspecies: string;
   readonly count: number;
 }
-export const spawnSettings = signal<SpawnSettings>({
-  species: 'human',
-  subspecies: 'plains',
-  count: 20,
-});
 
-/** Ce que l'outil d'apparition propose : les sous-espèces de chaque espèce, nommées. */
+/**
+ * Réglages choisis dans l'outil, ou undefined tant que le joueur n'a rien choisi : l'outil
+ * prend alors ceux par défaut, tirés des données (spawnChoice).
+ */
+export const spawnSettings = signal<SpawnSettings | undefined>(undefined);
+
+/** Ce que l'outil d'apparition propose : chaque espèce et ses sous-espèces, nommées. */
 export interface CreatorSetup {
   readonly species: readonly {
     readonly id: string;
     readonly name: MessageKey;
     readonly subspecies: readonly { readonly id: string; readonly name: MessageKey }[];
   }[];
-  /** Taille d'un groupe : au moins, au plus. */
-  readonly count: { readonly min: number; readonly max: number };
+  /** Taille d'un groupe : au moins, au plus, et au départ. */
+  readonly count: { readonly min: number; readonly max: number; readonly initial: number };
+}
+
+/**
+ * Ce que l'outil propose, tiré des données : chaque espèce de data/species.json et ses
+ * sous-espèces, dans leur ordre. Une espèce ou une sous-espèce ajoutée aux données y paraît
+ * d'elle-même.
+ */
+export function creatorSetup(
+  species: readonly Species[],
+  count: CreatorSetup['count'],
+): CreatorSetup {
+  return {
+    species: species.map((entry) => ({
+      id: entry.id,
+      // Clés de traduction, vérifiées contre le catalogue par les tests des données.
+      name: entry.name as MessageKey,
+      subspecies: entry.subspecies.map((subspecies) => ({
+        id: subspecies.id,
+        name: subspecies.name as MessageKey,
+      })),
+    })),
+    count,
+  };
+}
+
+/**
+ * Réglages que l'outil applique (U-11) : l'espèce et la sous-espèce choisies, tant que les
+ * données les proposent, et sinon la première espèce des données et sa première
+ * sous-espèce ; le nombre choisi, ou celui du départ, ramené dans ses bornes. Undefined si
+ * les données n'ont aucune espèce.
+ */
+export function spawnChoice(
+  setup: CreatorSetup,
+  settings: SpawnSettings | undefined,
+): SpawnSettings | undefined {
+  const species =
+    setup.species.find((entry) => entry.id === settings?.species) ?? setup.species.at(0);
+  const subspecies =
+    species?.subspecies.find((entry) => entry.id === settings?.subspecies) ??
+    species?.subspecies.at(0);
+  if (species === undefined || subspecies === undefined) return undefined;
+  const { min, max, initial } = setup.count;
+  const count = Math.min(max, Math.max(min, Math.round(settings?.count ?? initial)));
+  return { species: species.id, subspecies: subspecies.id, count };
 }
 
 /** Fiche ouverte : un individu ou un groupe, tel que le worker l'a décrit. */
@@ -124,10 +196,16 @@ export type Sheet =
   | { readonly kind: 'group'; readonly view: GroupView };
 export const sheet = signal<Sheet | undefined>(undefined);
 
-/** Faits de la chronique reçus, du plus ancien au plus récent ; les derniers seulement. */
-export const CHRONICLE_KEPT = 300;
+/**
+ * Faits de la chronique affichés, du plus ancien au plus récent : les derniers, ou, pendant
+ * la lecture des pages plus anciennes, la liste figée et ses pages (app/chronicle.ts).
+ */
 export const chronicle = signal<readonly ChronicleView[]>([]);
 export const chronicleOpen = signal(false);
+/** Une page de faits plus anciens est demandée, et pas encore reçue. */
+export const chronicleLoading = signal(false);
+/** Faits arrivés depuis que la liste affichée est figée ; 0 si elle ne l'est pas. */
+export const chronicleNewFacts = signal(0);
 
 /** Ce que l'écran de création propose : bornes des paramètres, tailles, taille par défaut. */
 export interface CreationSetup {

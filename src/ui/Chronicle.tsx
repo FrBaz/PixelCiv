@@ -1,12 +1,25 @@
 /**
  * Chronique de base (tâche 2.10 ; CHR-01, CRE-05) : les faits notables des groupes,
- * datés et situés, du plus récent au plus ancien. Un fait s'ouvre d'un appui : la carte
- * se centre sur son lieu, et la fiche du groupe s'ouvre, s'il vit encore.
+ * datés et situés, du plus récent au plus ancien, jusqu'au premier : les plus anciens se
+ * demandent au worker, page après page. Pendant cette lecture, la liste se fige, et un
+ * bouton en tête dit combien de faits sont arrivés depuis, et ramène aux derniers
+ * (app/chronicle.ts). Un fait s'ouvre d'un appui : la carte se centre sur son lieu, et la
+ * fiche du groupe s'ouvre, s'il vit encore ; sinon, la fiche en cours reste, et un avis le
+ * dit (app/sheets.ts). Chaque fait a pour clé son rang dans la chronique, qui ne change
+ * pas : un fait nouveau n'en recrée aucun autre.
  */
 import type { ChronicleView } from '../core/protocol';
 import { ofName, t, type MessageKey } from '../i18n';
 import { formatDate } from './calendar';
-import { chronicle, chronicleOpen, type UiActions } from './store';
+import {
+  buried,
+  chronicle,
+  chronicleLoading,
+  chronicleNewFacts,
+  chronicleOpen,
+  raise,
+  type UiActions,
+} from './store';
 
 /** Message de chaque sorte de fait (sim/society.ts, CHRONICLE_KINDS). */
 const KINDS: Readonly<Record<string, MessageKey>> = {
@@ -35,7 +48,9 @@ export function ChronicleToggle() {
       type="button"
       aria-pressed={open}
       onClick={() => {
-        chronicleOpen.value = !open;
+        // Sur petit écran, une chronique ouverte sous un autre panneau remonte.
+        if (open && buried(document.querySelector('.chronicle'))) raise('chronicle');
+        else chronicleOpen.value = !open;
       }}
     >
       {t('chronicle.toggle')}
@@ -43,18 +58,55 @@ export function ChronicleToggle() {
   );
 }
 
+/**
+ * En tête de la liste figée : les faits arrivés depuis, et le retour aux derniers. Seul ce
+ * bouton se redessine à chaque fait nouveau, et non la liste.
+ */
+function NewFacts({ actions }: { actions: UiActions }) {
+  const count = chronicleNewFacts.value;
+  if (count === 0) return null;
+  return (
+    <li class="chronicle-news">
+      <button
+        type="button"
+        onClick={() => {
+          actions.latestChronicle();
+        }}
+      >
+        {t('chronicle.newFacts', { count })}
+      </button>
+    </li>
+  );
+}
+
 export function ChroniclePanel({ actions }: { actions: UiActions }) {
   if (!chronicleOpen.value) return null;
   const entries = chronicle.value;
+  // Le premier fait gardé n'est pas le premier de la chronique : il y en a d'autres avant.
+  const older = (entries.at(0)?.index ?? 0) > 0;
   return (
     <div class="panel chronicle" role="log" aria-label={t('chronicle.title')}>
-      <strong>{t('chronicle.title')}</strong>
+      <div class="cell-info-head">
+        <strong>{t('chronicle.title')}</strong>
+        {/* Sur petit écran, la chronique peut couvrir son bouton de la barre du bas. */}
+        <button
+          type="button"
+          aria-label={t('chronicle.close')}
+          title={t('chronicle.close')}
+          onClick={() => {
+            chronicleOpen.value = false;
+          }}
+        >
+          ×
+        </button>
+      </div>
       {entries.length === 0 ? (
         <p>{t('chronicle.empty')}</p>
       ) : (
         <ol class="chronicle-entries">
-          {[...entries].reverse().map((entry, index) => (
-            <li key={`${String(entry.tick)}-${String(entries.length - index)}`}>
+          <NewFacts key="news" actions={actions} />
+          {[...entries].reverse().map((entry) => (
+            <li key={entry.index}>
               <button
                 type="button"
                 class="sheet-link"
@@ -69,6 +121,20 @@ export function ChroniclePanel({ actions }: { actions: UiActions }) {
               </button>
             </li>
           ))}
+          {older && (
+            // Au bout de la liste, après le plus ancien des faits gardés.
+            <li key="older" class="chronicle-older">
+              <button
+                type="button"
+                disabled={chronicleLoading.value}
+                onClick={() => {
+                  actions.olderChronicle();
+                }}
+              >
+                {t(chronicleLoading.value ? 'chronicle.loading' : 'chronicle.older')}
+              </button>
+            </li>
+          )}
         </ol>
       )}
     </div>

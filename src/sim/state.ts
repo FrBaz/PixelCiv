@@ -3,7 +3,6 @@
  * (CLAUDE.md, « Performances » ; ADR 0009), la population et ses groupes (ADR 0011), le
  * temps, le journal des commandes et le générateur de la partie.
  */
-import { wrapX } from '../core/cylinder';
 import type { ChunkPatch, GameCommand, LoggedCommand } from '../core/protocol';
 import { Rng } from '../core/rng';
 import {
@@ -15,9 +14,12 @@ import {
 } from '../core/world';
 import type { WorldParams } from '../core/worldParams';
 import { emptyStocks, type FoodStocks } from './forage';
-import { terrainCosts, type GroupsContent } from './groups';
+import type { GroupsContent } from './groups';
 import { Population } from './population';
 import { emptySociety, type Society } from './society';
+import { terrainCosts, terrainLands } from './terrain';
+
+export { cellIndex } from './terrain';
 
 export interface SimState {
   /** Paramètres du monde : graine, taille, réglages de la création. */
@@ -38,6 +40,15 @@ export interface SimState {
    * monde et du contenu : ni la sauvegarde ni l'empreinte n'en tiennent compte.
    */
   readonly cost: Float32Array<ArrayBuffer>;
+  /**
+   * Terre de chaque case, -1 pour une case infranchissable (terrainLands) : deux cases se
+   * relient à pied si et seulement si elles sont sur la même terre. Elle découle de `cost`,
+   * et se calcule avec lui, à la création et à la relecture d'une partie : ni la sauvegarde
+   * ni l'empreinte n'en tiennent compte. Aucune commande ne change la franchissabilité d'une
+   * case : le pinceau ne peint ni n'efface l'eau, seule infranchissable parmi les biomes, et
+   * ne touche pas à l'altitude, qui fait les sommets. La couche ne se recalcule donc pas.
+   */
+  readonly land: Int32Array<ArrayBuffer>;
   /** Commandes de jeu appliquées, dans l'ordre : rejouées depuis le monde, elles redonnent l'état. */
   readonly commandLog: LoggedCommand[];
   /**
@@ -63,6 +74,7 @@ export function createState(
 ): SimState {
   const size = WORLD_SIZES[params.size];
   const grid = chunkGrid(size);
+  const cost = terrainCosts(world, content);
   return {
     params,
     size,
@@ -71,24 +83,13 @@ export function createState(
     people: new Population(),
     society: emptySociety(),
     food: emptyStocks(world.biome.length),
-    cost: terrainCosts(world, content),
+    cost,
+    land: terrainLands(cost, size),
     commandLog: [],
     pending: [],
     rng: new Rng(params.seed),
     dirtyChunks: new Uint8Array(grid.columns * grid.rows),
   };
-}
-
-/**
- * Case qui contient le point (x, y) : sa colonne boucle d'est en ouest, et une ligne
- * hors du monde, au nord ou au sud, n'en a pas, pas plus qu'un point non fini. La partie
- * entière est prise avant de boucler : x = -0,1 tombe bien dans la dernière colonne.
- */
-export function cellIndex(size: WorldSize, x: number, y: number): number | undefined {
-  const { width, height } = size;
-  const row = Math.floor(y);
-  if (!Number.isFinite(x) || !(row >= 0 && row < height)) return undefined;
-  return row * width + wrapX(Math.floor(x), width);
 }
 
 /** Marque le bloc de la case `index` comme modifié. */

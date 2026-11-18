@@ -11,8 +11,11 @@ const cell = z.number().int();
 
 const id = z.string().regex(/^[a-z]+(-[a-z]+)*$/);
 
-/** Taille d'un groupe qu'on fait apparaître : de deux à une cinquantaine d'individus. */
-export const SPAWN_COUNT = { min: 2, max: 50 } as const;
+/**
+ * Taille d'un groupe qu'on fait apparaître : de deux à une cinquantaine d'individus ; une
+ * vingtaine, tant que le joueur n'en a pas choisi d'autre.
+ */
+export const SPAWN_COUNT = { min: 2, max: 50, initial: 20 } as const;
 
 export const GameCommandSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('paintBiome'), x: cell, y: cell, biome: id }).strict(),

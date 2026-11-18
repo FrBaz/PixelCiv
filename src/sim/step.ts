@@ -2,8 +2,9 @@
  * Avancée de la simulation : un pas vaut un mois. Les commandes de jeu s'appliquent
  * au début du pas, puis les systèmes s'exécutent dans un ordre fixe (ADR 0003, ADR 0011) :
  * la nourriture repousse, les groupes cherchent leur nourriture et mangent, la
- * population vit (morts, naissances, couples), puis les groupes trop grands se scindent
- * et tous se déplacent.
+ * population vit (morts, naissances, couples), les groupes trop petits rejoignent un
+ * voisin, à un mois de marche au plus, les groupes trop grands se scindent, et tous se
+ * déplacent, sauf ceux qui viennent de naître d'une scission, déjà partis vers leur aire.
  */
 import type { Cultures, Genetics, Nomads, Species } from '../core/data';
 import type { AltitudeLevel } from '../core/data/schemas';
@@ -14,11 +15,13 @@ import type { GameCommand, PaintBiomeCommand } from '../core/protocol';
 import { LAYER_NAMES } from '../core/world';
 import { PARAMETER_NAMES } from '../core/data/worldgen';
 import { depletedCells, feedGroup, FOOD_STRIDE, regrowFood } from './forage';
-import { groupMembers, mergeGroup, moveGroup, splitGroup, walkCost } from './groups';
+import { groupMembers, mergeGroup, moveGroup, Neighborhood, splitGroup } from './groups';
 import { lifeCycle } from './lifecycle';
+import { NONE } from './population';
 import { fingerprintPeople } from './populationSave';
 import { spawnGroup } from './spawn';
-import { cellIndex, markDirty, type SimState } from './state';
+import { markDirty, type SimState } from './state';
+import { cellIndex, walkCost } from './terrain';
 
 /** Contenu dont la simulation se sert. */
 export interface SimContent {
@@ -30,7 +33,11 @@ export interface SimContent {
   readonly nomads: Nomads;
 }
 
-/** Applique une commande ; une commande sans effet est sans danger. */
+/**
+ * Applique une commande ; une commande sans effet est sans danger. Une commande vérifie et
+ * calcule tout avant de toucher à l'état : si elle lève une exception, seul le générateur
+ * a pu avancer, et step le ramène en arrière.
+ */
 export function applyCommand(state: SimState, command: GameCommand, content: SimContent): void {
   switch (command.type) {
     case 'paintBiome':
@@ -44,7 +51,10 @@ export function applyCommand(state: SimState, command: GameCommand, content: Sim
 
 /**
  * Le pinceau ne change que le biome d'une case de terre en un autre biome de terre : la
- * mer et les lacs, qui ont une profondeur, restent ce qu'ils sont.
+ * mer et les lacs, qui ont une profondeur, restent ce qu'ils sont. Il ne change donc jamais
+ * la franchissabilité d'une case, puisque seule l'eau est infranchissable parmi les biomes
+ * et que l'altitude, qui fait les sommets, ne change pas : la couche des terres
+ * (`state.land`) reste juste sans se recalculer.
  */
 function paintBiome(state: SimState, command: PaintBiomeCommand, content: SimContent): void {
   const index = cellIndex(state.size, command.x, command.y);
@@ -59,22 +69,56 @@ function paintBiome(state: SimState, command: PaintBiomeCommand, content: SimCon
 }
 
 /**
- * Fait avancer l'état d'un pas. Les commandes reçues s'appliquent d'abord, et sont
- * journalisées avec le pas au début duquel elles s'appliquent.
+ * Commande écartée : elle a levé `error` en s'appliquant. L'état est resté celui d'avant
+ * elle, générateur compris, et elle n'entre pas au journal.
  */
+export type RejectedCommand = (command: GameCommand, error: unknown) => void;
+
 /**
- * Fait passer un mois. Renvoie les membres de chaque groupe à la fin du mois, dans l'ordre
- * des emplacements, tels que les donnerait groupMembers.
+ * Applique des commandes, dans l'ordre, et les journalise avec le pas au début duquel
+ * elles s'appliquent : le pas courant, qui n'a pas encore commencé. Sans `rejected`,
+ * l'exception d'une commande remonte ; avec, la commande est écartée et signalée.
+ *
+ * step les applique au début du mois. L'hôte, en pause, les applique dès leur réception :
+ * rien ne change l'état d'ici le pas suivant, qui commence donc là où il aurait commencé
+ * après elles, et le rejeu du journal ne voit aucune différence.
+ */
+export function applyCommands(
+  state: SimState,
+  commands: readonly GameCommand[],
+  content: SimContent,
+  rejected?: RejectedCommand,
+): void {
+  for (const command of commands) {
+    if (rejected === undefined) {
+      applyCommand(state, command, content);
+    } else {
+      const streams = state.rng.states();
+      try {
+        applyCommand(state, command, content);
+      } catch (error) {
+        state.rng.restore(streams);
+        rejected(command, error);
+        continue;
+      }
+    }
+    state.commandLog.push({ tick: state.tick, command });
+  }
+}
+
+/**
+ * Fait passer un mois. Les commandes reçues s'appliquent d'abord (applyCommands) ; sans
+ * `rejected`, l'exception d'une commande remonte ; avec, la commande est écartée et
+ * signalée, et le mois continue. Renvoie les membres de chaque groupe à la fin du mois,
+ * dans l'ordre des emplacements, tels que les donnerait groupMembers.
  */
 export function step(
   state: SimState,
   commands: readonly GameCommand[],
   content: SimContent,
+  rejected?: RejectedCommand,
 ): ReadonlyMap<number, readonly number[]> {
-  for (const command of commands) {
-    state.commandLog.push({ tick: state.tick, command });
-    applyCommand(state, command, content);
-  }
+  applyCommands(state, commands, content, rejected);
   // Systèmes, dans un ordre fixe.
   const { people, society, food, world, size, tick } = state;
   regrowFood(food, world, size, tick, content);
@@ -82,13 +126,16 @@ export function step(
   for (const group of society.groups.values()) {
     feedGroup(group, members.get(group.id) ?? [], people, food, world, size, tick, content);
   }
-  lifeCycle(state, content);
+  // Le voisinage des groupes, en temps de trajet : les groupes ne bougent qu'en fin de
+  // mois, et mariages et réunions le partagent.
+  const neighbors = new Neighborhood(state, content.nomads.marriage);
+  lifeCycle(state, content, members, neighbors);
   // Les fusions se décident toutes sur les membres d'après le cycle de vie ; les listes
   // se mettent à jour ensuite, dans l'ordre des emplacements, comme si on les recomptait.
   members = groupMembers(people);
   const merges: [from: number, into: number][] = [];
   for (const group of [...society.groups.values()]) {
-    const into = mergeGroup(state, group, members, content);
+    const into = mergeGroup(state, group, members, content, neighbors);
     if (into !== undefined) merges.push([group.id, into.id]);
   }
   for (const [from, into] of merges) {
@@ -111,6 +158,8 @@ export function step(
     );
   }
   for (const group of society.groups.values()) {
+    // Un groupe né d'une scission ce mois-ci a déjà fait sa marche du mois (splitGroup).
+    if (group.founded === tick && group.parent !== NONE) continue;
     moveGroup(state, group, members.get(group.id) ?? [], content, random);
   }
   state.tick++;

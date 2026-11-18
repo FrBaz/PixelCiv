@@ -1,4 +1,5 @@
-# Icône d'un groupe nomade, de loin : une bannière aux couleurs de sa culture.
+# Icône d'un groupe nomade, de loin : une bannière aux couleurs de sa culture, de 8 pixels
+# de haut. group-16, group-24 et group-36 la redessinent plus grande (src/render/crowd.ts).
 oo.....
 occccx.
 occcccx

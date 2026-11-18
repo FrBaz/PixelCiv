@@ -1,6 +1,6 @@
 # ADR 0003 — Déterminisme
 
-Statut : accepté · 9 novembre 2026 · tâche 0.2, complété en 1.10
+Statut : accepté · 9 novembre 2026 · tâche 0.2, complété en 1.10 et à la relecture de la phase 2
 
 ## Contexte
 
@@ -13,8 +13,8 @@ Une même graine et les mêmes paramètres doivent donner le même monde sur tou
 - **Empreintes.** `src/core/hash.ts` calcule des empreintes FNV-1a. Les bits d'un NaN varient d'un processeur à l'autre : les empreintes n'en voient qu'une forme canonique.
 - **Interdits.** Dans `src/core`, `src/sim`, `src/worldgen` et `src/gen`, ESLint refuse `Math.random`, `crypto`, `Date`, `performance`, les fonctions de Math approchées, l'opérateur `**`, `Intl` et les méthodes qui dépendent de la langue de l'appareil, y compris par `globalThis` ou `self`. `Math`, `globalThis` et `self` ne s'y emploient que devant une propriété écrite en clair (`Math.sqrt`, `Math['sqrt']`) : un alias (`const M = Math`), un détour (`globalThis.self`) ou une clé calculée (`Math[op]`) échapperait à ces interdictions. Les requêtes de type, comme `typeof Math.sin`, restent admises.
 - **Temps.** La simulation compte ses pas et ne lit jamais l'horloge. Seul l'hôte du worker (`src/worker`, ADR 0004) la lit, pour cadencer les pas.
-- **Commandes.** Une commande qui modifie l'état est horodatée du pas où elle s'applique, appliquée au début de ce pas, puis journalisée. Rejouer une partie revient à rejouer son journal à partir de la même graine.
-- **Contrôle.** Des tests comparent l'empreinte de l'état (FNV-1a sur 32 bits) après N pas à une valeur de référence, et celles de mondes générés, couche par couche, aux empreintes de référence de la génération (`src/worldgen/reference.test.ts`, tâche 1.10). Au démarrage, le jeu recalcule aussi dans le navigateur les valeurs de référence du générateur pseudo-aléatoire et de `dmath`, et le worker celle d'un monde de 64 × 32 cases, généré en quelques dizaines de millisecondes à la poignée de main ; le panneau de débogage indique si elles concordent.
+- **Commandes.** Une commande qui modifie l'état est horodatée du pas où elle s'applique, appliquée au début de ce pas, puis journalisée. En pause, l'hôte l'applique dès sa réception et la journalise au pas courant, qui n'a pas encore commencé : rien ne change l'état d'ici là, et la partie est celle où elle se serait appliquée au début de ce pas. Une commande vérifie et calcule tout avant de toucher à l'état. Si elle lève une exception dans l'hôte, la simulation rétablit les flux du générateur (`Rng.restore`) et l'écarte sans l'inscrire au journal : elle ne laisse aucune trace. Au rejeu et dans les tests, l'exception remonte. Rejouer une partie revient à rejouer son journal à partir de la même graine.
+- **Contrôle.** Des tests comparent l'empreinte de l'état (FNV-1a sur 32 bits) après N pas à une valeur de référence, et celles de mondes générés, couche par couche, aux empreintes de référence de la génération (`src/worldgen/reference.test.ts`, tâche 1.10). L'empreinte de l'état compte la population et les stocks de nourriture : `src/sim/state.test.ts` fige celles d'un an sans population, de vingt ans de trois groupes et de trente mois de 3 000 individus sur un vrai monde, et le banc d'essai de la population imprime celles de ses scénarios (ADR 0011). Au démarrage, le jeu recalcule aussi dans le navigateur les valeurs de référence du générateur pseudo-aléatoire et de `dmath`, et le worker celle d'un monde de 64 × 32 cases, généré en quelques dizaines de millisecondes à la poignée de main ; le panneau de débogage indique si elles concordent.
 
 ## Conséquences
 

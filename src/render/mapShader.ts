@@ -17,7 +17,21 @@
  * relief, les rivières (pixels d'eau d'une case marquée par l'alpha 128) restent bleues.
  *
  * Écrit en GLSL ES 1.0 : PixiJS y ajoute ce qu'il faut pour WebGL 1 et 2.
+ *
+ * Les rampes de la neige, de la glace et de la banquise viennent de core/seasons.ts, que
+ * la simulation lit aussi : la pêche gèle comme la carte.
  */
+import { COVER_RAMPS, type CoverRamp } from '../core/seasons';
+
+/** Nombre écrit en littéral flottant de GLSL : 3 devient « 3.0 ». */
+export function glslFloat(value: number): string {
+  return Number.isInteger(value) ? value.toFixed(1) : String(value);
+}
+
+/** Part couverte selon une rampe de core/seasons.ts, en GLSL, à la température `monthly`. */
+function coverExpression(ramp: CoverRamp): string {
+  return `clamp((${glslFloat(ramp.onset)} - monthly) / ${glslFloat(ramp.span)}, 0.0, 1.0) * ${glslFloat(ramp.full)}`;
+}
 
 export const MAP_VERTEX = /* glsl */ `
 in vec2 aPosition;
@@ -108,8 +122,8 @@ void main() {
   if (stream > 0.5) color = uRiverColor;
 
   // Couverture du mois (C1, D9) : neige, glace, banquise.
-  float snow = clamp((0.5 - monthly) / 3.0, 0.0, 1.0);
-  float ice = clamp((-1.0 - monthly) / 3.0, 0.0, 1.0) * 0.9;
+  float snow = ${coverExpression(COVER_RAMPS.snow)};
+  float ice = ${coverExpression(COVER_RAMPS.ice)};
   float coverage = 0.0;
   if (!water && cover == 1.0) {
     // Les arbres dépassent : les forêts gardent moins de neige.
@@ -125,7 +139,7 @@ void main() {
   } else if (water && cover == 2.0) {
     coverage = ice;
   } else if (water && cover == 3.0) {
-    coverage = clamp((-6.0 - monthly) / 4.0, 0.0, 1.0) * 0.85;
+    coverage = ${coverExpression(COVER_RAMPS['sea-ice'])};
   }
   vec2 dither = uFine > 0.5 ? pixel + uOrigin * 4.0 : cell;
   if (coverage > bayer(dither)) {
