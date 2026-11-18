@@ -63,7 +63,8 @@ export function DebugPanel() {
       info === undefined ? t('debug.unavailable') : t('unit.number', { value: round(info.fps, 0) }),
     ],
     ['debug.frame', milliseconds(info?.worstFrameMs)],
-    ['debug.day', milliseconds(info?.dayMs, 2)],
+    // Un jour ne coûte que quelques microsecondes dans un petit monde : trois décimales.
+    ['debug.day', milliseconds(info?.dayMs, 3)],
     ['debug.month', milliseconds(info?.monthMs)],
     ['debug.monthMax', milliseconds(info?.worstMonthMs)],
     ['debug.batchDays', number(info?.batchDays, 1)],

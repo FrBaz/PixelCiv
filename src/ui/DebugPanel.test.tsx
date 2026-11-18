@@ -28,7 +28,7 @@ describe('panneau de débogage (ADR 0013)', () => {
     debugInfo.value = {
       fps: 59.6,
       worstFrameMs: 18.24,
-      dayMs: 0.043,
+      dayMs: 0.0043,
       monthMs: 12.37,
       worstMonthMs: 20.5,
       batchDays: 2.6,
@@ -38,7 +38,8 @@ describe('panneau de débogage (ADR 0013)', () => {
       chunks: 0,
     };
     const shown = rows();
-    expect(shown.get("Durée moyenne d'un jour")).toBe('0,04 ms');
+    // Quelques microsecondes, comme dans un petit monde, se lisent encore.
+    expect(shown.get("Durée moyenne d'un jour")).toBe('0,004 ms');
     expect(shown.get('Durée moyenne du pas mensuel')).toBe('12,4 ms');
     expect(shown.get('Pas mensuel le plus long')).toBe('20,5 ms');
     expect(shown.get('Jours par lot')).toBe('2,6');
