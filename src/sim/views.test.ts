@@ -261,6 +261,7 @@ describe('image des groupes pour la carte (tâche 2.9 ; REN-04)', () => {
       givenName: 1,
       familyName: 0,
       familyLanguage: 1,
+      gregariousness: 128,
     });
     expect(reused).toBe(slot);
     expect(state.people.get('id', reused)).not.toBe(dead);

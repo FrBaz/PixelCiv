@@ -191,6 +191,7 @@ function person(
     givenName: 11,
     familyName: 0,
     familyLanguage: rest.culture ?? 1,
+    gregariousness: 128,
     ...rest,
   });
 }
@@ -515,6 +516,7 @@ describe('rigueurs du mois (ADR 0011 ; L-12)', () => {
       givenName: 1,
       familyName: 0,
       familyLanguage: 1,
+      gregariousness: 128,
     });
 
   it('rendent le froid plus dur aux fragiles et aux moins adaptés, la faim égale pour tous', () => {

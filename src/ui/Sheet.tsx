@@ -6,6 +6,7 @@
  * fiche, après un glisser sur la carte (escape.ts).
  */
 import type { Appearance, Genetics, Species } from '../core/data';
+import { DRAWN_TRAIT_ROLES } from '../core/data/people';
 import { isMinor } from '../core/life';
 import type { GroupSummary, GroupView, PersonSummary, PersonView } from '../core/protocol';
 import { ofName, t, tKey, type MessageKey } from '../i18n';
@@ -233,15 +234,18 @@ function PersonSheet({
         })}
         {person.traits.map((entry) => {
           const trait = content.genetics.traits.find((item) => item.id === entry.trait);
-          // Un trait qui tient un rôle se montre autrement : le teint au portrait, la taille
-          // en centimètres.
-          if (trait === undefined || trait.role !== undefined) return null;
+          // Le teint se montre au portrait, la taille en centimètres ; les autres traits,
+          // rapidité comprise, en niveaux.
+          if (trait === undefined) return null;
+          if (trait.role !== undefined && DRAWN_TRAIT_ROLES.includes(trait.role)) return null;
           return (
             <Row key={entry.trait} label={tKey(trait.name)}>
               {t(level(entry.value))}
             </Row>
           );
         })}
+        {/* Un trait de caractère, acquis et non hérité (IND-07, ADR 0014). */}
+        <Row label={t('person.gregariousness')}>{t(level(person.gregariousness))}</Row>
         {person.alive && <Row label={t('person.food')}>{t(food)}</Row>}
         {person.pregnant && <Row label={t('person.pregnant')}>✓</Row>}
         <Row label={t('person.mother')}>

@@ -180,6 +180,7 @@
     {
       "id": "speed",
       "name": "trait.speed",
+      "role": "speed",
       "variation": 0.1
     },
     {

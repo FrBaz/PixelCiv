@@ -20,6 +20,7 @@ import { spawnAdultAges } from '../core/data/people';
 import type { SpawnGroupCommand } from '../core/protocol';
 import type { RandomStream } from '../core/rng';
 import { inheritGenome, pureAncestry, randomGenome } from './genetics';
+import { drawGregariousness } from './temper';
 import {
   FEMALE,
   GENOME_WORDS,
@@ -116,6 +117,8 @@ export function spawnGroup(state: SimState, command: SpawnGroupCommand, content:
   if (subspeciesIndex < 0) return;
 
   const random = state.rng.stream('sim.spawn');
+  // Le caractère de chacun, sur son propre flux : il ne décale aucun autre tirage.
+  const temper = state.rng.stream('sim.temper');
   const { society, people, tick } = state;
   const x = cell % state.size.width;
   const y = (cell - x) / state.size.width;
@@ -166,6 +169,7 @@ export function spawnGroup(state: SimState, command: SpawnGroupCommand, content:
       givenName: random.nextUint32(),
       familyName: family.code,
       familyLanguage: family.language,
+      gregariousness: drawGregariousness(species, ancestry, 0, undefined, temper),
     });
   };
   const { fertility, couple } = species;
@@ -239,6 +243,13 @@ export function spawnGroup(state: SimState, command: SpawnGroupCommand, content:
         givenName: random.nextUint32(),
         familyName: family.code,
         familyLanguage: family.language,
+        gregariousness: drawGregariousness(
+          species,
+          ancestry,
+          0,
+          mother.person.gregariousness,
+          temper,
+        ),
       });
     }
     // Le dernier accouchement : celui du plus jeune, dont l'allaitement suit son cours.

@@ -271,6 +271,8 @@ describe('rôles des gènes et formes des allèles (D-6, A-10, W-12)', () => {
     expect(genetics.loci[roles.loci.nose]?.role).toBe('nose');
     expect(genetics.traits[roles.traits.skin]?.role).toBe('skin');
     expect(genetics.traits[roles.traits.height]?.role).toBe('height');
+    // La rapidité règle l'allure de la marche (ADR 0014).
+    expect(genetics.traits[roles.traits.speed]?.role).toBe('speed');
   });
 
   it('exige que chaque rôle soit tenu, et par un seul gène', () => {
@@ -281,7 +283,24 @@ describe('rôles des gènes et formes des allèles (D-6, A-10, W-12)', () => {
     expect(problems(anonymous)).toEqual([
       'traits : aucun trait ne tient le rôle skin',
       'traits : aucun trait ne tient le rôle height',
+      'traits : aucun trait ne tient le rôle speed',
     ]);
+    // Le rôle de la rapidité, exigé une fois comme les autres.
+    const slow = {
+      ...genetics,
+      traits: genetics.traits.map(({ role, ...entry }) =>
+        role === 'speed' ? entry : { ...entry, ...(role === undefined ? {} : { role }) },
+      ),
+    };
+    expect(problems(slow)).toEqual(['traits : aucun trait ne tient le rôle speed']);
+    expect(() => geneRoles(slow)).toThrow(DataError);
+    const fast = {
+      ...genetics,
+      traits: genetics.traits.map((entry) =>
+        entry.id === 'strength' ? { ...entry, role: 'speed' } : entry,
+      ),
+    };
+    expect(problems(fast)).toEqual(['traits : plusieurs traits tiennent le rôle speed']);
     expect(() => geneRoles(anonymous)).toThrow(DataError);
     const twice = {
       ...genetics,
@@ -392,6 +411,84 @@ describe('âges de la vie et confort, dans data/species.json (D-6, A-10, U-12)',
         ages: { ...human.ages, baby: 6, elder: 300, grey: [250, 380] },
       }),
     ).toBe(true);
+  });
+
+  it("borne la stature à l'octet de l'image des groupes (ADR 0014)", () => {
+    expect(human.display.stature).toBe(0.75);
+    // 0,75 × 2 × 195 / 340 = 0,86 case pour le plus grand adulte : il tient sur un octet.
+    const display = (stature: number, height: [number, number] = human.height) =>
+      valid({ ...human, height, display: { ...human.display, stature } });
+    expect(display(1.7)).toBe(true);
+    expect(display(1.8)).toBe(false);
+    // La plus grande taille compte, que la liste la donne en premier ou en second.
+    expect(display(1.7, [195, 145])).toBe(true);
+    expect(display(1.8, [195, 145])).toBe(false);
+    expect(display(0)).toBe(false);
+  });
+
+  it('refuse une croissance mal ordonnée, ou qui ne finit pas à la stature adulte', () => {
+    const growth = (points: [number, number][]) =>
+      valid({ ...human, display: { ...human.display, growth: points } });
+    expect(
+      growth([
+        [0, 0.4],
+        [12, 0.9],
+        [18, 1],
+      ]),
+    ).toBe(true);
+    expect(
+      growth([
+        [0, 0.4],
+        [12, 0.9],
+        [12, 1],
+      ]),
+    ).toBe(false);
+    expect(
+      growth([
+        [0, 0.4],
+        [18, 1],
+        [12, 0.9],
+      ]),
+    ).toBe(false);
+    expect(
+      growth([
+        [0, 0.4],
+        [18, 0.9],
+      ]),
+    ).toBe(false);
+    expect(
+      growth([
+        [0, 0],
+        [18, 1],
+      ]),
+    ).toBe(false);
+    expect(
+      growth([
+        [0, 0.4],
+        [10, 1.2],
+        [18, 1],
+      ]),
+    ).toBe(false);
+    expect(growth([])).toBe(false);
+  });
+
+  it("refuse une allure dont les âges se suivent mal ou dont les bornes s'inversent", () => {
+    const pace = (change: Partial<Species['pace']>) =>
+      valid({ ...human, pace: { ...human.pace, ...change } });
+    expect(pace({})).toBe(true);
+    expect(pace({ speed: [1.2, 0.8] })).toBe(false);
+    expect(pace({ speed: [0, 1] })).toBe(false);
+    expect(
+      pace({
+        age: [
+          [10, 1],
+          [5, 0.8],
+        ],
+      }),
+    ).toBe(false);
+    expect(pace({ age: [[0, 0]] })).toBe(false);
+    expect(pace({ carrying: 0 })).toBe(false);
+    expect(pace({ pregnant: 1.5 })).toBe(false);
   });
 
   it('refuse un confort qui ne tient pas entre ses deux extrêmes', () => {

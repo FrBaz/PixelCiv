@@ -68,6 +68,8 @@ function editedContent() {
       ...plains.appearance,
       alleles: { ...plains.appearance.alleles, [faceLocus.id]: { heart: 1 } },
     },
+    // Des gens très grégaires : un caractère acquis, que rien ne nomme dans le code.
+    temperament: { gregariousness: { mean: 0.9, sd: 0.02 } },
   };
   const species = loadCatalog('variante de data/species.json', SpeciesListSchema, [
     { ...human, subspecies: [highland, ...human.subspecies.slice(0, 3)] } satisfies Species,
@@ -114,6 +116,8 @@ describe('contenu en données : rien à coder pour une sous-espèce ou un allèl
       const view = personView(state, content, state.people.get('id', slot));
       if (view === undefined) throw new Error('pas de fiche');
       expect(view.ancestry).toEqual([{ subspecies: 'highland', share: 1 }]);
+      // La grégarité des hautes terres, tirée à l'apparition comme à la naissance.
+      expect(view.gregariousness).toBeGreaterThan(0.8);
       expect(portraitPixels(view, sheet)).toBeDefined();
       if (view.loci.find((entry) => entry.locus === faceLocus?.id)?.allele === 'heart') hearts++;
     }

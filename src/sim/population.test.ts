@@ -46,6 +46,7 @@ function person(overrides: Partial<NewPerson> = {}): NewPerson {
     givenName: 1,
     familyName: 1,
     familyLanguage: 1,
+    gregariousness: 128,
     ...overrides,
   };
 }

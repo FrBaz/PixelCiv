@@ -187,8 +187,10 @@ describe('pas', () => {
     // flux des systèmes, qui tournent chaque mois. Relecture de la phase 2 : une colonne de
     // plus, la langue du nom de famille. Tâche 2b.2 : l'empreinte couvre le jour du mois et
     // les marches en cours (ADR 0013) ; le déroulement mensuel, qui redonnait d7269069 avec
-    // le sous-pas quotidien, ne change pas.
-    expect(fingerprint(state)).toBe('91fb9419');
+    // le sous-pas quotidien, ne change pas. Tâche 2b.3, d'abord la seule grégarité (ADR 0014) :
+    // deux colonnes de plus, chez les vivants et dans l'archive, sans population ici ; de
+    // 91fb9419 à 107b7392.
+    expect(fingerprint(state)).toBe('107b7392');
   });
 
   it("redonnent l'empreinte de référence de vingt ans d'une population (ADR 0003)", () => {
@@ -214,8 +216,11 @@ describe('pas', () => {
     // corrections : voisins à un mois de marche, aire des scissions sur leur terre, et
     // célibataires qui cherchent plus souvent un conjoint (pairing). Tâche 2b.2 : le jour
     // et les marches en cours entrent dans l'empreinte (ADR 0013), sans que le déroulement
-    // change : avant cette extension, le sous-pas quotidien redonnait 63f71745.
-    expect(fingerprint(state)).toBe('24f9fb6b');
+    // change : avant cette extension, le sous-pas quotidien redonnait 63f71745. Tâche 2b.3,
+    // d'abord la seule grégarité (ADR 0014) : une colonne et un flux de plus, `sim.temper`,
+    // qui ne décale aucun autre tirage ; le déroulement ne change pas (de 24f9fb6b à
+    // ff30d063).
+    expect(fingerprint(state)).toBe('ff30d063');
   });
 
   it("redonnent l'empreinte de référence de trente mois de trois mille individus (ADR 0011)", () => {
@@ -228,13 +233,15 @@ describe('pas', () => {
     // déroulement change (D-10) : à la relecture des corrections, par le voisinage à un
     // mois de marche, l'aire des scissions et `pairing` ; à la tâche 2b.2, par le jour et
     // les marches en cours, qui entrent dans l'empreinte (ADR 0013) : avant cette extension,
-    // le sous-pas quotidien redonnait 27ee4786.
+    // le sous-pas quotidien redonnait 27ee4786. Tâche 2b.3, d'abord la seule grégarité
+    // (ADR 0014) : une colonne et un flux de plus, sans autre changement ; les trois graines
+    // gardent leurs vivants et leurs groupes à 120 mois (de 8049a7e6 à f1ddca1e).
     const state = testState();
     step(state, scatteredGroups(state, 100), testData);
     for (let tick = 1; tick < 30; tick++) step(state, [], testData);
     expect(state.society.groups.size).toBeGreaterThan(100);
     expect(state.people.count).toBeGreaterThan(2000);
     expect(state.people.archive.rows).toBeGreaterThan(500);
-    expect(fingerprint(state)).toBe('8049a7e6');
+    expect(fingerprint(state)).toBe('f1ddca1e');
   });
 });

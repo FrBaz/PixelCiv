@@ -100,6 +100,11 @@ export const LIVING_COLUMNS = {
   pregnantBy: { type: Uint32Array, width: 1 },
   /** Pas du dernier accouchement, NEVER s'il n'y en a pas eu. */
   lastBirth: { type: Int32Array, width: 1 },
+  /**
+   * Grégarité, de 0 à 255 : un trait de caractère acquis (IND-07, ADR 0014), hors du
+   * génome, tiré à la naissance ou à l'apparition (temper.ts).
+   */
+  gregariousness: { type: Uint8Array, width: 1 },
 } as const satisfies Record<string, ColumnSpec>;
 
 export type LivingColumn = keyof typeof LIVING_COLUMNS;
@@ -126,6 +131,8 @@ export const ARCHIVE_COLUMNS = {
   givenName: { type: Uint32Array, width: 1 },
   familyName: { type: Uint32Array, width: 1 },
   familyLanguage: { type: Uint16Array, width: 1 },
+  /** Grégarité au moment de la mort, pour la fiche. */
+  gregariousness: { type: Uint8Array, width: 1 },
 } as const satisfies Record<string, ColumnSpec>;
 
 export type ArchiveColumn = keyof typeof ARCHIVE_COLUMNS;
@@ -151,6 +158,8 @@ export interface NewPerson {
   readonly familyName: number;
   /** Langue du nom de famille : celle de la culture d'un fondateur, ou du nom hérité. */
   readonly familyLanguage: number;
+  /** Grégarité, de 0 à 255 (temper.ts). */
+  readonly gregariousness: number;
 }
 
 /** Emplacements alloués au départ, puis doublés au besoin. */
@@ -288,6 +297,7 @@ export class Population {
     columns.conceived[slot] = NEVER;
     columns.pregnantBy[slot] = NONE;
     columns.lastBirth[slot] = NEVER;
+    columns.gregariousness[slot] = person.gregariousness;
     return slot;
   }
 

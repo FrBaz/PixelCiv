@@ -46,6 +46,7 @@ import {
   type Language,
   type Society,
 } from './society';
+import { meanGregariousness } from './temper';
 
 /** Bornes d'une sauvegarde : bien au-delà de ce qu'une partie atteint, en deçà d'un abus. */
 export const MAX_SLOTS = 1 << 21;
@@ -296,6 +297,40 @@ function savedArray(save: SaveData, name: string, type: ColumnConstructor, lengt
   return array;
 }
 
+/**
+ * Colonnes qu'une sauvegarde peut ne pas avoir : les traits de caractère (temper.ts), plus
+ * récents que les autres colonnes. Leur absence se note dans `derived`.
+ */
+const DERIVED_COLUMNS: ReadonlySet<string> = new Set(['gregariousness']);
+
+function derivable(save: SaveData, array: string, column: string, derived: Set<string>): boolean {
+  if (!DERIVED_COLUMNS.has(column) || Object.hasOwn(save.arrays, array)) return false;
+  derived.add(array);
+  return true;
+}
+
+/**
+ * Grégarité de chacune des `count` premières lignes de `columns` (vivants ou archive) :
+ * la moyenne des sous-espèces de son ascendance, une fois espèces et parts ramenées à
+ * l'ordre des données.
+ */
+function deriveTempers(
+  columns: { readonly species: Column; readonly ancestry: Column; readonly gregariousness: Column },
+  count: number,
+  catalog: Catalog<Species>,
+  used: (row: number) => boolean,
+): void {
+  for (let row = 0; row < count; row++) {
+    const species = catalog.entries.at(columns.species[row] ?? 0);
+    if (!used(row) || species === undefined) continue;
+    columns.gregariousness[row] = meanGregariousness(
+      species,
+      columns.ancestry,
+      row * ANCESTRY_SLOTS,
+    );
+  }
+}
+
 function each<T>(items: readonly unknown[], schema: z.ZodType<T>, name: string): T[] {
   return items.map((item) => {
     const parsed = schema.safeParse(item);
@@ -503,11 +538,16 @@ export function restorePeople(
   const { end, nextId, archived } = json;
 
   // Tableaux d'abord, présents, de leur type et de leur longueur : ce qui s'alloue ensuite
-  // est borné par la taille du fichier, et non par les seuls nombres de l'en-tête.
+  // est borné par la taille du fichier, et non par les seuls nombres de l'en-tête. Seul un
+  // trait de caractère peut manquer : une sauvegarde d'avant lui ne le connaissait pas, et
+  // chacun reçoit alors la moyenne de son ascendance (deriveTempers).
   const living = {} as Record<LivingColumn, Column>;
+  const derived = new Set<string>();
   for (const name of LIVING_COLUMN_NAMES) {
     const spec = LIVING_COLUMNS[name];
-    living[name] = savedArray(save, livingArray(name), spec.type, end * spec.width);
+    living[name] = derivable(save, livingArray(name), name, derived)
+      ? new spec.type(end * spec.width)
+      : savedArray(save, livingArray(name), spec.type, end * spec.width);
   }
   const alive = savedArray(save, 'peopleAlive', Uint8Array, end);
   const free = save.arrays.peopleFree;
@@ -518,7 +558,9 @@ export function restorePeople(
   const dead = {} as Record<ArchiveColumn, Column>;
   for (const name of ARCHIVE_COLUMN_NAMES) {
     const spec = ARCHIVE_COLUMNS[name];
-    dead[name] = savedArray(save, archiveArray(name), spec.type, archived * spec.width);
+    dead[name] = derivable(save, archiveArray(name), name, derived)
+      ? new spec.type(archived * spec.width)
+      : savedArray(save, archiveArray(name), spec.type, archived * spec.width);
   }
   // Un identifiant ne resert jamais : chacun de ceux déjà donnés désigne un vivant ou un mort.
   let count = 0;
@@ -644,6 +686,13 @@ export function restorePeople(
   const remap = genomeRemap(json.genome, content.genetics);
   rewriteGenomes(people.columns.genome, end, remap);
   rewriteGenomes(archive.columns.genome, archived, remap);
+  // Caractère qu'une sauvegarde ancienne ne connaissait pas : la moyenne de l'ascendance.
+  if (derived.has(livingArray('gregariousness'))) {
+    deriveTempers(people.columns, end, content.species, (slot) => people.alive[slot] === 1);
+  }
+  if (derived.has(archiveArray('gregariousness'))) {
+    deriveTempers(archive.columns, archived, content.species, () => true);
+  }
 
   people.end = end;
   people.count = count;

@@ -107,6 +107,11 @@ export interface PersonView extends PersonSummary {
   /** Taille adulte, en centimètres. */
   readonly height: number;
   /**
+   * Grégarité, de 0 à 1, aujourd'hui ou à sa mort : un trait de caractère acquis (IND-07,
+   * ADR 0014), hors du génome.
+   */
+  readonly gregariousness: number;
+  /**
    * Grisonnement de ses cheveux, aujourd'hui ou à sa mort, de 0 à GREY_LEVELS − 1
    * (core/life.ts) : celui de son mini-sprite.
    */

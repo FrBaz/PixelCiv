@@ -22,6 +22,7 @@ function family() {
       givenName: 1,
       familyName: 1,
       familyLanguage: 1,
+      gregariousness: 128,
     });
     slots.set(name, slot);
   };

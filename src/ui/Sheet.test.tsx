@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { loadGameData } from '../core/data';
+import { DRAWN_TRAIT_ROLES } from '../core/data/people';
 import { ageClass } from '../core/life';
 import type { GroupView, PersonSummary, PersonView } from '../core/protocol';
 import { t, tKey } from '../i18n';
@@ -46,6 +47,7 @@ function person(overrides: Partial<PersonView> = {}): PersonView {
     loci: [],
     traits: [],
     height: 172,
+    gregariousness: 0.5,
     grey: 0,
     nutrition: 1,
     pregnant: false,
@@ -259,12 +261,17 @@ describe('fiches (IHM-02)', () => {
       [Portrait],
     );
     const labels = findAll(tree, (element) => element.type === 'dt').map(textOf);
-    // Les traits sans rôle, chacun son niveau ; le teint nulle part ; la taille une seule
-    // fois, en centimètres.
-    const plain = genetics.traits.filter((entry) => entry.role === undefined);
+    // Les traits sans rôle d'affichage, chacun son niveau, rapidité comprise ; le teint
+    // nulle part ; la taille une seule fois, en centimètres ; la grégarité, trait de
+    // caractère hors du génome, à part.
+    const plain = genetics.traits.filter(
+      (entry) => entry.role === undefined || !DRAWN_TRAIT_ROLES.includes(entry.role),
+    );
     expect(plain.length).toBeGreaterThan(0);
+    expect(plain.some((entry) => entry.role === 'speed')).toBe(true);
     for (const entry of plain) expect(labels).toContain(tKey(entry.name));
     expect(labels).not.toContain(tKey('trait.skin'));
     expect(labels.filter((label) => label === t('person.height'))).toHaveLength(1);
+    expect(labels).toContain(t('person.gregariousness'));
   });
 });

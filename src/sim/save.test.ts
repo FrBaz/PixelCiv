@@ -11,6 +11,7 @@ import {
 } from '../core/save/format';
 import { LAYER_NAMES } from '../core/world';
 import { GENERATOR_VERSION } from '../worldgen/generate';
+import { ANCESTRY_SLOTS } from './population';
 import { replay } from './replay';
 import { MIGRATIONS, restoreState, saveState } from './save';
 import type { SimState } from './state';
@@ -24,7 +25,9 @@ import {
   testParams,
   testState,
   testWorld,
+  withHuman,
 } from './testing';
+import { meanGregariousness } from './temper';
 import biomesJson from '../../data/biomes.json';
 
 const land = (family: string) => family !== 'water';
@@ -268,6 +271,44 @@ describe('sauvegarde de la simulation', () => {
     const cell = firstCellOf(first, land);
     step(first, [{ type: 'paintBiome', ...cell, biome: 'glacier' }], testData);
     expect(fingerprint(second)).toBe(before);
+  });
+
+  it("donne la moyenne de son ascendance au caractère qu'une sauvegarde ne connaît pas", () => {
+    const state = testState();
+    step(state, scatteredGroups(state, 10, 30), testData);
+    for (let tick = 0; tick < 6; tick++) step(state, [], testData);
+    const data = save(state);
+    const arrays = { ...data.arrays };
+    delete arrays.peopleGregariousness;
+    delete arrays.archiveGregariousness;
+    // Des sous-espèces de grégarités différentes : chacun reçoit celle de son ascendance.
+    const { species } = withHuman((human) => ({
+      ...human,
+      subspecies: human.subspecies.map((entry, index) => ({
+        ...entry,
+        temperament: { gregariousness: { mean: [0.2, 0.6, 0.9][index] ?? 0.5, sd: 0.1 } },
+      })),
+    }));
+    const content = { ...testData, species };
+    const restored = restoreState({ ...data, arrays }, content);
+    const human = content.species.entries.at(0);
+    if (human === undefined) throw new Error('pas d’humains');
+    const { people } = restored;
+    expect(people.count).toBeGreaterThan(0);
+    people.forEach((slot) => {
+      const expected = meanGregariousness(human, people.columns.ancestry, slot * ANCESTRY_SLOTS);
+      expect(people.get('gregariousness', slot)).toBe(expected);
+    });
+    const archive = people.archive;
+    expect(archive.rows).toBeGreaterThan(0);
+    for (let row = 0; row < archive.rows; row++) {
+      const expected = meanGregariousness(human, archive.columns.ancestry, row * ANCESTRY_SLOTS);
+      expect(archive.columns.gregariousness[row]).toBe(expected);
+    }
+    // Les autres colonnes ne manquent jamais.
+    const truncated = { ...data.arrays };
+    delete truncated.peopleNutrition;
+    expect(() => restore({ ...data, arrays: truncated })).toThrow(SaveError);
   });
 
   it('refuse un état incohérent', () => {

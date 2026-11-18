@@ -61,6 +61,33 @@
     },
     "pairing": 0.25,
     "height": [145, 195],
+    "display": {
+      "stature": 0.75,
+      "growth": [
+        [0, 0.35],
+        [3, 0.55],
+        [6, 0.65],
+        [10, 0.78],
+        [14, 0.92],
+        [18, 1]
+      ],
+      "carry": 0.2
+    },
+    "pace": {
+      "speed": [0.85, 1.15],
+      "age": [
+        [0, 0.5],
+        [3, 0.6],
+        [10, 0.85],
+        [15, 1],
+        [50, 1],
+        [70, 0.8],
+        [95, 0.6]
+      ],
+      "carrying": 0.9,
+      "pregnant": 0.9
+    },
+    "upbringing": 0.3,
     "subspecies": [
       {
         "id": "nordic",
@@ -134,6 +161,12 @@
               "mean": 0.5,
               "sd": 0.15
             }
+          }
+        },
+        "temperament": {
+          "gregariousness": {
+            "mean": 0.5,
+            "sd": 0.2
           }
         }
       },
@@ -209,6 +242,12 @@
               "sd": 0.15
             }
           }
+        },
+        "temperament": {
+          "gregariousness": {
+            "mean": 0.5,
+            "sd": 0.2
+          }
         }
       },
       {
@@ -275,6 +314,12 @@
               "mean": 0.5,
               "sd": 0.15
             }
+          }
+        },
+        "temperament": {
+          "gregariousness": {
+            "mean": 0.5,
+            "sd": 0.2
           }
         }
       }

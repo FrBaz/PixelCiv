@@ -38,6 +38,7 @@ import { groupMembers, Neighborhood } from './groups';
 import { adaptationOf, cellTemperature, closeKin, monthOf, MONTHS_PER_YEAR } from './people';
 import { inheritedFamilyName, type FamilyName } from './spawn';
 import { cultureOf, type Group } from './society';
+import { drawGregariousness } from './temper';
 import type { SimState } from './state';
 import type { SimContent } from './step';
 
@@ -258,6 +259,7 @@ function giveBirth(
   content: SimContent,
   mother: number,
   random: RandomStream,
+  temper: RandomStream,
   membersOf: (group: number) => readonly number[],
 ): { readonly child: number | undefined; readonly survived: boolean } {
   const { people, tick } = state;
@@ -293,6 +295,12 @@ function giveBirth(
     own?.language ?? 0,
     random,
   );
+  const kind = content.species.entries.at(people.get('species', mother));
+  // Le caractère, sur son propre flux (temper.ts) : il ne décale aucun tirage des naissances.
+  const gregariousness =
+    kind === undefined
+      ? people.get('gregariousness', mother)
+      : drawGregariousness(kind, ancestry, 0, people.get('gregariousness', mother), temper);
   const child = people.add({
     sex,
     birth: tick,
@@ -306,6 +314,7 @@ function giveBirth(
     givenName,
     familyName: family.code,
     familyLanguage: family.language,
+    gregariousness,
   });
   people.set('lastBirth', mother, tick);
   people.set('conceived', mother, NEVER);
@@ -346,6 +355,7 @@ export function lifeCycle(
   const month = monthOf(tick);
   const deaths = state.rng.stream('sim.deaths');
   const births = state.rng.stream('sim.births');
+  const temper = state.rng.stream('sim.temper');
   // Température du mois sur la case de chaque groupe, par identifiant ; NaN hors groupe.
   const groupCount = society.nextGroupId;
   const climate = new Float64Array(groupCount).fill(Number.NaN);
@@ -408,7 +418,7 @@ export function lifeCycle(
     // court son premier mois en orphelin.
     const conceived = columns.conceived[slot] ?? NEVER;
     if (conceived !== NEVER && tick - conceived >= entry.fertility.gestation) {
-      const { child, survived } = giveBirth(state, content, slot, births, membersOf);
+      const { child, survived } = giveBirth(state, content, slot, births, temper, membersOf);
       columns = people.columns;
       if (child !== undefined) newborns.push(child);
       if (!survived) {

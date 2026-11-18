@@ -30,6 +30,7 @@ import { childrenOf, field, heredity, personName, recordOf, type PersonRecord } 
 import { cultureOf, type ChronicleEntry } from './society';
 import type { SimState } from './state';
 import type { SimContent } from './step';
+import { TEMPER_MAX } from './temper';
 
 /** Âge exact, en années, d'un vivant aujourd'hui ou d'un mort à sa mort. */
 function yearsOf(state: SimState, record: PersonRecord): number {
@@ -142,6 +143,7 @@ export function personView(
     loci,
     traits,
     height,
+    gregariousness: field(people, record, 'gregariousness') / TEMPER_MAX,
     grey: species === undefined ? 0 : greyLevel(species, yearsOf(state, record)),
     nutrition: record.alive ? people.get('nutrition', record.index) / 255 : 0,
     pregnant: record.alive && people.get('conceived', record.index) !== NEVER,

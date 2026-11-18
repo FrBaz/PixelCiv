@@ -33,12 +33,20 @@ export const LOCUS_ROLES = ['eyes', 'hair', 'face', 'nose'] as const;
 export type LocusRole = (typeof LOCUS_ROLES)[number];
 
 /**
- * Rôles d'un trait continu : le teint, qui parcourt la rampe de data/appearance.json, et la
- * taille, entre les deux bouts de `height` de l'espèce. Chacun est tenu par un trait, et un
- * seul.
+ * Rôles d'un trait continu : le teint, qui parcourt la rampe de data/appearance.json ; la
+ * taille, entre les deux bouts de `height` de l'espèce ; la rapidité, entre les deux bouts
+ * de `pace.speed` de l'espèce, qui règle l'allure de la marche (ADR 0014). Chacun est tenu
+ * par un trait, et un seul.
  */
-export const TRAIT_ROLES = ['skin', 'height'] as const;
+export const TRAIT_ROLES = ['skin', 'height', 'speed'] as const;
 export type TraitRole = (typeof TRAIT_ROLES)[number];
+
+/**
+ * Rôles des traits qui se montrent autrement qu'en niveau dans la fiche : le teint au
+ * portrait, la taille en centimètres. La rapidité, elle, se lit en niveau, comme les traits
+ * sans rôle.
+ */
+export const DRAWN_TRAIT_ROLES: readonly TraitRole[] = ['skin', 'height'];
 
 /**
  * Bornes de la forme du visage. Le portrait d'un adulte y garde ses yeux et sa bouche dans
@@ -254,6 +262,7 @@ export function geneRoles(genetics: {
     traits: {
       skin: holder(genetics.traits, 'skin'),
       height: holder(genetics.traits, 'height'),
+      speed: holder(genetics.traits, 'speed'),
     },
   };
   rolesOf.set(genetics, roles);
@@ -274,6 +283,13 @@ const AdaptationSchema = z
   })
   .strict();
 
+/**
+ * Caractère acquis (IND-07, ADR 0014), hors du génome : chacun reçoit le sien à la
+ * naissance ou à l'apparition, tiré de la répartition des sous-espèces de son ascendance.
+ * La grégarité règle, chez les nomades, le jour du départ, la place au camp et l'allure.
+ */
+const TemperamentSchema = z.object({ gregariousness: DistributionSchema }).strict();
+
 const SubspeciesSchema = z
   .object({
     id: IdSchema,
@@ -288,8 +304,63 @@ const SubspeciesSchema = z
         traits: z.record(IdSchema, DistributionSchema),
       })
       .strict(),
+    temperament: TemperamentSchema,
   })
   .strict();
+
+/** Courbe par morceaux : des points (âge en années, valeur), d'âges strictement croissants. */
+const CurveSchema = (value: z.ZodNumber) =>
+  z
+    .array(z.tuple([z.number().min(0), value]))
+    .min(1)
+    .max(32)
+    .refine(
+      (points) =>
+        points.every((point, index) => index === 0 || point[0] > (points[index - 1]?.[0] ?? 0)),
+      {
+        message: 'des âges strictement croissants',
+      },
+    );
+
+/**
+ * Taille d'un individu à l'écran (ADR 0014), en cases : `stature` est la hauteur debout de
+ * l'adulte de taille moyenne de l'espèce ; `growth` donne, selon l'âge, la part de sa
+ * stature adulte qu'atteint un individu, de façon linéaire entre deux points, jusqu'à 1 ;
+ * `carry` est l'écart de côté, en cases, d'un nourrisson porté contre sa mère.
+ */
+const DisplaySchema = z
+  .object({
+    stature: z.number().positive(),
+    growth: CurveSchema(z.number().gt(0).max(1)).refine((points) => points.at(-1)?.[1] === 1, {
+      message: 'la croissance finit à 1, la stature adulte',
+    }),
+    carry: z.number().min(0).max(0.5),
+  })
+  .strict();
+
+/**
+ * Allure de la marche (ADR 0014) : chacun parcourt chaque jour nomads.walk / 30 cases de
+ * plaine, fois son endurance, fois sa rapidité (le trait du rôle « speed », de `speed[0]` à
+ * `speed[1]`), fois le facteur de son âge (`age`, linéaire entre deux points, constant
+ * au-delà des bouts), fois `carrying` s'il porte un nourrisson et `pregnant` si elle est
+ * enceinte.
+ */
+const PaceSchema = z
+  .object({
+    speed: z
+      .tuple([z.number().positive(), z.number().positive()])
+      .refine(([low, high]) => low <= high, { message: 'speed[0] ≤ speed[1]' }),
+    age: CurveSchema(z.number().gt(0).max(2)),
+    carrying: z.number().gt(0).max(1),
+    pregnant: z.number().gt(0).max(1),
+  })
+  .strict();
+
+/**
+ * Stature la plus grande que l'image des groupes puisse dire : elle part en 1/128 de case,
+ * sur un octet (ADR 0014).
+ */
+export const MAX_STATURE = 255 / 128;
 
 /**
  * Mortalité de Siler, par an, à l'âge x en années : infant.level × e^(−infant.decay × x)
@@ -415,9 +486,22 @@ export const SpeciesSchema = z
     pairing: ShareSchema,
     /** Taille adulte, en centimètres, aux deux bouts du trait « taille ». */
     height: z.tuple([z.number().positive(), z.number().positive()]),
+    display: DisplaySchema,
+    pace: PaceSchema,
+    /**
+     * Part du caractère de la mère que reçoit l'enfant (ADR 0014) : sa grégarité vaut
+     * upbringing × celle de sa mère + (1 − upbringing) × un tirage de son ascendance.
+     */
+    upbringing: ShareSchema,
     subspecies: uniqueIds(SubspeciesSchema).min(1).max(MAX_SUBSPECIES),
   })
   .strict()
+  .refine(
+    ({ display, height }) =>
+      (display.stature * 2 * Math.max(height[0], height[1])) / (height[0] + height[1]) <=
+      MAX_STATURE,
+    { message: 'la stature du plus grand adulte tient sur un octet, en 1/128 de case' },
+  )
   .refine((species) => species.maturity < species.longevity, {
     message: "l'âge adulte précède la longévité",
   })
