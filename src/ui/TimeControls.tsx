@@ -1,11 +1,13 @@
 /**
- * Contrôle du temps (MOD-06) : date de la partie, pause, pas unique et vitesses.
- * Les boutons portent des symboles ; leurs noms passent par la traduction.
+ * Contrôle du temps (MOD-06, ADR 0013) : date de la partie au jour près, à l'instant que
+ * montre la carte, pause, pas unique d'un jour et vitesses. Les boutons portent des
+ * symboles ; leurs noms passent par la traduction. La date garde une largeur fixe, en
+ * chiffres tabulaires : les boutons ne bougent pas quand les jours défilent.
  */
 import { SPEEDS, type SpeedId } from '../core/time';
 import { t, type MessageKey } from '../i18n';
-import { formatDate } from './calendar';
-import { time, type UiActions } from './store';
+import { formatDay } from './calendar';
+import { shownDay, time, type UiActions } from './store';
 
 const SPEED_LABELS: Readonly<Record<SpeedId, { symbol: string; key: MessageKey }>> = {
   slow: { symbol: '×½', key: 'time.speed.slow' },
@@ -22,11 +24,11 @@ const STEP = '▶︎❚';
 export function TimeControls({ actions }: { actions: UiActions }) {
   const current = time.value;
   if (current === undefined) return null;
-  const { paused, speed, tick } = current;
+  const { paused, speed } = current;
   const toggle = paused ? t('time.resume') : t('time.pause');
   return (
     <div class="panel time-controls" role="group" aria-label={t('time.controls')}>
-      <span class="time-date">{formatDate(tick)}</span>
+      <span class="time-date">{formatDay(shownDay.value ?? current)}</span>
       <button
         type="button"
         aria-label={toggle}

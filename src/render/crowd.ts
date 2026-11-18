@@ -1,18 +1,49 @@
 /**
- * Disposition des groupes sur la carte (tâche 2.9 ; REN-03, REN-04, REN-08) : quel motif
- * dessine chaque membre, où il se tient autour de la case du groupe, jusqu'où s'étend ce
- * qui se dessine autour de la case, quelle bannière montre un groupe vu de loin, dans quel
- * ordre les dessins passent les uns devant les autres, et quel groupe se trouve sous un
- * appui. Fonctions pures, sans PixiJS : PeopleLayer dessine avec elles ce que pickGroup
- * retrouve.
+ * Disposition des groupes sur la carte (tâches 2.9 et 2b.2 ; REN-03, REN-04, REN-08 ;
+ * ADR 0013) : où se tient chaque groupe à l'instant affiché, sur sa marche du mois ou au
+ * centre de sa case, quel motif dessine chaque membre, où il se tient autour de la
+ * position du groupe, jusqu'où s'étend ce qui se dessine autour d'elle, quelle bannière
+ * montre un groupe vu de loin, dans quel ordre les dessins passent les uns devant les
+ * autres, et quel groupe se trouve sous un appui. Fonctions pures, sans PixiJS :
+ * PeopleLayer dessine avec elles ce que pickGroup retrouve.
  */
 import { GROUP_STRIDE, type GroupsFrame } from '../core/protocol';
+import { walking, walkPosition } from '../core/walk';
 import { AGE_CLASSES, decodeVisual } from '../core/visual';
 import type { Rgb } from './bake';
 import { displayScale, TILE_PX, type Camera, type Extent } from './camera';
 
 /** Échelle, en pixels physiques par pixel de carte, à partir de laquelle on voit les gens. */
 export const SPRITE_SCALE = 3;
+
+/**
+ * Position, en cases, de chaque groupe de l'image `frame` au jour `k` du mois de ses
+ * marches, fractionnaire (de 0 à 30) : sur son chemin s'il marche (walkOf donne l'indice de
+ * sa marche), sinon au centre de sa case. Écrit x et y de chaque groupe, dans l'ordre de
+ * l'image, dans `positions`, et dans `moving` si le groupe marche encore à cet instant.
+ */
+export function groupPositions(
+  frame: GroupsFrame,
+  walkOf: ReadonlyMap<number, number>,
+  k: number,
+  width: number,
+  positions: Float64Array,
+  moving: Uint8Array,
+): void {
+  const { groups, walks } = frame;
+  for (let rank = 0; rank * GROUP_STRIDE + GROUP_STRIDE <= groups.length; rank++) {
+    const at = rank * GROUP_STRIDE;
+    const walk = walkOf.get(groups[at] ?? 0);
+    if (walk === undefined) {
+      positions[rank * 2] = (groups[at + 1] ?? 0) + 0.5;
+      positions[rank * 2 + 1] = (groups[at + 2] ?? 0) + 0.5;
+      moving[rank] = 0;
+    } else {
+      walkPosition(walks, walk, k, width, positions, rank * 2);
+      moving[rank] = walking(walks, walk, k) ? 1 : 0;
+    }
+  }
+}
 
 /** Motif d'une classe d'âge et d'un sexe, à l'image `step` (0 ou 1) de sa marche. */
 export function spriteName(age: number, sex: number, step: number): string {
@@ -223,8 +254,10 @@ export function bannerBox(x: number, y: number, banner: Size, pixel: number): Bo
 
 /**
  * Rectangle du mini-sprite du membre `member`, de `shape` pixels de carte à `scale` pixels
- * physiques chacun : les pieds sur la case, en grappe autour du point (x, y) de l'écran,
- * centre de la case, ses pixels sur ceux de la carte.
+ * physiques chacun : les pieds sur la position du groupe, en grappe autour du point (x, y)
+ * de l'écran, arrondi aux pixels physiques. Au repos, au centre de sa case, ses pixels
+ * tombent sur ceux de la carte ; en marche, il quitte leur grille, mais chacun de ses
+ * pixels reste un pixel de carte (ADR 0013).
  */
 export function memberBox(x: number, y: number, member: number, shape: Size, scale: number): Box {
   const offset = clusterOffset(member);
@@ -246,15 +279,17 @@ export interface MapView {
 }
 
 /**
- * Où se dessine le groupe de la case (column, row) : le centre de sa case à l'écran, dans
- * la copie du monde la plus proche de la caméra, la largeur `span` d'une copie du monde à
- * l'écran, et le nombre de copies à regarder de chaque côté pour un dessin d'étendue
- * `reach`, en unités de `unit` pixels physiques. Quand le monde est plus étroit que
- * l'écran, chaque groupe se voit dans chacune des copies visibles (monde cylindrique).
+ * Où se dessine le groupe de la position (x, y), en cases et fractions de case (au repos,
+ * le centre de sa case, (colonne + ½, ligne + ½)) : ce point à l'écran, dans la copie du
+ * monde la plus proche de la caméra, la largeur `span` d'une copie du monde à l'écran, et
+ * le nombre de copies à regarder de chaque côté pour un dessin d'étendue `reach`, en
+ * unités de `unit` pixels physiques. Quand le monde est plus étroit que l'écran, chaque
+ * groupe se voit dans chacune des copies visibles (monde cylindrique). Les rectangles des
+ * dessins s'arrondissent ensuite aux pixels physiques (bannerBox, memberBox).
  */
 export function groupScreen(
-  column: number,
-  row: number,
+  x: number,
+  y: number,
   view: MapView,
   reach: Reach,
   unit: number,
@@ -262,8 +297,8 @@ export function groupScreen(
   const { camera, viewport, world } = view;
   const scale = displayScale(camera.zoom);
   const span = world.width * scale;
-  let mapX = column * TILE_PX + TILE_PX / 2;
-  const mapY = row * TILE_PX + TILE_PX / 2;
+  let mapX = x * TILE_PX;
+  const mapY = y * TILE_PX;
   mapX += Math.round((camera.x - mapX) / world.width) * world.width;
   return {
     x: (mapX - camera.x) * scale + viewport.width / 2,
@@ -295,12 +330,15 @@ function gap(box: Box, x: number, y: number): number {
 /**
  * Le groupe dessiné sous le point (x, y) de l'écran, en pixels physiques (W-7) : sa
  * bannière de loin, l'un de ses membres de près, aux places, à la taille et dans l'ordre
- * où PeopleLayer les dessine, à la densité de la carte. La bannière se touche donc là où
- * elle se voit, à tout zoom. Un dessin touché l'emporte sur un dessin frôlé, à `slop`
- * pixels au plus ; à égalité, celui qui passe devant, de plus grande profondeur (depth).
+ * où PeopleLayer les dessine, à la densité de la carte, chaque groupe à sa position
+ * dessinée (`positions`, en cases, deux nombres par groupe dans l'ordre de l'image). La
+ * bannière se touche donc là où elle se voit, à tout zoom, en marche comme au repos. Un
+ * dessin touché l'emporte sur un dessin frôlé, à `slop` pixels au plus ; à égalité, celui
+ * qui passe devant, de plus grande profondeur (depth).
  */
 export function pickGroup(
   frame: GroupsFrame,
+  positions: Float64Array,
   view: MapView,
   x: number,
   y: number,
@@ -337,7 +375,14 @@ export function pickGroup(
     const reach = close
       ? clusterReach(size, shapes.largest.width, shapes.largest.height)
       : bannerReach;
-    const at = groupScreen(groups[index + 1] ?? 0, groups[index + 2] ?? 0, view, reach, pixel);
+    const group = index / GROUP_STRIDE;
+    const at = groupScreen(
+      positions[group * 2] ?? 0,
+      positions[group * 2 + 1] ?? 0,
+      view,
+      reach,
+      pixel,
+    );
     for (let copy = -at.copies; copy <= at.copies; copy++) {
       const screenX = at.x + copy * at.span;
       if (!onScreen(screenX, at.y, reach, pixel, view.viewport)) continue;

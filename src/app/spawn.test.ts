@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { ChronicleView, GroupsFrame } from '../core/protocol';
+import type { ChronicleView } from '../core/protocol';
 import { emptyLayers, type WorldSize } from '../core/world';
 import { walkCost } from '../sim/terrain';
 import { testData } from '../sim/testing';
@@ -38,10 +38,9 @@ const none: ReadonlySet<number> = new Set();
 /** Le refus d'une case occupée. */
 const OCCUPIED = { refusal: 'creator.occupied' };
 
-/** Une image du worker : pour chaque groupe, identifiant, x, y, membres et culture. */
-function frame(...cells: (readonly [x: number, y: number])[]): GroupsFrame {
-  const groups = cells.flatMap(([x, y], index) => [index + 1, x, y, 20, 0]);
-  return { groups: Uint32Array.from(groups), sprites: new Uint16Array(20 * cells.length) };
+/** Cases occupées par des groupes, comptées comme cellIndex dans un monde de 8 colonnes. */
+function cells(...list: (readonly [x: number, y: number])[]): Set<number> {
+  return new Set(list.map(([x, y]) => y * 8 + x));
 }
 
 /** Le fait d'une apparition, à la case (x, y). */
@@ -85,12 +84,12 @@ describe("outil d'apparition (CRE-03)", () => {
     });
   });
 
-  it("refuse une case occupée par un groupe de l'image, même par un x hors du monde (9-navigateur/P2)", () => {
+  it('refuse une case où se tient un groupe, même par un x hors du monde (9-navigateur/P2)', () => {
     const { size, layers } = world();
     // Deux groupes : sur la prairie (7, 2), au bord est du monde, et sur la prairie (1, 2),
     // dont la case (2, 1) prendrait la place si x et y s'échangeaient.
     const occupied = new OccupiedCells();
-    occupied.reset(frame([7, 2], [1, 2]), size);
+    occupied.setGroups(cells([7, 2], [1, 2]));
     // La case (7, 2), d'une copie à l'autre du monde, et par la couture à l'ouest de (0, 2).
     for (const x of [7, -1, 15, -9, 23]) {
       expect(spawnTarget(layers, size, x, 2, testData, occupied)).toEqual(OCCUPIED);
@@ -106,39 +105,42 @@ describe("outil d'apparition (CRE-03)", () => {
     expect(spawnTarget(layers, size, 7, 1, testData, occupied)).toEqual({
       refusal: 'creator.water',
     });
-    // Chaque image remplace la précédente.
-    occupied.update(frame([6, 2]), [], size);
+    // Les cases d'un appui remplacent celles du précédent : le groupe a marché.
+    occupied.setGroups(cells([6, 2]));
     expect(spawnTarget(layers, size, -1, 2, testData, occupied)).toEqual({ x: 7, y: 2 });
     expect(spawnTarget(layers, size, 6, 2, testData, occupied)).toEqual(OCCUPIED);
   });
 
-  it("compte une apparition envoyée jusqu'à l'image qui la montre (9-navigateur/P2)", () => {
+  it("compte une apparition envoyée jusqu'au delta qui la montre (9-navigateur/P2)", () => {
     const { size, layers } = world();
     const occupied = new OccupiedCells();
-    occupied.reset(frame(), size);
+    occupied.reset();
     expect(spawnTarget(layers, size, 3, 2, testData, occupied)).toEqual({ x: 3, y: 2 });
     occupied.add(3, 2, size);
     expect(spawnTarget(layers, size, 3, 2, testData, occupied)).toEqual(OCCUPIED);
-    // Une image calculée avant que le worker ne reçoive la commande : ni le groupe ni son
-    // fait. L'apparition reste en attente.
-    occupied.update(frame([5, 3]), [], size);
+    // Un delta parti avant que le worker ne reçoive la commande : ni le groupe ni son fait.
+    // L'apparition reste en attente.
+    occupied.update([], size);
+    occupied.setGroups(cells([5, 3]));
     expect(spawnTarget(layers, size, 3, 2, testData, occupied)).toEqual(OCCUPIED);
     expect(spawnTarget(layers, size, 5, 3, testData, occupied)).toEqual(OCCUPIED);
-    // L'image qui la montre : le groupe, parti de sa case dans le mois, ne l'occupe plus.
-    occupied.update(frame([4, 2], [5, 3]), [appeared(3, 2)], size);
+    // Le delta qui la montre : son fait la retire de l'attente, et le groupe, parti de sa
+    // case, ne l'occupe plus.
+    occupied.update([appeared(3, 2)], size);
+    occupied.setGroups(cells([4, 2], [5, 3]));
     expect(spawnTarget(layers, size, 3, 2, testData, occupied)).toEqual({ x: 3, y: 2 });
     expect(spawnTarget(layers, size, 4, 2, testData, occupied)).toEqual(OCCUPIED);
     // Un autre fait, même à sa case, ne la montre pas.
     occupied.add(6, 1, size);
-    occupied.update(frame(), [{ ...appeared(6, 1), kind: 'groupSplit' }], size);
+    occupied.update([{ ...appeared(6, 1), kind: 'groupSplit' }], size);
     expect(spawnTarget(layers, size, 6, 1, testData, occupied)).toEqual(OCCUPIED);
     // Une commande refusée par le worker, ou une autre partie, efface les apparitions en
-    // attente ; l'instantané donne ses groupes.
+    // attente ; une autre partie, aussi les groupes.
     occupied.refused();
     expect(spawnTarget(layers, size, 6, 1, testData, occupied)).toEqual({ x: 6, y: 1 });
     occupied.add(6, 1, size);
-    occupied.reset(frame([2, 2]), size);
+    occupied.reset();
     expect(spawnTarget(layers, size, 6, 1, testData, occupied)).toEqual({ x: 6, y: 1 });
-    expect(spawnTarget(layers, size, 2, 2, testData, occupied)).toEqual(OCCUPIED);
+    expect(spawnTarget(layers, size, 4, 2, testData, occupied)).toEqual({ x: 4, y: 2 });
   });
 });

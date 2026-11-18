@@ -2,7 +2,8 @@ import { describe, expect, it } from 'vitest';
 import { CHUNK_SIZE, emptyLayers, WORLD_SIZES } from '../core/world';
 import { altitudeLevelIndex } from '../core/altitude';
 import { cellIndex, createState, takeDirtyChunks } from './state';
-import { applyCommand, fingerprint, step, type SimContent } from './step';
+import { step } from './day';
+import { applyCommand, fingerprint, type SimContent } from './step';
 import { terrainLands } from './terrain';
 import {
   firstCellOf,
@@ -115,7 +116,7 @@ describe('pas', () => {
     step(state, [{ type: 'paintBiome', ...cell, biome: 'steppe' }], testData);
     expect(state.tick).toBe(2);
     expect(state.commandLog).toEqual([
-      { tick: 1, command: { type: 'paintBiome', ...cell, biome: 'steppe' } },
+      { tick: 1, day: 0, command: { type: 'paintBiome', ...cell, biome: 'steppe' } },
     ]);
   });
 
@@ -145,7 +146,7 @@ describe('pas', () => {
     expect(rejected[0]?.[1]).toBeInstanceOf(RangeError);
     // Ni groupe, ni langue, ni culture, ni tirage : la partie est celle où rien n'a été tenté,
     // et la suite du mois s'est déroulée.
-    expect(failing.commandLog).toEqual([{ tick: 0, command: paint }]);
+    expect(failing.commandLog).toEqual([{ tick: 0, day: 0, command: paint }]);
     expect(failing.society.languages).toEqual([]);
     expect(fingerprint(failing)).toBe(fingerprint(control));
     // Les mois suivants le restent, une apparition réussie comprise.
@@ -184,8 +185,10 @@ describe('pas', () => {
     expect(state.tick).toBe(12);
     // Empreinte de la phase 2 : l'état compte désormais la population, vide ici, et les
     // flux des systèmes, qui tournent chaque mois. Relecture de la phase 2 : une colonne de
-    // plus, la langue du nom de famille.
-    expect(fingerprint(state)).toBe('d7269069');
+    // plus, la langue du nom de famille. Tâche 2b.2 : l'empreinte couvre le jour du mois et
+    // les marches en cours (ADR 0013) ; le déroulement mensuel, qui redonnait d7269069 avec
+    // le sous-pas quotidien, ne change pas.
+    expect(fingerprint(state)).toBe('91fb9419');
   });
 
   it("redonnent l'empreinte de référence de vingt ans d'une population (ADR 0003)", () => {
@@ -209,8 +212,10 @@ describe('pas', () => {
     // puis gibier plus rare dans le froid, pêche gelée comme sur la carte, marche sans
     // coin coupé, scissions (meneur, fratries, aire, une seule marche). Relecture des
     // corrections : voisins à un mois de marche, aire des scissions sur leur terre, et
-    // célibataires qui cherchent plus souvent un conjoint (pairing).
-    expect(fingerprint(state)).toBe('63f71745');
+    // célibataires qui cherchent plus souvent un conjoint (pairing). Tâche 2b.2 : le jour
+    // et les marches en cours entrent dans l'empreinte (ADR 0013), sans que le déroulement
+    // change : avant cette extension, le sous-pas quotidien redonnait 63f71745.
+    expect(fingerprint(state)).toBe('24f9fb6b');
   });
 
   it("redonnent l'empreinte de référence de trente mois de trois mille individus (ADR 0011)", () => {
@@ -221,13 +226,15 @@ describe('pas', () => {
     // de 2 400 vivants, 177 groupes et plus de 900 morts au bout de trente mois. Comme
     // celle des scénarios du banc d'essai, qui l'imprime, l'empreinte ne change que si le
     // déroulement change (D-10) : à la relecture des corrections, par le voisinage à un
-    // mois de marche, l'aire des scissions et `pairing`.
+    // mois de marche, l'aire des scissions et `pairing` ; à la tâche 2b.2, par le jour et
+    // les marches en cours, qui entrent dans l'empreinte (ADR 0013) : avant cette extension,
+    // le sous-pas quotidien redonnait 27ee4786.
     const state = testState();
     step(state, scatteredGroups(state, 100), testData);
     for (let tick = 1; tick < 30; tick++) step(state, [], testData);
     expect(state.society.groups.size).toBeGreaterThan(100);
     expect(state.people.count).toBeGreaterThan(2000);
     expect(state.people.archive.rows).toBeGreaterThan(500);
-    expect(fingerprint(state)).toBe('27ee4786');
+    expect(fingerprint(state)).toBe('8049a7e6');
   });
 });

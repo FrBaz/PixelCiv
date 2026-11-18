@@ -1,5 +1,8 @@
-/** Date de la partie, telle qu'on l'affiche : « mars de l'an 12 ». */
-import { dateOfTick } from '../core/time';
+/**
+ * Date de la partie, telle qu'on l'affiche : « mars de l'an 12 » pour la chronique et les
+ * fiches, datées du mois, et « 12 mars de l'an 3 » pour le contrôle du temps (ADR 0013).
+ */
+import { dateOfTick, dateOfTime, type GameTime } from '../core/time';
 import { t, type MessageKey } from '../i18n';
 
 /** Noms des mois, de janvier à décembre. */
@@ -25,4 +28,17 @@ export function formatDate(tick: number): string {
   if (year <= 0) return t('calendar.dateBefore', { month: name, count: 1 - year });
   // Une année s'écrit sans séparateur de milliers : l'an 2000, et non l'an 2 000.
   return t('calendar.date', { month: name, year: String(year) });
+}
+
+/**
+ * Date d'un instant, au jour près : le jour en cours de son mois, « 12 mars de l'an 3 »,
+ * et « 1er mars de l'an 3 » pour le premier. La partie commence à l'an 1 : un instant
+ * d'avant n'a que son mois.
+ */
+export function formatDay(time: GameTime): string {
+  const { year, month, day } = dateOfTime(time);
+  if (year <= 0) return formatDate(time.tick);
+  const name = t(MONTH_KEYS[month] ?? MONTH_KEYS[0]);
+  if (day === 1) return t('calendar.dayDateFirst', { month: name, year: String(year) });
+  return t('calendar.dayDate', { day: String(day), month: name, year: String(year) });
 }

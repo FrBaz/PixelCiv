@@ -1,6 +1,6 @@
 # ADR 0002 — Monde cylindrique
 
-Statut : accepté · 9 novembre 2026 · tâche 0.2
+Statut : accepté · 9 novembre 2026 · tâche 0.2 ; révisé le 17 novembre 2026 (affichage, ADR 0012)
 
 ## Contexte
 
@@ -14,7 +14,7 @@ Le monde est un cylindre, continu d'est en ouest et bordé de pôles au nord et 
 - **Voisinage.** Les voisins d'une case sont pris modulo la largeur, dans tous les algorithmes (hydrologie, diffusion, déplacements).
 - **Bruit.** Le bruit est échantillonné sur un cylindre : la longitude devient un angle θ, et l'on lit un bruit 3D au point (r·cos θ, r·sin θ, y), calculé avec `dmath` (ADR 0003, tâche 1.1).
 - **Blocs.** La grille est découpée en blocs de 64 × 64 cases ; les tailles de monde sont des multiples de 64 dans les deux sens.
-- **Affichage.** La caméra garde une position horizontale libre, ramenée modulo la largeur du monde. La colonne de blocs visible `i` affiche le bloc `i` modulo le nombre de colonnes : le monde se répète quand on dézoome.
+- **Affichage.** La caméra garde une position horizontale libre, ramenée modulo la largeur du monde. La colonne de blocs visible `i` affiche le bloc `i` modulo le nombre de colonnes : le monde se répète dès que l'écran est plus large que lui. Depuis la tâche 2b.1, le zoom le plus faible remplit la hauteur de l'écran sans rien montrer au-delà des pôles (ADR 0012) : le monde, au format 2:1, ne se répète plus que sur un écran plus allongé que lui, comme un téléphone en paysage.
 
 ## Conséquences
 

@@ -8,7 +8,8 @@ import { MONTHS_PER_YEAR } from './people';
 import { NEVER, NONE } from './population';
 import { membersOf, spawnGroup } from './spawn';
 import { createState, type SimState } from './state';
-import { step, type SimContent } from './step';
+import { step } from './day';
+import type { SimContent } from './step';
 import {
   firstCellOf,
   flatState,

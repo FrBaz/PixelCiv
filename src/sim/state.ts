@@ -1,7 +1,8 @@
 /**
  * État de la simulation : le monde généré, une couche par attribut en tableaux typés
  * (CLAUDE.md, « Performances » ; ADR 0009), la population et ses groupes (ADR 0011), le
- * temps, le journal des commandes et le générateur de la partie.
+ * temps, au mois et au jour, avec les marches du mois (ADR 0013), le journal des commandes
+ * et le générateur de la partie.
  */
 import type { ChunkPatch, GameCommand, LoggedCommand } from '../core/protocol';
 import { Rng } from '../core/rng';
@@ -18,6 +19,7 @@ import type { GroupsContent } from './groups';
 import { Population } from './population';
 import { emptySociety, type Society } from './society';
 import { terrainCosts, terrainLands } from './terrain';
+import { DayPositions, Walks } from './walks';
 
 export { cellIndex } from './terrain';
 
@@ -25,8 +27,10 @@ export interface SimState {
   /** Paramètres du monde : graine, taille, réglages de la création. */
   readonly params: WorldParams;
   readonly size: WorldSize;
-  /** Pas écoulés depuis le début de la partie, un par mois. */
+  /** Pas mensuels faits depuis le début de la partie, un par mois. */
   tick: number;
+  /** Jours écoulés du mois en cours, de 0 à DAYS_PER_MONTH − 1 (ADR 0013). */
+  day: number;
   /** Couches du monde. Le biome peut changer en cours de partie (pinceau). */
   readonly world: WorldLayers;
   /** Individus vivants, en colonnes, et archive des morts. */
@@ -35,6 +39,16 @@ export interface SimState {
   readonly society: Society;
   /** Stocks de nourriture des cases entamées : cueillette, gibier, poisson. */
   readonly food: FoodStocks;
+  /**
+   * Marches du mois, décidées au pas mensuel et parcourues jour après jour (ADR 0013) :
+   * elles font partie de l'état, sauvegarde et empreinte comprises.
+   */
+  readonly walks: Walks;
+  /**
+   * Position du jour de chaque groupe, déduite des marches et du jour : un cache, que ni la
+   * sauvegarde ni l'empreinte ne comptent (rebuildPositions).
+   */
+  readonly dayPositions: DayPositions;
   /**
    * Coût de marche de chaque case (Infinity si elle est infranchissable). Il découle du
    * monde et du contenu : ni la sauvegarde ni l'empreinte n'en tiennent compte.
@@ -52,7 +66,7 @@ export interface SimState {
   /** Commandes de jeu appliquées, dans l'ordre : rejouées depuis le monde, elles redonnent l'état. */
   readonly commandLog: LoggedCommand[];
   /**
-   * Commandes reçues et vérifiées, qui s'appliqueront au début du prochain pas. Elles
+   * Commandes reçues et vérifiées, qui s'appliqueront au début du prochain jour. Elles
    * font partie de la sauvegarde : une partie rechargée les applique comme l'aurait
    * fait l'originale.
    */
@@ -79,10 +93,13 @@ export function createState(
     params,
     size,
     tick: 0,
+    day: 0,
     world,
     people: new Population(),
     society: emptySociety(),
     food: emptyStocks(world.biome.length),
+    walks: new Walks(),
+    dayPositions: new DayPositions(),
     cost,
     land: terrainLands(cost, size),
     commandLog: [],
@@ -90,6 +107,19 @@ export function createState(
     rng: new Rng(params.seed),
     dirtyChunks: new Uint8Array(grid.columns * grid.rows),
   };
+}
+
+/**
+ * Recalcule les positions du jour de tous les groupes (DayPositions), d'après les groupes,
+ * les marches et le jour : au chargement, au pas mensuel et après une commande.
+ */
+export function rebuildPositions(state: SimState): void {
+  state.dayPositions.rebuild(
+    state.society.groups.values(),
+    state.walks,
+    state.day,
+    state.size.width,
+  );
 }
 
 /** Marque le bloc de la case `index` comme modifié. */

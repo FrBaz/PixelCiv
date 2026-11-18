@@ -2,13 +2,14 @@
  * Outil d'apparition (CRE-03) : la case touchée peut-elle recevoir un groupe ? Le fil
  * principal en juge avant d'envoyer la commande, par les règles de la simulation : la case
  * du monde qui contient le point (cellIndex, x bouclant d'est en ouest), et un biome et un
- * étage d'altitude franchissables (walkCost). Il refuse aussi une case occupée, par un
- * groupe de la dernière image venue du worker ou par une apparition envoyée que les images
- * n'ont pas encore montrée (OccupiedCells) : un second appui au même point, ou un
- * double-clic, n'empile pas un groupe sous le premier, où rien ne le distinguerait à
- * l'écran. Un refus se dit au joueur, avec sa raison.
+ * étage d'altitude franchissables (walkCost). Il refuse aussi une case occupée : par un
+ * groupe qui s'y tient, à l'instant affiché ou à celui du dernier état reçu, en marche
+ * comme au repos (ADR 0013), ou par une apparition envoyée qu'aucun état n'a encore
+ * montrée (OccupiedCells). Un second appui au même point, ou un double-clic, n'empile donc
+ * pas un groupe sous le premier, où rien ne le distinguerait à l'écran. Un refus se dit au
+ * joueur, avec sa raison.
  */
-import { GROUP_STRIDE, type ChronicleView, type GroupsFrame } from '../core/protocol';
+import type { ChronicleView } from '../core/protocol';
 import type { WorldLayers, WorldSize } from '../core/world';
 import type { MessageKey } from '../i18n';
 import type { ChronicleKind } from '../sim/society';
@@ -21,37 +22,30 @@ export type SpawnTarget =
 /** Le fait qui montre une apparition, à sa case. */
 const APPEARED: ChronicleKind = 'groupAppeared';
 
-/** Cases des groupes d'une image du worker, comptées comme cellIndex. */
-function groupCells(frame: GroupsFrame, size: WorldSize): Set<number> {
-  const cells = new Set<number>();
-  const { groups } = frame;
-  // Chaque groupe : identifiant, x, y, membres, culture.
-  for (let at = 0; at + GROUP_STRIDE <= groups.length; at += GROUP_STRIDE) {
-    cells.add(groups[at + 2] * size.width + groups[at + 1]);
-  }
-  return cells;
-}
-
 /**
- * Cases occupées, comptées comme cellIndex : celles des groupes de la dernière image, et
- * celles des apparitions envoyées que les images n'ont pas encore montrées. Une apparition
- * se montre par son fait (« groupAppeared »), à sa case, dans le delta qui suit son
- * application ; une image calculée avant que le worker ne reçoive la commande, encore en
- * route quand elle part, ne l'efface donc pas.
+ * Cases occupées, comptées comme cellIndex : celles où se tiennent des groupes, données à
+ * chaque appui (groups), et celles des apparitions envoyées qu'aucun état n'a encore
+ * montrées. Une apparition se montre par son fait (« groupAppeared »), à sa case, dans le
+ * delta qui suit son application, avec l'image des groupes qui la contient ; un delta
+ * parti avant que le worker ne reçoive la commande ne l'efface donc pas.
  */
 export class OccupiedCells {
-  private groups = new Set<number>();
+  private groups: ReadonlySet<number> = new Set<number>();
   private readonly sent = new Set<number>();
 
   /** Un instantané : une autre partie, sans apparition en attente. */
-  reset(frame: GroupsFrame, size: WorldSize): void {
-    this.groups = groupCells(frame, size);
+  reset(): void {
+    this.groups = new Set<number>();
     this.sent.clear();
   }
 
-  /** Un delta : l'image de ses groupes, et les apparitions que ses faits montrent. */
-  update(frame: GroupsFrame, facts: readonly ChronicleView[], size: WorldSize): void {
-    this.groups = groupCells(frame, size);
+  /** Cases où se tiennent les groupes, au moment d'un appui. */
+  setGroups(cells: ReadonlySet<number>): void {
+    this.groups = cells;
+  }
+
+  /** Un delta : les apparitions que ses faits montrent ne sont plus en attente. */
+  update(facts: readonly ChronicleView[], size: WorldSize): void {
     for (const fact of facts) {
       if (fact.kind === APPEARED) this.sent.delete(fact.y * size.width + fact.x);
     }

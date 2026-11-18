@@ -22,7 +22,8 @@ import { field, heredity, personName, phonologyOf, recordOf } from './records';
 import { CHRONICLE_KINDS, cultureOf, languageOf, type ChronicleEntry } from './society';
 import { MIGRATIONS, restoreState, saveState } from './save';
 import type { SimState } from './state';
-import { fingerprint, step } from './step';
+import { step } from './day';
+import { fingerprint } from './step';
 import { flatState, testData, testHuman, testState, withHuman } from './testing';
 import { personView } from './views';
 

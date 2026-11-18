@@ -2,8 +2,9 @@
 // de simulation, puis les relie.
 import { h, render } from 'preact';
 import { loadGameData, type GameData } from '../core/data';
-import { PROTOCOL_VERSION, type InspectTarget } from '../core/protocol';
-import { WORLD_SIZES, type WorldLayers, type WorldSizeId } from '../core/world';
+import { GROUP_STRIDE, PROTOCOL_VERSION, type InspectTarget } from '../core/protocol';
+import { dayIndex, type GameTime } from '../core/time';
+import { WORLD_SIZES, type WorldLayers, type WorldSize, type WorldSizeId } from '../core/world';
 import { defaultWorldParams, type WorldParams } from '../core/worldParams';
 import { determinismSelfTest } from '../core/selftest';
 import { t } from '../i18n';
@@ -11,8 +12,17 @@ import { parseColor } from '../render/bake';
 import { CameraControls } from '../render/controls';
 import { MapView } from '../render/map';
 import { legend, overlayTexels } from '../render/mapModes';
-import { cellAt, showAt, TILE_PX, type Camera } from '../render/camera';
-import { PeopleLayer } from '../render/people';
+import {
+  cellAt,
+  openingZoom,
+  parseZoom,
+  showAt,
+  SMALL_SCREEN_QUERY,
+  TILE_PX,
+  type Camera,
+} from '../render/camera';
+import { groupPositions } from '../render/crowd';
+import { PeopleLayer, positionCells } from '../render/people';
 import { previewPixels } from '../render/preview';
 import { SPAWN_COUNT } from '../sim/commands';
 import type { SheetContent } from '../ui/Sheet';
@@ -41,6 +51,7 @@ import {
   previewKey,
   raise,
   sheet,
+  shownDay,
   showNotice,
   spawnChoice,
   spawnSettings,
@@ -66,8 +77,9 @@ import { SaveManager, SaveStore } from './saves';
 import { describeCell } from './inspect';
 import { SheetRequests } from './sheets';
 import { OccupiedCells, spawnTarget } from './spawn';
+import { FrameQueue, walkDay } from './frames';
+import { GameClock } from './gameClock';
 import { PreviewScheduler } from './preview';
-import { SeasonClock } from './seasonClock';
 import { SimulationClient } from './simulation';
 import './style.css';
 
@@ -79,7 +91,8 @@ function element(id: string): HTMLElement {
 
 /**
  * Débogage : l'adresse peut nommer le monde de la première partie (?seed=abc&size=large),
- * qui commence alors sans passer par l'écran de création.
+ * qui commence alors sans passer par l'écran de création. Elle peut aussi fixer le zoom
+ * des parties qui s'ouvrent (?zoom=4, en pixels CSS par pixel de carte ; parseZoom).
  */
 function startingParams(data: GameData, query: URLSearchParams): WorldParams {
   const size = query.get('size') ?? 'small';
@@ -102,7 +115,10 @@ async function main(): Promise<void> {
   const app = await createRenderer(mapElement);
   const map = new MapView(app, data.biomes.entries);
   const people = new PeopleLayer(app, { genetics: data.genetics, appearance: data.appearance });
-  const seasons = new SeasonClock();
+  // Horloge du rendu et images des groupes datées (ADR 0013) : la carte, ses saisons et la
+  // date montrent l'instant de l'horloge, un peu en retard sur le dernier état reçu.
+  const clock = new GameClock();
+  const frames = new FrameQueue();
   const modeData = {
     biomes: data.biomes.entries,
     altitudeLevels: data.altitudeLevels.entries,
@@ -111,6 +127,10 @@ async function main(): Promise<void> {
   // Au doigt seul (téléphone, tablette) : un monde Moyen par défaut, en attendant la
   // mesure sur téléphone, et pas d'Immense, réservé au PC (MON-02).
   const touchOnly = !matchMedia('(any-pointer: fine)').matches;
+  // Téléphone : au doigt seul, sur le petit écran de la mise en page (style.css). Une partie
+  // s'y ouvre au zoom 3, et au zoom 2 ailleurs (openingZoom, 2b.1).
+  const smallScreen = matchMedia(SMALL_SCREEN_QUERY);
+  const queryZoom = parseZoom(query.get('zoom'));
   const setup: CreationSetup = {
     parameters: data.worldgen.parameters,
     sizes: touchOnly ? ['small', 'medium', 'large'] : ['small', 'medium', 'large', 'huge'],
@@ -197,6 +217,7 @@ async function main(): Promise<void> {
     viewport: () => map.viewport,
     resolution: () => app.renderer.resolution,
     world: () => map.world,
+    defaultZoom: () => openingZoom({ queryZoom, touchOnly, smallScreen: smallScreen.matches }),
     onLongPress: (mapX, mapY, screenX, screenY) => {
       designate(mapX, mapY, screenX, screenY, false);
     },
@@ -214,13 +235,25 @@ async function main(): Promise<void> {
   const openSheet = (target: InspectTarget) => {
     simulation.send({ type: 'inspect', ...sheets.open(target) });
   };
-  // Cases occupées, que l'outil d'apparition refuse : celles des groupes de la dernière
-  // image, et celles des apparitions envoyées qu'aucune image n'a encore montrées.
+  // Cases occupées, que l'outil d'apparition refuse : celles où se tiennent les groupes, à
+  // l'instant affiché et à celui du dernier état reçu, et celles des apparitions envoyées
+  // qu'aucun état n'a encore montrées.
   const occupied = new OccupiedCells();
+  /** Cases des groupes du dernier état reçu, à son instant. */
+  const receivedCells = (size: WorldSize): Set<number> => {
+    const latest = frames.latest();
+    if (latest === undefined) return new Set();
+    const count = Math.floor(latest.frame.groups.length / GROUP_STRIDE);
+    const positions = new Float64Array(count * 2);
+    const day = walkDay(latest, clock.received);
+    groupPositions(latest.frame, latest.walkOf, day, size.width, positions, new Uint8Array(count));
+    return positionCells(positions, size);
+  };
   /** Fait apparaître un groupe sur la case, si elle le permet ; un avis dit sinon pourquoi. */
   const spawnAt = (x: number, y: number) => {
     const info = worldInfo.value;
     if (worldLayers === undefined || info === undefined) return;
+    occupied.setGroups(new Set([...people.occupiedCells(info.size), ...receivedCells(info.size)]));
     const target = spawnTarget(worldLayers, info.size, x, y, data, occupied);
     if ('refusal' in target) {
       showNotice(target.refusal);
@@ -258,14 +291,7 @@ async function main(): Promise<void> {
   const showCell = (x: number, y: number) => {
     const info = worldInfo.value;
     if (worldLayers === undefined || info === undefined) return;
-    inspected.value = describeCell(
-      worldLayers,
-      info.size,
-      x,
-      y,
-      seasons.month(performance.now()),
-      data,
-    );
+    inspected.value = describeCell(worldLayers, info.size, x, y, clock.month(), data);
   };
   // La température du mois de la case inspectée suit le temps qui passe ; rien de plus :
   // une case inspectée n'ouvre jamais d'elle-même la fiche d'un groupe qui passe.
@@ -310,15 +336,31 @@ async function main(): Promise<void> {
   document.addEventListener('visibilitychange', () => {
     if (document.visibilityState === 'visible') returning = true;
   });
+  /** Aucune marche : l'image d'un groupe sans image. */
+  const noWalks: ReadonlyMap<number, number> = new Map();
+  /** Rang du jour que montre la date, pour ne la changer qu'au jour suivant. */
+  let shownIndex = -1;
   app.ticker.add((ticker) => {
     // La durée réelle de l'image : deltaMS est plafonné à 100 ms, et cacherait les à-coups.
     if (returning) returning = false;
     else sampler.frame(ticker.elapsedMS);
-    map.setSeason(seasons.month(performance.now()));
+    const now = performance.now();
+    // L'instant affiché : les saisons, les groupes et la date le suivent ensemble.
+    const shown = clock.advance(now);
+    map.setSeason(clock.month());
+    const dated = frames.at(shown);
+    const width = worldInfo.value?.size.width ?? 1;
+    const day = dated === undefined ? 0 : walkDay(dated, shown);
+    people.show(dated?.frame, dated?.walkOf ?? noWalks, day, width);
+    const today: GameTime = clock.today();
+    if (dayIndex(today) !== shownIndex && time.value !== undefined) {
+      shownIndex = dayIndex(today);
+      shownDay.value = today;
+    }
     const camera = controls.update(ticker.deltaMS);
     drawnCamera = camera;
     map.draw(camera);
-    people.draw(camera, map.viewport, map.world, performance.now());
+    people.draw(camera, map.viewport, map.world, now);
   });
   setInterval(() => {
     const renderer = { name: app.renderer.name, resolution: app.renderer.resolution };
@@ -372,8 +414,8 @@ async function main(): Promise<void> {
         sheets.close();
         sheet.value = undefined;
         people.clear();
-        people.setFrame(message.frame);
-        occupied.reset(message.frame, message.world.size);
+        frames.reset(message.frame, message.time);
+        occupied.reset();
         chronicleRequest++;
         chronicleLoading.value = false;
         showFacts(snapshotFacts(message.chronicle));
@@ -383,26 +425,30 @@ async function main(): Promise<void> {
         const world = map.world;
         if (world !== undefined) controls.center(world);
         time.value = message.time;
-        seasons.update(message.time, performance.now());
+        clock.reset(message.time, performance.now());
+        shownIndex = dayIndex(message.time);
+        shownDay.value = { tick: message.time.tick, day: message.time.day };
         break;
       }
       case 'delta': {
         map.updateChunks(message.chunks);
-        people.setFrame(message.frame);
+        // L'image des groupes, quand elle change, vaut à partir de l'instant du delta.
+        if (message.frame !== undefined) frames.push(message.frame, message.time);
         const info = worldInfo.value;
-        if (info !== undefined) occupied.update(message.frame, message.chronicle, info.size);
+        if (info !== undefined) occupied.update(message.chronicle, info.size);
         // Pendant la lecture des pages plus anciennes, les faits nouveaux se comptent.
         showFacts(receiveFacts(facts, message.chronicle));
         time.value = message.time;
-        seasons.update(message.time, performance.now());
+        clock.receive(message.time, performance.now());
         break;
       }
       case 'time':
         time.value = message.time;
-        seasons.update(message.time, performance.now());
+        clock.receive(message.time, performance.now());
         break;
       case 'stats':
-        sampler.step(message.stats.stepMs);
+        sampler.batch(message.stats);
+        if (message.stats.monthMs !== undefined) clock.monthStep(message.stats.monthMs);
         break;
       case 'progress':
         generation.value = { stage: message.stage, step: message.step, steps: message.steps };
@@ -555,7 +601,7 @@ async function main(): Promise<void> {
 
   // La poignée de main d'abord : le worker refuse tout message qui la précède.
   simulation.send({ type: 'hello', protocol: PROTOCOL_VERSION });
-  // Débogage : ?stepCost=200 ajoute un coût factice de 200 ms à chaque pas.
+  // Débogage : ?stepCost=200 ajoute un coût factice de 200 ms à chaque pas mensuel.
   const stepCost = Number(query.get('stepCost') ?? 0);
   if (stepCost > 0) simulation.send({ type: 'debugStepCost', milliseconds: stepCost });
 }

@@ -2,7 +2,7 @@
 
 Version 0.6 · 11 novembre 2026 · complète le PRD (`docs/PRD.md`, version 0.5)
 
-Historique : 0.1, première version ; 0.2, intégration de la séance C1 sur le monde ; 0.3, générateurs de portraits et d'armoiries conçus à neuf, portraits d'environ 64×64 px ; 0.4, ADR de la phase 0 et dossier `src/worker/` (tâche 0.2) ; 0.5, intégration de la séance C2 sur les peuples et les établissements ; 0.6, lot « Population » de la phase 2 aligné sur l'ADR 0011 : les emplacements sont recyclés, les identifiants restent stables (relecture de la phase 2).
+Historique : 0.1, première version ; 0.2, intégration de la séance C1 sur le monde ; 0.3, générateurs de portraits et d'armoiries conçus à neuf, portraits d'environ 64×64 px ; 0.4, ADR de la phase 0 et dossier `src/worker/` (tâche 0.2) ; 0.5, intégration de la séance C2 sur les peuples et les établissements ; 0.6, lot « Population » de la phase 2 aligné sur l'ADR 0011 : les emplacements sont recyclés, les identifiants restent stables (relecture de la phase 2) ; 0.7, phase 2b, corrections avant la phase 3, d'après les consignes de l'auteur du 15 novembre 2026 (`docs/design/corrections-phase-2.md`).
 
 ## 1. Principes
 
@@ -103,7 +103,7 @@ Le `SharedArrayBuffer` est exclu, parce qu'il exige des en-têtes HTTP que GitHu
 
 | Sujet | Choix |
 |---|---|
-| Temps | Pas de temps mensuel. Les systèmes s'exécutent dans un ordre fixe, chacun à sa fréquence (mensuelle, saisonnière, annuelle). |
+| Temps | Deux horloges (ADR 0013) : un pas mensuel pour la démographie, l'économie, les savoirs et les saisons, et un sous-pas quotidien, en mois de 30 jours, pour le mouvement et les activités des seuls individus actifs, regroupé en lots aux vitesses élevées. Une année dure 40 s en vitesse normale. Les systèmes s'exécutent dans un ordre fixe, chacun à sa fréquence (quotidienne, mensuelle, saisonnière, annuelle). |
 | Commandes | Horodatées et appliquées au début d'un pas : rejouer une partie revient à rejouer ses commandes. |
 | Individus | Les individus ordinaires sont stockés en tableaux typés, une colonne par attribut. Les notables sont enrichis par des objets. Les identifiants sont des entiers recyclés. |
 | Relations | Tables de liaison pour les relations multiples : civilisation et cultures, individu et langues, etc. |
@@ -166,6 +166,7 @@ Le bruit simplex est écrit dans le projet, pour en maîtriser le déterminisme.
 | 0 | Socle technique | Une coquille déployée : grille de test qui boucle, zoom, temps, sauvegarde | M |
 | 1 | Génération du monde | Générer et explorer un monde cylindrique | L |
 | 2 | Individus et démographie | Les premiers humains vivent, ont des enfants et meurent | L |
+| 2b | Corrections avant la phase 3 | De près, chaque humain vaque à ses activités au fil des jours, dans un monde qui bouge | L |
 | 3 | Villages, civilisations et cultures | Des villages naissent, grandissent et inventent | L |
 | 4 | Gouvernements, armoiries et premières guerres | **MVP du mode Créateur (P0)** | L |
 | 5 | Saga, première version | Vivre une vie, puis celle d'un héritier | L |
@@ -241,6 +242,24 @@ Objectif : une population qui vit, se reproduit, transmet ses gènes et meurt, e
 | Mesures | Bancs d'essai à 10 000 et 50 000 individus, sur PC et sur téléphone ; calibrage mobile. | IND-03, NF-01 |
 
 **Jalon 2.** On fait apparaître un groupe d'humains. Il nomadise au fil des saisons, survit ou non, et ses enfants ressemblent à leurs parents. On suit les lignées.
+
+### Phase 2b — Corrections avant la phase 3
+
+Objectif : voir vivre chaque individu de près, au fil des jours, dans un monde qui bouge, avant d'y bâtir des villages. Les consignes de l'auteur du 15 novembre 2026 font foi pour cette phase (`docs/design/corrections-phase-2.md`). Les tâches se traitent dans l'ordre, une PR par tâche, avec des captures avant et après aux zooms 1, 2, 4 et 8 sur trois graines, et un essai sur PC et sur téléphone. Le rendu des tuiles de la carte ne change pas : ni l'ombrage, ni le grain, ni les couleurs du terrain.
+
+| Tâche | Contenu | Exigences |
+|---|---|---|
+| 2b.1 | Zoom et caméra : zoom maximal 24 ; zoom minimal recalculé à chaque redimensionnement, pour que la carte remplisse l'écran en hauteur sans rien montrer au-delà des pôles ; bouclage est-ouest ; zoom par défaut 2 sur PC, 3 sur téléphone. | REN-01, IHM-07 |
+| 2b.2 | Deux horloges : le pas mensuel, ralenti (une année dure 40 s en vitesse normale ; vitesses ×½, ×1, ×4 et ×16), pour la démographie, l'économie, les savoirs et les saisons ; un sous-pas quotidien pour le mouvement et les activités des seuls individus actifs, qui regroupe plusieurs jours aux vitesses élevées ; un rendu interpolé entre deux jours. | MOD-06 |
+| 2b.3 | Individus découplés des pixels : une position continue, en cases et fractions de case ; une taille et une résolution d'affichage propres, converties en pixels au rendu selon le zoom ; plus de grappe autour du groupe. | REN-04, REN-08 |
+| 2b.4 | Mer animée par le shader, sans recuire les blocs : onde claire en diagonale, en boucle lente, et rares clapots plus sombres ; haute mer plus calme que les eaux côtières ; palette de l'eau ; figée par le gel. | REN-10 |
+| 2b.5 | Humains : les planches de `sprites/humans/skin/`, habillées par substitution exacte des tons, région par région, pour toutes les animations ; versions réduites pour les zooms faibles. | REN-04, REN-09 |
+| 2b.6 | Décor et gibier : arbres, conifères, buissons et rochers en objets, posés d'après les couches `trees` et `shrubs` et les gisements, au plus un arbre par case de forêt, avec ombre portée et variantes saisonnières ; cerf, sanglier et lièvre dans le style des animaux de `sprites/animals/`. | MON-10, FAU-01, REN-03 |
+| 2b.7 | Saisons : neige à inertie, qui s'accumule et fond lentement ; feuillages au fil de l'année ; lumière de saison par les palettes ; réglage des effets. | REN-10, SAI-02 |
+| 2b.8 | Activités : repos au camp, cueillette, chasse, pêche, corvée d'eau, suivi du groupe, jeu ; le mouvement visible est une animation déterministe tirée de l'activité, pour les seuls individus visibles. | REN-03, REN-04, SAI-03 |
+| 2b.9 | Portraits : le générateur Portrait64 (FrBaz/AvatarGenerator) porté en TypeScript, ses calques PNG assemblés et recolorés à l'exécution, sa configuration déduite des gènes, de l'âge, de la culture et du rang, de façon déterministe et mise en cache ; ses détails polis jusqu'à l'accord de relecteurs sceptiques. | REN-07 |
+
+**Jalon 2b.** De près, on voit chaque humain, habillé selon sa culture, vaquer à ses activités au fil des jours, parmi les arbres, le gibier et une mer qui bouge ; les saisons passent avec leur neige et leurs feuillages ; chaque portrait vient de Portrait64.
 
 ### Phase 3 — Villages, civilisations et cultures
 
