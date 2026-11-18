@@ -4,7 +4,15 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createServer } from 'vite';
 import { describe, expect, it, vi } from 'vitest';
-import { MODULE, packAtlas, parseGrid, pixelAtlas, readSources } from './pixel-atlas';
+import {
+  MODULE,
+  packAtlas,
+  parseGrid,
+  pixelAtlas,
+  readSources,
+  variantGrid,
+  variantName,
+} from './pixel-atlas';
 
 describe("pipeline d'assets (AST-04)", () => {
   it('lit une grille de rôles, et nomme la source et la ligne en défaut', () => {
@@ -30,6 +38,32 @@ describe("pipeline d'assets (AST-04)", () => {
       roles: [0, 3],
     });
     expect(parseGrid('essai', '\uFEFF.s\n')).toEqual({ width: 2, height: 1, roles: [0, 3] });
+  });
+
+  it('fait les variantes de hauteur qu’une source demande, en doublant ou en ôtant une rangée (ADR 0014)', () => {
+    const grid = parseGrid('essai', '# motif\n# variantes 2 à 4, rangée 2\nss\nhc\noo\n');
+    expect(grid.variants).toEqual({ min: 2, max: 4, row: 2 });
+    expect(variantGrid(grid, 2).roles).toEqual([3, 3, 1, 1]);
+    expect(variantGrid(grid, 3).roles).toEqual(grid.roles);
+    expect(variantGrid(grid, 4)).toEqual({ width: 2, height: 4, roles: [3, 3, 6, 9, 6, 9, 1, 1] });
+    expect(() => variantGrid(grid, 5)).toThrow(/non demandée/);
+    expect(() => variantGrid(parseGrid('essai', 'ss'), 1)).toThrow(/non demandée/);
+    // Une rangée de plus ou de moins au plus, la hauteur de la source comprise, une rangée du
+    // motif, une seule demande, et une forme exacte.
+    expect(() => parseGrid('essai', '# variantes 1 à 4, rangée 2\nss\nhc\noo')).toThrow(
+      /essai, ligne 1 : de 2 à 4 rangées/,
+    );
+    expect(() => parseGrid('essai', '# variantes 4 à 4, rangée 2\nss\nhc\noo')).toThrow(
+      /rangées au plus/,
+    );
+    expect(() => parseGrid('essai', '# variantes 2 à 4, rangée 4\nss\nhc\noo')).toThrow(
+      /rangée hors du motif/,
+    );
+    expect(() => parseGrid('essai', '# variantes 2 à 4\nss\nhc\noo')).toThrow(/attendu/);
+    expect(() =>
+      parseGrid('essai', '# variantes 2 à 4, rangée 1\n# variantes 2 à 3, rangée 1\nss\nhc\noo'),
+    ).toThrow(/essai, ligne 2 : variantes déjà demandées/);
+    expect(variantName('sprites/adult-male-0', 10)).toBe('sprites/adult-male-0@10');
   });
 
   it('range les motifs sans recouvrement, avec leurs rôles', () => {
@@ -75,6 +109,22 @@ describe("pipeline d'assets (AST-04)", () => {
     expect(height('child')).toBeLessThan(height('adult-female'));
     expect(height('child')).toBeLessThan(height('adult-male'));
     expect(sources['icons/group']).toBeDefined();
+    // Les variantes de hauteur (ADR 0014) : adulte de 8 à 10 rangées, enfant de 6 à 8, chaque
+    // image de la marche ; le nourrisson n'en a pas.
+    const variants = (age: string) =>
+      Object.keys(sources)
+        .filter((name) => name.startsWith(`sprites/${age}-0@`))
+        .map((name) => sources[name].height)
+        .sort((a, b) => a - b);
+    expect(variants('adult-female')).toEqual([8, 9, 10]);
+    expect(variants('adult-male')).toEqual([8, 9, 10]);
+    expect(variants('child')).toEqual([6, 7, 8]);
+    expect(variants('baby')).toEqual([]);
+    for (const age of ['adult-female', 'adult-male', 'child']) {
+      for (const rows of variants(age)) {
+        expect(size(`${age}-1@${String(rows)}`)).toEqual(size(`${age}-0@${String(rows)}`));
+      }
+    }
   });
 
   it('refait l’atlas et recharge la page quand une source est ajoutée, modifiée ou supprimée (A-4)', async () => {
