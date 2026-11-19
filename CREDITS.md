@@ -6,13 +6,15 @@ Le code et le contenu propres au jeu restent sous droits réservés : le dépôt
 
 ## Pack de sprites
 
-Pas intégré. Le pack retenu par l'auteur est la version gratuite de « 2D Pixel Art Male and Female Character », de GandalfHardcore : <https://gandalfhardcore.itch.io/2d-pixel-art-male-and-female-character> (PRD, question 14). Sa licence reste à vérifier avant tout versement (AST-01, AST-02). Les mini-sprites de la carte n'en dépendent pas : ils sont dessinés pour le jeu, sous la licence du dépôt, en grilles de texte de 6 à 9 px de haut (`assets/pixel/`), et recolorés pour chaque individu (REN-04, REN-09). On consignera ici sa licence s'il est intégré.
+Intégré à la tâche 2b.5 (ADR 0016) : « 2D Pixel Art Male and Female Character », version gratuite, de GandalfHardcore, <https://gandalfhardcore.itch.io/2d-pixel-art-male-and-female-character> (PRD, question 14). L'auteur du jeu a versé ses planches dans `sprites/humans/skin/` et vérifié sa licence le 15 novembre 2026 : elle permet de les modifier, et de les distribuer avec le jeu, comme dans ce dépôt public (`docs/design/corrections-phase-2.md`). Ses termes ne sont pas recopiés ici.
 
-| Auteur | Lien | Licence | Emplacement |
-|---|---|---|---|
-| GandalfHardcore | [itch.io](https://gandalfhardcore.itch.io/2d-pixel-art-male-and-female-character) | à vérifier | non versé : `assets/source/` si la licence permet de redistribuer les fichiers, sinon `assets/local/`, hors du dépôt |
+Le jeu part des deux planches de base, `Male Skin1.png` et `Female Skin1.png`. Il en distribue les pixels, recodés au build en rôles de teinte (région du corps et rang du ton), réduits pour les zooms faibles, composés en enfants, et recolorés à l'exécution d'après les palettes de l'auteur du jeu (`tools/human-atlas.ts`, `src/render/humans.ts`) ; les planches elles-mêmes restent dans le dépôt, non publiées avec le jeu. Le jeu publié nomme le pack dans `licenses.txt`, jusqu'à l'écran des crédits (IHM-08).
 
-`assets/source/README.md` décrit la marche à suivre.
+| Titre | Auteur | Lien | Licence | Emplacement |
+|---|---|---|---|---|
+| 2D Pixel Art Male and Female Character (version gratuite) | GandalfHardcore | [itch.io](https://gandalfhardcore.itch.io/2d-pixel-art-male-and-female-character) | vérifiée par l'auteur du jeu le 15 novembre 2026 : modification et distribution avec le jeu permises | `sprites/humans/skin/` |
+
+Les palettes de peau, de cheveux et de tissus que le jeu pose sur ces planches sont celles de l'auteur du jeu (`sprites/sprite_converter.ipynb`, et Portrait64), sous la licence du dépôt. Les mini-sprites de la tâche 2.9 ne servent plus (ADR 0016) ; les bannières des groupes restent dessinées pour le jeu (`assets/pixel/icons/`).
 
 ## Bibliothèques distribuées avec le jeu
 
@@ -43,7 +45,8 @@ Ces algorithmes ont été réécrits à partir de leur description publiée, san
 |---|---|---|---|
 | xoshiro128** | Générateur pseudo-aléatoire (`src/core/rng.ts`) | David Blackman et Sebastiano Vigna | https://prng.di.unimi.it |
 | SplitMix et finaliseur de MurmurHash3 | Graines des flux du générateur (`src/core/rng.ts`) et des noms de chaque langue (`src/gen/names.ts`) ; déphasage de la marche de chaque individu sur la carte (`src/render/crowd.ts`) | Guy L. Steele Jr., Doug Lea et Christine H. Flood ; Austin Appleby | « Fast Splittable Pseudorandom Number Generators », OOPSLA 2014 ; https://github.com/aappleby/smhasher |
-| FNV-1a | Empreintes de l'état (`src/core/hash.ts`) ; variante de chaque portrait, tirée du génome (`src/ui/Portrait.tsx`) | Glenn Fowler, Landon Curt Noll et Kiem-Phong Vo | http://www.isthe.com/chongo/tech/comp/fnv/ |
+| FNV-1a | Empreintes de l'état (`src/core/hash.ts`) ; variante de chaque portrait, tirée du génome (`src/ui/Portrait.tsx`) ; empreintes des planches habillées et de l'atlas des humains, dans leurs tests (`src/render/humans.test.ts`, `tools/human-atlas.test.ts`) | Glenn Fowler, Landon Curt Noll et Kiem-Phong Vo | http://www.isthe.com/chongo/tech/comp/fnv/ |
+| Espace de couleurs OKLab | Contraste des tissus et des peaux, dans son test (`tools/author-palettes.test.ts`) | Björn Ottosson | « A perceptual color space for image processing », 2020, https://bottosson.github.io/posts/oklab/ |
 | Réduction d'argument de Cody et Waite | Fonctions trigonométriques déterministes (`src/core/dmath.ts`) | William J. Cody et William Waite | *Software Manual for the Elementary Functions*, Prentice-Hall, 1980 |
 | Bruit simplex | Relief, climat, flore et gisements (`src/core/noise.ts`), au noyau resserré à √0,5 | Ken Perlin ; forme et code de Stefan Gustavson (domaine public) | Ken Perlin, « Noise hardware », SIGGRAPH 2001 ; Stefan Gustavson, « Simplex noise demystified », 2005 |
 | Bruit de crêtes | Chaînes de montagnes (`src/worldgen/sampler.ts`) | F. Kenton Musgrave | *Texturing and Modeling: A Procedural Approach*, Academic Press, 1994 |

@@ -2,7 +2,7 @@
 
 Ce dossier accueille le pack de sprites original (AST-01), si sa licence permet de le redistribuer. Le dépôt étant public, tout fichier versé ici est publié.
 
-Le pack n'est pas encore fourni. À son arrivée :
+Le pack retenu, « 2D Pixel Art Male and Female Character » de GandalfHardcore, n'est pas ici : l'auteur du jeu en a versé les planches sans vêtements dans `sprites/humans/skin/`, avec sa licence vérifiée le 15 novembre 2026, et la tâche 2b.5 les a intégrées (`CREDITS.md`, ADR 0016). La marche à suivre reste celle-ci pour tout autre pack :
 
 1. **Vérifier la licence.** Elle doit permettre un usage commercial, avec attribution (AST-02), et la redistribution des fichiers eux-mêmes, pour qu'ils puissent figurer dans un dépôt public.
 2. **Ranger les fichiers.**
