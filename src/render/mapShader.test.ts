@@ -1,10 +1,63 @@
 import { describe, expect, it } from 'vitest';
-import { loadGameData } from '../core/data';
+import { BiomesSchema, type Biome } from '../core/data/schemas';
 import { Fingerprint } from '../core/hash';
 import { COVER_RAMPS, coverShare, seasonFactor } from '../core/seasons';
-import { bakedWaterTone } from '../core/waves';
+import {
+  bakedWaterTone,
+  MAX_CREST_LENGTH,
+  MAX_CREST_THICKNESS,
+  MAX_WAVE_BIOMES,
+} from '../core/waves';
 import { glslFloat, MAP_FRAGMENT, MAP_FRAGMENT_WAVES, WAVE_ANCHORS } from './mapShader';
 import { WAVE_GLSL, waveNoise, wavePhase, wavePixel, waveTable } from './waves';
+
+/** Une eau fictive, de tons et de mer animée choisis : le reste n'importe pas à l'onde. */
+const water = (
+  id: string,
+  [shadow, base, light]: readonly [string, string, string],
+  waves?: Biome['waves'],
+): Biome => ({
+  id,
+  family: 'water',
+  name: 'biome.essai',
+  fertility: 0,
+  movementCost: null,
+  disease: false,
+  resources: [],
+  forage: { plants: 0, game: 0, fish: 0 },
+  flora: { trees: 0, shrubs: 0, species: [] },
+  palette: { shadow, base, light },
+  tile: 'water',
+  vegetation: 'none',
+  seasons: { cover: 'none' },
+  ...(waves === undefined ? {} : { waves }),
+});
+
+/**
+ * Les eaux de l'empreinte du miroir, sans rapport avec data/biomes.json : autant d'eaux
+ * animées que le shader a de places, aux longueurs et épaisseurs extrêmes, aux parts de 0 à 1
+ * (des seuils variés), aux deux tons de crête ; puis une eau immobile. Des tons cuits
+ * distincts, dont certains à bits faibles du rouge et du vert à 1, que la cuisson efface.
+ */
+const FICTIVE_WATERS: readonly Biome[] = [
+  water('mer-longue', ['#102040', '#183050', '#204060'], {
+    crest: { share: 1, length: MAX_CREST_LENGTH, thickness: MAX_CREST_THICKNESS, tone: 'light' },
+    ripple: { share: 0.25 },
+  }),
+  water('mer-courte', ['#214171', '#295181', '#316191'], {
+    crest: { share: 0.45, length: 1, thickness: 1, tone: 'base' },
+    ripple: { share: 1 },
+  }),
+  water('mer-calme', ['#3060a0', '#3870b0', '#4080c0'], {
+    crest: { share: 0, length: 3, thickness: 2, tone: 'base' },
+    ripple: { share: 0.8 },
+  }),
+  water('mer-claire', ['#4890c8', '#50a0d0', '#58b0e0'], {
+    crest: { share: 0.7, length: 2, thickness: 1, tone: 'light' },
+    ripple: { share: 0 },
+  }),
+  water('eau-dormante', ['#2a6a9a', '#3a7aaa', '#4a8aba']),
+];
 
 describe('shader de la carte', () => {
   it('écrit les nombres en littéraux flottants de GLSL', () => {
@@ -69,25 +122,27 @@ describe('programmes de la carte et de la mer animée (ADR 0015)', () => {
     expect(WAVE_GLSL.header).toContain('for (int i = 0; i < 4; i++) {');
   });
 
-  // Vitest ne voit pas le shader : ces deux empreintes figent son code et le motif de son
-  // miroir. N'en mettre une à jour qu'après avoir relancé le contrôle des pixels dans Chromium
-  // (ADR 0015 : shader et miroir comparés pixel à pixel, mois forcé, calme partiel compris),
-  // et en joindre le résultat à la PR.
-  it('fige le code de l’onde et le motif de son miroir', () => {
+  // Vitest ne voit pas le shader : ces deux empreintes figent son code et la logique de son
+  // miroir, sur des eaux fictives écrites ici, non sur data/biomes.json. Le shader ne reçoit
+  // les réglages des données que par ses uniformes, que le miroir lit dans la même table :
+  // régler la mer animée dans les données ne change ni l'une ni l'autre. On n'en met une à jour
+  // que si la logique du shader ou du miroir change, après avoir relancé le contrôle des
+  // pixels dans Chromium (tools/wave-control/LISEZMOI.md ; ADR 0015, § 10), dont on joint le
+  // résultat à la PR.
+  it('fige le code de l’onde et le motif de son miroir, indépendamment des données', () => {
     expect(new Fingerprint().string(MAP_FRAGMENT_WAVES).hex()).toBe('01c90fa3');
-    const biomes = loadGameData().biomes.entries;
+    const biomes = BiomesSchema.parse(FICTIVE_WATERS);
     const table = waveTable(biomes, 1);
+    expect(table.biomes).toHaveLength(MAX_WAVE_BIOMES);
     const noise = waveNoise();
     const worldPx = 2048;
     // Chaque ton cuit de chaque eau, et une terre, sur une grille ; des cases de tous les
     // drapeaux, à des températures de part et d'autre des seuils, en un mois de calme partiel.
-    const colors = [
-      ...biomes
-        .filter((biome) => biome.family === 'water')
-        .flatMap((biome) => [biome.palette.shadow, biome.palette.base, biome.palette.light])
-        .map(bakedWaterTone),
-      0x6b8a3b,
-    ];
+    const tones = biomes
+      .flatMap((biome) => [biome.palette.shadow, biome.palette.base, biome.palette.light])
+      .map(bakedWaterTone);
+    expect(new Set(tones).size).toBe(tones.length);
+    const colors = [...tones, 0x6b8a3b];
     const temperatures = [-12, -7, -6, -5.5, -5, -4.5, -1, -0.5, 0, 0.5, 1, 4, 22];
     const view = {
       season: Math.fround(seasonFactor(1.37)),
@@ -95,12 +150,17 @@ describe('programmes de la carte et de la mer animée (ADR 0015)', () => {
       natural: true,
       streams: true,
     };
-    const fingerprint = new Fingerprint();
-    let changed = 0;
+    // Les uniformes de la table, tels que le shader les lit.
+    const fingerprint = new Fingerprint()
+      .uint32(table.biomes.length)
+      .typedArray(table.tones)
+      .typedArray(table.crests)
+      .typedArray(table.ripples);
+    const changed = new Map<string, number>();
     for (let step = 0; step < 64; step++) {
       const frame = { table, noise, phase: wavePhase(step, worldPx), worldPx };
-      for (let y = 0; y < 96; y++) {
-        for (let x = 0; x < 96; x++) {
+      for (let y = 0; y < 128; y++) {
+        for (let x = 0; x < 128; x++) {
           const cell = Math.floor(x / 4) + 31 * Math.floor(y / 4);
           const color = colors[(7 * x + 3 * y) % colors.length] ?? 0;
           const pixel = {
@@ -112,14 +172,26 @@ describe('programmes de la carte et de la mer animée (ADR 0015)', () => {
             flags: (cell & 1) | (((cell >> 1) % 4) << 4) | (((cell >> 3) & 1) << 6),
           };
           // À cheval sur la couture.
-          const tone = wavePixel(frame, view, worldPx - 48 + x, y, pixel);
+          const tone = wavePixel(frame, view, worldPx - 64 + x, y, pixel);
           if (tone === undefined) continue;
-          changed++;
+          // La crête éclaircit le pixel, le clapot l'assombrit, dans la palette de son eau.
+          const owner = table.biomes.find((biome) => biome.tones.includes(tone));
+          const lighter = (owner?.tones.indexOf(tone) ?? -1) > (owner?.tones.indexOf(color) ?? -1);
+          const kind = `${owner?.id ?? ''} ${lighter ? 'crête' : 'clapot'}`;
+          changed.set(kind, (changed.get(kind) ?? 0) + 1);
           fingerprint.uint32(step).uint32(x).uint32(y).uint32(tone);
         }
       }
     }
-    expect(changed).toBeGreaterThan(500);
-    expect(fingerprint.hex()).toBe('3385c578');
+    // Chaque eau animée bouge, et elles seules : crêtes et clapots selon ses parts.
+    expect([...changed.keys()].sort()).toEqual([
+      'mer-calme clapot',
+      'mer-claire crête',
+      'mer-courte clapot',
+      'mer-courte crête',
+      'mer-longue clapot',
+      'mer-longue crête',
+    ]);
+    expect(fingerprint.hex()).toBe('5a74a6e6');
   });
 });

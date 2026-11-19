@@ -13,8 +13,8 @@
  *
  * La mer animée (tâche 2b.4, ADR 0015) a son programme : chaque bloc a deux shaders, aux
  * mêmes textures, et ne prend celui de l'onde que si elle s'y voit (force non nulle, échelle
- * 1 ou plus, mode naturel) et que sa cuisson y a trouvé de la mer. L'onde ne recuit rien :
- * seuls ses uniformes changent, à chaque pas.
+ * 1 ou plus, mode naturel) et que la partie visible du bloc touche une tuile de mer de sa
+ * cuisson (seaMask). L'onde ne recuit rien : seuls ses uniformes changent, à chaque pas.
  */
 import {
   BufferImageSource,
@@ -38,11 +38,18 @@ import {
 } from '../core/world';
 import { bakeBiomes, CHUNK_PX, type BakeBiome } from './bake';
 import { Baker } from './baker';
-import { displayScale, visibleChunks, type Camera, type Extent } from './camera';
+import {
+  displayScale,
+  visibleChunks,
+  type Camera,
+  type ChunkPlacement,
+  type Extent,
+} from './camera';
 import { MAP_FRAGMENT, MAP_FRAGMENT_WAVES, MAP_VERTEX } from './mapShader';
 import { seasonPalettes, seasonTexels } from './seasons';
 import {
   MAX_WAVE_BIOMES,
+  seaInRect,
   seaTones,
   WAVE_NOISE,
   waveNoise,
@@ -75,8 +82,29 @@ interface ChunkView {
   readonly waveShader: Shader;
   readonly mesh: ChunkMesh;
   baked: boolean;
-  /** La cuisson y a trouvé un pixel de mer animée. */
-  sea: boolean;
+  /** Masque de la mer animée de sa cuisson, un octet par tuile (src/render/waves.ts, seaMask). */
+  seaMask: Uint8Array;
+}
+
+/**
+ * La partie de l'écran `viewport` (pixels physiques) que couvre le bloc placé en `placement`,
+ * en pixels du bloc : [left, right[ × [top, bottom[, élargie aux pixels du bloc entamés ; vide
+ * (right ≤ left ou bottom ≤ top) si le bloc est hors de l'écran.
+ */
+function visiblePart(placement: ChunkPlacement, viewport: Extent) {
+  // Sur un côté : le bloc commence à `start` et mesure `size` pixels de l'écran, qui en a `screen`.
+  const span = (start: number, size: number, screen: number) => {
+    if (size <= 0) return [0, 0] as const;
+    const from = Math.max(0, -start);
+    const to = Math.min(size, screen - start);
+    return [
+      Math.max(0, Math.floor((from * CHUNK_PX) / size)),
+      Math.min(CHUNK_PX, Math.ceil((to * CHUNK_PX) / size)),
+    ] as const;
+  };
+  const [left, right] = span(placement.left, placement.width, viewport.width);
+  const [top, bottom] = span(placement.top, placement.height, viewport.height);
+  return { left, top, right, bottom };
 }
 
 /** Texture de données brutes, filtrée au plus proche, sans prémultiplication. */
@@ -120,34 +148,41 @@ export class MapView {
     uFine: { value: 1, type: 'f32' },
     uStreams: { value: 0, type: 'f32' },
   });
-  /** Réglages de la mer animée, que seul son programme lit (src/render/waves.ts). */
-  private readonly waveGlobals = new UniformGroup({
-    uWavePhase: { value: new Float32Array(4), type: 'vec4<f32>' },
-    uWorldPx: { value: CHUNK_PX, type: 'f32' },
-    uWaveCount: { value: 0, type: 'f32' },
-    uWaveTones: {
-      value: new Float32Array(MAX_WAVE_BIOMES * 9),
-      type: 'vec3<f32>',
-      size: MAX_WAVE_BIOMES * 3,
+  /**
+   * Réglages de la mer animée, que seul son programme lit (src/render/waves.ts). Statiques :
+   * PixiJS ne les renvoie au GPU qu'après update(), appelé quand ils changent (phase, force,
+   * table, monde), une fois pour le programme et non à chaque bloc de chaque image.
+   */
+  private readonly waveGlobals = new UniformGroup(
+    {
+      uWavePhase: { value: new Float32Array(4), type: 'vec4<f32>' },
+      uWorldPx: { value: CHUNK_PX, type: 'f32' },
+      uWaveCount: { value: 0, type: 'f32' },
+      uWaveTones: {
+        value: new Float32Array(MAX_WAVE_BIOMES * 9),
+        type: 'vec3<f32>',
+        size: MAX_WAVE_BIOMES * 3,
+      },
+      uWaveCrests: {
+        value: new Float32Array(MAX_WAVE_BIOMES * 4),
+        type: 'vec4<f32>',
+        size: MAX_WAVE_BIOMES,
+      },
+      uWaveRipples: {
+        value: new Float32Array(MAX_WAVE_BIOMES * 4),
+        type: 'vec4<f32>',
+        size: MAX_WAVE_BIOMES,
+      },
     },
-    uWaveCrests: {
-      value: new Float32Array(MAX_WAVE_BIOMES * 4),
-      type: 'vec4<f32>',
-      size: MAX_WAVE_BIOMES,
-    },
-    uWaveRipples: {
-      value: new Float32Array(MAX_WAVE_BIOMES * 4),
-      type: 'vec4<f32>',
-      size: MAX_WAVE_BIOMES,
-    },
-  });
+    { isStatic: true },
+  );
   /** Bruit fixe de l'onde, lu au plus proche. */
   private readonly waveNoise = dataSource(waveNoise(), WAVE_NOISE, WAVE_NOISE);
   /** Force de l'onde (0 : pas d'onde), son pas, et sa table à cette force. */
   private waveForce = 1;
   private waveStep = 0;
   private table: WaveTable;
-  /** Un bloc à l'écran montre-t-il l'onde, à la dernière image ? */
+  /** Un bloc a-t-il pris le programme de l'onde à la dernière image (wavesShown) ? */
   private seaShown = false;
   /** Le programme de l'onde a-t-il été compilé, hors de l'écran ? */
   private warmed = false;
@@ -185,8 +220,8 @@ export class MapView {
     );
     this.table = waveTable(biomes, this.waveForce);
     this.applyWaveTable();
-    this.baker = new Baker((column, row, pixels, sea) => {
-      this.baked(column, row, pixels, sea);
+    this.baker = new Baker((column, row, pixels, seaMask) => {
+      this.baked(column, row, pixels, seaMask);
     });
     app.stage.addChild(this.layer);
   }
@@ -239,6 +274,7 @@ export class MapView {
     );
     this.globals.uniforms.uWorldCells = new Float32Array([size.width, size.height]);
     this.waveGlobals.uniforms.uWorldPx = grid.columns * CHUNK_PX;
+    this.waveGlobals.update();
     this.version++;
     this.setWaves(this.waveStep, this.waveForce);
     this.chunks = Array.from({ length: grid.columns * grid.rows }, (_, index) =>
@@ -263,18 +299,23 @@ export class MapView {
     }
     this.waveStep = step;
     const width = this.world?.width ?? CHUNK_PX;
-    (this.waveGlobals.uniforms.uWavePhase as Float32Array).set(wavePhase(step, width));
+    const phase = wavePhase(step, width);
+    const shown = this.waveGlobals.uniforms.uWavePhase as Float32Array;
+    if (phase.some((value, index) => value !== shown[index])) {
+      shown.set(phase);
+      this.waveGlobals.update();
+    }
   }
 
-  /** Un bloc à l'écran montrait-il l'onde, à la dernière image ? */
+  /** L'onde se voyait-elle à la dernière image, la partie visible d'un bloc touchant la mer ? */
   get wavesShown(): boolean {
     return this.seaShown;
   }
 
   /**
    * Signature de ce que la carte a dessiné à la dernière image, hors caméra et écran : sa
-   * version, la saison, la force de l'onde, et son pas si un bloc à l'écran la montre. Le rendu
-   * à la demande ne redessine l'image que si elle change (src/render/frameGate.ts).
+   * version, la saison, la force de l'onde, et son pas si l'onde se voyait (wavesShown). Le
+   * rendu à la demande ne redessine l'image que si elle change (src/render/frameGate.ts).
    */
   signature(): readonly number[] {
     return [
@@ -285,13 +326,14 @@ export class MapView {
     ];
   }
 
-  /** Les uniformes de la table de l'onde. */
+  /** Les uniformes de la table de l'onde, renvoyés au GPU à la prochaine image. */
   private applyWaveTable(): void {
     const { uniforms } = this.waveGlobals;
     uniforms.uWaveCount = this.table.biomes.length;
     uniforms.uWaveTones = this.table.tones;
     uniforms.uWaveCrests = this.table.crests;
     uniforms.uWaveRipples = this.table.ripples;
+    this.waveGlobals.update();
   }
 
   /**
@@ -360,14 +402,16 @@ export class MapView {
     this.globals.uniforms.uFine = scale >= 1 ? 1 : 0;
     // Les ruisseaux ne paraissent qu'à partir de 2 pixels de l'écran (CSS) par pixel de carte.
     this.globals.uniforms.uStreams = scale / resolution >= STREAMS_SCALE ? 1 : 0;
-    const placements = visibleChunks(camera, this.viewport, grid, CHUNK_PX);
-    // L'onde se voit de près, en mode naturel, à une force non nulle, sur les blocs de mer.
+    const viewport = this.viewport;
+    const placements = visibleChunks(camera, viewport, grid, CHUNK_PX);
+    // L'onde se voit de près, en mode naturel, à une force non nulle, là où la partie visible
+    // d'un bloc touche une tuile de mer : ailleurs, elle ne changerait aucun pixel de l'écran.
     const waves = this.waveForce > 0 && scale >= 1 && this.mode === 'natural';
     let seaShown = false;
     for (const chunk of this.chunks) chunk.mesh.visible = false;
     const shown = new Set<ChunkMesh>();
     const order: { column: number; row: number; distance: number }[] = [];
-    const center = { x: this.viewport.width / 2, y: this.viewport.height / 2 };
+    const center = { x: viewport.width / 2, y: viewport.height / 2 };
     for (const placement of placements) {
       const chunk = this.chunks.at(placement.row * grid.columns + placement.column);
       if (chunk === undefined) continue;
@@ -384,7 +428,10 @@ export class MapView {
       const mesh = shown.has(chunk.mesh) ? this.copyOf(chunk) : chunk.mesh;
       shown.add(mesh);
       mesh.visible = true;
-      const wavy = waves && chunk.sea;
+      const part = waves ? visiblePart(placement, viewport) : undefined;
+      const wavy =
+        part !== undefined &&
+        seaInRect(chunk.seaMask, CHUNK_PX, part.left, part.top, part.right, part.bottom);
       mesh.shader = wavy ? chunk.waveShader : chunk.shader;
       seaShown ||= wavy;
       mesh.position.set(placement.left / resolution, placement.top / resolution);
@@ -396,7 +443,6 @@ export class MapView {
     this.releaseCopies(shown);
     this.seaShown = seaShown;
     this.globals.update();
-    this.waveGlobals.update();
     order.sort((a, b) => a.distance - b.distance);
     this.baker.prioritize(order);
   }
@@ -415,7 +461,7 @@ export class MapView {
     const mesh: ChunkMesh = new Mesh({ geometry: this.geometry, shader });
     mesh.visible = false;
     this.layer.addChild(mesh);
-    return { pixels, source, shader, waveShader, mesh, baked: false, sea: false };
+    return { pixels, source, shader, waveShader, mesh, baked: false, seaMask: new Uint8Array(0) };
   }
 
   /** Textures et réglages d'un bloc, communs à ses deux programmes. */
@@ -471,7 +517,12 @@ export class MapView {
     this.copiesInUse = 0;
   }
 
-  private baked(column: number, row: number, pixels: Uint8Array<ArrayBuffer>, sea: boolean): void {
+  private baked(
+    column: number,
+    row: number,
+    pixels: Uint8Array<ArrayBuffer>,
+    seaMask: Uint8Array<ArrayBuffer>,
+  ): void {
     const grid = this.grid;
     if (grid === undefined) return;
     const chunk = this.chunks.at(row * grid.columns + column);
@@ -479,7 +530,7 @@ export class MapView {
     chunk.pixels.set(pixels);
     chunk.source.update();
     chunk.baked = true;
-    chunk.sea = sea;
+    chunk.seaMask = seaMask;
     this.version++;
   }
 }

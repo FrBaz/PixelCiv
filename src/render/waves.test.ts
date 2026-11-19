@@ -7,6 +7,7 @@ import { chunkGrid, WORLD_SIZES, type WorldLayers } from '../core/world';
 import { defaultWorldParams } from '../core/worldParams';
 import { generateWorld } from '../worldgen/generate';
 import { bakeBiomes, bakeChunk, bakeRegion, CHUNK_PX, type BakeWorld } from './bake';
+import { bakedReply } from './bakeProtocol';
 import { seasonTexels } from './seasons';
 import {
   bayer,
@@ -19,7 +20,9 @@ import {
   monthly32,
   RIPPLE_CYCLE,
   rippleAt,
-  seaInChunk,
+  SEA_TILE,
+  seaInRect,
+  seaMask,
   seaTones,
   WAVE_BLOCK,
   WAVE_NOISE,
@@ -48,6 +51,11 @@ const W = size.width * 4;
 const noise = waveNoise();
 const table = waveTable(biomes, 1);
 const index = (id: string) => biomes.findIndex((biome) => biome.id === id);
+const byId = (id: string) => {
+  const biome = biomes.find((entry) => entry.id === id);
+  if (biome === undefined) throw new Error(`biome ${id} absent`);
+  return biome;
+};
 const tonesOf = (id: string) => {
   const biome = table.biomes.find((entry) => entry.id === id);
   if (biome === undefined) throw new Error(`biome animé ${id} absent`);
@@ -584,7 +592,12 @@ describe('mer animée : le miroir du shader (ADR 0015)', () => {
   it('sous une force de 1, éteint des crêtes et des clapots sans en allumer d’autres ; à 0, rien', () => {
     const half = waveTable(biomes, 0.5);
     const none = waveTable(biomes, 0);
-    expect(half.biomes.map((biome) => biome.crestThreshold)).toEqual([38, 77, 128]);
+    expect(half.biomes.map((biome) => biome.crestThreshold)).toEqual(
+      table.biomes.map(({ id }) => Math.round(256 * (byId(id).waves?.crest.share ?? 0) * 0.5)),
+    );
+    expect(none.biomes.every((biome) => biome.crestThreshold + biome.rippleThreshold === 0)).toBe(
+      true,
+    );
     let kept = 0;
     let lost = 0;
     const block = chosen('coast');
@@ -613,17 +626,33 @@ describe('mer animée : le miroir du shader (ADR 0015)', () => {
 
   it('tire sa table des données, aux tons cuits distincts, et refuse deux eaux confondues', () => {
     expect(table.biomes.map((biome) => biome.id)).toEqual(['deep-ocean', 'ocean', 'coastal-ocean']);
-    expect(table.biomes.map((biome) => [biome.crestThreshold, biome.rippleThreshold])).toEqual([
-      [77, 10],
-      [154, 31],
-      [256, 79],
-    ]);
+    // Les réglages de chaque mer, tels que les données les donnent : les seuils, sur 256, valent
+    // la part multipliée par 256, arrondie, à la force 1.
+    for (const entry of table.biomes) {
+      const { palette, waves } = byId(entry.id);
+      expect(entry.crestThreshold).toBe(Math.round(256 * (waves?.crest.share ?? Number.NaN)));
+      expect(entry.rippleThreshold).toBe(Math.round(256 * (waves?.ripple.share ?? Number.NaN)));
+      expect([entry.length, entry.thickness]).toEqual([
+        waves?.crest.length,
+        waves?.crest.thickness,
+      ]);
+      expect(entry.crestTone).toBe(waves?.crest.tone === 'light' ? 2 : 1);
+      expect(entry.tones).toEqual(
+        [palette.shadow, palette.base, palette.light].map(bakedWaterTone),
+      );
+    }
     const tones = seaTones(table);
-    expect(new Set(tones).size).toBe(9);
+    expect(tones).toHaveLength(3 * table.biomes.length);
+    expect(new Set(tones).size).toBe(tones.length);
     // Le ton cuit d'une eau : les bits faibles du rouge et du vert à 0, comme la cuisson.
-    expect(ocean.tones[2]).toBe(0x3464a3);
+    expect(bakedWaterTone('#3564a3')).toBe(0x3464a3);
+    expect(bakedWaterTone('#3463a3')).toBe(0x3462a3);
     const lake = biomes[index('lake')] ?? biomes[0];
-    const twin: Biome = { ...lake, palette: { ...lake.palette, light: '#59a3c9' } };
+    const light = Number.parseInt(byId('coastal-ocean').palette.light.slice(1), 16);
+    const twin: Biome = {
+      ...lake,
+      palette: { ...lake.palette, light: `#${(light ^ 0x010100).toString(16).padStart(6, '0')}` },
+    };
     expect(() => waveTable([...biomes, twin], 1)).toThrow(
       /coastal-ocean et lake partagent un ton cuit/,
     );
@@ -635,19 +664,79 @@ describe('mer animée : le miroir du shader (ADR 0015)', () => {
     expect(coastal.tones.filter((tone) => written.has(tone))).toEqual([...coastal.tones]);
   });
 
-  it('dit si un bloc cuit a de la mer animée', () => {
-    expect(seaInChunk(chosen('deep').pixels, seaTones(table))).toBe(true);
-    expect(seaInChunk(chosen('coast').pixels, seaTones(table))).toBe(true);
-    expect(seaInChunk(chosen('deep').pixels, [])).toBe(false);
-    // Un bloc tout en terre, et la même eau sans ses tons animés.
+  it('repère la mer animée d’un bloc cuit, tuile par tuile', () => {
+    const tones = seaTones(table);
+    const tiles = CHUNK_PX / SEA_TILE;
+    /** Tuiles qui ont un pixel d'eau aux tons animés, comptées pixel à pixel. */
+    const expected = (pixels: Uint8Array, wanted: readonly number[]) => {
+      const mask = new Uint8Array(tiles * tiles);
+      for (let y = 0; y < CHUNK_PX; y++) {
+        for (let x = 0; x < CHUNK_PX; x++) {
+          const o = (y * CHUNK_PX + x) * 4;
+          const red = pixels[o] ?? 1;
+          const tone = (red << 16) | ((pixels[o + 1] ?? 0) << 8) | (pixels[o + 2] ?? 0);
+          if ((red & 1) === 0 && wanted.includes(tone)) {
+            mask[Math.floor(y / SEA_TILE) * tiles + Math.floor(x / SEA_TILE)] = 1;
+          }
+        }
+      }
+      return mask;
+    };
+    const marked = (mask: Uint8Array) => mask.reduce((sum, tile) => sum + tile, 0);
+    for (const name of ['deep', 'ocean', 'coast', 'fresh']) {
+      const { pixels } = chosen(name);
+      expect(seaMask(pixels, tones, CHUNK_PX)).toEqual(expected(pixels, tones));
+    }
+    // Au large, la mer partout ; à la côte, une partie des tuiles seulement.
+    expect(marked(seaMask(chosen('deep').pixels, tones, CHUNK_PX))).toBe(tiles * tiles);
+    const coast = seaMask(chosen('coast').pixels, tones, CHUNK_PX);
+    expect(marked(coast)).toBeGreaterThan(0);
+    expect(marked(coast)).toBeLessThan(tiles * tiles);
+    // Sans tons animés, un bloc tout en terre, la même eau sans ses tons animés : rien.
+    expect(marked(seaMask(chosen('deep').pixels, [], CHUNK_PX))).toBe(0);
     const land = new Uint8Array(CHUNK_PX * CHUNK_PX * 4).fill(1);
-    expect(seaInChunk(land, seaTones(table))).toBe(false);
+    expect(marked(seaMask(land, tones, CHUNK_PX))).toBe(0);
     const lakeOnly = Uint8Array.from(chosen('fresh').pixels);
     for (let o = 0; o < lakeOnly.length; o += 4) {
       const tone =
         ((lakeOnly[o] ?? 0) << 16) | ((lakeOnly[o + 1] ?? 0) << 8) | (lakeOnly[o + 2] ?? 0);
-      if (((lakeOnly[o] ?? 0) & 1) === 0 && seaTones(table).includes(tone)) lakeOnly[o] = 1;
+      if (((lakeOnly[o] ?? 0) & 1) === 0 && tones.includes(tone)) lakeOnly[o] = 1;
     }
-    expect(seaInChunk(lakeOnly, seaTones(table))).toBe(false);
+    expect(marked(seaMask(lakeOnly, tones, CHUNK_PX))).toBe(0);
+    // Un seul pixel de mer, au coin d'une tuile : sa tuile seule, et tout rectangle qui la touche.
+    const one = Uint8Array.from(land);
+    const [x, y] = [3 * SEA_TILE + SEA_TILE - 1, 5 * SEA_TILE];
+    const o = (y * CHUNK_PX + x) * 4;
+    one.set([coastal.tones[1] >>> 16, (coastal.tones[1] >>> 8) & 255, coastal.tones[1] & 255], o);
+    const mask = seaMask(one, tones, CHUNK_PX);
+    expect(marked(mask)).toBe(1);
+    expect(mask[5 * tiles + 3]).toBe(1);
+    expect(seaInRect(mask, CHUNK_PX, x, y, x + 1, y + 1)).toBe(true);
+    expect(seaInRect(mask, CHUNK_PX, 0, 0, CHUNK_PX, CHUNK_PX)).toBe(true);
+    expect(seaInRect(mask, CHUNK_PX, 3 * SEA_TILE, 5 * SEA_TILE, 4 * SEA_TILE, 6 * SEA_TILE)).toBe(
+      true,
+    );
+    // Les tuiles voisines, bord à bord : rien. Un rectangle vide : rien.
+    expect(seaInRect(mask, CHUNK_PX, 0, 0, 3 * SEA_TILE, CHUNK_PX)).toBe(false);
+    expect(seaInRect(mask, CHUNK_PX, 4 * SEA_TILE, 0, CHUNK_PX, CHUNK_PX)).toBe(false);
+    expect(seaInRect(mask, CHUNK_PX, 0, 0, CHUNK_PX, 5 * SEA_TILE)).toBe(false);
+    expect(seaInRect(mask, CHUNK_PX, 0, 6 * SEA_TILE, CHUNK_PX, CHUNK_PX)).toBe(false);
+    expect(seaInRect(mask, CHUNK_PX, x, y, x, y + 1)).toBe(false);
+  });
+
+  it('renvoie de chaque bloc cuit ses pixels et le masque de sa mer, transférés', () => {
+    const request = { type: 'bake', generation: 3, column: 2, row: 1, version: 7 } as const;
+    const tones = seaTones(table);
+    for (const name of ['deep', 'coast', 'fresh']) {
+      const pixels = Uint8Array.from(chosen(name).pixels);
+      const { reply, transfer } = bakedReply(request, 3, pixels, tones);
+      if (reply.type !== 'baked') throw new Error('réponse inattendue');
+      expect(reply).toMatchObject({ generation: 3, column: 2, row: 1, version: 7, pixels });
+      expect(reply.seaMask).toEqual(seaMask(pixels, tones, CHUNK_PX));
+      expect(transfer).toEqual([pixels.buffer, reply.seaMask.buffer]);
+    }
+    const land = new Uint8Array(CHUNK_PX * CHUNK_PX * 4).fill(1);
+    const { reply } = bakedReply(request, 3, land, tones);
+    expect(reply.type === 'baked' && reply.seaMask.every((tile) => tile === 0)).toBe(true);
   });
 });

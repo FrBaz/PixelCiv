@@ -3,7 +3,8 @@
  * son numéro de génération : une réponse d'un monde remplacé est ignorée.
  */
 import type { WorldLayers, WorldSize } from '../core/world';
-import type { BakeBiome } from './bake';
+import { CHUNK_PX, type BakeBiome } from './bake';
+import { seaMask } from './waves';
 
 export type BakeRequest =
   /**
@@ -44,8 +45,11 @@ export type BakeReply =
       readonly row: number;
       readonly version: number;
       readonly pixels: Uint8Array<ArrayBuffer>;
-      /** Le bloc a-t-il un pixel de mer animée ? Sinon, la carte le dessine sans l'onde. */
-      readonly sea: boolean;
+      /**
+       * Masque de la mer animée du bloc (src/render/waves.ts, seaMask) : un octet par tuile. La
+       * carte ne dessine avec l'onde qu'un bloc dont la partie visible touche une tuile de mer.
+       */
+      readonly seaMask: Uint8Array<ArrayBuffer>;
     }
   /** Demande devenue sans objet : le monde a changé entre-temps. */
   | {
@@ -55,3 +59,28 @@ export type BakeReply =
       readonly row: number;
       readonly version: number;
     };
+
+/**
+ * La réponse du worker à la cuisson `request` du monde `generation` : les pixels cuits, et le
+ * masque de la mer animée aux tons `seaTones`, tous deux transférés (`transfer`).
+ */
+export function bakedReply(
+  request: Extract<BakeRequest, { type: 'bake' }>,
+  generation: number,
+  pixels: Uint8Array<ArrayBuffer>,
+  seaTones: readonly number[],
+): { readonly reply: BakeReply; readonly transfer: Transferable[] } {
+  const mask = seaMask(pixels, seaTones, CHUNK_PX);
+  return {
+    reply: {
+      type: 'baked',
+      generation,
+      column: request.column,
+      row: request.row,
+      version: request.version,
+      pixels,
+      seaMask: mask,
+    },
+    transfer: [pixels.buffer, mask.buffer],
+  };
+}

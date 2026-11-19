@@ -55,10 +55,10 @@ describe('panneau de débogage (ADR 0013, ADR 0014, ADR 0015)', () => {
     expect(shown.get('Pas mensuel le plus long')).toBe('20,5 ms');
     expect(shown.get('Jours par lot')).toBe('2,6');
     expect(shown.get('Marcheurs')).toBe('412');
-    // Ce que coûte une image au fil principal : sa mise à jour et son rendu par PixiJS, puis,
-    // dans la mise à jour, l'instant affiché de la chronologie, à côté des messages qu'elle
-    // reçoit.
-    expect(shown.get("Mise à jour, rendu de l'image")).toBe('6 + 5,13 ms');
+    // Ce que coûte une image au fil principal : la mise à jour de chaque tic, le rendu par
+    // PixiJS de chaque image dessinée, puis, dans la mise à jour, l'instant affiché de la
+    // chronologie, à côté des messages qu'elle reçoit.
+    expect(shown.get('Mise à jour par tic, rendu par image dessinée')).toBe('6 + 5,13 ms');
     expect(shown.get('Chronologie : affichage, messages')).toBe('0,31 + 0,06 ms');
     // Les positions reçues, et ce que coûte au fil principal le dessin des individus.
     expect(shown.get('Positions reçues')).toBe('1\u202f234 étapes/s · 64 Kio/s');
@@ -67,9 +67,11 @@ describe('panneau de débogage (ADR 0013, ADR 0014, ADR 0015)', () => {
     expect(shown.get('Textures')).toBe("140 dans l'image, 412 gardées");
     expect(shown.get("Pages de l'atlas")).toBe('1');
     expect(shown.get('Appels de dessin')).toBe('37');
-    // Le rendu à la demande ne dessine que les images qui changent (ADR 0015).
-    expect(shown.get('Images par seconde')).toBe('60');
+    // Le rendu à la demande ne dessine que les images qui changent (ADR 0015) : les tics de
+    // l'animation, et parmi eux les images dessinées.
+    expect(shown.get('Tics par seconde')).toBe('60');
     expect(shown.get('Images dessinées par seconde')).toBe('4');
+    expect(shown.get('Tic le plus long')).toBe('18,2 ms');
     // Sans mesure, chaque ligne le dit.
     debugInfo.value = {
       ...debugInfo.value,

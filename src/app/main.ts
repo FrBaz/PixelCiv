@@ -30,7 +30,6 @@ import { walkCost } from '../sim/terrain';
 import type { SheetContent } from '../ui/Sheet';
 import { FrameGate, invalidateOnRestore } from '../render/frameGate';
 import { createRenderer, renderOnDemand, timeRendering } from '../render/renderer';
-import { WAVE_STEP_MS } from '../render/waves';
 import { App } from '../ui/App';
 import { escapeKey } from '../ui/escape';
 import {
@@ -83,6 +82,7 @@ import {
   positionBytes,
   usedMemoryMb,
 } from './debug';
+import { frameSignature, waveInputs } from './cadence';
 import { centerOf, visibleArea, type Rect } from './focus';
 import { SaveManager, SaveStore } from './saves';
 import { describeCell } from './inspect';
@@ -474,8 +474,8 @@ async function main(): Promise<void> {
     }
     const camera = controls.update(ticker.deltaMS);
     drawnCamera = camera;
-    const waveForce = overrides.waves && !reducedMotion.matches ? seaMotion.value : 0;
-    map.setWaves(overrides.waveStep ?? Math.floor(now / WAVE_STEP_MS), waveForce);
+    const waves = waveInputs(overrides, reducedMotion.matches, seaMotion.value, now);
+    map.setWaves(waves.step, waves.force);
     map.draw(camera);
     const speed = time.value?.speed ?? 'normal';
     people.draw(
@@ -490,19 +490,18 @@ async function main(): Promise<void> {
       map.viewport,
       map.world,
     );
-    // Ce que l'image montre : l'instant, la caméra, l'écran, la carte et les individus.
-    const viewport = map.viewport;
-    const changed = gate.changed([
-      shown,
-      camera.x,
-      camera.y,
-      camera.zoom,
-      viewport.width,
-      viewport.height,
-      app.renderer.resolution,
-      ...map.signature(),
-      people.drawVersion,
-    ]);
+    // Ce que l'image montre, une fois la carte et les individus dessinés : l'instant, la
+    // caméra, l'écran, la carte et les individus (src/app/cadence.ts).
+    const changed = gate.changed(
+      frameSignature({
+        shown,
+        camera,
+        viewport: map.viewport,
+        resolution: app.renderer.resolution,
+        map: map.signature(),
+        people: people.drawVersion,
+      }),
+    );
     drawWanted = changed || !gated;
     frameCost.updateMs = performance.now() - now;
   });

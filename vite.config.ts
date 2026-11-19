@@ -7,7 +7,9 @@ import { pixelAtlas } from './tools/pixel-atlas.ts';
 const licenses = bundleLicenses();
 
 // Configuration de Vite (serveur de développement et build) et de Vitest (tests). Le mode
-// « bench » (npm run bench) ne lance que les bancs d'essai, tools/*.bench.ts.
+// « bench » (npm run bench) ne lance que les bancs d'essai, tools/*.bench.ts ; le mode
+// « wave-control » (npx vitest run --mode wave-control), que le contrôle des pixels de la mer
+// animée, tools/wave-control/*.control.ts, sur des captures de Chromium (ADR 0015).
 export default defineConfig(({ mode }) => ({
   // Chemins relatifs : le même build sert en local et sur GitHub Pages, sous /PixelCiv/.
   base: './',
@@ -21,7 +23,12 @@ export default defineConfig(({ mode }) => ({
   },
   test: {
     // Composants compris : leurs tests s'écrivent en .test.tsx.
-    include: mode === 'bench' ? ['tools/**/*.bench.ts'] : ['{src,tools}/**/*.test.{ts,tsx}'],
+    include:
+      mode === 'bench'
+        ? ['tools/**/*.bench.ts']
+        : mode === 'wave-control'
+          ? ['tools/wave-control/*.control.ts']
+          : ['{src,tools}/**/*.test.{ts,tsx}'],
     // Les bancs d'essai mesurent des durées : l'un après l'autre, pour ne pas se gêner.
     fileParallelism: mode !== 'bench',
     // Les tests de la génération du monde produisent des cartes entières.

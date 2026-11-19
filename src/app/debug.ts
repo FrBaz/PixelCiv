@@ -1,10 +1,11 @@
 /**
- * Mesures du panneau de débogage (NF-01, ADR 0013, ADR 0014) : images par seconde et image
- * la plus longue sur la dernière seconde ; durée moyenne d'un jour sur les mille derniers au
- * moins ; durée moyenne du pas mensuel et le plus long sur les douze derniers ; jours par lot
- * sur les trente derniers lots ; marcheurs au dernier lot ; positions reçues par seconde,
- * étapes et octets ; ce que coûte une image au fil principal, en moyenne sur la dernière
- * seconde : sa mise à jour et son rendu par PixiJS, la chronologie des individus, à
+ * Mesures du panneau de débogage (NF-01, ADR 0013, ADR 0014, ADR 0015) : tics de l'animation
+ * par seconde, images dessinées parmi eux (rendu à la demande) et tic le plus long, sur la
+ * dernière seconde ; durée moyenne d'un jour sur les mille derniers au moins ; durée moyenne
+ * du pas mensuel et le plus long sur les douze derniers ; jours par lot sur les trente derniers
+ * lots ; marcheurs au dernier lot ; positions reçues par seconde, étapes et octets ; ce que
+ * coûte une image au fil principal, en moyenne sur la dernière seconde : sa mise à jour, par
+ * tic, et son rendu par PixiJS, par image dessinée, la chronologie des individus, à
  * l'affichage et à la réception des messages, et le dessin des individus (positions, tri,
  * sprites) ; ce que l'image dessine : sprites, textures, appels de dessin. Ces dernières
  * mesures ne dépendent pas du GPU : dans un navigateur qui rend en logiciel, les images par
@@ -13,14 +14,17 @@
 import { GROUP_STRIDE, type GroupsFrame, type LegArrays, type StepStats } from '../core/protocol';
 
 export interface DebugSample {
-  /** Images par seconde, sur la dernière seconde : les tics de l'animation. */
+  /**
+   * Tics de l'animation par seconde, sur la dernière seconde : chacun met l'image à jour, sans
+   * forcément la dessiner (rendu à la demande).
+   */
   readonly fps: number;
   /**
    * Images dessinées par seconde, sur la dernière seconde : le rendu à la demande ne dessine
    * que celles qui changent (ADR 0010, tâche 2b.4).
    */
   readonly drawnFps: number;
-  /** Image la plus longue de la dernière seconde, en millisecondes. */
+  /** Plus long intervalle entre deux tics de la dernière seconde, en millisecondes. */
   readonly worstFrameMs: number;
   /** Durée moyenne d'un jour ordinaire, hors pas mensuel, en millisecondes. */
   readonly dayMs: number | undefined;
@@ -35,9 +39,11 @@ export interface DebugSample {
   readonly legsPerSecond: number | undefined;
   readonly positionBytesPerSecond: number | undefined;
   /**
-   * Durée moyenne, par image de la dernière seconde, en millisecondes, de sa mise à jour (le
-   * rappel de l'image : horloge, chronologie, carte, individus) et de son rendu par PixiJS,
-   * qui la suit : à elles deux, ce que l'image coûte au fil principal, hors messages.
+   * Durées moyennes sur la dernière seconde, en millisecondes : la mise à jour, par tic (le
+   * rappel de l'image : horloge, chronologie, carte, individus), et le rendu par PixiJS, qui
+   * la suit, par image dessinée. En marche, chaque tic se dessine, et leur somme est ce que
+   * l'image coûte au fil principal, hors messages ; en pause, elles portent sur des tics
+   * différents.
    */
   readonly main: { readonly update: number; readonly render: number };
   /**

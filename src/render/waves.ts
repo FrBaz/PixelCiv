@@ -177,17 +177,57 @@ export function seaTones(table: WaveTable): number[] {
   return table.biomes.flatMap((biome) => biome.tones);
 }
 
+/** Côté d'une tuile du masque de la mer d'un bloc cuit, en pixels de carte. */
+export const SEA_TILE = 16;
+
 /**
- * Le bloc cuit `pixels` (RGBA) a-t-il un pixel d'eau aux tons de `tones` ? Sinon, l'onde n'y
- * change rien, et la carte le dessine sans elle.
+ * Masque de la mer animée d'un bloc cuit `pixels` (RGBA), de `size` pixels de côté : un octet
+ * par tuile de SEA_TILE pixels, ligne par ligne, à 1 si la tuile a un pixel d'eau aux tons de
+ * `tones`. L'onde ne change rien hors de ces tuiles : la carte dessine sans elle un bloc dont
+ * la partie visible n'en touche aucune (src/render/map.ts).
  */
-export function seaInChunk(pixels: Uint8Array, tones: readonly number[]): boolean {
+export function seaMask(
+  pixels: Uint8Array,
+  tones: readonly number[],
+  size: number,
+): Uint8Array<ArrayBuffer> {
+  const tiles = Math.ceil(size / SEA_TILE);
+  const mask = new Uint8Array(tiles * tiles);
   const wanted = new Set(tones);
-  for (let offset = 0; offset < pixels.length; offset += 4) {
-    const red = pixels[offset] ?? 1;
-    if ((red & 1) === 1) continue;
-    if (wanted.has((red << 16) | ((pixels[offset + 1] ?? 0) << 8) | (pixels[offset + 2] ?? 0))) {
-      return true;
+  for (let y = 0; y < size; y++) {
+    const row = Math.floor(y / SEA_TILE) * tiles;
+    for (let x = 0; x < size; x++) {
+      const tile = row + Math.floor(x / SEA_TILE);
+      if (mask[tile] === 1) continue;
+      const offset = (y * size + x) * 4;
+      const red = pixels[offset] ?? 1;
+      if ((red & 1) === 1) continue;
+      const tone = (red << 16) | ((pixels[offset + 1] ?? 0) << 8) | (pixels[offset + 2] ?? 0);
+      if (wanted.has(tone)) mask[tile] = 1;
+    }
+  }
+  return mask;
+}
+
+/**
+ * Le masque `mask` d'un bloc de `size` pixels de côté (seaMask) a-t-il une tuile de mer qui
+ * touche le rectangle [left, right[ × [top, bottom[, en pixels du bloc ?
+ */
+export function seaInRect(
+  mask: Uint8Array,
+  size: number,
+  left: number,
+  top: number,
+  right: number,
+  bottom: number,
+): boolean {
+  if (right <= left || bottom <= top) return false;
+  const tiles = Math.ceil(size / SEA_TILE);
+  const tile = (pixel: number) => Math.min(tiles - 1, Math.max(0, Math.floor(pixel / SEA_TILE)));
+  const [first, last] = [tile(left), tile(right - 1)];
+  for (let row = tile(top); row <= tile(bottom - 1); row++) {
+    for (let column = first; column <= last; column++) {
+      if (mask[row * tiles + column] === 1) return true;
     }
   }
   return false;

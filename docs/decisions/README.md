@@ -18,4 +18,4 @@ Chaque décision d'architecture fait l'objet d'un ADR court (CLAUDE.md, section 
 | [0012](0012-camera-et-zoom.md) | Caméra et zoom | accepté ; unité du zoom soumise à l'auteur |
 | [0013](0013-deux-horloges.md) | Deux horloges | accepté, révisé aux tâches 2b.3 (marche des groupes remplacée par l'ADR 0014) et 2b.4 (mer animée au temps réel) ; interprétations soumises à l'auteur |
 | [0014](0014-individus-hors-de-la-grille.md) | Individus hors de la grille | accepté, révisé à la tâche 2b.4 (rendu à la demande fait) ; écarts et interprétations soumis à l'auteur |
-| [0015](0015-mer-animee.md) | Mer animée | accepté sous réserve de l'avis de l'auteur sur le motif et de l'essai sur son téléphone ; interprétations et écarts soumis à l'auteur |
+| [0015](0015-mer-animee.md) | Mer animée | accepté sous réserve de l'avis de l'auteur sur le motif et de l'essai sur son téléphone, révisé à la relecture (empreintes indépendantes des données, contrôle des pixels versé, mer jugée sur la partie visible des blocs) ; interprétations et écarts soumis à l'auteur |
