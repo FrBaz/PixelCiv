@@ -83,47 +83,12 @@ describe("pipeline d'assets (AST-04)", () => {
     expect(atlas.roles[frameB.y * atlas.width + frameB.x + 2]).toBe(6);
   });
 
-  it('lit toutes les sources du jeu, mini-sprites et icônes compris', () => {
+  it('lit toutes les sources du jeu : les bannières, les seuls motifs pixel art de la carte (ADR 0016)', () => {
     const sources = readSources(fileURLToPath(new URL('../assets/pixel', import.meta.url)));
-    for (const age of ['baby', 'child', 'adult-male', 'adult-female']) {
-      for (const step of [0, 1]) expect(sources[`sprites/${age}-${String(step)}`]).toBeDefined();
-    }
-    // Des mini-sprites de 6 à 10 pixels de haut (REN-04, tâche 2.9), nourrisson compris.
-    for (const [name, grid] of Object.entries(sources)) {
-      if (!name.startsWith('sprites/')) continue;
-      expect(grid.height, name).toBeGreaterThanOrEqual(6);
-      expect(grid.height, name).toBeLessThanOrEqual(10);
-    }
-    // Les deux images d'une marche ont la même taille, et chaque âge garde sa stature.
-    const size = (name: string) => {
-      const key = `sprites/${name}`;
-      if (!Object.hasOwn(sources, key)) return undefined;
-      const grid = sources[key];
-      return [grid.width, grid.height];
-    };
-    for (const age of ['baby', 'child', 'adult-male', 'adult-female']) {
-      expect(size(`${age}-1`), age).toEqual(size(`${age}-0`));
-    }
-    const height = (age: string) => sources[`sprites/${age}-0`].height;
-    expect(height('baby')).toBeLessThan(height('child'));
-    expect(height('child')).toBeLessThan(height('adult-female'));
-    expect(height('child')).toBeLessThan(height('adult-male'));
-    expect(sources['icons/group']).toBeDefined();
-    // Les variantes de hauteur (ADR 0014) : adulte de 8 à 10 rangées, enfant de 6 à 8, chaque
-    // image de la marche ; le nourrisson n'en a pas.
-    const variants = (age: string) =>
-      Object.keys(sources)
-        .filter((name) => name.startsWith(`sprites/${age}-0@`))
-        .map((name) => sources[name].height)
-        .sort((a, b) => a - b);
-    expect(variants('adult-female')).toEqual([8, 9, 10]);
-    expect(variants('adult-male')).toEqual([8, 9, 10]);
-    expect(variants('child')).toEqual([6, 7, 8]);
-    expect(variants('baby')).toEqual([]);
-    for (const age of ['adult-female', 'adult-male', 'child']) {
-      for (const rows of variants(age)) {
-        expect(size(`${age}-1@${String(rows)}`)).toEqual(size(`${age}-0@${String(rows)}`));
-      }
+    // Les mini-sprites de 2.9 ont cédé la place aux humains des planches (tâche 2b.5).
+    expect(Object.keys(sources).filter((name) => name.startsWith('sprites/'))).toEqual([]);
+    for (const name of ['icons/group', 'icons/group-16', 'icons/group-24', 'icons/group-36']) {
+      expect(sources[name], name).toBeDefined();
     }
   });
 

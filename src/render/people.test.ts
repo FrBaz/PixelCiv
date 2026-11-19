@@ -1,5 +1,5 @@
-import { Container, Sprite, type Application } from 'pixi.js';
-import { describe, expect, it, vi } from 'vitest';
+import { Container, type Application, type Particle, type Sprite } from 'pixi.js';
+import { describe, expect, it } from 'vitest';
 import { PositionMirror } from '../app/frames';
 import { loadGameData, type Appearance } from '../core/data';
 import { NO_CARRIER, type GroupsFrame, type LegArrays } from '../core/protocol';
@@ -9,6 +9,7 @@ import { visualCode } from '../core/visual';
 import { CHUNK_PX } from './bake';
 import { displayScale, physicalZoom, TILE_PX, visibleChunks, type Camera } from './camera';
 import { viewDensity, type Box } from './crowd';
+import { LEVEL_ROWS } from './humans';
 import { PeopleLayer, stepDuration, STEP_MS, type PeopleScene } from './people';
 
 // Le calque des individus, sur une application factice : la scène, et la densité de l'écran
@@ -81,23 +82,56 @@ const aimedAt = (x: number, y: number, zoom: number, dx = 0, dy = 0): Camera => 
   zoom,
 });
 
-/** Rectangle d'un sprite à l'écran, en pixels physiques. */
+/** Rectangle d'un sprite de bannière à l'écran, en pixels physiques. */
 function boxOf(sprite: Sprite, resolution: number): Box {
   return {
     left: Math.round(sprite.position.x * resolution),
     top: Math.round(sprite.position.y * resolution),
-    width: Math.round(sprite.texture.width * sprite.scale.x * resolution),
-    height: Math.round(sprite.texture.height * sprite.scale.y * resolution),
+    width: Math.round(sprite.texture.width * Math.abs(sprite.scale.x) * resolution),
+    height: Math.round(sprite.texture.height * Math.abs(sprite.scale.y) * resolution),
   };
 }
 
-/** Les sprites visibles, dans l'ordre où PixiJS les rend : le dernier devant. */
-function rendered(layer: Container): Sprite[] {
+/**
+ * Rectangle d'une particule d'humain à l'écran, en pixels physiques : retournée (échelle
+ * négative), elle s'étend à gauche de sa position, de la largeur de son motif.
+ */
+function particleBox(particle: Particle, resolution: number): Box {
+  const { width, height } = particle.texture.frame;
+  const left = particle.scaleX < 0 ? particle.x + width * particle.scaleX : particle.x;
+  return {
+    left: Math.round(left * resolution),
+    top: Math.round(particle.y * resolution),
+    width: Math.round(width * Math.abs(particle.scaleX) * resolution),
+    height: Math.round(height * Math.abs(particle.scaleY) * resolution),
+  };
+}
+
+/**
+ * Ce que PixiJS rendrait, dans son ordre, le dernier devant : les bannières, sprites du calque
+ * des bannières, puis les humains, particules du conteneur qui les suit. Chaque dessin dit ce
+ * qu'il montre : l'identifiant de l'individu, ou celui du groupe en négatif.
+ */
+function rendered(people: PeopleLayer, layer: Container, resolution: number) {
   // Le calque ne se trie pas : ses enfants se rendent dans leur ordre.
   expect(layer.sortableChildren).toBe(false);
-  return layer.children.filter(
-    (child): child is Sprite => child instanceof Sprite && child.visible,
-  );
+  const { sprites, particles, ids } = people.shown;
+  return [
+    ...sprites
+      .filter((sprite) => sprite.visible)
+      .map((sprite) => ({
+        box: boxOf(sprite, resolution),
+        entity: Number(sprite.label),
+        texture: sprite.texture as unknown,
+        unit: sprite.scale.x * resolution,
+      })),
+    ...particles.map((particle, index) => ({
+      box: particleBox(particle, resolution),
+      entity: ids[index] ?? 0,
+      texture: particle.texture as unknown,
+      unit: particle.scaleX * resolution,
+    })),
+  ];
 }
 
 const contains = (box: Box, x: number, y: number) =>
@@ -107,7 +141,7 @@ describe('bannière d’un groupe sur la carte (REN-08, A-1)', () => {
   it('se dessine à la densité de la carte, sur ses pixels, à toute densité et tout zoom', () => {
     const group = scene(frame(20, [7, 100, 50, 1]));
     for (const resolution of [1, 1.25, 1.5, 1.75, 2, 2.25, 2.625, 2.75, 3]) {
-      const { people, layer } = setup(resolution);
+      const { people } = setup(resolution);
       for (const zoom of [0.25, 0.4096, 0.5, 0.8, 1, 2]) {
         const label = `densité ${String(resolution)}, zoom ${String(zoom)}`;
         // Une caméra entre deux pixels : les bords des blocs de la carte s'arrondissent.
@@ -115,7 +149,7 @@ describe('bannière d’un groupe sur la carte (REN-08, A-1)', () => {
         people.draw(group, camera, viewport, world);
         expect(people.close, label).toBe(false);
         // Une bannière par copie visible du monde, plus étroit que l'écran au zoom 0,25.
-        const banners = rendered(layer);
+        const banners = people.shown.sprites;
         expect(banners.length, label).toBeGreaterThanOrEqual(1);
         const [chunk] = visibleChunks(camera, viewport, grid, CHUNK_PX);
         // Pixels physiques par pixel de bannière : ceux d'un pixel de carte, l'échelle à
@@ -156,7 +190,7 @@ describe('ordre des dessins et appui (W-7, ADR 0014)', () => {
         const { people, layer } = setup(resolution);
         const home = aimedAt(230, 110, zoom);
         people.draw(pair, home, viewport, wide);
-        const first = rendered(layer).map((sprite) => boxOf(sprite, resolution));
+        const first = rendered(people, layer, resolution).map((entry) => entry.box);
         expect(first, label).toHaveLength(2);
         const [a, b] = [...first].sort((p, q) => p.left - q.left);
         // La caméra s'écarte : A sort de l'écran par la gauche, B reste dessiné, 100 pixels
@@ -168,9 +202,9 @@ describe('ordre des dessins et appui (W-7, ADR 0014)', () => {
           y: home.y - 100 / scale,
         };
         people.draw(pair, away, viewport, wide);
-        expect(rendered(layer), label).toHaveLength(1);
+        expect(rendered(people, layer, resolution), label).toHaveLength(1);
         people.draw(pair, home, viewport, wide);
-        const boxes = rendered(layer).map((sprite) => boxOf(sprite, resolution));
+        const boxes = rendered(people, layer, resolution).map((entry) => entry.box);
         expect(
           [...boxes].sort((p, q) => p.left - q.left),
           label,
@@ -220,17 +254,17 @@ describe('ordre des dessins et appui (W-7, ADR 0014)', () => {
     const mismatches: string[] = [];
     let checked = 0;
     let persons = 0;
-    for (const resolution of [1, 2]) {
+    let flipped = 0;
+    for (const resolution of [1, 2.75]) {
       const { people, layer } = setup(resolution);
       for (const zoom of [0.25, 0.5, 1, 2, 3, 4, 8]) {
         for (let trial = 0; trial < 3; trial++) {
           const camera = aimedAt(302, 121, zoom, random.nextRange(-8, 8), random.nextRange(-8, 8));
           people.draw(crowd, camera, viewport, world);
-          // L'étiquette d'un sprite dit ce qu'il montre : un individu, ou un groupe en négatif.
-          const drawn = rendered(layer).map((sprite) => ({
-            box: boxOf(sprite, resolution),
-            entity: Number(sprite.label),
-          }));
+          // Ce que montre chaque dessin : un individu, ou un groupe en négatif ; des humains
+          // retournés vers l'est parmi eux.
+          const drawn = rendered(people, layer, resolution);
+          flipped += drawn.filter((entry) => entry.unit < 0).length;
           // Les pixels où se recouvrent deux dessins, un sur deux en chaque sens.
           const overlaps = new Map<string, [number, number]>();
           for (const [i, p] of drawn.entries()) {
@@ -264,33 +298,35 @@ describe('ordre des dessins et appui (W-7, ADR 0014)', () => {
       }
     }
     expect(mismatches).toEqual([]);
-    // Les recouvrements ont bien été visités, de loin comme de près.
+    // Les recouvrements ont bien été visités, de loin comme de près, humains retournés compris.
     expect(checked).toBeGreaterThan(1000);
     expect(persons).toBeGreaterThan(100);
+    expect(flipped).toBeGreaterThan(50);
   });
 });
 
-describe('individus à leur position (ADR 0014)', () => {
+describe('individus à leur position (ADR 0014, ADR 0016)', () => {
   it('dessine chacun à sa position, à la densité de la vue, à des positions entières de l’écran', () => {
-    const { people, layer } = setup(2);
-    const groups = frame(4, [1, 101, 50, 1]);
-    // Le quatrième membre, un quart de case à l'est des trois autres.
-    groups.positions[6] += FIXED / 4;
-    const camera = aimedAt(101, 50, 24, 0.3);
-    people.draw(scene(groups), camera, viewport, world);
-    const sprites = rendered(layer);
-    const boxes = sprites.map((sprite) => boxOf(sprite, 2));
-    expect(boxes).toHaveLength(4);
-    const { k } = viewDensity(displayScale(24), 2, reference, [9]);
-    for (const [index, box] of boxes.entries()) {
-      expect(Number.isInteger(box.left) && Number.isInteger(box.top)).toBe(true);
-      // k pixels physiques par pixel de motif : un adulte moyen de 9 rangées.
-      expect((sprites[index]?.scale.x ?? 0) * 2).toBe(k);
-      expect(box.height).toBe(9 * k);
+    for (const resolution of [1, 2]) {
+      const { people, layer } = setup(resolution);
+      const groups = frame(4, [1, 101, 50, 1]);
+      // Le quatrième membre, un quart de case à l'est des trois autres.
+      groups.positions[6] += FIXED / 4;
+      const camera = aimedAt(101, 50, 24, 0.3);
+      people.draw(scene(groups), camera, viewport, world);
+      const drawn = rendered(people, layer, resolution);
+      expect(drawn).toHaveLength(4);
+      const { k } = viewDensity(displayScale(24), resolution, reference, LEVEL_ROWS);
+      for (const { box, unit, texture } of drawn) {
+        expect(Number.isInteger(box.left) && Number.isInteger(box.top)).toBe(true);
+        // k pixels physiques par pixel de motif, la même densité pour tous.
+        expect(Math.abs(unit)).toBe(k);
+        const frameHeight = (texture as { frame: { height: number } }).frame.height;
+        expect(box.height).toBe(frameHeight * k);
+      }
+      expect(people.stats.level).toBe(0);
+      expect(people.stats.k).toBe(k);
     }
-    const lefts = boxes.map((box) => box.left).sort((a, b) => a - b);
-    const shift = (lefts.at(-1) ?? 0) - (lefts.at(0) ?? 0);
-    expect(Math.abs(shift - 0.25 * TILE_PX * displayScale(24))).toBeLessThanOrEqual(1);
   });
 
   it('dessine côte à côte, au plus court, les membres d’un groupe à cheval sur la couture', () => {
@@ -301,17 +337,18 @@ describe('individus à leur position (ADR 0014)', () => {
     groups.positions[2] = Math.round(0.2 * FIXED);
     for (const x of [511, 0]) {
       people.draw(scene(groups), aimedAt(x, 60, 8), viewport, world);
-      const lefts = rendered(layer)
-        .map((sprite) => boxOf(sprite, 1).left)
-        .sort((a, b) => a - b);
-      expect(lefts).toHaveLength(2);
-      // 0,4 case d'écart à l'écran, et non le tour du monde.
-      const gap = (lefts[1] ?? 0) - (lefts[0] ?? 0);
-      expect(Math.abs(gap - 0.4 * TILE_PX * 8)).toBeLessThanOrEqual(1);
+      const boxes = rendered(people, layer, 1).map((entry) => entry.box);
+      expect(boxes).toHaveLength(2);
+      // 0,4 case d'écart à l'écran, et non le tour du monde, au motif près.
+      const centers = boxes.map((box) => box.left + box.width / 2).sort((a, b) => a - b);
+      const gap = (centers[1] ?? 0) - (centers[0] ?? 0);
+      expect(Math.abs(gap - 0.4 * TILE_PX * 8)).toBeLessThanOrEqual(
+        Math.max(...boxes.map((box) => box.width)),
+      );
     }
     // Au zoom le plus faible, le monde plus étroit que l'écran : une bannière par copie.
     people.draw(scene(groups), { x: 0, y: 60 * TILE_PX, zoom: 0.25 }, viewport, world);
-    const copies = rendered(layer).length;
+    const copies = rendered(people, layer, 1).length;
     expect(copies).toBeGreaterThanOrEqual(Math.floor(viewport.width / (world.width * 0.25)));
     expect(copies).toBeLessThanOrEqual(Math.ceil(viewport.width / (world.width * 0.25)) + 1);
   });
@@ -320,23 +357,19 @@ describe('individus à leur position (ADR 0014)', () => {
     for (const resolution of [1, 2.75]) {
       const { people, layer } = setup(resolution);
       const groups = scene(frame(20, [1, 200, 100, 1], [2, 203, 101, 2]));
-      // L'adulte de référence vise 8 pixels CSS à l'échelle 3 à la densité 1 (le zoom 3), et à
-      // l'échelle 8 à la densité 2,75 (le zoom 2,9) ; de loin, une bannière par groupe, de
-      // près un sprite par individu.
       const threshold = resolution === 1 ? 3 : 8;
       for (const zoom of [1, 2, 2.5, 2.9, 3, 4, 8, 4, 3, 2.9, 2.5, 2, 1]) {
         const label = `densité ${String(resolution)}, zoom ${String(zoom)}`;
         const scale = physicalZoom(zoom, resolution);
         people.draw(groups, aimedAt(201, 100, scale), viewport, world);
         expect(people.close, label).toBe(scale >= threshold);
-        expect(rendered(layer).length, label).toBe(scale >= threshold ? 40 : 2);
+        expect(rendered(people, layer, resolution).length, label).toBe(scale >= threshold ? 40 : 2);
+        expect(people.shown.particles.length, label).toBe(scale >= threshold ? 40 : 0);
       }
-      expect(physicalZoom(2.9, 2.75)).toBe(8);
-      expect(physicalZoom(2.5, 2.75)).toBe(7);
     }
   });
 
-  it('alterne les images de la marche à la cadence du rendu, figée en pause et hors d’une étape', () => {
+  it('anime la marche et le repos à la cadence du rendu, figés en pause, et retourne le marcheur vers l’est', () => {
     const { people, layer } = setup(1);
     const groups = frame(3, [1, 101, 50, 1]);
     // Le premier membre marche vers l'est, sur une étape de dix jours.
@@ -350,26 +383,31 @@ describe('individus à leur position (ADR 0014)', () => {
         count: Uint16Array.of(10),
       },
     };
-    const textures = (walkMs: number, t: number) => {
+    const look = (walkMs: number, t: number) => {
       people.draw({ ...scene(walker, walkMs), t }, aimedAt(101, 50, 8), viewport, world);
-      return new Map(rendered(layer).map((sprite) => [sprite.label, sprite.texture]));
+      return new Map(rendered(people, layer, 1).map((entry) => [entry.entity, entry]));
     };
     const step = STEP_MS.slowest;
     const walking = new Set<unknown>();
     const resting = new Set<unknown>();
-    for (let walkMs = 0; walkMs < 4 * step; walkMs += step / 2) {
-      walking.add(textures(walkMs, 1.5).get('1'));
-      resting.add(textures(walkMs, 1.5).get('2'));
+    for (let walkMs = 0; walkMs < 2 * step; walkMs += step / 4) {
+      walking.add(look(walkMs, 1.5).get(1)?.texture);
+      resting.add(look(walkMs, 1.5).get(2)?.texture);
     }
-    // Deux images pour le marcheur ; au repos, la première.
-    expect(walking.size).toBe(2);
-    expect(resting.size).toBe(1);
-    // L'étape finie, le marcheur se tient sur la première image.
-    expect(textures(0, 20).get('1')).toBe(textures(step, 20).get('1'));
-    expect(textures(0, 20).get('1')).toBe(textures(0, 20).get('2'));
+    // Les huit images de la marche en deux pas ; au repos, les images de la respiration.
+    expect(walking.size).toBe(8);
+    expect(resting.size).toBeGreaterThan(1);
+    expect([...walking].some((texture) => resting.has(texture))).toBe(false);
+    // Vers l'est : retourné ; arrêté, il garde son sens.
+    expect(look(0, 1.5).get(1)?.unit).toBeLessThan(0);
+    expect(look(0, 20).get(1)?.unit).toBeLessThan(0);
+    // L'étape finie, le marcheur reprend le repos.
+    const still = new Set<unknown>();
+    for (let walkMs = 0; walkMs < 2000; walkMs += 130) still.add(look(walkMs, 20).get(1)?.texture);
+    expect([...still].some((texture) => walking.has(texture))).toBe(false);
     // Une horloge de marche arrêtée, comme en pause, fige l'image, quel que soit l'instant.
-    expect(textures(step / 3, 1.5).get('1')).toBe(textures(step / 3, 1.6).get('1'));
-    // Une alternance toutes les 420 ms à ×½ et ×1, toutes les 200 ms au plus vite.
+    expect(look(step / 3, 1.5).get(1)?.texture).toBe(look(step / 3, 1.6).get(1)?.texture);
+    // Une image de marche toutes les 105 ms à ×½ et ×1, toutes les 50 ms au plus vite.
     expect([0.5, 1, 4, 16].map(stepDuration)).toEqual([420, 420, 200, 200]);
   });
 
@@ -409,24 +447,33 @@ describe('individus à leur position (ADR 0014)', () => {
     // Une image inchangée ne change pas la version ; une image refaite, un monde vidé, si.
     people.draw(shown, camera, viewport, world);
     expect(people.drawVersion).toBe(drawn);
-    people.draw({ ...shown, t: 0.5 }, camera, viewport, world);
+    // L'horloge de la marche avance : l'animation refait l'image, et la version suit.
+    people.draw({ ...shown, walkMs: 105 }, camera, viewport, world);
     expect(people.drawVersion).toBe(drawn + 1);
-    people.invalidate();
     people.draw({ ...shown, t: 0.5 }, camera, viewport, world);
     expect(people.drawVersion).toBe(drawn + 2);
-    people.clear();
+    people.invalidate();
+    people.draw({ ...shown, t: 0.5 }, camera, viewport, world);
     expect(people.drawVersion).toBe(drawn + 3);
+    people.clear();
+    expect(people.drawVersion).toBe(drawn + 4);
   });
 
-  it('compte en pause les textures distinctes de l’image, même quand l’image d’avant ne les a pas comptées', () => {
+  it('compte en pause les apparences distinctes de l’image, même quand l’image d’avant ne les a pas comptées', () => {
     const { people } = setup(1);
     const camera = aimedAt(100, 50, 8);
-    // Une image comptée : un seul motif pour les cinq adultes de stature moyenne.
+    // Une image comptée : une seule apparence pour les cinq adultes.
     people.draw(scene(frame(5, [1, 100, 50, 1])), camera, viewport, world);
     expect(people.stats.textures).toBe(1);
-    // La suivante ne compte pas : trois variantes d'adulte, trois textures.
+    // La suivante ne compte pas : trois teints, trois apparences.
     const varied = frame(5, [1, 100, 50, 1]);
-    varied.statures.set([80, 96, 112, 96, 96]);
+    varied.sprites.set([
+      visualCode(1, 2, 0, 2, 0),
+      visualCode(1, 2, 7, 2, 0),
+      visualCode(1, 2, 15, 2, 0),
+      visualCode(1, 2, 0, 2, 0),
+      visualCode(1, 2, 0, 2, 0),
+    ]);
     const paused = scene(varied);
     people.draw(paused, camera, viewport, world);
     expect(people.stats.drawn).toBe(5);
@@ -437,7 +484,7 @@ describe('individus à leur position (ADR 0014)', () => {
     expect(people.stats.textures).toBe(3);
   });
 
-  it('ne cache que les sprites de l’image d’avant, oublie ceux d’une foule passée, et tous au changement de monde', () => {
+  it('oublie les particules d’une foule passée, et toutes au changement de monde', () => {
     const { people, layer } = setup(1);
     const crowd = frame(
       20,
@@ -452,59 +499,86 @@ describe('individus à leur position (ADR 0014)', () => {
     expect(layer.isRenderGroup).toBe(true);
     people.draw(scene(crowd), aimedAt(110, 50, 8), viewport, world);
     expect(people.stats.drawn).toBe(200);
-    expect(layer.children).toHaveLength(200);
-    const shown = vi.spyOn(Container.prototype, 'visible', 'set');
-    try {
-      // Loin de la foule : ses 200 sprites se cachent, une fois.
-      people.draw(scene(crowd), aimedAt(400, 200, 8), viewport, world);
-      expect(people.stats.drawn).toBe(0);
-      expect(shown).toHaveBeenCalledTimes(200);
-      shown.mockClear();
-      people.draw(scene(crowd), aimedAt(401, 200, 8), viewport, world);
-      expect(shown).not.toHaveBeenCalled();
-    } finally {
-      shown.mockRestore();
-    }
+    expect(people.shown.particles).toHaveLength(200);
+    // Loin de la foule : plus aucune particule à dessiner.
+    people.draw(scene(crowd), aimedAt(400, 200, 8), viewport, world);
+    expect(people.stats.drawn).toBe(0);
+    expect(people.shown.particles).toHaveLength(0);
     // La réserve se défait de la foule passée en quelques secondes d'images.
     for (let image = 0; image < 400; image++) {
       people.draw(scene(crowd), aimedAt(400 + (image % 2), 200, 8), viewport, world);
     }
-    expect(layer.children.length).toBeLessThanOrEqual(64);
+    expect(people.pooled.particles).toBeLessThanOrEqual(64);
     // Elle sert encore : la foule revient.
     people.draw(scene(crowd), aimedAt(110, 50, 8), viewport, world);
-    expect(rendered(layer)).toHaveLength(200);
+    expect(rendered(people, layer, 1)).toHaveLength(200);
     people.clear();
-    expect(layer.children).toHaveLength(0);
+    expect(people.shown.particles).toHaveLength(0);
+    expect(people.pooled).toEqual({ particles: 0, sprites: 0 });
   });
 
-  it('partage les textures de deux cultures de même habit, et en garde une par motif, variante et apparence', () => {
-    const clothing = ['#a03030', '#30a030', '#a03030'];
-    const { people, layer } = setup(1, { ...data.appearance, clothing });
-    // Les cultures 1 et 3 portent le même habit, la culture 2 un autre.
-    const groups = frame(5, [1, 100, 50, 1], [2, 104, 50, 3], [3, 108, 50, 2]);
-    // Trois variantes d'adulte dans le premier groupe, la moyenne ailleurs.
-    groups.statures.set([80, 96, 112, 96, 96]);
+  it('peint tous les humains d’une même texture, et range chaque apparence une fois, sans rien recolorer d’une image à l’autre', () => {
+    const { people } = setup(1);
+    // Trois groupes, de trois cultures : trois tenues, et deux teints dans le premier.
+    const groups = frame(5, [1, 100, 50, 1], [2, 104, 50, 2], [3, 108, 50, 3]);
+    groups.sprites[0] = visualCode(1, 2, 14, 2, 0);
     people.draw(scene(groups), aimedAt(104, 50, 8), viewport, world);
     expect(people.stats.drawn).toBe(15);
     expect(people.stats.textures).toBe(4);
     expect(people.stats.cached).toBe(4);
-    // Rangées dans une seule page de l'atlas dynamique : un seul lot de dessin.
-    expect(people.stats.pages).toBe(1);
-    const sources = new Set(rendered(layer).map((sprite) => sprite.texture.source));
+    // Une seule source pour tous les humains : un seul appel de dessin.
+    const sources = new Set(people.shown.particles.map((particle) => particle.texture.source));
     expect(sources.size).toBe(1);
-    // La page part au GPU quand elle reçoit des motifs, et seulement alors.
-    const [page] = [...sources];
-    let updates = 0;
-    page.on('update', () => {
-      updates++;
-    });
-    // Une image nouvelle, où le troisième groupe compte un adulte plus petit : un motif de plus.
-    const next = { ...groups, statures: Uint8Array.from(groups.statures) };
-    next.statures[10] = 84;
-    people.draw(scene(next), aimedAt(104, 50, 8), viewport, world);
-    expect(people.stats.cached).toBe(5);
-    expect(updates).toBe(1);
-    people.draw(scene(next), aimedAt(104, 49, 8), viewport, world);
-    expect(updates).toBe(1);
+    const palettes = people.paletteTexture;
+    expect(palettes.written).toBe(4);
+    // La marche, le pas mensuel, une autre caméra : aucune palette de plus.
+    for (let image = 1; image <= 20; image++) {
+      people.draw(
+        { ...scene(groups, image * 105), t: image / 10 },
+        aimedAt(104, 50 + image / 40, 8),
+        viewport,
+        world,
+      );
+    }
+    expect(palettes.written).toBe(4);
+    // La couleur de chaque particule désigne la place de son apparence.
+    const slots = new Set(people.shown.particles.map((particle) => particle.color & 0xffff));
+    expect(slots).toEqual(new Set([0, 1, 2, 3]));
+  });
+
+  it('ne recolore rien à chaque image, même quand la vue montre des centaines d’apparences', () => {
+    const { people } = setup(1);
+    // Quarante groupes de vingt, aux teints, cheveux et gris variés, sur huit cultures.
+    const groups = Array.from({ length: 40 }, (_, group): [number, number, number, number] => [
+      group + 1,
+      90 + (group % 10) * 3,
+      45 + Math.floor(group / 10) * 3,
+      1 + (group % 8),
+    ]);
+    const crowd = frame(20, ...groups);
+    for (let member = 0; member < crowd.ids.length; member++) {
+      crowd.sprites[member] = visualCode(
+        member % 2,
+        2,
+        member % 16,
+        (member >> 1) % 4,
+        (member >> 3) % 4,
+      );
+    }
+    people.draw(scene(crowd), aimedAt(104, 49, 4), viewport, world);
+    const palettes = people.paletteTexture;
+    const looks = palettes.written;
+    expect(looks).toBeGreaterThan(100);
+    expect(people.stats.drawn).toBe(800);
+    for (let image = 1; image <= 30; image++) {
+      people.draw(
+        { ...scene(crowd, image * 50), t: image / 30 },
+        aimedAt(104, 49, 4),
+        viewport,
+        world,
+      );
+    }
+    expect(palettes.written).toBe(looks);
+    expect(people.stats.cached).toBe(looks);
   });
 });

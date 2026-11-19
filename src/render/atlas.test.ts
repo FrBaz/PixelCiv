@@ -1,20 +1,16 @@
 import { describe, expect, it } from 'vitest';
 import { loadGameData } from '../core/data';
-import { geneRoles } from '../core/data/people';
-import { GREY_LEVELS, ROLE } from '../core/visual';
-import {
-  alleleColors,
-  cultureCloth,
-  frameOf,
-  greyed,
-  personPalette,
-  recolor,
-  recolorRoles,
-  skinColor,
-} from './atlas';
+import { ROLE } from '../core/visual';
+import { frameOf, personPalette, recolor, recolorRoles } from './atlas';
 import { parseColor, type Rgb } from './bake';
+import { cultureOutfit, hairTones, outfitColor } from './looks';
 
-const { appearance, genetics } = loadGameData();
+const { appearance } = loadGameData();
+const [light = [], dark = []] = [
+  appearance.skinPalettes.at(0)?.tones,
+  appearance.skinPalettes.at(-1)?.tones,
+];
+const linen = appearance.fabrics.find((fabric) => fabric.id === 'linen')?.tones ?? [];
 
 /** Luminance relative d'une couleur, au sens des WCAG 2. */
 function luminance(color: Rgb): number {
@@ -32,53 +28,30 @@ function contrast(a: Rgb, b: Rgb): number {
 }
 
 describe('recoloration (REN-09)', () => {
-  it('remplace chaque rôle par sa couleur, et laisse le transparent', () => {
-    const palette = personPalette(appearance, {
-      skin: [200, 150, 120],
-      hair: [40, 30, 20],
-      cloth: [100, 80, 60],
-    });
+  it('remplace chaque rôle par sa couleur de même rang, et laisse le transparent', () => {
+    const hair = hairTones(appearance, 'black', 0) ?? [];
+    const palette = personPalette(appearance, { skin: light, hair, cloth: linen });
     const pixels = recolorRoles(
-      [ROLE.transparent, ROLE.skin, ROLE.hair, ROLE.clothShadow],
+      [ROLE.transparent, ROLE.skin, ROLE.hair, ROLE.clothShadow, ROLE.skinLight],
       palette,
     );
     expect(Array.from(pixels.subarray(0, 4))).toEqual([0, 0, 0, 0]);
-    expect(Array.from(pixels.subarray(4, 8))).toEqual([200, 150, 120, 255]);
-    expect(Array.from(pixels.subarray(8, 12))).toEqual([40, 30, 20, 255]);
-    // L'ombre de l'habit est plus sombre que sa base.
-    expect(pixels.at(12)).toBeLessThan(100);
+    // Lumière, base et ombre : les tons de rang 0, 1 et 2 des rampes, sans calcul.
+    expect(Array.from(pixels.subarray(4, 7))).toEqual(parseColor(light[1] ?? ''));
+    expect(Array.from(pixels.subarray(8, 11))).toEqual(parseColor(hair[1] ?? ''));
+    expect(Array.from(pixels.subarray(12, 15))).toEqual(parseColor(linen[2] ?? ''));
+    expect(Array.from(pixels.subarray(16, 19))).toEqual(parseColor(light[0] ?? ''));
   });
 
-  it('sert un même motif à tous les teints', () => {
-    const name = 'sprites/adult-female-0';
+  it('sert un même motif à toutes les couleurs : la bannière d’un groupe', () => {
+    const name = 'icons/group';
     const frame = frameOf(name);
-    const light = recolor(
-      name,
-      personPalette(appearance, {
-        skin: skinColor(appearance, 0),
-        hair: [0, 0, 0],
-        cloth: [0, 0, 0],
-      }),
-    );
-    const dark = recolor(
-      name,
-      personPalette(appearance, {
-        skin: skinColor(appearance, 1),
-        hair: [0, 0, 0],
-        cloth: [0, 0, 0],
-      }),
-    );
-    expect(light).toHaveLength(frame.width * frame.height * 4);
-    expect(Array.from(light)).not.toEqual(Array.from(dark));
+    const one = recolor(name, personPalette(appearance, { skin: light, hair: [], cloth: linen }));
+    const other = recolor(name, personPalette(appearance, { skin: dark, hair: [], cloth: dark }));
+    expect(one).toHaveLength(frame.width * frame.height * 4);
+    expect(Array.from(one)).not.toEqual(Array.from(other));
     // La même silhouette : les mêmes pixels opaques.
-    for (let index = 3; index < light.length; index += 4) expect(light[index]).toBe(dark[index]);
-  });
-
-  it('parcourt la rampe des teints, du plus clair au plus foncé', () => {
-    expect(skinColor(appearance, 0)).toEqual(parseColor(appearance.skin[0] ?? '#000000'));
-    expect(skinColor(appearance, 1)).toEqual(parseColor(appearance.skin.at(-1) ?? '#000000'));
-    const middle = skinColor(appearance, 0.5);
-    expect(middle[0]).toBeLessThan(skinColor(appearance, 0)[0]);
+    for (let index = 3; index < one.length; index += 4) expect(one[index]).toBe(other[index]);
   });
 
   it('détache le fond des portraits du contour et des cheveux les plus sombres (A-11)', () => {
@@ -86,53 +59,26 @@ describe('recoloration (REN-09)', () => {
     const outline = parseColor(appearance.outline);
     // Le contour de la silhouette se voit sur le fond.
     expect(contrast(backdrop, outline)).toBeGreaterThanOrEqual(2);
-    // L'ombre des cheveux les plus sombres aussi : la tête garde sa silhouette.
-    const black: Rgb = [0, 0, 0];
-    const hairs = alleleColors(genetics.loci[geneRoles(genetics).loci.hair], black);
-    const shadows = hairs.map(
-      (hair) =>
-        personPalette(appearance, { skin: black, hair, cloth: black })[ROLE.hairShadow] ?? black,
+    // L'ombre des cheveux les plus sombres aussi, gris compris : la tête garde sa silhouette.
+    const shadows = Object.keys(appearance.hair).flatMap((allele) =>
+      [0, 1, 2, 3].map((grey) => parseColor(hairTones(appearance, allele, grey)?.[2] ?? '#000000')),
     );
     expect(shadows.length).toBeGreaterThan(0);
     const darkest = shadows.reduce((a, b) => (luminance(b) < luminance(a) ? b : a));
     expect(contrast(backdrop, darkest)).toBeGreaterThanOrEqual(2);
   });
 
-  it('prend les couleurs des cheveux au locus qui en tient le rôle, quel que soit son nom', () => {
-    const hair = genetics.loci.at(geneRoles(genetics).loci.hair);
-    if (hair === undefined) throw new Error('pas de cheveux');
-    expect(alleleColors({ ...hair, id: 'chevelure' }, [1, 2, 3])).toEqual(
-      hair.alleles.map((allele) => parseColor(allele.color ?? '')),
+  it('habille les cultures à tour de rôle, et en tire la couleur de leur bannière', () => {
+    const { cultureOutfits, outfits } = appearance;
+    const index = (id: string | undefined) => outfits.findIndex((outfit) => outfit.id === id);
+    expect(cultureOutfit(appearance, 1)).toBe(index(cultureOutfits[0]));
+    expect(cultureOutfit(appearance, 0)).toBe(index(cultureOutfits[0]));
+    expect(cultureOutfit(appearance, 2)).toBe(index(cultureOutfits[1]));
+    expect(cultureOutfit(appearance, cultureOutfits.length + 1)).toBe(index(cultureOutfits[0]));
+    // La bannière prend le premier tissu de la tenue, tel quel ; le portrait, sur sa peau.
+    const first = outfits[0]?.female[0]?.fabric;
+    expect(outfitColor(appearance, 0, 'female')).toEqual(
+      appearance.fabrics.find((fabric) => fabric.id === first)?.tones,
     );
-    // Un allèle sans couleur (le schéma l'interdit pour ce rôle) prend la couleur de repli.
-    const bare = { ...hair, alleles: hair.alleles.map(({ color: _color, ...allele }) => allele) };
-    expect(alleleColors(bare, [1, 2, 3])[0]).toEqual([1, 2, 3]);
-    expect(alleleColors(undefined, [1, 2, 3])).toEqual([]);
-  });
-
-  it('grisonne les cheveux par crans, le même gris sur la carte et au portrait (A-10)', () => {
-    const hair: Rgb = [30, 20, 10];
-    const grey = parseColor(appearance.grey);
-    expect(greyed(hair, grey, 0)).toEqual(hair);
-    expect(greyed(hair, grey, GREY_LEVELS - 1)).toEqual(grey);
-    // Chaque cran rapproche du gris, sans le dépasser.
-    let previous = hair;
-    for (let level = 1; level < GREY_LEVELS; level++) {
-      const now = greyed(hair, grey, level);
-      for (let channel = 0; channel < 3; channel++) {
-        expect(now[channel]).toBeGreaterThan(previous[channel] ?? 0);
-        expect(now[channel]).toBeLessThanOrEqual(grey[channel] ?? 0);
-      }
-      previous = now;
-    }
-  });
-
-  it('habille les cultures à tour de rôle', () => {
-    const { clothing } = appearance;
-    expect(cultureCloth(clothing, 1)).toBe(clothing[0]);
-    expect(cultureCloth(clothing, 0)).toBe(clothing[0]);
-    expect(cultureCloth(clothing, 2)).toBe(clothing[1]);
-    expect(cultureCloth(clothing, clothing.length + 1)).toBe(clothing[0]);
-    expect(cultureCloth<string>([], 3)).toBeUndefined();
   });
 });

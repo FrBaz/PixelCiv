@@ -3,10 +3,10 @@ import { loadGameData } from '../core/data';
 import { geneRoles } from '../core/data/people';
 import { ageClass, greyLevel } from '../core/life';
 import type { PersonView } from '../core/protocol';
-import { GREY_LEVELS, ROLE } from '../core/visual';
+import { GREY_LEVELS, ROLE, skinCode } from '../core/visual';
 import { PORTRAIT_SIZE, portraitRoles } from '../gen/portrait';
-import { alleleColors, greyed } from '../render/atlas';
 import { parseColor } from '../render/bake';
+import { hairTones, skinPaletteOf } from '../render/looks';
 import { portraitPixels, variantOf } from './Portrait';
 import type { SheetContent } from './Sheet';
 
@@ -76,19 +76,37 @@ function colorOf(view: PersonView, role: number): number[] {
 }
 
 describe('portrait dans la fiche (REN-07)', () => {
-  it('grisonne les cheveux au cran de son mini-sprite, à 45, 50 et 60 ans (A-10)', () => {
-    const grey = parseColor(data.appearance.grey);
-    const colors = alleleColors(hairLocus, grey);
-    hairLocus.alleles.forEach((allele, index) => {
+  it('grisonne les cheveux au cran de la carte, des tons de son allèle, à 45, 50 et 60 ans (A-10, ADR 0016)', () => {
+    for (const allele of hairLocus.alleles) {
       for (const age of [30, 45, 50, 60, 70]) {
         const view = person(age, new Map([[hairLocus.id, allele.id]]));
         const level = greyLevel(human, age);
         expect(level).toBeLessThan(GREY_LEVELS);
-        // Le gris du mini-sprite : la couleur de l'allèle, grisée du cran de son code.
-        const onMap = greyed(colors[index] ?? missing(), grey, level);
-        expect(colorOf(view, ROLE.hair), `${allele.id} à ${String(age)} ans`).toEqual(onMap);
+        // Les cheveux du crâne sur la carte, au même cran : la même rampe, une seule source.
+        const tones = hairTones(data.appearance, allele.id, level) ?? missing();
+        const label = `${allele.id} à ${String(age)} ans`;
+        expect(colorOf(view, ROLE.hair), label).toEqual(parseColor(tones[1] ?? ''));
+        expect(colorOf(view, ROLE.hairShadow), label).toEqual(parseColor(tones[2] ?? ''));
       }
-    });
+    }
+  });
+
+  it('prend la peau de la carte : la palette de son code de teint, rang pour rang (ADR 0016)', () => {
+    for (let step = 0; step < 20; step++) {
+      const value = step / 20;
+      const view: PersonView = {
+        ...person(30),
+        traits: person(30).traits.map((entry) => ({ ...entry, value })),
+      };
+      const palette = data.appearance.skinPalettes.at(
+        skinPaletteOf(data.appearance, skinCode(value)),
+      );
+      const tones = palette?.tones ?? missing();
+      const label = `teint ${String(value)}`;
+      expect(colorOf(view, ROLE.skinLight), label).toEqual(parseColor(tones[0]));
+      expect(colorOf(view, ROLE.skin), label).toEqual(parseColor(tones[1]));
+      expect(colorOf(view, ROLE.skinShadow), label).toEqual(parseColor(tones[2]));
+    }
   });
 
   it('se dessine de la forme de visage que porte son allèle', () => {
