@@ -398,6 +398,26 @@ describe('individus à leur position (ADR 0014)', () => {
     expect(asked).toBe(4);
   });
 
+  it('expose la version de ce qu’il dessine, que lit la signature de l’image (ADR 0010)', () => {
+    const { people } = setup(1);
+    const shown = scene(frame(5, [1, 100, 50, 1]));
+    const camera = aimedAt(100, 50, 8);
+    const start = people.drawVersion;
+    people.draw(shown, camera, viewport, world);
+    const drawn = people.drawVersion;
+    expect(drawn).toBeGreaterThan(start);
+    // Une image inchangée ne change pas la version ; une image refaite, un monde vidé, si.
+    people.draw(shown, camera, viewport, world);
+    expect(people.drawVersion).toBe(drawn);
+    people.draw({ ...shown, t: 0.5 }, camera, viewport, world);
+    expect(people.drawVersion).toBe(drawn + 1);
+    people.invalidate();
+    people.draw({ ...shown, t: 0.5 }, camera, viewport, world);
+    expect(people.drawVersion).toBe(drawn + 2);
+    people.clear();
+    expect(people.drawVersion).toBe(drawn + 3);
+  });
+
   it('compte en pause les textures distinctes de l’image, même quand l’image d’avant ne les a pas comptées', () => {
     const { people } = setup(1);
     const camera = aimedAt(100, 50, 8);

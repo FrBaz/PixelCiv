@@ -20,13 +20,17 @@
  *
  * Les rampes de la neige, de la glace et de la banquise viennent de core/seasons.ts, que
  * la simulation lit aussi : la pêche gèle comme la carte.
+ *
+ * La mer animée (tâche 2b.4, ADR 0015) a son propre programme, `MAP_FRAGMENT_WAVES` : le même,
+ * augmenté du code de src/render/waves.ts, inséré avant main() et après la couverture. La
+ * carte ne le donne qu'aux blocs où l'onde se voit ; partout ailleurs, `MAP_FRAGMENT` reste
+ * celui de la tâche 2b.3, à l'octet près, en image comme en coût.
  */
 import { COVER_RAMPS, type CoverRamp } from '../core/seasons';
+import { glslFloat } from './glsl';
+import { WAVE_GLSL } from './waves';
 
-/** Nombre écrit en littéral flottant de GLSL : 3 devient « 3.0 ». */
-export function glslFloat(value: number): string {
-  return Number.isInteger(value) ? value.toFixed(1) : String(value);
-}
+export { glslFloat } from './glsl';
 
 /** Part couverte selon une rampe de core/seasons.ts, en GLSL, à la température `monthly`. */
 function coverExpression(ramp: CoverRamp): string {
@@ -164,3 +168,22 @@ void main() {
   finalColor = vec4(color, 1.0);
 }
 `;
+
+/** Insère `code` juste avant `anchor`, qui doit paraître une fois et une seule dans `source`. */
+function insertBefore(source: string, anchor: string, code: string): string {
+  const at = source.indexOf(anchor);
+  if (at < 0 || source.includes(anchor, at + 1)) {
+    throw new Error(`point d'insertion introuvable ou ambigu : ${anchor}`);
+  }
+  return source.slice(0, at) + code + source.slice(at);
+}
+
+/** Points d'insertion du code de l'onde : avant main(), et entre la couverture et les modes. */
+export const WAVE_ANCHORS = { header: 'void main() {', main: '  if (uMode > 0.5) {' } as const;
+
+/** Programme des blocs où la mer animée se voit : MAP_FRAGMENT et le code de l'onde. */
+export const MAP_FRAGMENT_WAVES = insertBefore(
+  insertBefore(MAP_FRAGMENT, WAVE_ANCHORS.header, WAVE_GLSL.header),
+  WAVE_ANCHORS.main,
+  WAVE_GLSL.main,
+);

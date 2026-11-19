@@ -139,6 +139,11 @@ export class PeopleLayer {
   private drawnWith: readonly unknown[] = [];
   /** Version de ce que le calque ne voit pas changer : la franchissabilité des cases. */
   private version = 0;
+  /**
+   * Version de ce que le calque dessine, augmentée chaque fois qu'il se refait, pages de
+   * l'atlas comprises, ou se vide : la signature de l'image la lit (rendu à la demande, ADR 0010).
+   */
+  private drawn = 0;
   stats: PeopleStats = {
     positionsMs: 0,
     sortMs: 0,
@@ -244,6 +249,7 @@ export class PeopleLayer {
       return;
     }
     this.drawnWith = signature;
+    this.drawn++;
     let looks = this.looks;
     if (looks === undefined || looks.frame !== frame) {
       looks = memberLooks(frame, this.motifs, this.data.reference);
@@ -367,6 +373,11 @@ export class PeopleLayer {
     this.version++;
   }
 
+  /** Version de ce que le calque dessine (rendu à la demande). */
+  get drawVersion(): number {
+    return this.drawn;
+  }
+
   /** Les individus se voyaient-ils, à la dernière image, plutôt que les bannières ? */
   get close(): boolean {
     return this.layout.close;
@@ -390,5 +401,6 @@ export class PeopleLayer {
     this.shownIds.fill(Number.NaN);
     this.shownKeys.fill(Number.NaN);
     this.drawnWith = [];
+    this.drawn++;
   }
 }

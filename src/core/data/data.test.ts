@@ -14,6 +14,13 @@ import {
   type Nomads,
 } from './people';
 import { AltitudeLevelsSchema, BiomesSchema } from './schemas';
+import {
+  bakedWaterTone,
+  CREST_TONES,
+  MAX_CREST_LENGTH,
+  MAX_CREST_THICKNESS,
+  MAX_WAVE_BIOMES,
+} from '../waves';
 
 /** Les 32 biomes naturels de la séance C1 (D6), par famille, tels que la séance les nomme. */
 const C1_BIOMES: Readonly<Record<string, readonly string[]>> = {
@@ -89,6 +96,109 @@ describe('validation', () => {
     expect(cost('deep-ocean')).toBeNull();
     expect(cost('lake')).toBeNull();
     expect(cost('beach')).toBeGreaterThanOrEqual(1);
+  });
+});
+
+describe('mer animée, dans data/biomes.json (ADR 0015)', () => {
+  const load = (raw: unknown) => () => loadCatalog('essai.json', BiomesSchema, raw);
+  const byId = (id: string) => {
+    const biome = biomesJson.find((entry) => entry.id === id);
+    if (biome === undefined) throw new Error(`biome ${id} absent`);
+    return biome;
+  };
+  const coastal = byId('coastal-ocean');
+  const waves = coastal.waves;
+  const grassland = byId('grassland');
+  /** La mer côtière, avec d'autres réglages de crête. */
+  const crest = (change: Record<string, unknown>) => [
+    { ...coastal, waves: { ...waves, crest: { ...waves?.crest, ...change } } },
+  ];
+
+  it('anime la mer, et elle seule, moins au large qu’à la côte', () => {
+    const { biomes } = loadGameData();
+    const animated = biomes.entries.filter((biome) => biome.waves !== undefined);
+    // La mer seule (ADR 0015, point 3) : animer une autre eau est une décision, qui revoit ce
+    // test, celui des eaux immobiles du miroir et les tons cuits envoyés au worker.
+    expect(animated.map((biome) => biome.id)).toEqual(['deep-ocean', 'ocean', 'coastal-ocean']);
+    // Du large à la côte, chaque réglage croît ou reste égal : parts des crêtes et des clapots,
+    // longueur, épaisseur et ton des crêtes. Leurs valeurs restent celles des données, que
+    // l'auteur règle sans toucher aux tests (le miroir vérifie que la côte bouge plus).
+    const settings = animated.map(({ waves }) =>
+      waves === undefined
+        ? []
+        : [
+            waves.crest.share,
+            waves.ripple.share,
+            waves.crest.length,
+            waves.crest.thickness,
+            CREST_TONES.indexOf(waves.crest.tone),
+          ],
+    );
+    settings.slice(1).forEach((coastward, rank) => {
+      const offshore = settings[rank] ?? [];
+      expect(coastward).toHaveLength(5);
+      coastward.forEach((value, column) => {
+        expect(value).toBeGreaterThanOrEqual(offshore[column] ?? Number.NaN);
+      });
+    });
+  });
+
+  it('accepte les bornes du motif', () => {
+    expect(load(crest({ length: MAX_CREST_LENGTH, thickness: MAX_CREST_THICKNESS }))).not.toThrow();
+    expect(load(crest({ length: 1, thickness: 1, tone: 'base', share: 0 }))).not.toThrow();
+  });
+
+  it('refuse un réglage hors des bornes, ou que le shader ne saurait pas dessiner', () => {
+    expect(load(crest({ length: MAX_CREST_LENGTH + 1 }))).toThrow(/waves\.crest\.length/);
+    expect(load(crest({ length: 0 }))).toThrow(/waves\.crest\.length/);
+    expect(load(crest({ length: 2.5 }))).toThrow(/waves\.crest\.length/);
+    expect(load(crest({ thickness: MAX_CREST_THICKNESS + 1 }))).toThrow(/waves\.crest\.thickness/);
+    expect(load(crest({ thickness: 0 }))).toThrow(/waves\.crest\.thickness/);
+    expect(load(crest({ tone: 'shadow' }))).toThrow(/waves\.crest\.tone/);
+    expect(load(crest({ share: 1.2 }))).toThrow(/waves\.crest\.share/);
+    expect(load(crest({ share: -0.1 }))).toThrow(/waves\.crest\.share/);
+    expect(load([{ ...coastal, waves: { ...waves, ripple: { share: 2 } } }])).toThrow(
+      /waves\.ripple\.share/,
+    );
+    expect(load(crest({ speed: 2 }))).toThrow(/waves\.crest/);
+    expect(load([{ ...coastal, waves: { crest: waves?.crest } }])).toThrow(/waves\.ripple/);
+  });
+
+  it('refuse une mer animée sur une terre', () => {
+    expect(load([{ ...grassland, waves }])).toThrow(/0\.waves.*seules les eaux/s);
+  });
+
+  it(`refuse plus de ${String(MAX_WAVE_BIOMES)} biomes animés`, () => {
+    // Des eaux animées aux tons tous différents : seul leur nombre est en cause.
+    const waters = Array.from({ length: MAX_WAVE_BIOMES + 1 }, (_, index) => {
+      const tone = (step: number) =>
+        `#${(16 * index + 2 * step).toString(16).padStart(2, '0')}4080`;
+      return {
+        ...coastal,
+        id: `mer-${'abcde'.charAt(index)}`,
+        palette: { shadow: tone(0), base: tone(1), light: tone(2) },
+      };
+    });
+    expect(load(waters.slice(0, MAX_WAVE_BIOMES))).not.toThrow();
+    expect(load(waters)).toThrow(/5 biomes ont une mer animée, 4 au plus/);
+  });
+
+  it('refuse deux eaux de même ton cuit, dont l’une est animée, et nomme les deux', () => {
+    const lake = byId('lake');
+    const hex = (value: number) => `#${value.toString(16).padStart(6, '0')}`;
+    const light = Number.parseInt(coastal.palette.light.slice(1), 16);
+    // La lumière de la mer côtière, aux bits faibles du rouge et du vert près, que la cuisson
+    // efface : le même ton cuit.
+    const twin = { ...lake, palette: { ...lake.palette, base: hex(light ^ 0x010100) } };
+    const shared = hex(bakedWaterTone(coastal.palette.light));
+    expect(load([coastal, twin])).toThrow(`coastal-ocean et lake partagent le ton cuit ${shared}`);
+    // Au bit faible du bleu près, que la cuisson garde : un autre ton.
+    expect(
+      load([coastal, { ...twin, palette: { ...lake.palette, base: hex(light ^ 0x000001) } }]),
+    ).not.toThrow();
+    // Deux eaux immobiles peuvent se ressembler : aucune ne se reconnaît à son ton.
+    const still = { ...coastal, waves: undefined };
+    expect(load([still, twin])).not.toThrow();
   });
 });
 

@@ -47,6 +47,8 @@ export const generationMs = signal<number | undefined>(undefined);
 /** Mesures du panneau de débogage, rafraîchies quelques fois par seconde. */
 export interface DebugInfo {
   readonly fps: number;
+  /** Images dessinées par seconde : le rendu à la demande ne dessine que celles qui changent. */
+  readonly drawnFps: number;
   readonly worstFrameMs: number;
   /** Durée moyenne d'un jour, du pas mensuel et du plus long des pas mensuels récents. */
   readonly dayMs: number | undefined;
@@ -86,6 +88,13 @@ export const determinismOk = signal<boolean | undefined>(undefined);
 
 /** Panneau de débogage ouvert ou fermé. */
 export const debugOpen = signal(false);
+
+/**
+ * Force de la mer animée, de 0 (immobile) à 1 (par défaut ; ADR 0015) : le point d'entrée du
+ * réglage des effets de la tâche 2b.7, qui l'exposera et le gardera dans les préférences. La
+ * carte la lit à chaque image ; une demande de mouvement réduit l'emporte sur elle.
+ */
+export const seaMotion = signal(1);
 
 /**
  * Avis passager à montrer au joueur, comme « Partie sauvegardée. ». Chaque avis a son

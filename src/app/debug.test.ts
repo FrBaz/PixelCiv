@@ -4,6 +4,7 @@ import { NO_CARRIER, type GroupsFrame, type LegArrays } from '../core/protocol';
 import {
   DAY_WINDOW,
   DebugSampler,
+  displayOverrides,
   DrawCallCounter,
   LEG_BYTES,
   MEMBER_BYTES,
@@ -188,6 +189,40 @@ describe('DebugSampler', () => {
     expect(sample.timeline.receive).toBeCloseTo(0.3, 9);
   });
 
+  it('compte les images dessinées, et ne mesure le rendu que sur elles (rendu à la demande)', () => {
+    const sampler = new DebugSampler();
+    const people = {
+      positionsMs: 0,
+      sortMs: 0,
+      spritesMs: 0,
+      drawn: 10,
+      textures: 3,
+      cached: 3,
+      pages: 1,
+    };
+    // En pause, une image dessinée sur quinze : le pas de la mer animée, quatre fois par seconde.
+    for (let frameIndex = 0; frameIndex < 120; frameIndex++) {
+      const rendered = frameIndex % 15 === 0;
+      sampler.frame(1000 / 60, {
+        ...people,
+        updateMs: 0.1,
+        renderMs: rendered ? 4 : 0,
+        drawCalls: rendered ? 9 : 0,
+        rendered,
+      });
+    }
+    const sample = sampler.sample();
+    expect(sample.fps).toBeCloseTo(60, 0);
+    expect(sample.drawnFps).toBeCloseTo(4, 0);
+    expect(sample.main.render).toBeCloseTo(4, 9);
+    // Les appels de dessin : ceux de la dernière image dessinée.
+    expect(sample.drawCalls).toBe(9);
+    // Sans réponse, une image compte comme dessinée.
+    const plain = new DebugSampler();
+    for (let i = 0; i < 60; i++) plain.frame(1000 / 60);
+    expect(plain.sample().drawnFps).toBeCloseTo(60, 0);
+  });
+
   it('compte les appels de dessin WebGL de chaque image', () => {
     const calls: string[] = [];
     const gl = {
@@ -207,5 +242,37 @@ describe('DebugSampler', () => {
     // Les appels arrivent toujours au contexte.
     expect(calls).toEqual(['elements 4', 'elements 4', 'arrays 5']);
     expect(new DrawCallCounter(undefined).take()).toBe(0);
+  });
+});
+
+describe("réglages de débogage de l'affichage (ADR 0015)", () => {
+  const read = (search: string) => displayOverrides(new URLSearchParams(search));
+
+  it("ne change rien sans eux : l'onde allumée, au pas et au mois du jeu", () => {
+    expect(read('?seed=abc&zoom=2')).toEqual({
+      waves: true,
+      waveStep: undefined,
+      month: undefined,
+    });
+  });
+
+  it("éteint l'onde, fixe son pas et le mois de la carte", () => {
+    expect(read('?waves=off&waveStep=42&month=1.3')).toEqual({
+      waves: false,
+      waveStep: 42,
+      month: 1.3,
+    });
+    expect(read('?waveStep=0&month=0').waveStep).toBe(0);
+    expect(read('?waveStep=0&month=0').month).toBe(0);
+    expect(read('?waves=on').waves).toBe(true);
+  });
+
+  it('ignore un pas qui n’est pas un entier positif, et un mois hors de l’année', () => {
+    for (const step of ['-1', '2.5', 'abc', '', '1e400']) {
+      expect(read(`?waveStep=${step}`).waveStep).toBeUndefined();
+    }
+    for (const month of ['-0.5', '12.5', 'NaN', 'Infinity', 'mars']) {
+      expect(read(`?month=${month}`).month).toBeUndefined();
+    }
   });
 });

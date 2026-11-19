@@ -58,11 +58,16 @@ function followContainer(app: Application, container: HTMLElement): void {
 }
 
 /**
- * Mesure le rendu de la scène, que l'application de PixiJS fait à chaque image depuis son
- * ticker, à la priorité LOW, après les rappels de l'image (débogage, ADR 0014) : deux rappels
- * l'encadrent, juste avant et juste après, et `measured` en reçoit la durée, en millisecondes.
+ * Mesure le rendu de la scène, que l'application de PixiJS fait depuis son ticker, à la
+ * priorité LOW, après les rappels de l'image (débogage, ADR 0014) : deux rappels l'encadrent,
+ * juste avant et juste après, et `measured` en reçoit la durée, en millisecondes, pour les
+ * seules images dessinées (`drawn`, rendu à la demande).
  */
-export function timeRendering(ticker: Ticker, measured: (milliseconds: number) => void): void {
+export function timeRendering(
+  ticker: Ticker,
+  measured: (milliseconds: number) => void,
+  drawn: () => boolean = () => true,
+): void {
   let start = 0;
   ticker.add(
     () => {
@@ -73,9 +78,42 @@ export function timeRendering(ticker: Ticker, measured: (milliseconds: number) =
   );
   ticker.add(
     () => {
-      measured(performance.now() - start);
+      if (drawn()) measured(performance.now() - start);
     },
     undefined,
     UPDATE_PRIORITY.LOW - 1,
   );
+}
+
+/** Ce que le rendu à la demande dit des images : celle de ce tic, et leur nombre. */
+export interface DrawnFrames {
+  /** L'image du dernier tic a-t-elle été dessinée ? */
+  readonly drawn: boolean;
+  /** Images dessinées depuis le début. */
+  readonly count: number;
+}
+
+/**
+ * Rendu à la demande (ADR 0010, tâche 2b.4) : PixiJS rend la scène à chaque tic de son
+ * ticker, à la priorité LOW ; ce rendu cède la place, à la même priorité, à un rendu qui n'a
+ * lieu que si `wanted()` le demande (src/render/frameGate.ts). Sans dessin, le canvas garde
+ * l'image d'avant.
+ */
+export function renderOnDemand(app: Application, wanted: () => boolean): DrawnFrames {
+  const frames = { drawn: false, count: 0 };
+  // PixiJS a ajouté la méthode elle-même, avec l'application pour contexte (TickerPlugin) : le
+  // ticker ne la retire que sous la même référence, non liée.
+  // eslint-disable-next-line @typescript-eslint/unbound-method
+  app.ticker.remove(app.render, app);
+  app.ticker.add(
+    () => {
+      frames.drawn = wanted();
+      if (!frames.drawn) return;
+      app.render();
+      frames.count++;
+    },
+    undefined,
+    UPDATE_PRIORITY.LOW,
+  );
+  return frames;
 }
