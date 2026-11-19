@@ -10,7 +10,7 @@ import { CHUNK_PX } from './bake';
 import { displayScale, physicalZoom, TILE_PX, visibleChunks, type Camera } from './camera';
 import { viewDensity, type Box } from './crowd';
 import { LEVEL_ROWS } from './humans';
-import { PeopleLayer, stepDuration, STEP_MS, type PeopleScene } from './people';
+import { bannerCloth, PeopleLayer, stepDuration, STEP_MS, type PeopleScene } from './people';
 
 // Le calque des individus, sur une application factice : la scène, et la densité de l'écran
 // du rendu. On y lit ce que PixiJS rendrait, sprite par sprite, dans l'ordre de ses enfants.
@@ -175,6 +175,29 @@ describe('bannière d’un groupe sur la carte (REN-08, A-1)', () => {
         }
       }
     }
+  });
+
+  it('teint la bannière du tissu que porte le plus grand nombre de ses membres, d’après leurs codes d’apparence', () => {
+    const appearance: Appearance = data.appearance;
+    const cloth = bannerCloth(appearance);
+    const tunic = appearance.cultureOutfits.indexOf('tunic') + 1;
+    const index = (id: string | undefined) =>
+      appearance.fabrics.findIndex((fabric) => fabric.id === id);
+    const skin = (id: string) =>
+      appearance.skinPalettes.find((palette) => palette.id === id)?.upTo ?? 0;
+    const linen = appearance.fabrics.find((fabric) => fabric.id === 'linen');
+    // Des codes d'apparence complets (sexe, âge, cheveux, gris) : seul le teint compte. Le groupe
+    // tient les codes 1 à 3 d'une image qui en a d'autres autour.
+    const codes = [
+      visualCode(1, 2, skin('dark'), 3, 0),
+      visualCode(0, 2, skin('light'), 1, 0),
+      visualCode(1, 1, skin('light'), 0, 2),
+      visualCode(0, 0, skin('medium'), 2, 0),
+      visualCode(1, 2, skin('dark'), 3, 0),
+    ];
+    expect(cloth(tunic, codes, 1, 3)).toBe(index(linen?.onSkin?.light));
+    expect(cloth(tunic, codes, 3, 2)).toBe(index('linen'));
+    expect(index(linen?.onSkin?.light)).not.toBe(index('linen'));
   });
 });
 

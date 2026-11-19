@@ -99,7 +99,10 @@ function figureHeight(body: number): number {
 /**
  * Variante de hauteur d'un adulte au niveau `level`, d'après `ratio` : arrondi(ratio × rangées
  * du niveau), parmi les écarts que l'atlas y range (trois au plus) ; un enfant ou un nourrisson
- * n'a que la sienne. Rend le rang de la variante.
+ * n'a que la sienne. Rend le rang de la variante. C'est la conversion la plus fidèle de sa
+ * stature à la résolution du niveau : la même à toute densité k, mais l'arrondi peut changer
+ * d'un niveau à l'autre (un adulte un peu grand l'est à ×1,5, moyen à ×4) ; elle croît avec la
+ * stature, si bien que l'ordre des tailles ne s'inverse jamais.
  */
 export function variantOf(body: number, level: number, ratio: number): number {
   const info = atlas.levels.at(level);

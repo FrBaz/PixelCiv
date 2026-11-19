@@ -2,11 +2,11 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { geneRoles } from '../src/core/data/people';
-import { BODY_KINDS } from '../src/core/data/humans';
+import { BODY_KINDS, type BodyKind } from '../src/core/data/humans';
 import { loadGameData } from '../src/core/data';
 import { parseRegionGrids, type RoleImage } from '../src/gen/humans';
 import { humanPalette, sheetPalette, type HumanPalette } from '../src/render/humans';
-import { loadHumans, sheetFrames } from './human-atlas';
+import { buildHumanAtlas, loadHumans, sheetFrames } from './human-atlas';
 import { decodeRgba } from './png';
 
 // L'habillage au pixel près (ADR 0016, § 3) : chaque image de chaque animation des deux planches,
@@ -183,28 +183,65 @@ describe('habillage des planches, pixel pour pixel (ADR 0016, § 3)', () => {
     }
   });
 
-  it('ne laisse jamais voir le sous-vêtement des planches, ni sur la planche ni réduit', () => {
+  it('ne laisse jamais voir le sous-vêtement des planches : ni sur la planche ni réduit, sur aucun corps, aucune tenue ni aucune peau', () => {
+    // Tous les motifs de l'atlas de toutes les animations : adultes, enfants et nourrisson, à
+    // chaque niveau et à chaque variante. Le sous-vêtement est une source (un bit du rôle) et non
+    // une couleur : aucune palette ne lui donne un ton du sous-vêtement des planches.
+    const atlas = buildHumanAtlas(root, humans, { animations: 'all' });
+    const all = Buffer.from(atlas.roles, 'base64');
+    const L = atlas.levels.length;
+    const roles = new Map<BodyKind, Set<number>>();
+    atlas.bodies.forEach((_, body) => {
+      const kind = atlas.kinds[body] ?? 'male';
+      const seen = roles.get(kind) ?? new Set<number>();
+      roles.set(kind, seen);
+      for (let level = 0; level < L; level++) {
+        for (let variant = 0; variant < 3; variant++) {
+          atlas.animations.forEach((animation, a) => {
+            const first =
+              atlas.index[((body * L + level) * 3 + variant) * atlas.animations.length + a] ?? -1;
+            for (let motif = first; first >= 0 && motif < first + animation.frames; motif++) {
+              const [x = 0, y = 0, width = 0, height = 0] = atlas.motifs.slice(
+                motif * 6,
+                motif * 6 + 4,
+              );
+              for (let row = 0; row < height; row++) {
+                for (const role of all.subarray(
+                  (y + row) * atlas.width + x,
+                  (y + row) * atlas.width + x + width,
+                )) {
+                  seen.add(role);
+                }
+              }
+            }
+          });
+        }
+      }
+    });
+    expect([...roles.keys()].sort()).toEqual([...BODY_KINDS].sort());
     const underTones = new Set(under.concat(Object.keys(underAlso)));
-    for (const sex of sexes) {
+    const shown: string[] = [];
+    for (const [kind, used] of roles) {
       appearance.outfits.forEach((outfit, index) => {
-        const palette = humanPalette(appearance, hairIds, {
-          skin: 2,
-          hair: 0,
-          grey: 0,
-          outfit: index,
-          body: sex,
-        });
-        const shown = new Set<string>();
-        for (const animation of frames[sex]) {
-          for (const image of animation) {
-            for (const role of image.roles) {
-              const color = colorOf(palette, role);
-              if (color !== undefined && underTones.has(color)) shown.add(color);
+        appearance.skinPalettes.forEach((skinPalette, s) => {
+          const palette = humanPalette(appearance, hairIds, {
+            skin: s,
+            hair: 0,
+            grey: 0,
+            outfit: index,
+            body: kind,
+          });
+          for (const role of used) {
+            const color = colorOf(palette, role);
+            if (color !== undefined && underTones.has(color)) {
+              shown.push(
+                `${kind}, ${outfit.id}, ${skinPalette.id}, rôle ${String(role)} : ${color}`,
+              );
             }
           }
-        }
-        expect([...shown], `${sex}, ${outfit.id}`).toEqual([]);
+        });
       });
     }
+    expect(shown).toEqual([]);
   });
 });

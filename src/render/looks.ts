@@ -64,28 +64,36 @@ export function outfitPieces(
 }
 
 /**
- * Les tons d'un tissu sur la palette de peau `palette` : les siens, ou ceux de son tissu de
- * rechange sur cette peau (onSkin), dont il ne se détacherait pas.
+ * Le tissu que porte vraiment, sur la palette de peau `palette`, qui porte le tissu `fabric` :
+ * lui-même, ou son tissu de rechange sur cette peau (onSkin), dont il ne se détacherait pas.
  */
-export function fabricTones(
-  appearance: Appearance,
-  fabric: string,
-  palette: number,
-): Ramp4 | undefined {
+export function wornFabric(appearance: Appearance, fabric: string, palette: number): string {
   const entry = appearance.fabrics.find((candidate) => candidate.id === fabric);
   const skin = appearance.skinPalettes.at(palette)?.id ?? '';
   const spare =
     entry?.onSkin !== undefined && Object.hasOwn(entry.onSkin, skin)
       ? entry.onSkin[skin]
       : undefined;
-  if (spare === undefined) return entry?.tones;
-  return appearance.fabrics.find((candidate) => candidate.id === spare)?.tones ?? entry?.tones;
+  return spare !== undefined && appearance.fabrics.some((candidate) => candidate.id === spare)
+    ? spare
+    : fabric;
+}
+
+/** Les tons d'un tissu sur la palette de peau `palette` : ceux du tissu porté (wornFabric). */
+export function fabricTones(
+  appearance: Appearance,
+  fabric: string,
+  palette: number,
+): Ramp4 | undefined {
+  const worn = wornFabric(appearance, fabric, palette);
+  return appearance.fabrics.find((candidate) => candidate.id === worn)?.tones;
 }
 
 /**
  * Le tissu qui porte la couleur d'une tenue : celui de sa première pièce, pour une femme, sur la
- * palette de peau `palette`, ou tel quel sans palette. La bannière d'un groupe le prend, et le
- * portrait, jusqu'à 2b.9, pour l'habit.
+ * palette de peau `palette`, ou tel quel sans palette. Le portrait le prend, jusqu'à 2b.9, sur sa
+ * palette de peau, pour l'habit ; la bannière d'un groupe, tel que le porte le plus grand nombre
+ * de ses membres (bannerFabric).
  */
 export function outfitColor(
   appearance: Appearance,
@@ -97,4 +105,30 @@ export function outfitColor(
   if (fabric === undefined) return undefined;
   if (palette === undefined) return appearance.fabrics.find((entry) => entry.id === fabric)?.tones;
   return fabricTones(appearance, fabric, palette);
+}
+
+/**
+ * Le tissu de la bannière d'un groupe de la culture `culture`, dont les membres ont pour codes de
+ * teint `skins` (de 0 à 15) : le premier tissu de sa tenue (outfitColor), tel que le porte chacun
+ * sur sa palette de peau, rechange compris (wornFabric) ; celui que porte le plus grand nombre.
+ * À égalité, et sans membre, celui de la culture. La couleur de loin est ainsi celle que porte de
+ * près le plus grand nombre (ADR 0016, § 3).
+ */
+export function bannerFabric(
+  appearance: Appearance,
+  culture: number,
+  skins: Iterable<number>,
+): string {
+  const fabric =
+    outfitPieces(appearance, cultureOutfit(appearance, culture), 'female').at(0)?.fabric ?? '';
+  const counts = new Map<string, number>([[fabric, 0]]);
+  for (const skin of skins) {
+    const worn = wornFabric(appearance, fabric, skinPaletteOf(appearance, skin));
+    counts.set(worn, (counts.get(worn) ?? 0) + 1);
+  }
+  let best = fabric;
+  for (const [id, count] of counts) {
+    if (count > (counts.get(best) ?? 0)) best = id;
+  }
+  return best;
 }

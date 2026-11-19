@@ -9,13 +9,15 @@
  *   ni grille de case ou de pixel de carte. Ses pieds se posent sur sa position, arrondie au
  *   pixel physique.
  * - C'est un humain des planches (2b.5, src/render/humans.ts) : son corps (sexe, ou taille
- *   d'enfant, ou nourrisson), à la variante de hauteur de sa stature, quel que soit le zoom,
- *   et à l'image de son animation (la marche quand il avance, le repos sinon) ; la vue choisit
+ *   d'enfant, ou nourrisson), à la variante de hauteur la plus proche de sa stature au niveau de
+ *   la vue (quel que soit k, mais d'un niveau à l'autre, l'arrondi peut changer d'une rangée), et
+ *   à l'image de son animation (la marche quand il avance, le repos sinon) ; la vue choisit
  *   un niveau de motifs et une densité entière k, les mêmes pour tous ses individus
  *   (viewDensity). Une vue ne mêle donc jamais deux densités d'individus, et un pixel de motif
  *   y fait k × k pixels physiques. Tourné vers l'ouest dans la planche, il se retourne pour
  *   aller vers l'est.
- * - Le nourrisson porté se dessine contre sa mère, juste devant elle, tourné comme elle.
+ * - Le nourrisson porté se dessine contre sa mère, juste devant elle, tourné comme elle, et marche
+ *   avec elle, du même pas, quand elle marche.
  * - De loin, la bannière de chaque groupe, à la densité de la carte, au barycentre de ses
  *   membres, ou au membre le plus proche si ce point tombe sur l'eau (bannerAt).
  * - Le plus bas à l'écran passe devant, d'après les pieds, puis le dernier disposé (depth).
@@ -36,11 +38,18 @@ export const CLOSE_CSS_PX = 8;
  * Un niveau de motifs se prend dès que son adulte de référence, à un pixel physique par pixel
  * de motif, ne dépasse pas LEVEL_SPAN fois la cible : la règle ne dépend que de la cible, si
  * bien que le détail ne recule jamais quand on zoome (2b.5, ADR 0016). Avec des niveaux espacés
- * d'un facteur 1,5 au plus (data/humans.json), k = arrondi(cible / rangées) tient la taille à
- * 25 % de la cible, sauf au plus grossier, faute de plus petit, et quand la planche passe d'un
- * pixel physique par pixel de motif à deux, faute de plus fin (jusqu'à un tiers).
+ * d'un facteur LEVEL_STEP (1,5) au plus, ce que le schéma de data/humans.json impose, k =
+ * arrondi(cible / rangées) tient la taille à 25 % de la cible, sauf au plus grossier, faute de
+ * plus petit, et quand la planche passe d'un pixel physique par pixel de motif à deux, faute de
+ * plus fin (jusqu'à un tiers).
  */
 export const LEVEL_SPAN = 1.25;
+
+/**
+ * L'espacement le plus grand de deux niveaux de motifs qui se suivent, dont dépend la règle du
+ * choix du niveau (viewDensity) : le schéma de data/humans.json refuse des niveaux plus espacés.
+ */
+export { LEVEL_STEP } from '../core/data/humans';
 
 /** Unités de stature par case : le worker l'envoie en 1/128 de case (ADR 0014). */
 export const STATURE_UNITS = 128;
@@ -173,6 +182,8 @@ export interface MemberLooks {
   readonly phase: Float64Array<ArrayBuffer>;
   /** Groupes, par rang, dont l'apparence des membres est tirée (1). */
   readonly ready: Uint8Array<ArrayBuffer>;
+  /** Tissu de la bannière de chaque groupe, par rang, tiré à sa première vue de loin (−1 avant). */
+  readonly banner: Int32Array<ArrayBuffer>;
 }
 
 /**
@@ -225,6 +236,7 @@ export function memberLooks(
     look: new Uint16Array(count),
     phase: new Float64Array(count),
     ready: new Uint8Array(Math.floor((frame?.groups.length ?? 0) / GROUP_STRIDE)),
+    banner: new Int32Array(Math.floor((frame?.groups.length ?? 0) / GROUP_STRIDE)).fill(-1),
   };
 }
 
@@ -486,8 +498,17 @@ export interface CrowdOptions {
   readonly motifs: MotifTable;
   /** Stature de l'adulte de référence, en cases (display.stature). */
   readonly reference: number;
-  /** Tissu de la bannière de chaque culture, compté comme le veut textureKey. */
-  readonly cloth: (culture: number) => number;
+  /**
+   * Tissu de la bannière d'un groupe de la culture `culture`, dont les membres ont pour codes
+   * d'apparence codes[first … first + size) : celui que porte le plus grand nombre d'entre eux,
+   * compté comme le veut textureKey.
+   */
+  readonly cloth: (
+    culture: number,
+    codes: ArrayLike<number>,
+    first: number,
+    size: number,
+  ) => number;
   /** La case, comptée comme cellIndex, se franchit-elle ? */
   readonly passable: (cell: number) => boolean;
   /**
@@ -793,7 +814,12 @@ export function layoutCrowd(
         const y = (planted[1] / FIXED) * TILE_PX * scale - camera.y * scale + halfHeight;
         const box = bannerBox(x, y, banner, pixel);
         if (touches(box.left, box.top, box.left + box.width, box.top + box.height, viewport)) {
-          const cloth = options.cloth(groups[group * GROUP_STRIDE + 4] ?? 1);
+          let cloth = looks.banner[group] ?? -1;
+          if (cloth < 0) {
+            const culture = groups[group * GROUP_STRIDE + 4] ?? 1;
+            cloth = options.cloth(culture, looks.frame?.sprites ?? [], first, size);
+            looks.banner[group] = cloth;
+          }
           layout.add(
             box.left,
             box.top,
@@ -821,19 +847,23 @@ export function layoutCrowd(
         const sense = facing[index] ?? 0;
         const east = sense > 0 || (sense === 0 && (looks.phase[index] ?? 0) >= 0.5);
         let member = index;
+        // L'animation du porteur, et son déphasage, que prennent ses portés : un nourrisson
+        // contre sa mère qui marche marche avec elle, du même pas, au lieu de glisser au repos.
+        const walking = (moving[index] ?? 0) === 1;
+        const pace = looks.phase[index] ?? 0;
         while (member >= 0) {
           // Son corps, sa variante au niveau de la vue, et l'image de son animation à
           // l'horloge de la marche du rendu, figée en pause.
           const body = looks.body[member] ?? 0;
           const ratio = looks.ratio[member] ?? 1;
           const variant = humans.variantOf(body, level, ratio);
-          let animation = humans.animationOf((moving[member] ?? 0) === 1);
+          let animation = humans.animationOf(walking);
           let start = humans.firstMotif(body, level, variant, animation);
           if (start < 0) {
             animation = resting;
             start = Math.max(0, humans.firstMotif(body, level, variant, animation));
           }
-          const motif = start + humans.frame(animation, walkMs, stepMs, looks.phase[member] ?? 0);
+          const motif = start + humans.frame(animation, walkMs, stepMs, pace);
           const motifWidth = humans.width[motif] ?? 1;
           const rows = humans.height[motif] ?? 1;
           const x = base + deltaFixedX(originX, xs[member] ?? 0, width) * unitToScreen;

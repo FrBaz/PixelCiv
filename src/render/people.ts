@@ -36,6 +36,7 @@ import {
 import type { Appearance, Genetics } from '../core/data';
 import { geneRoles } from '../core/data/people';
 import { GROUP_STRIDE } from '../core/protocol';
+import { decodeVisual } from '../core/visual';
 import { frameOf, recolor, ROLE, type Palette } from './atlas';
 import { parseColor, type Rgb } from './bake';
 import { followPalettes, humanShader, PaletteTexture, roleSource, slotColor } from './humanShader';
@@ -48,7 +49,7 @@ import {
   MOTIF_COUNT,
   motifBox,
 } from './humans';
-import { cultureOutfit, outfitColor } from './looks';
+import { bannerFabric } from './looks';
 import { TexturePages } from './pages';
 import type { Camera, Extent } from './camera';
 import {
@@ -58,6 +59,7 @@ import {
   motifTable,
   pickEntity,
   textureParts,
+  type CrowdOptions,
   type CrowdSource,
   type HumanTable,
   type MemberLooks,
@@ -173,7 +175,7 @@ export class PeopleLayer {
   private readonly table: HumanTable;
   private readonly hairIds: readonly string[];
   /** Tissu de bannière de chaque culture, compté comme son rang parmi les tissus. */
-  private readonly clothOf: (culture: number) => number;
+  private readonly clothOf: CrowdOptions['cloth'];
   private looks: MemberLooks | undefined;
   private readonly layout = new CrowdLayout();
   private readonly seen = new Set<number>();
@@ -213,11 +215,7 @@ export class PeopleLayer {
     this.hairIds = (data.genetics.loci[geneRoles(data.genetics).loci.hair]?.alleles ?? []).map(
       (allele) => allele.id,
     );
-    const fabrics = appearance.fabrics.map((fabric) => fabric.id);
-    this.clothOf = (culture) => {
-      const outfit = appearance.outfits.at(cultureOutfit(appearance, culture));
-      return Math.max(0, fabrics.indexOf(outfit?.female.at(0)?.fabric ?? ''));
-    };
+    this.clothOf = bannerCloth(appearance);
     this.table = humanTable(appearance);
     this.roles = roleSource(ATLAS_ROLES, humanAtlas.width, humanAtlas.height);
     this.motifTextures = Array.from({ length: MOTIF_COUNT }, (_, motif) => {
@@ -553,7 +551,19 @@ export class PeopleLayer {
   }
 }
 
-/** Le tissu de bannière d'une culture, sans palette de peau (outfitColor), pour les essais. */
-export function cultureBanner(appearance: Appearance, culture: number): readonly string[] {
-  return outfitColor(appearance, cultureOutfit(appearance, culture), 'female') ?? [];
+/**
+ * Le tissu de la bannière d'un groupe, compté comme son rang parmi les tissus (textureKey) :
+ * celui que porte le plus grand nombre de ses membres, d'après le teint de leur code d'apparence
+ * (bannerFabric, rechange compris).
+ */
+export function bannerCloth(appearance: Appearance): CrowdOptions['cloth'] {
+  const fabrics = appearance.fabrics.map((fabric) => fabric.id);
+  return (culture, codes, first, size) => {
+    const skins = function* () {
+      for (let member = first; member < first + size; member++) {
+        yield decodeVisual(codes[member] ?? 0).skin;
+      }
+    };
+    return Math.max(0, fabrics.indexOf(bannerFabric(appearance, culture, skins())));
+  };
 }

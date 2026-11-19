@@ -22,6 +22,7 @@ import {
   groupArea,
   layoutCrowd,
   LEVEL_SPAN,
+  LEVEL_STEP,
   mapPixel,
   memberLooks,
   motifTable,
@@ -214,6 +215,28 @@ describe('niveaux de motifs, densité de la vue et seuil des individus (ADR 0014
     }
   });
 
+  it('tient la taille à 25 % de la cible avec des niveaux espacés de LEVEL_STEP, que le schéma impose, et non au-delà', () => {
+    // La pire erreur de taille de l'adulte de référence, de la cible du plus grossier à celle où
+    // la planche passe à deux pixels physiques par pixel de motif (l'exception documentée).
+    const worst = (levels: readonly [number, ...number[]]) => {
+      let error = 0;
+      for (let target = levels.at(-1) ?? 1; target <= levels[0] * LEVEL_SPAN; target += 0.125) {
+        const view = viewDensity(target / (reference * TILE_PX), 1, reference, levels);
+        error = Math.max(error, Math.abs(((levels[view.level] ?? 0) * view.k) / target - 1));
+      }
+      return error;
+    };
+    // Des niveaux de 43 rangées, chacun LEVEL_STEP fois plus réduit que le précédent, arrondis :
+    // la règle tient. Espacés de 2, comme 1, 2 et 4, que le schéma refuse, elle ne tient plus.
+    const spaced: [number, ...number[]] = [43];
+    for (let factor = LEVEL_STEP; spaced.length < 6; factor *= LEVEL_STEP) {
+      spaced.push(Math.round(43 / factor));
+    }
+    expect(worst(spaced)).toBeLessThanOrEqual(0.25);
+    expect(worst(LEVEL_ROWS)).toBeLessThanOrEqual(0.25);
+    expect(worst([43, 22, 11])).toBeGreaterThan(0.25);
+  });
+
   it('montre les individus dès que l’adulte de référence vise 8 pixels CSS', () => {
     expect(CLOSE_CSS_PX).toBe(8);
     // Densité 1 : à partir du zoom 3, comme avant 2b.3.
@@ -227,7 +250,7 @@ describe('niveaux de motifs, densité de la vue et seuil des individus (ADR 0014
     expect(viewDensity(6, 2, reference, LEVEL_ROWS).close).toBe(true);
   });
 
-  it('garde à chacun la variante de sa stature, à tout zoom et toute densité', () => {
+  it('garde à chacun la variante la plus proche de sa stature au niveau de la vue, à toute densité', () => {
     // Trois adultes d'une rangée de moins, moyenne et de plus, et un enfant de 10 ans.
     const frame = crowdFrame([
       1,
@@ -602,6 +625,40 @@ describe('bannière d’un groupe vu de loin (REN-08, A-1, ADR 0014)', () => {
     expect(layout.member[0]).toBe(-1);
     expect(frame.groups[layout.group[0] * GROUP_STRIDE]).toBe(9);
   });
+
+  it('prend le tissu que portent ses membres, tiré de leurs codes d’apparence une fois par image des groupes', () => {
+    const light = visualCode(1, 2, 1, 2, 0);
+    const dark = visualCode(1, 2, 14, 2, 0);
+    const frame = crowdFrame(
+      [4, 3, [{ x: 100.5, y: 40.5, code: light }]],
+      [
+        9,
+        5,
+        [
+          { x: 300.25, y: 80.5, code: dark },
+          { x: 300.75, y: 80.5, code: dark },
+        ],
+      ],
+    );
+    const calls: string[] = [];
+    const cloth: CrowdOptions['cloth'] = (culture, codes, first, size) => {
+      calls.push(
+        `${String(culture)} : ${Array.from({ length: size }, (_, i) => codes[first + i]).join(',')}`,
+      );
+      return culture;
+    };
+    const source = new PositionMirror({ carry, passable: () => true });
+    source.reset({ at: 0, tick: 0, frame }, world.width / TILE_PX);
+    const looks = memberLooks(frame, humans, reference);
+    const view = { camera: aimedAt(300.5, 80.5, 1), viewport, world, resolution: 1 };
+    const layout = new CrowdLayout();
+    for (let pass = 0; pass < 2; pass++) {
+      layoutCrowd(layout, source, looks, view, 0, { ...options(), cloth });
+    }
+    // Le second groupe, seul à l'écran : son tissu vient des codes de ses deux membres, une fois.
+    expect(calls).toEqual([`5 : ${String(dark)},${String(dark)}`]);
+    expect(textureParts(layout.texture[0]).cloth).toBe(5);
+  });
 });
 
 describe('textures des bannières et pieds des individus (A-13, ADR 0016)', () => {
@@ -668,6 +725,65 @@ describe('textures des bannières et pieds des individus (A-13, ADR 0016)', () =
         expect(Number.isInteger(feet)).toBe(true);
       }
     }
+  });
+
+  it('fait marcher le nourrisson porté avec sa mère qui marche, du même pas, et reposer avec elle', () => {
+    const baby = visualCode(0, AGE_CODE.baby, 3, 2, 0);
+    const frame = crowdFrame([
+      1,
+      1,
+      [
+        { x: 100.5, y: 50.5 },
+        { x: 100.5, y: 50.5, code: baby, stature: 30, carrier: 0 },
+      ],
+    ]);
+    // La mère est en marche sur une étape : le miroir le dirait de même.
+    class Walking extends PositionMirror {
+      override positions(
+        group: number,
+        t: number,
+        xs: Float64Array,
+        ys: Float64Array,
+        moving: Uint8Array,
+        facing?: Int8Array,
+      ): void {
+        super.positions(group, t, xs, ys, moving, facing);
+        moving[0] = this.walking ? 1 : 0;
+      }
+      walking = true;
+    }
+    const source = new Walking({ carry, passable: () => true });
+    source.reset({ at: 0, tick: 0, frame }, world.width / TILE_PX);
+    const view = { camera: aimedAt(100.5, 50.5, 16), viewport: desktop, world, resolution: 1 };
+    const walkRow = humans.animationOf(true);
+    const restRow = humans.animationOf(false);
+    const frameOfMotif = (body: number, animation: number, motif: number) => {
+      for (let variant = 0; variant < 3; variant++) {
+        const first = humans.firstMotif(body, 0, variant, animation);
+        if (first >= 0 && motif >= first && motif < first + 8) return motif - first;
+      }
+      return -1;
+    };
+    for (const walkMs of [0, 420, 1260, 2940]) {
+      const looks = memberLooks(frame, humans, reference);
+      const layout = new CrowdLayout();
+      layoutCrowd(layout, source, looks, view, 0, { ...options(), walkMs });
+      layout.sort();
+      const drawn = drawnOf(layout);
+      const mother = drawn.find((entry) => entry.member === 0);
+      const child = drawn.find((entry) => entry.member === 1);
+      const motherFrame = frameOfMotif(looks.body[0], walkRow, mother?.motif ?? -1);
+      const childFrame = frameOfMotif(looks.body[1], walkRow, child?.motif ?? -1);
+      expect(motherFrame, `${String(walkMs)} ms`).toBeGreaterThanOrEqual(0);
+      expect(childFrame, `${String(walkMs)} ms`).toBe(motherFrame);
+    }
+    source.walking = false;
+    const looks = memberLooks(frame, humans, reference);
+    const layout = new CrowdLayout();
+    layoutCrowd(layout, source, looks, view, 0, options());
+    layout.sort();
+    const child = drawnOf(layout).find((entry) => entry.member === 1);
+    expect(frameOfMotif(looks.body[1], restRow, child?.motif ?? -1)).toBeGreaterThanOrEqual(0);
   });
 
   it('tourne le nourrisson porté comme sa mère, même sans étape connue, d’après le déphasage de la mère', () => {

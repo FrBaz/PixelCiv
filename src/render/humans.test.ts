@@ -25,7 +25,7 @@ import {
   variantOf,
   type HumanLook,
 } from './humans';
-import { cultureOutfit, fabricTones, hairTones, skinPaletteOf } from './looks';
+import { bannerFabric, cultureOutfit, fabricTones, hairTones, skinPaletteOf } from './looks';
 
 const data = loadGameData();
 const { appearance } = data;
@@ -166,6 +166,52 @@ describe('palettes des humains (ADR 0016, § 3)', () => {
     expect(fabricTones(appearance, 'leather', 0)).toEqual(leather?.tones);
   });
 
+  it('donne à la bannière d’un groupe le tissu que porte le plus grand nombre de ses membres, rechange compris', () => {
+    const tunic = appearance.cultureOutfits.indexOf('tunic') + 1;
+    const loincloth = appearance.cultureOutfits.indexOf('loincloth') + 1;
+    // Un code de teint de chaque palette de peau : le dernier qu'elle prend.
+    const skin = (id: string) =>
+      appearance.skinPalettes.find((palette) => palette.id === id)?.upTo ?? -1;
+    const linen = appearance.fabrics.find((fabric) => fabric.id === 'linen');
+    const leather = appearance.fabrics.find((fabric) => fabric.id === 'leather');
+    expect(linen?.onSkin?.light).toBeDefined();
+    expect(linen?.onSkin?.xlight).toBe(linen?.onSkin?.light);
+    expect(leather?.onSkin?.medium).toBeDefined();
+    // Une tunique de lin portée surtout par des peaux claires : le lin y prend son rechange.
+    expect(bannerFabric(appearance, tunic, [skin('light'), skin('light'), skin('medium')])).toBe(
+      linen?.onSkin?.light,
+    );
+    // Surtout par des peaux medium : le lin reste le lin. Le pagne de cuir y prend le lin.
+    const mostlyMedium = [skin('medium'), skin('light'), skin('medium')];
+    expect(bannerFabric(appearance, tunic, mostlyMedium)).toBe('linen');
+    expect(bannerFabric(appearance, loincloth, mostlyMedium)).toBe(leather?.onSkin?.medium);
+    // Le tissu le plus porté, et non celui de la palette la plus nombreuse : deux peaux très
+    // claires (marine) contre une medium et une olive (lin), le lin l'emporte.
+    expect(
+      bannerFabric(appearance, tunic, [
+        skin('xlight'),
+        skin('xlight'),
+        skin('medium'),
+        skin('olive'),
+      ]),
+    ).toBe('linen');
+    // Sans membre, et à égalité, le tissu de la culture.
+    expect(bannerFabric(appearance, tunic, [])).toBe('linen');
+    expect(bannerFabric(appearance, tunic, [skin('light'), skin('medium')])).toBe('linen');
+    // Un seul membre : le tissu de la pièce que porte la femme, sur sa peau, rechange compris.
+    for (let palette = 0; palette < appearance.skinPalettes.length; palette++) {
+      const code = appearance.skinPalettes[palette]?.upTo ?? 0;
+      expect(skinPaletteOf(appearance, code)).toBe(palette);
+      for (let culture = 1; culture <= appearance.cultureOutfits.length; culture++) {
+        const piece = appearance.outfits[cultureOutfit(appearance, culture)]?.female[0];
+        const worn = appearance.fabrics.find(
+          (fabric) => fabric.id === bannerFabric(appearance, culture, [code]),
+        );
+        expect(worn?.tones).toEqual(fabricTones(appearance, piece.fabric, palette));
+      }
+    }
+  });
+
   it('garde l’empreinte des planches habillées, à chaque niveau, adultes, enfants et nourrisson', () => {
     // Une apparence par tenue : teint medium, cheveux châtains, sans gris. Toute retouche d'une
     // grille, d'une réduction, d'une tenue ou d'une palette change ces empreintes.
@@ -237,7 +283,7 @@ describe('corps, variantes et animations (ADR 0016, § 5, § 6)', () => {
     expect(bodyKind(bodyOf(0, AGE_CODE.baby, 0.3))).toBe('baby');
   });
 
-  it('choisit la variante d’un adulte sur sa stature, la même à tout zoom', () => {
+  it('choisit la variante d’un adulte la plus proche de sa stature, au niveau de la vue', () => {
     for (let level = 1; level < LEVEL_ROWS.length; level++) {
       expect(variantOf(BODY_MALE, level, 1)).toBe(1);
       expect(variantOf(BODY_MALE, level, 0.85)).toBe(0);
@@ -246,6 +292,35 @@ describe('corps, variantes et animations (ADR 0016, § 5, § 6)', () => {
     expect(variantOf(BODY_MALE, 0, 1.2)).toBe(0);
     const child = atlas.kinds.indexOf('child');
     expect(variantOf(child, 2, 1.2)).toBe(0);
+  });
+
+  it('donne à chaque stature d’adulte l’arrondi borné de sa hauteur à chaque niveau, croissant avec elle', () => {
+    // Toutes les statures d'adulte, en 1/128 de case, de 82 à 110 : à chaque niveau, la variante
+    // est l'écart arrondi de sa hauteur à celle de la référence, borné aux variantes rangées, et
+    // ne décroît jamais quand la stature croît. D'un niveau à l'autre, elle peut changer d'un cran
+    // (92 : moyen à ×1,5, grand à ×4) : c'est l'arrondi de chaque résolution (ADR 0016, § 7).
+    const reference = data.species.entries.at(0)?.display.stature;
+    expect(reference).toBeDefined();
+    let changes = 0;
+    for (const body of [BODY_FEMALE, BODY_MALE]) {
+      for (let level = 1; level < LEVEL_ROWS.length; level++) {
+        const info = atlas.levels[level];
+        let previous = -1;
+        for (let stature = 82; stature <= 110; stature++) {
+          const ratio = stature / 128 / (reference ?? 1);
+          const variant = variantOf(body, level, ratio);
+          const offsets = info.variants;
+          const wanted = Math.round(ratio * info.rows) - info.rows;
+          const bounded = Math.min(Math.max(wanted, offsets[0] ?? 0), offsets.at(-1) ?? 0);
+          expect(offsets[variant], `${String(stature)}, niveau ${String(level)}`).toBe(bounded);
+          expect(variant).toBeGreaterThanOrEqual(previous);
+          previous = variant;
+          if (level > 1 && variant !== variantOf(body, 1, ratio)) changes++;
+        }
+      }
+    }
+    // Des statures changent de variante d'un niveau à l'autre : le test les couvre.
+    expect(changes).toBeGreaterThan(0);
   });
 
   it('tire l’image d’une animation de l’horloge de la marche : pure, déphasée, figée quand l’horloge l’est', () => {

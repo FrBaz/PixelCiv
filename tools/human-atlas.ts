@@ -209,6 +209,15 @@ export function buildHumanAtlas(
     rows: Math.round(reference('male') / level.factor),
     variants: level.variants,
   }));
+  // Un enfant ou un nourrisson reste plus petit que l'adulte de référence, dont la hauteur ne se
+  // connaît qu'ici : la règle du niveau (src/render/crowd.ts, viewDensity) tient sur lui la taille
+  // de toute la vue à 25 % de la cible.
+  const tall = young.filter((size) => size.rows >= reference('male'));
+  if (tall.length > 0) {
+    throw new Error(
+      `atlas des humains : un enfant ou un nourrisson de ${tall.map((size) => String(size.rows)).join(', ')} rangées n'est pas plus petit que l'adulte de référence (${String(reference('male'))} rangées)`,
+    );
+  }
   humans.levels.forEach((level, l) => {
     const outline: OutlineMode = level.outline;
     sexes.forEach((sex, body) => {

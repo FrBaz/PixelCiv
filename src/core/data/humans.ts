@@ -43,6 +43,12 @@ export const MAX_OUTFITS = 1 << LOOK_BITS.outfit;
  * MAX_REGIONS régions au plus.
  */
 export const RECOLOR = 16;
+/**
+ * Rapport le plus grand entre les facteurs de deux niveaux de motifs qui se suivent
+ * (data/humans.json, levels) : la règle du choix du niveau (src/render/crowd.ts, viewDensity)
+ * tient la taille à 25 % de la cible à condition que les niveaux soient espacés de 1,5 au plus.
+ */
+export const LEVEL_STEP = 1.5;
 export const MAX_KEPT_TONES = RECOLOR - 1;
 export const PALETTE_ROLES = 128;
 export const MAX_REGIONS = (PALETTE_ROLES - RECOLOR) / 8;
@@ -204,8 +210,15 @@ export const HumansSchema = z
       issue('le premier niveau est la planche à sa taille, sans variante', ['levels', 0]);
     }
     for (let index = 1; index < h.levels.length; index++) {
-      if (h.levels[index].factor <= h.levels[index - 1].factor) {
+      const factor = h.levels[index].factor;
+      const before = h.levels[index - 1].factor;
+      if (factor <= before) {
         issue('des niveaux de plus en plus réduits', ['levels', index, 'factor']);
+      } else if (factor / before > LEVEL_STEP + 1e-9) {
+        issue(
+          `deux niveaux qui se suivent sont espacés d'un facteur ${String(LEVEL_STEP)} au plus`,
+          ['levels', index, 'factor'],
+        );
       }
     }
   });

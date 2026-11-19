@@ -154,6 +154,27 @@ describe('atlas des humains (ADR 0016, § 1, § 7)', () => {
     ]);
   });
 
+  it('refuse au build un enfant ou un nourrisson qui n’est pas plus petit que l’adulte de référence', () => {
+    // L'adulte de référence a 43 rangées (le tableau des niveaux) : un enfant de 60, ou de 43,
+    // casserait la règle du niveau, qui tient sur lui la taille de toute la vue.
+    const reference = game.levels[0]?.rows ?? 0;
+    expect(reference).toBe(43);
+    for (const rows of [60, reference]) {
+      const child = [...humans.young.child.slice(0, -1), { rows, head: 10 }];
+      expect(() => buildHumanAtlas(root, { ...humans, young: { ...humans.young, child } })).toThrow(
+        /n'est pas plus petit que l'adulte de référence \(43 rangées\)/,
+      );
+      const baby = [{ rows, head: 8 }];
+      expect(() => buildHumanAtlas(root, { ...humans, young: { ...humans.young, baby } })).toThrow(
+        /n'est pas plus petit/,
+      );
+    }
+    const child = [...humans.young.child.slice(0, -1), { rows: reference - 1, head: 10 }];
+    expect(() =>
+      buildHumanAtlas(root, { ...humans, young: { ...humans.young, child } }),
+    ).not.toThrow();
+  });
+
   it('refuse au build une tenue qui laisse voir le sous-vêtement, ou un pack que CREDITS.md ne cite pas', () => {
     const outfits = loadOutfits(root);
     expect(uncoveredUnderwear(game, outfits)).toEqual([]);

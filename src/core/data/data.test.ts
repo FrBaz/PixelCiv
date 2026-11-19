@@ -11,7 +11,7 @@ import {
   type Genetics,
   type Species,
 } from './index';
-import { HumansSchema, MAX_OUTFITS, MAX_SKIN_PALETTES } from './humans';
+import { HumansSchema, LEVEL_STEP, MAX_OUTFITS, MAX_SKIN_PALETTES } from './humans';
 import {
   AppearanceSchema,
   FACE_BOUNDS,
@@ -865,6 +865,20 @@ describe('humains des planches et leurs tenues (ADR 0016)', () => {
         withHumans({ levels: [first, { ...second, variants: [-1, 0, 1, 2] }, ...rest] }),
       ).join(),
     ).toMatch(/levels\.1\.variants : Too big/);
+    // Deux niveaux qui se suivent espacés de plus de LEVEL_STEP : la règle du niveau ne tiendrait
+    // plus la taille à 25 % de la cible (src/render/crowd.ts, viewDensity).
+    const spaced = [first, ...[2, 4].map((factor) => ({ ...second, factor }))];
+    expect(issues(HumansSchema, withHumans({ levels: spaced }))).toContain(
+      `levels.2.factor : deux niveaux qui se suivent sont espacés d'un facteur ${String(LEVEL_STEP)} au plus`,
+    );
+    expect(
+      issues(HumansSchema, withHumans({ levels: [first, { ...second, factor: 1.6 }] })),
+    ).toContain(
+      `levels.1.factor : deux niveaux qui se suivent sont espacés d'un facteur ${String(LEVEL_STEP)} au plus`,
+    );
+    expect(
+      issues(HumansSchema, withHumans({ levels: [first, { ...second, factor: LEVEL_STEP }] })),
+    ).toEqual([]);
     const animations = humans.animations.map((animation) =>
       animation.id === 'walk' ? { ...animation, shown: false } : animation,
     );
