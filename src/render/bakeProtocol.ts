@@ -6,7 +6,10 @@ import type { WorldLayers, WorldSize } from '../core/world';
 import type { BakeBiome } from './bake';
 
 export type BakeRequest =
-  /** Nouveau monde : ses couches, copiées pour le worker, et les palettes. */
+  /**
+   * Nouveau monde : ses couches, copiées pour le worker, les palettes, et les tons cuits de
+   * la mer animée (src/render/waves.ts), que le worker cherche dans chaque bloc cuit.
+   */
   | {
       readonly type: 'world';
       readonly generation: number;
@@ -14,6 +17,7 @@ export type BakeRequest =
       readonly layers: WorldLayers;
       readonly biomes: readonly BakeBiome[];
       readonly riverBiome: number;
+      readonly seaTones: readonly number[];
     }
   /** Biome d'un bloc changé par la simulation. */
   | {
@@ -40,6 +44,8 @@ export type BakeReply =
       readonly row: number;
       readonly version: number;
       readonly pixels: Uint8Array<ArrayBuffer>;
+      /** Le bloc a-t-il un pixel de mer animée ? Sinon, la carte le dessine sans l'onde. */
+      readonly sea: boolean;
     }
   /** Demande devenue sans objet : le monde a changé entre-temps. */
   | {

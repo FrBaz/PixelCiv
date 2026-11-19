@@ -209,6 +209,32 @@ export class DebugSampler {
   }
 }
 
+/**
+ * Réglages de débogage de l'affichage, tirés de l'adresse (ADR 0015) : `?waves=off` éteint la
+ * mer animée ; `?waveStep=N` fixe son pas, un entier positif ou nul, pour des captures qui se
+ * comparent à son miroir ; `?month=N` fixe le mois continu, de 0 à 12, que montre la carte,
+ * saisons et gel de l'onde compris (la date et la simulation n'en savent rien).
+ */
+export interface DisplayOverrides {
+  readonly waves: boolean;
+  readonly waveStep: number | undefined;
+  readonly month: number | undefined;
+}
+
+export function displayOverrides(query: URLSearchParams): DisplayOverrides {
+  const number = (name: string) => {
+    const text = query.get(name)?.trim() ?? '';
+    return text === '' ? Number.NaN : Number(text);
+  };
+  const step = number('waveStep');
+  const month = number('month');
+  return {
+    waves: query.get('waves') !== 'off',
+    waveStep: Number.isSafeInteger(step) && step >= 0 ? step : undefined,
+    month: Number.isFinite(month) && month >= 0 && month <= 12 ? month : undefined,
+  };
+}
+
 /** Mémoire occupée par le tas JavaScript, en mégaoctets, si le navigateur la donne. */
 export function usedMemoryMb(): number | undefined {
   const memory = (performance as Performance & { memory?: { usedJSHeapSize?: number } }).memory;

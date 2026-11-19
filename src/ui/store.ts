@@ -88,6 +88,13 @@ export const determinismOk = signal<boolean | undefined>(undefined);
 export const debugOpen = signal(false);
 
 /**
+ * Force de la mer animée, de 0 (immobile) à 1 (par défaut ; ADR 0015) : le point d'entrée du
+ * réglage des effets de la tâche 2b.7, qui l'exposera et le gardera dans les préférences. La
+ * carte la lit à chaque image ; une demande de mouvement réduit l'emporte sur elle.
+ */
+export const seaMotion = signal(1);
+
+/**
  * Avis passager à montrer au joueur, comme « Partie sauvegardée. ». Chaque avis a son
  * numéro : le même texte, montré deux fois, relance son minuteur.
  */

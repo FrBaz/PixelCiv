@@ -13,7 +13,13 @@ import type { BakeReply, BakeRequest } from './bakeProtocol';
 /** Blocs confiés en même temps à chaque worker : un en cours, un d'avance. */
 const IN_FLIGHT = 2;
 
-export type BakedListener = (column: number, row: number, pixels: Uint8Array<ArrayBuffer>) => void;
+/** Un bloc cuit : ses pixels, et s'il a de la mer animée. */
+export type BakedListener = (
+  column: number,
+  row: number,
+  pixels: Uint8Array<ArrayBuffer>,
+  sea: boolean,
+) => void;
 
 interface BakeWorker {
   readonly worker: Worker;
@@ -45,12 +51,16 @@ export class Baker {
     });
   }
 
-  /** Nouveau monde : chaque worker en reçoit une copie, et tous les blocs sont à cuire. */
+  /**
+   * Nouveau monde : chaque worker en reçoit une copie, et tous les blocs sont à cuire ; il y
+   * cherche les tons de la mer animée, `seaTones`.
+   */
   setWorld(
     size: WorldSize,
     layers: WorldLayers,
     biomes: readonly BakeBiome[],
     riverBiome: number,
+    seaTones: readonly number[],
   ): void {
     this.generation++;
     this.grid = chunkGrid(size);
@@ -67,6 +77,7 @@ export class Baker {
         layers,
         biomes,
         riverBiome,
+        seaTones,
       });
     }
     this.pump();
@@ -152,7 +163,7 @@ export class Baker {
     else this.inFlight.delete(index);
     // Une cuisson d'avant une modification du bloc : la suivante, en attente, la remplace.
     if (reply.type === 'baked' && reply.version === this.versions[index]) {
-      this.onBaked(reply.column, reply.row, reply.pixels);
+      this.onBaked(reply.column, reply.row, reply.pixels, reply.sea);
     }
     this.pump();
   }

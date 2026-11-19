@@ -29,6 +29,7 @@ import { SPAWN_COUNT } from '../sim/commands';
 import { walkCost } from '../sim/terrain';
 import type { SheetContent } from '../ui/Sheet';
 import { createRenderer, timeRendering } from '../render/renderer';
+import { WAVE_STEP_MS } from '../render/waves';
 import { App } from '../ui/App';
 import { escapeKey } from '../ui/escape';
 import {
@@ -52,6 +53,7 @@ import {
   previewImage,
   previewKey,
   raise,
+  seaMotion,
   sheet,
   shownDay,
   showNotice,
@@ -73,7 +75,13 @@ import {
   receivePage,
   type KeptFacts,
 } from './chronicle';
-import { DebugSampler, DrawCallCounter, positionBytes, usedMemoryMb } from './debug';
+import {
+  DebugSampler,
+  displayOverrides,
+  DrawCallCounter,
+  positionBytes,
+  usedMemoryMb,
+} from './debug';
 import { centerOf, visibleArea, type Rect } from './focus';
 import { SaveManager, SaveStore } from './saves';
 import { describeCell } from './inspect';
@@ -418,6 +426,11 @@ async function main(): Promise<void> {
   // Horloge de la marche du rendu (ADR 0014) : elle n'avance qu'avec l'instant affiché, si
   // bien que les images de la marche restent figées en pause.
   let walkMs = 0;
+  // La mer animée (ADR 0015) : son pas suit le temps réel de l'affichage, en pause comme à
+  // toute vitesse ; sa force, le réglage des effets (seaMotion), nulle si l'on demande moins
+  // de mouvement. Débogage : ?waves=off, ?waveStep=N et ?month=N (displayOverrides).
+  const overrides = displayOverrides(query);
+  const reducedMotion = matchMedia('(prefers-reduced-motion: reduce)');
   app.ticker.add((ticker) => {
     // La durée réelle de l'image : deltaMS est plafonné à 100 ms, et cacherait les à-coups.
     // L'image précédente a coûté ce que mesurent son dessin et son rappel, son rendu et les
@@ -431,7 +444,7 @@ async function main(): Promise<void> {
     const shown = clock.advance(now);
     if (shown > shownInstant) walkMs += ticker.elapsedMS;
     shownInstant = shown;
-    map.setSeason(clock.month());
+    map.setSeason(overrides.month ?? clock.month());
     const showing = performance.now();
     crowd.show(shown);
     frameCost.showMs = performance.now() - showing;
@@ -442,6 +455,8 @@ async function main(): Promise<void> {
     }
     const camera = controls.update(ticker.deltaMS);
     drawnCamera = camera;
+    const waveForce = overrides.waves && !reducedMotion.matches ? seaMotion.value : 0;
+    map.setWaves(overrides.waveStep ?? Math.floor(now / WAVE_STEP_MS), waveForce);
     map.draw(camera);
     const speed = time.value?.speed ?? 'normal';
     people.draw(

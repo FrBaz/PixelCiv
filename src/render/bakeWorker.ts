@@ -1,14 +1,17 @@
 /**
  * Worker de cuisson (tâche 1.7 ; ADR 0010) : il reçoit les couches du monde, puis cuit
- * les blocs qu'on lui demande et renvoie leurs pixels, transférés. Il ne connaît ni
- * PixiJS ni le DOM.
+ * les blocs qu'on lui demande et renvoie leurs pixels, transférés, en disant s'ils ont de
+ * la mer animée (tâche 2b.4, ADR 0015). Il ne connaît ni PixiJS ni le DOM.
  */
 import { bakeChunk, type BakeWorld } from './bake';
 import type { BakeReply, BakeRequest } from './bakeProtocol';
+import { seaInChunk } from './waves';
 import { CHUNK_SIZE } from '../core/world';
 
 let world: BakeWorld | undefined;
 let generation = -1;
+/** Tons cuits de la mer animée, cherchés dans chaque bloc cuit. */
+let seaTones: readonly number[] = [];
 
 function reply(message: BakeReply, transfer: Transferable[]): void {
   self.postMessage(message, { transfer });
@@ -25,6 +28,7 @@ self.addEventListener('message', (event: MessageEvent<BakeRequest>) => {
         biomes: message.biomes,
         riverBiome: message.riverBiome,
       };
+      seaTones = message.seaTones;
       break;
     case 'patch': {
       if (world === undefined || message.generation !== generation) break;
@@ -62,6 +66,7 @@ self.addEventListener('message', (event: MessageEvent<BakeRequest>) => {
           row: message.row,
           version: message.version,
           pixels,
+          sea: seaInChunk(pixels, seaTones),
         },
         [pixels.buffer],
       );
