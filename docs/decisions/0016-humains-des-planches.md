@@ -20,7 +20,7 @@ Ce que montrent les planches, vérifié au pixel près (`tools/human-sheets.test
 - **Le jeu part des deux planches de base et des six palettes de peau**, pas des douze planches, qui n'apportent rien d'autre : `tools/human-sheets.test.ts` le prouve sur les quatorze PNG, par les palettes des données.
 - **Au build**, à côté de `tools/pixel-atlas.ts` : `tools/human-atlas.ts`, extension de Vite, lit les deux bases et les grilles de régions, en tire une image de rôles par image d'animation (`src/gen/humans.ts`, fonctions pures), ses réductions et les corps d'enfants, et range le tout dans le module virtuel `virtual:human-atlas`, refait en développement quand une planche, une grille ou une donnée change. Le décodeur PNG est écrit sur `node:zlib` (`tools/png.ts`, 8 bits par canal, RGB ou RGBA, non entrelacé, alpha gardé) ; `tools/wave-control/png.ts` n'en est plus qu'une enveloppe qui rend le RGB. Aucune dépendance nouvelle. Le module du schéma des humains (`src/core/data/humans.ts`) n'importe que zod, si bien que la configuration de Vite le charge sans avertissement.
 - **L'atlas du jeu** ne range que les animations montrées (`shown` dans `data/humans.json`, repos et marche jusqu'à 2b.8) : 1 024 × 129 rôles d'un octet, 598 motifs, construits en 0,6 s. Les tests construisent aussi l'atlas de toutes les animations, 1 024 × 348 rôles et 1 430 motifs, en 1,0 s, pour que les sept rangées restent vérifiées et habillées. Le paquet principal passe de 564,7 à 786,2 ko (de 170,7 à 217,1 ko compressés) ; celui du worker de 284,3 à 295,8 ko, qui lit maintenant `data/humans.json` avec le reste du contenu.
-- **Ce que le jeu distribue** : les pixels des deux planches de base, recodés en rôles (région et rang, ou ton gardé), réduits, composés en enfants et recolorés ; au niveau de la planche, une recopie exacte des bases, que le test aller-retour prouve. Les PNG eux-mêmes restent dans `sprites/`, dans le dépôt public, et ne sont pas publiés avec le jeu. Le jeu publié nomme le pack dans `licenses.txt` (`tools/bundle-licenses.ts`), jusqu'à l'écran des crédits (IHM-08).
+- **Ce que le jeu distribue** : les pixels des deux planches de base, recodés en rôles (région et rang, ou ton gardé), réduits, composés en enfants et recolorés ; au niveau de la planche, une recopie exacte des bases, que prouve le test de l'habillage sans tenue (`tools/human-dressing.test.ts`). Les PNG eux-mêmes restent dans `sprites/`, dans le dépôt public, et ne sont pas publiés avec le jeu. Le jeu publié nomme le pack dans `licenses.txt` (`tools/bundle-licenses.ts`), jusqu'à l'écran des crédits (IHM-08).
 
 ### 2. Les régions
 
@@ -104,7 +104,7 @@ Ce que montrent les planches, vérifié au pixel près (`tools/human-sheets.test
   | Pixel 5, zoom 24 (66) | 198 | planche | 5 | 215 | 78,2 | 72 |
 
   Hauteurs relevées dans Chromium sur les trois graines : celles du tableau, à deux rangées près selon l'image de la marche et la variante.
-- **REN-04 et REN-08** : au zoom le plus faible des individus, le facteur 4 tient le rôle du mini-sprite à l'échelle de la carte, de 10 à 12 pixels ; plus près, les niveaux plus fins sont l'écart décidé par l'auteur pour 2b.3 : une résolution propre aux individus, une densité k commune à tous ceux d'une vue, une autre pour la carte et les bannières, jamais deux dans un même dessin (ADR 0014, § 6). Les sprites de la planche ne se montrent jamais plus petits que leurs pixels : chaque niveau est un motif dédié, tiré d'eux, dont chaque pixel fait k × k pixels physiques. Le prix : un pixel d'individu est 8 à 16 fois plus fin qu'un pixel de carte (PC, zoom 8 : 1 pixel physique contre 8 ; zoom 16 : 1 contre 16 ; Pixel 5 au zoom 3 : 1 pixel physique, 0,36 pixel CSS, contre 8), au lieu de 2,7 à 3,2 fois en 2b.3.
+- **REN-04 et REN-08** : au zoom le plus faible des individus, le facteur 4 tient le rôle du mini-sprite à l'échelle de la carte, de 10 à 12 pixels ; plus près, les niveaux plus fins sont l'écart décidé par l'auteur pour 2b.3 : une résolution propre aux individus, une densité k commune à tous ceux d'une vue, une autre pour la carte et les bannières, jamais deux dans un même dessin (ADR 0014, § 6). Les sprites de la planche ne se montrent jamais plus petits que leurs pixels : chaque niveau est un motif dédié, tiré d'eux, dont chaque pixel fait k × k pixels physiques. Le prix : un pixel d'individu est bien plus fin qu'un pixel de carte, de 3 fois (PC, zoom 3) à 21 fois (PC, zoom 21) : 8 fois au zoom 8 du PC (1 pixel physique contre 8), 16 fois au zoom 16, et 8 fois sur Pixel 5 au zoom 3 (1 pixel physique, 0,36 pixel CSS), au lieu de 2,7 à 3,2 fois en 2b.3 aux mêmes zooms.
 - **Les mini-sprites de 2.9 sont retirés** (`assets/pixel/sprites/`), et non gardés comme niveau le plus grossier : de face, à l'ombrage calculé, ils changeraient de style au zoom 3. Les bannières restent.
 
 ### 8. Rendu et coût
@@ -117,7 +117,21 @@ Ce que montrent les planches, vérifié au pixel près (`tools/human-sheets.test
 
 ### 8 bis. Coût mesuré
 
-Les mesures avant et après, dans Chromium, suivent ici dès qu'elles sont faites (essais de la réalisation, en cours).
+Foules de débogage (`?crowd=N`) sur la graine `pixelciv`, relevés du panneau de débogage, une valeur par seconde pendant six secondes à ×1, puis en pause ; 599e410 (avant) et la réalisation (après), aux mêmes positions. Pixel 5 ralenti ×4 par CDP. Fourchettes des six relevés.
+
+| Écran, zoom, foule | Dessinés | Mise à jour + rendu (ms) | Positions + tri + sprites (ms) | Apparences ou textures : dans l'image, gardées | Pages | Appels de dessin | Mémoire (JS) |
+|---|---|---|---|---|---|---|---|
+| Pixel 5 ×4, zoom 4, 2 000 : avant (mini-sprites) | 1 580 à 1 960 | 4,1 à 13,8 + 1,3 à 9,4 | 1,7 à 5,7 + 0,4 à 1,1 + 1,1 à 6,7 | 1 065 à 1 180, 1 890 | 2 à 3 | 5 | 10,1 Mo |
+| après (facteur 1,5, k = 1) | 1 615 à 1 960 | 3,5 à 8,4 + 2,2 à 3,2 | 1,4 à 4,7 + 0,3 à 0,7 + 0,8 à 1,7 | 376 à 390, 392 | 0 | 5 | 12,1 Mo |
+| après, zoom 5 (planche, k = 1) | 1 640 à 1 960 | 4,4 à 8,1 + 2,3 à 3,8 | 1,8 à 4,7 + 0,5 à 0,8 + 0,8 à 2,4 | 378 à 392, 395 | 0 | 5 | 12,1 Mo |
+| PC 1 920 × 1 080, zoom 11, 4 000 : avant | 3 330 à 3 980 | 1,3 à 5,8 + 0,4 à 3,6 | 0,6 à 1,7 + 0,1 à 0,6 + 0,5 à 3,7 | 1 563, 2 765 | 2 à 3 | 5 | 10,1 Mo |
+| après (facteur 1,5, k = 1) | 3 350 à 3 980 | 1,6 à 5,1 + 0,8 à 1,0 | 0,8 à 2,2 + 0,1 à 3,0 + 0,3 à 0,9 | 440 à 449, 452 | 0 | 5 | 13,6 Mo |
+| après, zoom 12 (planche, k = 1) | 3 050 à 3 930 | 1,6 à 3,2 + 0,7 à 1,2 | 0,7 à 2,0 + 0,2 à 0,4 + 0,4 à 0,7 | 433 à 451, 452 | 0 | 5 | 13,6 Mo |
+
+- **Pires cas de la critique** : sur Pixel 5 au zoom 4 et sur PC au zoom 11, le prototype, au niveau de la planche, gardait 4 000 à 4 700 textures dans 44 à 51 pages et faisait 12 à 41 appels de dessin. La réalisation y montre le facteur 1,5 (la règle du § 7) ; au niveau de la planche (Pixel 5 au zoom 5, PC au zoom 12), elle garde moins de 460 palettes, aucune page, et fait 5 appels de dessin, carte comprise, comme 599e410.
+- **Mémoire des textures des individus** : 772 Kio (l'atlas des rôles, et la texture des palettes, passée de 16 à 64 rangées pour quelque 450 apparences) ; le tas JavaScript gagne 2 à 3,5 Mo, l'atlas des rôles décodé et les tables des motifs.
+- **En pause**, rien ne se refait : positions, tri et sprites ne coûtent rien, avant comme après.
+- La mise à jour des sprites coûte moins qu'avant (une particule change de cadre, sans texture à changer) ; le rendu par PixiJS un peu plus sur Pixel 5 ralenti, de 2 à 4 ms. Ces temps viennent de SwiftShader, qui rend en logiciel ; ceux de vrais appareils sont à demander à l'auteur.
 
 ### 9. Les tests
 
@@ -145,6 +159,7 @@ Les tests ont été mis à l'épreuve de 47 mutations du code, des données et d
 
 - La carte montre de près des humains habillés selon leur culture, à cinq niveaux de détail, sans qu'aucune couleur ne soit calculée ; les tuiles ne changent pas : hors du calque des individus, l'image est celle de 599e410 au pixel près, aux zooms 1 à 24, sur les trois graines, sur PC et sur Pixel 5.
 - Les humains ne coûtent qu'un appel de dessin, et plus aucune texture recolorée.
+- **Essais dans Chromium** (PC 1 280 × 720 et Pixel 5 au doigt, graines `pixelciv`, `graine` et `autre`, zooms 1, 2, 3, 4, 5, 8, 16 et 24, foule de débogage de 300 individus après 30 jours ; à `graine` et `autre`, la foule ne se voit qu'aux zooms 1 à 4, et 8 pour `autre`) : hors du calque des individus, 0 pixel ne diffère de 599e410 ; à l'écran, toutes les couleurs des individus sont déclarées, aucun ton de sous-vêtement ni de peau des planches ne paraît ; un seul k par vue, positions entières. En pause, aucun pixel ne change en 1,5 s ; à ×1 et à ×16, la marche s'anime. Sur 224 relevés d'un immobile d'une image à l'autre, en quatre mois à ×1 puis vingt à ×16, aucun retournement ; 205 portés relevés contre leur mère, tous tournés comme elle. Une partie de cinq ans et demi montre nourrissons, enfants et adultes, aux couleurs toutes déclarées. Aucune erreur de console.
 - Ajouter une tenue, un tissu, une teinte ou des cheveux ne demande que des données ; une animation, une ligne de `data/humans.json` et ses grilles ; une planche nouvelle, ses grilles.
 - Les grilles de régions sont du contenu à entretenir à la main : 90 images, que le test des aires garde.
 
@@ -173,7 +188,7 @@ Planches de revue : chaque tenue sur chaque peau, à chaque niveau ; les niveaux
 **Les pertes et les écarts**
 8. **Le teint** passe de 16 nuances interpolées à 6 palettes de l'auteur (seuils `upTo`).
 9. **Le contour** : gardé à la planche, retracé aux facteurs 1,5 et 2, absent aux facteurs 3 et 4, alors que la consigne dit « en gardant le contour d'origine ».
-10. **La densité** : un pixel d'individu est 8 à 16 fois plus fin qu'un pixel de carte, au lieu de 2,7 à 3,2 fois en 2b.3 (§ 7). Une autre règle prendrait le niveau en pixels CSS (k au moins égal à la densité de l'écran) : des figures plus petites ou plus grossières sur téléphone, mais des pixels plus proches de ceux de la carte.
+10. **La densité** : un pixel d'individu est 8 fois plus fin qu'un pixel de carte au zoom 8, 16 fois au zoom 16, au lieu de 2,7 à 3,2 fois en 2b.3 (§ 7). Une autre règle prendrait le niveau en pixels CSS (k au moins égal à la densité de l'écran) : des figures plus petites ou plus grossières sur téléphone, mais des pixels plus proches de ceux de la carte.
 11. **La règle du niveau** : 25 % de la cible au lieu des 25 % de l'ADR 0014 à densité égale, mais de −32 % à +30 % quand la planche passe de k = 1 à 2 (PC, zooms 21 et 22). Sur Pixel 5 au zoom 4, l'adulte fait 10,5 pixels CSS au lieu de 13,1.
 12. **Les mini-sprites remplacés** par le facteur 4, de 11 rangées au lieu des 6 à 10 de REN-04, de trois quarts au lieu de face ; au zoom 3 du PC, les mini-sprites de 2b.3, aux bras écartés, se lisaient mieux.
 13. **Écarts au PRD** : AST-01 demande les originaux du pack « avec vêtements » : la consigne a choisi les planches sans vêtements, habillées par le jeu ; AST-03 veut des mini-sprites générés : ils sont tirés du pack.
@@ -183,3 +198,4 @@ Planches de revue : chaque tenue sur chaque peau, à chaque niveau ; les niveaux
 17. **Enfants composés** d'après le corps masculin, et nourrisson debout contre sa mère, faute de pose où l'on porte.
 18. **Glissement des pieds** : à ×1, un marcheur avance vite à l'écran, et la marche s'anime à la cadence de 2b.3, si bien que ses pas ne suivent pas le sol.
 19. **Les animations de 2b.8** : course, saut, chute, lancer et mort sont prêts et vérifiés, à associer aux activités.
+20. **Visages réduits** : au facteur 1,5 (PC aux zooms 8 à 11, Pixel 5 aux zooms 3 et 4), l'œil et les sourcils, gardés d'un bloc où ils comptent assez, s'étalent en une bande sombre sur le visage, surtout chez les enfants composés, dont la tête est plus grande ; un seuil de l'œil propre à chaque niveau l'atténuerait, au prix d'yeux perdus sur certaines images.
