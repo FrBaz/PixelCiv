@@ -53,7 +53,7 @@ Ces algorithmes ont été réécrits à partir de leur description publiée, san
 | Seuil d'aridité de Köppen | Climats secs du classement des biomes (`data/worldgen.json`) | Wladimir Köppen | « Das geographische System der Klimate », *Handbuch der Klimatologie*, 1936 |
 | Mortalité de Siler | Risque de mort selon l'âge, pour chaque espèce (`src/sim/lifecycle.ts` ; paramètres dans `data/species.json`, décrits par `src/core/data/people.ts`) | William Siler | « A competing-risk model for animal mortality », *Ecology* 60, 1979 |
 | Transformation de Box et Muller | Tirages gaussiens des traits continus, à l'apparition comme à l'hérédité (`src/sim/genetics.ts`) | George E. P. Box et Mervin E. Muller | « A Note on the Generation of Random Normal Deviates », *The Annals of Mathematical Statistics* 29, 1958 |
-| Tramage ordonné de Bayer | Couverture de neige et de glace, sans sortir des palettes (`src/render/bake.ts`, `src/render/mapShader.ts`) | Bryce E. Bayer | « An optimum method for two-level rendition of continuous-tone pictures », IEEE International Conference on Communications, 1973 |
+| Tramage ordonné de Bayer | Couverture de neige et de glace, et calme de la mer animée avant le gel, sans sortir des palettes (`src/render/bake.ts`, `src/render/mapShader.ts`, `src/render/waves.ts`) | Bryce E. Bayer | « An optimum method for two-level rendition of continuous-tone pictures », IEEE International Conference on Communications, 1973 |
 
 ## Outils de développement
 
