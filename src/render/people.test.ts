@@ -1,5 +1,15 @@
-import { Container, type Application, type Particle, type Sprite } from 'pixi.js';
-import { describe, expect, it } from 'vitest';
+import {
+  BufferImageSource,
+  Container,
+  DOMAdapter,
+  type Application,
+  type ICanvas,
+  type Particle,
+  type ParticleContainer,
+  type Shader,
+  type Sprite,
+} from 'pixi.js';
+import { describe, expect, it, vi } from 'vitest';
 import { PositionMirror } from '../app/frames';
 import { loadGameData, type Appearance } from '../core/data';
 import { NO_CARRIER, type GroupsFrame, type LegArrays } from '../core/protocol';
@@ -9,6 +19,7 @@ import { visualCode } from '../core/visual';
 import { CHUNK_PX } from './bake';
 import { displayScale, physicalZoom, TILE_PX, visibleChunks, type Camera } from './camera';
 import { viewDensity, type Box } from './crowd';
+import { FIRST_PALETTE_ROWS, PALETTES_PER_ROW, type PaletteTexture } from './humanShader';
 import { LEVEL_ROWS } from './humans';
 import { bannerCloth, PeopleLayer, stepDuration, STEP_MS, type PeopleScene } from './people';
 
@@ -24,14 +35,24 @@ const viewport = { width: 1280, height: 720 };
 const world = { width: 512 * TILE_PX, height: 256 * TILE_PX };
 const grid = { columns: world.width / CHUNK_PX, rows: world.height / CHUNK_PX };
 
-function setup(resolution: number, appearance: Appearance = data.appearance) {
+/**
+ * Le calque sur une fausse application : sans GPU, ou, avec `gl`, un rendu qui se dit WebGL,
+ * pour que le calque pose son shader (rien n'y dessine).
+ */
+function setup(resolution: number, appearance: Appearance = data.appearance, gl = false) {
   const stage = new Container();
-  const app = { renderer: { resolution }, stage } as unknown as Application;
+  const renderer: { resolution: number; gl?: object } = { resolution };
+  if (gl) renderer.gl = {};
+  const app = { renderer, stage } as unknown as Application;
   const people = new PeopleLayer(app, { genetics: data.genetics, appearance, reference });
   const layer = stage.children.at(0);
   if (!(layer instanceof Container)) throw new Error('calque introuvable');
-  return { people, layer };
+  return { people, layer, renderer };
 }
+
+/** Ce que le calque garde pour lui : les particules des humains et leurs palettes. */
+const insides = (people: PeopleLayer) =>
+  people as unknown as { humans: ParticleContainer; palettes: PaletteTexture };
 
 /** Aucune étape. */
 const noLegs = (): LegArrays => ({
@@ -480,6 +501,96 @@ describe('individus à leur position (ADR 0014, ADR 0016)', () => {
     expect(people.drawVersion).toBe(drawn + 3);
     people.clear();
     expect(people.drawVersion).toBe(drawn + 4);
+  });
+
+  it('refait l’image quand la cadence des pas ou la densité de l’écran change, et seulement alors', () => {
+    const { people, renderer } = setup(1);
+    const shown = scene(frame(5, [1, 100, 50, 1]));
+    const camera = aimedAt(100, 50, 8);
+    people.draw(shown, camera, viewport, world);
+    const drawn = people.drawVersion;
+    // La vitesse change la cadence des pas : la même horloge montre une autre image.
+    expect(STEP_MS.fastest).not.toBe(shown.stepMs);
+    people.draw({ ...shown, stepMs: STEP_MS.fastest }, camera, viewport, world);
+    expect(people.drawVersion).toBe(drawn + 1);
+    people.draw({ ...shown, stepMs: STEP_MS.fastest }, camera, viewport, world);
+    expect(people.drawVersion).toBe(drawn + 1);
+    // Le navigateur change de densité (écran, zoom du navigateur) : tout se redispose.
+    renderer.resolution = 2;
+    people.draw({ ...shown, stepMs: STEP_MS.fastest }, camera, viewport, world);
+    expect(people.drawVersion).toBe(drawn + 2);
+  });
+
+  it('pose au premier dessin d’un rendu WebGL le shader des palettes, envoie les palettes et le fait suivre la texture quand elle double', () => {
+    const update = vi.spyOn(BufferImageSource.prototype, 'update');
+    // PixiJS sonde la précision du GPU sur un canevas à la création d'un programme : sans DOM, un
+    // canevas sans contexte WebGL suffit, et rien ne se compile.
+    const adapter = DOMAdapter.get();
+    DOMAdapter.set({
+      ...adapter,
+      createCanvas: () => ({ getContext: () => null }) as unknown as ICanvas,
+    });
+    try {
+      // Sans GPU, aucun shader : les essais disposent sans lui.
+      const plain = setup(1);
+      plain.people.draw(scene(frame(5, [1, 100, 50, 1])), aimedAt(100, 50, 8), viewport, world);
+      expect(insides(plain.people).humans.shader).toBeUndefined();
+      // Huit cultures, six teints, quatre cheveux et deux crans de gris : 384 apparences, de
+      // quoi doubler deux fois la texture et porter les places au-delà de 255.
+      const { people } = setup(1, data.appearance, true);
+      const { humans } = insides(people);
+      expect(humans.shader).toBeUndefined();
+      const codes: number[] = [];
+      for (const skin of [0, 3, 6, 8, 11, 14]) {
+        for (let hair = 0; hair < 4; hair++) {
+          for (const grey of [0, 1]) codes.push(visualCode(1, 2, skin, hair, grey));
+        }
+      }
+      const groups = frame(
+        codes.length,
+        ...Array.from({ length: 8 }, (_, culture): [number, number, number, number] => [
+          culture + 1,
+          100,
+          50,
+          culture + 1,
+        ]),
+      );
+      groups.sprites.set(Array.from({ length: 8 }, () => codes).flat());
+      people.draw(scene(groups), aimedAt(100, 50, 8), viewport, world);
+      const { palettes } = insides(people);
+      // PixiJS le type présent ; il ne l'est qu'une fois posé.
+      const shader = (humans as { shader?: Shader }).shader;
+      expect(shader?.glProgram.fragment).toContain('uPalettes');
+      expect(palettes.count).toBe(8 * codes.length);
+      expect(palettes.rows).toBeGreaterThanOrEqual((8 * codes.length) / PALETTES_PER_ROW);
+      expect(palettes.rows).toBeGreaterThan(FIRST_PALETTE_ROWS);
+      // Le shader lit la texture d'aujourd'hui, à son nombre de rangées, et elle est partie au
+      // GPU ; les sources remplacées se sont libérées.
+      const resources = shader?.resources as {
+        uPalettes: BufferImageSource;
+        humans: { uniforms: { uPaletteRows: number } };
+      };
+      // Des identités, comparées en booléens : un échec n'imprime pas deux textures entières.
+      expect(
+        resources.uPalettes === palettes.source,
+        'le shader lit la texture d’aujourd’hui',
+      ).toBe(true);
+      expect(resources.humans.uniforms.uPaletteRows).toBe(palettes.rows);
+      expect(update.mock.contexts.includes(palettes.source), 'palettes envoyées').toBe(true);
+      // Une image de plus, rien de nouveau : rien ne repart.
+      update.mockClear();
+      people.draw({ ...scene(groups), t: 0.25 }, aimedAt(100, 50, 8), viewport, world);
+      expect(update.mock.contexts.includes(palettes.source), 'rien à renvoyer').toBe(false);
+      // Un monde vidé : une texture neuve, que le shader suit aussitôt.
+      people.clear();
+      expect(resources.uPalettes === insides(people).palettes.source, 'texture neuve suivie').toBe(
+        true,
+      );
+      expect(resources.humans.uniforms.uPaletteRows).toBe(FIRST_PALETTE_ROWS);
+    } finally {
+      update.mockRestore();
+      DOMAdapter.set(adapter);
+    }
   });
 
   it('compte en pause les apparences distinctes de l’image, même quand l’image d’avant ne les a pas comptées', () => {

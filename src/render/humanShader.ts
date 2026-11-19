@@ -36,6 +36,35 @@ export function colorSlot(color: number): number {
   return color & 0xffff;
 }
 
+/**
+ * Le texel de la texture des palettes où se range le rôle `role` de la place `slot` : la
+ * colonne et la rangée. PaletteTexture y écrit et y lit, et le shader y lit (PALETTE_ADDRESS).
+ */
+export function paletteTexel(slot: number, role: number): { column: number; row: number } {
+  return {
+    column: (slot % PALETTES_PER_ROW) * PALETTE_ROLES + role,
+    row: Math.floor(slot / PALETTES_PER_ROW),
+  };
+}
+
+const glslFloat = (value: number) => value.toFixed(1);
+
+/**
+ * L'adressage de la texture des palettes, écrit une seule fois, en expressions GLSL : le shader
+ * des humains les assemble (HUMAN_FRAGMENT), et les essais les évaluent hors du GPU
+ * (humanShader.test.ts), pour vérifier qu'elles relisent la place de slotColor et lisent le
+ * texel de paletteTexel, à tout nombre de rangées. `roleRed` est le rouge du texel de l'atlas
+ * des rôles, `vColor` la couleur de la particule, normalisés comme les lit le GPU.
+ */
+export const PALETTE_ADDRESS = {
+  role: 'floor(roleRed * 255.0 + 0.5)',
+  slot: 'floor(vColor.r * 255.0 + 0.5) + 256.0 * floor(vColor.g * 255.0 + 0.5)',
+  column: `mod(slot, ${glslFloat(PALETTES_PER_ROW)}) * ${glslFloat(PALETTE_ROLES)} + role`,
+  row: `floor(slot / ${glslFloat(PALETTES_PER_ROW)})`,
+  u: `(column + 0.5) / ${glslFloat(PALETTE_WIDTH)}`,
+  v: '(row + 0.5) / uPaletteRows',
+} as const;
+
 export const HUMAN_VERTEX = /* glsl */ `attribute vec2 aVertex;
 attribute vec2 aUV;
 attribute vec4 aColor;
@@ -74,12 +103,13 @@ uniform sampler2D uPalettes;
 uniform float uPaletteRows;
 
 void main(void) {
-  float role = floor(texture2D(uTexture, vUV).r * 255.0 + 0.5);
+  float roleRed = texture2D(uTexture, vUV).r;
+  float role = ${PALETTE_ADDRESS.role};
   if (role < 0.5) discard;
-  float slot = floor(vColor.r * 255.0 + 0.5) + 256.0 * floor(vColor.g * 255.0 + 0.5);
-  float column = mod(slot, ${PALETTES_PER_ROW.toFixed(1)}) * ${PALETTE_ROLES.toFixed(1)} + role;
-  float row = floor(slot / ${PALETTES_PER_ROW.toFixed(1)});
-  vec2 at = vec2((column + 0.5) / ${PALETTE_WIDTH.toFixed(1)}, (row + 0.5) / uPaletteRows);
+  float slot = ${PALETTE_ADDRESS.slot};
+  float column = ${PALETTE_ADDRESS.column};
+  float row = ${PALETTE_ADDRESS.row};
+  vec2 at = vec2(${PALETTE_ADDRESS.u}, ${PALETTE_ADDRESS.v});
   gl_FragColor = vec4(texture2D(uPalettes, at).rgb, 1.0);
 }
 `;
@@ -153,8 +183,8 @@ export class PaletteTexture {
   }
 
   private write(slot: number, palette: HumanPalette): void {
-    const row = Math.floor(slot / PALETTES_PER_ROW);
-    const start = (row * PALETTE_WIDTH + (slot % PALETTES_PER_ROW) * PALETTE_ROLES) * 4;
+    const { column, row } = paletteTexel(slot, 0);
+    const start = (row * PALETTE_WIDTH + column) * 4;
     for (let role = 0; role < PALETTE_ROLES; role++) {
       const color = palette[role];
       const at = start + role * 4;
@@ -190,8 +220,8 @@ export class PaletteTexture {
 
   /** Couleur du rôle `role` de la place `slot`, telle que la lit le shader (essais). */
   colorAt(slot: number, role: number): readonly [number, number, number, number] {
-    const row = Math.floor(slot / PALETTES_PER_ROW);
-    const at = (row * PALETTE_WIDTH + (slot % PALETTES_PER_ROW) * PALETTE_ROLES + role) * 4;
+    const { column, row } = paletteTexel(slot, role);
+    const at = (row * PALETTE_WIDTH + column) * 4;
     return [
       this.pixels[at] ?? 0,
       this.pixels[at + 1] ?? 0,
