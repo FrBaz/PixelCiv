@@ -22,11 +22,12 @@ function rows(): Map<string, string> {
   );
 }
 
-describe('panneau de débogage (ADR 0013, ADR 0014)', () => {
+describe('panneau de débogage (ADR 0013, ADR 0014, ADR 0015)', () => {
   it('montre la durée d’un jour et du pas mensuel, les jours par lot, les marcheurs et ce que coûtent les individus', () => {
     debugOpen.value = true;
     debugInfo.value = {
       fps: 59.6,
+      drawnFps: 4.04,
       worstFrameMs: 18.24,
       dayMs: 0.0043,
       monthMs: 12.37,
@@ -66,6 +67,9 @@ describe('panneau de débogage (ADR 0013, ADR 0014)', () => {
     expect(shown.get('Textures')).toBe("140 dans l'image, 412 gardées");
     expect(shown.get("Pages de l'atlas")).toBe('1');
     expect(shown.get('Appels de dessin')).toBe('37');
+    // Le rendu à la demande ne dessine que les images qui changent (ADR 0015).
+    expect(shown.get('Images par seconde')).toBe('60');
+    expect(shown.get('Images dessinées par seconde')).toBe('4');
     // Sans mesure, chaque ligne le dit.
     debugInfo.value = {
       ...debugInfo.value,

@@ -47,6 +47,8 @@ export const generationMs = signal<number | undefined>(undefined);
 /** Mesures du panneau de débogage, rafraîchies quelques fois par seconde. */
 export interface DebugInfo {
   readonly fps: number;
+  /** Images dessinées par seconde : le rendu à la demande ne dessine que celles qui changent. */
+  readonly drawnFps: number;
   readonly worstFrameMs: number;
   /** Durée moyenne d'un jour, du pas mensuel et du plus long des pas mensuels récents. */
   readonly dayMs: number | undefined;

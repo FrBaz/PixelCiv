@@ -151,6 +151,12 @@ export class MapView {
   private seaShown = false;
   /** Le programme de l'onde a-t-il été compilé, hors de l'écran ? */
   private warmed = false;
+  /**
+   * Version de ce que montrent les blocs, hors caméra, saison et onde : augmentée à chaque
+   * texture envoyée (bloc cuit, données des saisons, superposition), à chaque mode, à chaque
+   * monde et à chaque table de l'onde. La signature de l'image la lit (rendu à la demande).
+   */
+  private version = 0;
   private readonly palettes: BufferImageSource;
   private readonly baker: Baker;
   private grid: ChunkGrid | undefined;
@@ -233,6 +239,7 @@ export class MapView {
     );
     this.globals.uniforms.uWorldCells = new Float32Array([size.width, size.height]);
     this.waveGlobals.uniforms.uWorldPx = grid.columns * CHUNK_PX;
+    this.version++;
     this.setWaves(this.waveStep, this.waveForce);
     this.chunks = Array.from({ length: grid.columns * grid.rows }, (_, index) =>
       this.chunkView(index % grid.columns, Math.floor(index / grid.columns)),
@@ -252,6 +259,7 @@ export class MapView {
       this.waveForce = strength;
       this.table = waveTable(this.biomes, strength);
       this.applyWaveTable();
+      this.version++;
     }
     this.waveStep = step;
     const width = this.world?.width ?? CHUNK_PX;
@@ -261,6 +269,20 @@ export class MapView {
   /** Un bloc à l'écran montrait-il l'onde, à la dernière image ? */
   get wavesShown(): boolean {
     return this.seaShown;
+  }
+
+  /**
+   * Signature de ce que la carte a dessiné à la dernière image, hors caméra et écran : sa
+   * version, la saison, la force de l'onde, et son pas si un bloc à l'écran la montre. Le rendu
+   * à la demande ne redessine l'image que si elle change (src/render/frameGate.ts).
+   */
+  signature(): readonly number[] {
+    return [
+      this.version,
+      this.globals.uniforms.uSeason,
+      this.waveForce,
+      this.seaShown ? this.waveStep : -1,
+    ];
   }
 
   /** Les uniformes de la table de l'onde. */
@@ -305,6 +327,7 @@ export class MapView {
       data.update();
     }
     if (this.mode !== 'natural') this.setMode(this.mode);
+    this.version++;
   }
 
   /** Mois courant, continu : 0 au début de janvier, 11,5 à la mi-décembre. */
@@ -315,6 +338,7 @@ export class MapView {
   /** Mode de carte : sa superposition se calcule à la demande. */
   setMode(mode: MapMode): void {
     this.mode = mode;
+    this.version++;
     this.globals.uniforms.uMode = mode === 'natural' ? 0 : mode === 'resources' ? 2 : 1;
     const overlay = this.overlay;
     if (mode === 'natural' || overlay === undefined || this.overlays === undefined) return;
@@ -456,5 +480,6 @@ export class MapView {
     chunk.source.update();
     chunk.baked = true;
     chunk.sea = sea;
+    this.version++;
   }
 }

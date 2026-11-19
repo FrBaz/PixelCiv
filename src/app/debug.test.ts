@@ -189,6 +189,40 @@ describe('DebugSampler', () => {
     expect(sample.timeline.receive).toBeCloseTo(0.3, 9);
   });
 
+  it('compte les images dessinées, et ne mesure le rendu que sur elles (rendu à la demande)', () => {
+    const sampler = new DebugSampler();
+    const people = {
+      positionsMs: 0,
+      sortMs: 0,
+      spritesMs: 0,
+      drawn: 10,
+      textures: 3,
+      cached: 3,
+      pages: 1,
+    };
+    // En pause, une image dessinée sur quinze : le pas de la mer animée, quatre fois par seconde.
+    for (let frameIndex = 0; frameIndex < 120; frameIndex++) {
+      const rendered = frameIndex % 15 === 0;
+      sampler.frame(1000 / 60, {
+        ...people,
+        updateMs: 0.1,
+        renderMs: rendered ? 4 : 0,
+        drawCalls: rendered ? 9 : 0,
+        rendered,
+      });
+    }
+    const sample = sampler.sample();
+    expect(sample.fps).toBeCloseTo(60, 0);
+    expect(sample.drawnFps).toBeCloseTo(4, 0);
+    expect(sample.main.render).toBeCloseTo(4, 9);
+    // Les appels de dessin : ceux de la dernière image dessinée.
+    expect(sample.drawCalls).toBe(9);
+    // Sans réponse, une image compte comme dessinée.
+    const plain = new DebugSampler();
+    for (let i = 0; i < 60; i++) plain.frame(1000 / 60);
+    expect(plain.sample().drawnFps).toBeCloseTo(60, 0);
+  });
+
   it('compte les appels de dessin WebGL de chaque image', () => {
     const calls: string[] = [];
     const gl = {

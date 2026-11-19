@@ -13,8 +13,13 @@
 import { GROUP_STRIDE, type GroupsFrame, type LegArrays, type StepStats } from '../core/protocol';
 
 export interface DebugSample {
-  /** Images par seconde, sur la dernière seconde. */
+  /** Images par seconde, sur la dernière seconde : les tics de l'animation. */
   readonly fps: number;
+  /**
+   * Images dessinées par seconde, sur la dernière seconde : le rendu à la demande ne dessine
+   * que celles qui changent (ADR 0010, tâche 2b.4).
+   */
+  readonly drawnFps: number;
   /** Image la plus longue de la dernière seconde, en millisecondes. */
   readonly worstFrameMs: number;
   /** Durée moyenne d'un jour ordinaire, hors pas mensuel, en millisecondes. */
@@ -75,6 +80,8 @@ export interface FrameCost {
   /** Le rappel de l'image, et le rendu de la scène par PixiJS qui le suit. */
   readonly updateMs?: number;
   readonly renderMs?: number;
+  /** L'image a-t-elle été dessinée (rendu à la demande) ? Sans réponse, elle l'a été. */
+  readonly rendered?: boolean;
   /** L'instant affiché de la chronologie, et les messages qu'elle a reçus depuis l'image d'avant. */
   readonly showMs?: number;
   readonly receiveMs?: number;
@@ -169,13 +176,17 @@ export class DebugSampler {
   sample(now?: number): DebugSample {
     const total = this.frames.reduce((sum, duration) => sum + duration, 0);
     const costs = this.costs.filter((cost): cost is FrameCost => cost !== undefined);
-    const average = (pick: (cost: FrameCost) => number) =>
-      costs.length === 0 ? 0 : costs.reduce((sum, cost) => sum + pick(cost), 0) / costs.length;
-    const last = costs.at(-1);
+    const average = (pick: (cost: FrameCost) => number, of = costs) =>
+      of.length === 0 ? 0 : of.reduce((sum, cost) => sum + pick(cost), 0) / of.length;
+    // Le rendu et ce qu'il dessine se lisent sur les images dessinées.
+    const rendered = costs.filter((cost) => cost.rendered !== false);
+    const last = rendered.at(-1) ?? costs.at(-1);
     const recent =
       now === undefined ? undefined : this.received.filter((entry) => entry.at > now - 1000);
+    const undrawn = this.costs.filter((cost) => cost?.rendered === false).length;
     return {
       fps: total > 0 ? (this.frames.length * 1000) / total : 0,
+      drawnFps: total > 0 ? ((this.frames.length - undrawn) * 1000) / total : 0,
       worstFrameMs: Math.max(0, ...this.frames),
       dayMs:
         this.dayCount > 0
@@ -189,7 +200,7 @@ export class DebugSampler {
       positionBytesPerSecond: recent?.reduce((sum, entry) => sum + entry.bytes, 0),
       main: {
         update: average((cost) => cost.updateMs ?? 0),
-        render: average((cost) => cost.renderMs ?? 0),
+        render: average((cost) => cost.renderMs ?? 0, rendered),
       },
       timeline: {
         show: average((cost) => cost.showMs ?? 0),

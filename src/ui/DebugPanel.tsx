@@ -1,6 +1,6 @@
 /**
- * Panneau de débogage (NF-01, ADR 0013, ADR 0014) : images par seconde, ce que coûte une
- * image au fil principal (mise à jour et rendu, chronologie des individus, dessin des
+ * Panneau de débogage (NF-01, ADR 0013, ADR 0014, ADR 0015) : images par seconde, et celles
+ * que le rendu à la demande dessine, ce que coûte une image au fil principal (mise à jour et rendu, chronologie des individus, dessin des
  * individus : positions, tri, sprites), durée d'un jour et du pas mensuel, jours par lot,
  * marcheurs, positions reçues, sprites, textures et appels de dessin, mémoire, monde (graine,
  * taille, durée de la génération, blocs à cuire), contenu et auto-test du déterminisme. Il
@@ -65,6 +65,7 @@ export function DebugPanel() {
       'debug.fps',
       info === undefined ? t('debug.unavailable') : t('unit.number', { value: round(info.fps, 0) }),
     ],
+    ['debug.drawnFps', number(info?.drawnFps, 1)],
     ['debug.frame', milliseconds(info?.worstFrameMs)],
     [
       'debug.frameCost',

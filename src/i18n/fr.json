@@ -136,6 +136,7 @@
   "debug.toggle": "Débogage",
   "debug.title": "Débogage",
   "debug.fps": "Images par seconde",
+  "debug.drawnFps": "Images dessinées par seconde",
   "debug.frame": "Image la plus longue",
   "debug.frameCost": "Mise à jour, rendu de l'image",
   "debug.frameCostValue": "{update} + {render} ms",

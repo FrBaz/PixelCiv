@@ -28,7 +28,8 @@ import { previewPixels } from '../render/preview';
 import { SPAWN_COUNT } from '../sim/commands';
 import { walkCost } from '../sim/terrain';
 import type { SheetContent } from '../ui/Sheet';
-import { createRenderer, timeRendering } from '../render/renderer';
+import { FrameGate, invalidateOnRestore } from '../render/frameGate';
+import { createRenderer, renderOnDemand, timeRendering } from '../render/renderer';
 import { WAVE_STEP_MS } from '../render/waves';
 import { App } from '../ui/App';
 import { escapeKey } from '../ui/escape';
@@ -411,9 +412,20 @@ async function main(): Promise<void> {
   // dont l'instant affiché de la chronologie ; les messages que celle-ci reçoit d'une image à
   // l'autre ; le rendu de la scène par PixiJS, qui suit le rappel.
   const frameCost = { updateMs: 0, renderMs: 0, showMs: 0, receiveMs: 0 };
-  timeRendering(app.ticker, (milliseconds) => {
-    frameCost.renderMs = milliseconds;
-  });
+  // L'image à la demande (ADR 0010) : elle ne se redessine que si sa signature change, ou si
+  // la page l'a perdue. Débogage : ?gate=off la redessine à chaque image, comme avant 2b.4.
+  const gate = new FrameGate();
+  const gated = query.get('gate') !== 'off';
+  let drawWanted = true;
+  const frames = renderOnDemand(app, () => drawWanted);
+  invalidateOnRestore(gate, { canvas: app.canvas, document, window });
+  timeRendering(
+    app.ticker,
+    (milliseconds) => {
+      frameCost.renderMs = milliseconds;
+    },
+    () => frames.drawn,
+  );
   let sheetRefresh = 0;
   // Au retour d'un onglet masqué, la première image couvre toute l'absence : elle ne
   // compte pas comme une image lente.
@@ -437,7 +449,14 @@ async function main(): Promise<void> {
     // messages reçus depuis ; elle a fait ses appels de dessin.
     const calls = drawCalls.take();
     if (returning) returning = false;
-    else sampler.frame(ticker.elapsedMS, { ...people.stats, ...frameCost, drawCalls: calls });
+    else {
+      sampler.frame(ticker.elapsedMS, {
+        ...people.stats,
+        ...frameCost,
+        drawCalls: calls,
+        rendered: frames.drawn,
+      });
+    }
     frameCost.receiveMs = 0;
     const now = performance.now();
     // L'instant affiché : les saisons, les individus et la date le suivent ensemble.
@@ -471,6 +490,20 @@ async function main(): Promise<void> {
       map.viewport,
       map.world,
     );
+    // Ce que l'image montre : l'instant, la caméra, l'écran, la carte et les individus.
+    const viewport = map.viewport;
+    const changed = gate.changed([
+      shown,
+      camera.x,
+      camera.y,
+      camera.zoom,
+      viewport.width,
+      viewport.height,
+      app.renderer.resolution,
+      ...map.signature(),
+      people.drawVersion,
+    ]);
+    drawWanted = changed || !gated;
     frameCost.updateMs = performance.now() - now;
   });
   setInterval(() => {

@@ -170,3 +170,53 @@ describe('mer animée sur la carte (ADR 0015)', () => {
     expect(mesh.waves?.uniforms.uWorldPx).toBe(size.width * 4);
   });
 });
+
+describe('version et signature de la carte (rendu à la demande, ADR 0010)', () => {
+  it('change de signature avec ce qu’elle dessine, et seulement avec cela', () => {
+    const { map } = mapView();
+    const camera = { x: 128, y: 384, zoom: 2 };
+    map.setSeason(1);
+    map.setWaves(5, 1);
+    map.draw(camera);
+    const first = map.signature();
+    // Rien ne change : la même signature.
+    map.setSeason(1);
+    map.setWaves(5, 1);
+    map.draw(camera);
+    expect(map.signature()).toEqual(first);
+    // Le pas de l'onde y entre quand elle se voit, et seulement alors.
+    map.setWaves(6, 1);
+    map.draw(camera);
+    expect(map.signature()).not.toEqual(first);
+    const land = { x: 1024, y: 384, zoom: 2 };
+    map.draw(land);
+    const still = map.signature();
+    map.setWaves(7, 1);
+    map.draw(land);
+    expect(map.signature()).toEqual(still);
+    // La force, la saison, le mode, un bloc cuit, des cases repeintes : une autre signature.
+    const changes: (() => void)[] = [
+      () => {
+        map.setWaves(7, 0.5);
+      },
+      () => {
+        map.setSeason(2);
+      },
+      () => {
+        map.setMode('biomes');
+      },
+      () => {
+        baker.listener?.(3, 1, new Uint8Array(CHUNK_PX * CHUNK_PX * 4), false);
+      },
+      () => {
+        map.updateChunks([{ column: 3, row: 1, biome: new Uint8Array(64 * 64) }]);
+      },
+    ];
+    for (const change of changes) {
+      const before = map.signature();
+      change();
+      map.draw(land);
+      expect(map.signature()).not.toEqual(before);
+    }
+  });
+});
