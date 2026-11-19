@@ -35,7 +35,7 @@ import {
   keptTones,
   parseRegionGrids,
   RECOLOR,
-  reduceRoles,
+  reduceFigure,
   roleParts,
   toneKinds,
   trimRoles,
@@ -219,7 +219,7 @@ export function buildHumanAtlas(
         chosen.forEach((animation, a) => {
           index[slot(body, l, variant, a)] = images.length;
           for (const image of frames[sex][animation] ?? []) {
-            images.push(trimRoles(reduceRoles(image, factor, outline, eyes)));
+            images.push(trimRoles(reduceFigure(image, factor, outline, eyes, head, level.head)));
             owners.push(body);
           }
         });

@@ -14,8 +14,10 @@ import {
   parseRegionGrids,
   RECOLOR,
   recolorRole,
+  reduceFigure,
   reduceRoles,
   roleParts,
+  thickOutline,
   toneKinds,
   trimRoles,
   youngRoles,
@@ -212,6 +214,131 @@ describe('rôles des humains des planches (ADR 0016)', () => {
       for (const role of young.roles)
         expect(role === 0 || role === KEPT || input.has(role)).toBe(true);
     }
+  });
+
+  it('ne tire d’un pixel d’œil qu’un pixel d’œil, où que tombe la grille', () => {
+    // Un œil d'un pixel dans un visage : à ×1,5, il chevauche jusqu'à quatre blocs, qui le
+    // prenaient tous ; seul celui où tombe son centre le garde (ADR 0016, § 7).
+    const eye = KEPT + 1;
+    for (const factor of [1.5, 2, 2.5, 3]) {
+      for (let shift = 0; shift < 4; shift++) {
+        const width = 12;
+        const rows = 24 + shift;
+        const roles = new Uint8Array(width * rows).fill(recolorRole(1, 0, 1));
+        roles[(6 + shift) * width + 5] = eye;
+        const reduced = reduceRoles(
+          { width, height: rows, roles, anchorX: 6, anchorY: rows },
+          factor,
+          'none',
+          [eye],
+        );
+        const eyes = reduced.roles.filter((role) => role === eye).length;
+        expect(eyes, `×${String(factor)}, décalage ${String(shift)}`).toBe(1);
+      }
+    }
+  });
+
+  /**
+   * Un adulte fabriqué : la tête (cuir chevelu 0, visage 1, deux yeux) en haut de `head` rangées
+   * depuis `top`, le corps (région 2) jusqu'aux pieds, contour autour.
+   */
+  function adult(top: number, rows = 40, width = 9): RoleImage {
+    const roles = new Uint8Array(width * rows);
+    for (let y = top; y < rows; y++) {
+      for (let x = 0; x < width; x++) {
+        const edge = x === 0 || x === width - 1 || y === top;
+        const row = y - top;
+        const region = row < 6 ? 0 : row < 10 ? 1 : 2;
+        roles[y * width + x] = edge ? KEPT : recolorRole(region, 0, (x + y) % 3);
+      }
+    }
+    roles[(top + 6) * width + 2] = KEPT + 1;
+    roles[(top + 6) * width + 5] = KEPT + 1;
+    return { width, height: rows, roles, anchorX: Math.floor(width / 2), anchorY: rows };
+  }
+
+  /** Les rangées de la tête d'une image de rôles (cuir chevelu, visage, yeux), en texte. */
+  function headRows(image: RoleImage): string[] {
+    const out: string[] = [];
+    for (let y = 0; y < image.height; y++) {
+      const row = [...image.roles.subarray(y * image.width, (y + 1) * image.width)];
+      const inHead = row.some(
+        (role) => role === KEPT + 1 || (role >= RECOLOR && roleParts(role).region < 2),
+      );
+      if (!inHead) continue;
+      out.push(
+        row
+          .map((role) =>
+            role === 0
+              ? '.'
+              : role === KEPT + 1
+                ? '*'
+                : role < RECOLOR
+                  ? '#'
+                  : 'CVB'[roleParts(role).region],
+          )
+          .join(''),
+      );
+    }
+    return out;
+  }
+
+  it('réduit la tête sur la grille de ses yeux : une rangée d’yeux puis une de visage, la même où que soit la tête', () => {
+    for (const factor of [3, 4]) {
+      const heads = [0, 1, 2, 3].map((top) =>
+        headRows(reduceFigure(adult(top), factor, 'none', [KEPT + 1], [0, 1], 'eyes')),
+      );
+      // Le balancement déplace la tête d'une rangée de la planche : sa réduction ne change pas.
+      for (const head of heads) expect(head, `×${String(factor)}`).toEqual(heads[0]);
+      const eyesRow = heads[0]?.findIndex((row) => row.includes('*')) ?? -1;
+      expect(eyesRow).toBeGreaterThanOrEqual(0);
+      expect(heads[0]?.[eyesRow + 1] ?? '', `×${String(factor)}`).toContain('V');
+    }
+    // Grille des pieds, ou planche à sa taille : la réduction ordinaire.
+    const image = adult(1);
+    expect(reduceFigure(image, 3, 'none', [KEPT + 1], [0, 1], 'feet')).toEqual(
+      reduceRoles(image, 3, 'none', [KEPT + 1]),
+    );
+    expect(reduceFigure(image, 1, 'keep', [KEPT + 1], [0, 1], 'eyes')).toBe(image);
+  });
+
+  it('ne pose qu’une ligne de contour entre la tête et le corps d’une tête réduite à part', () => {
+    const doubled = (image: RoleImage) => {
+      for (let y = 0; y + 1 < image.height; y++) {
+        let run = 0;
+        for (let x = 0; x < image.width; x++) {
+          const line = (row: number) => image.roles[row * image.width + x] === KEPT;
+          run = line(y) && line(y + 1) ? run + 1 : 0;
+          if (run >= 3) return true;
+        }
+      }
+      return false;
+    };
+    for (const factor of [1.5, 2]) {
+      expect(doubled(reduceFigure(adult(1), factor, 'thick', [KEPT + 1], [0, 1], 'eyes'))).toBe(
+        false,
+      );
+    }
+    for (const [rows, head] of [
+      [26, 9],
+      [26, 10],
+      [19, 8],
+    ] as const) {
+      expect(doubled(youngRoles(adult(1), rows, head, 'thick', [KEPT + 1], [0, 1]))).toBe(false);
+    }
+  });
+
+  it('retrace le contour là où la forme est épaisse, sans toucher aux pixels gelés', () => {
+    const width = 5;
+    const roles = new Uint8Array(width * 5).fill(recolorRole(0, 0, 1));
+    const image = { width, height: 5, roles, anchorX: 2, anchorY: 5 };
+    const outlined = thickOutline(image);
+    expect(outlined.roles[0]).toBe(recolorRole(0, 0, 1));
+    expect(outlined.roles[1]).toBe(KEPT);
+    expect(outlined.roles[2 * width + 2]).toBe(recolorRole(0, 0, 1));
+    const frozen = new Uint8Array(width * 5);
+    frozen[1] = 1;
+    expect(thickOutline(image, frozen).roles[1]).toBe(recolorRole(0, 0, 1));
   });
 
   it('recadre une image sur ses pixels, pieds gardés', () => {

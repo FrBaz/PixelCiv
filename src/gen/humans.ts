@@ -203,13 +203,16 @@ export function cellRoles(
   return { width: cellWidth, height: cellHeight, roles, anchorX: anchor[0], anchorY: anchor[1] };
 }
 
-/** Pixels de l'entrée qui recouvrent [x0, x0 + f) × [y0, y0 + f), et la part de chacun. */
+/**
+ * Pixels de l'entrée qui recouvrent [x0, x0 + f) × [y0, y0 + f), la part de chacun, et si son
+ * centre tombe dans le bloc.
+ */
 function cover(
   image: RoleImage,
   x0: number,
   y0: number,
   f: number,
-  visit: (role: number, weight: number) => void,
+  visit: (role: number, weight: number, centered: boolean) => void,
 ): void {
   const fromY = Math.max(0, Math.floor(y0));
   const toY = Math.min(image.height, Math.ceil(y0 + f));
@@ -218,21 +221,27 @@ function cover(
   for (let y = fromY; y < toY; y++) {
     const wy = Math.min(y + 1, y0 + f) - Math.max(y, y0);
     if (wy <= 0) continue;
+    const middleY = y + 0.5 >= y0 && y + 0.5 < y0 + f;
     for (let x = fromX; x < toX; x++) {
       const wx = Math.min(x + 1, x0 + f) - Math.max(x, x0);
-      if (wx > 0) visit(image.roles[y * image.width + x] ?? 0, wx * wy);
+      const centered = middleY && x + 0.5 >= x0 && x + 0.5 < x0 + f;
+      if (wx > 0) visit(image.roles[y * image.width + x] ?? 0, wx * wy, centered);
     }
   }
 }
 
 export type OutlineMode = 'keep' | 'thick' | 'none';
 
+/** Part d'un bloc que l'œil doit couvrir pour s'y montrer (reduceRoles). */
+const EYE_SHARE = 0.05;
+
 /**
  * Réduction d'une image de rôles d'un facteur f ≥ 1, pieds sur pieds (méthode retenue, ADR
  * 0016) : un pixel de sortie est opaque si l'entrée l'est sur 45 % de sa surface au moins ;
  * son rôle est celui de la région la plus présente (peau et sous-vêtement à part), au rang
- * moyen de ses pixels, arrondi, ou l'œil s'il en couvre assez ; une ligne de contour intérieure
- * y devient l'ombre profonde de la région. Au bord, le contour d'un pixel n'est retracé que là
+ * moyen de ses pixels, arrondi, ou l'œil, dans le seul bloc où tombe le centre d'un pixel d'œil
+ * et s'il y compte assez (un œil de la planche ne donne qu'un œil de la réduction) ; une ligne de
+ * contour intérieure y devient l'ombre profonde de la région. Au bord, le contour d'un pixel n'est retracé que là
  * où la forme a trois pixels d'épaisseur au moins (« thick »), ou pas du tout (« none »). Les
  * rôles de sortie sont donc tous des rôles de l'entrée, ou le contour : aucune couleur nouvelle.
  * `eyes` sont les rôles des yeux (eyeRoles).
@@ -258,14 +267,17 @@ export function reduceRoles(
       const x0 = image.anchorX + (u - outLeft) * f;
       weights.fill(0);
       let total = 0;
-      cover(image, x0, y0, f, (role, weight) => {
+      let eye = -1;
+      cover(image, x0, y0, f, (role, weight, centered) => {
         weights[role] = (weights[role] ?? 0) + weight;
         total += weight;
+        if (centered && eyes.includes(role)) eye = role;
       });
       const opaque = total - weights[0];
       if (total === 0 || opaque === 0 || opaque / (f * f) < threshold) continue;
       solid[v * width + u] = 1;
-      inner[v * width + u] = interior(weights, opaque, f, eyes);
+      const seen = eye >= 0 && (weights[eye] ?? 0) >= EYE_SHARE * f * f;
+      inner[v * width + u] = seen ? eye : interior(weights, opaque, eyes);
       filled++;
     }
     return filled;
@@ -280,41 +292,40 @@ export function reduceRoles(
   if (grounded && height > 0 && fill(height - 1, 0.45) === 0 && fill(height - 1, 0.2) === 0) {
     fill(height - 1, Number.MIN_VALUE);
   }
-  const roles = new Uint8Array(width * height);
+  // Le rôle intérieur de chaque pixel opaque, jamais 0 (interior), puis le contour.
+  const voted = { width, height, roles: inner, anchorX: outLeft, anchorY: height };
+  return outline === 'thick' ? thickOutline(voted) : voted;
+}
+
+/**
+ * Le contour retracé d'une réduction (« thick ») : un pixel du bord de la forme (un de ses quatre
+ * voisins est vide) devient le contour s'il touche un pixel de l'intérieur, c'est-à-dire là où la
+ * forme a trois pixels d'épaisseur au moins. Les autres pixels gardent leur rôle, et ceux que
+ * marque `frozen` aussi (une tête gardée à la taille de la planche, avec son contour d'origine).
+ */
+export function thickOutline(image: RoleImage, frozen?: Uint8Array): RoleImage {
+  const { width, height } = image;
   const at = (u: number, v: number) =>
-    u >= 0 && u < width && v >= 0 && v < height && solid[v * width + u] === 1;
+    u >= 0 && u < width && v >= 0 && v < height && (image.roles[v * width + u] ?? 0) !== 0;
   const edge = (u: number, v: number) =>
     !at(u - 1, v) || !at(u + 1, v) || !at(u, v - 1) || !at(u, v + 1);
+  const inward = (u: number, v: number) => at(u, v) && !edge(u, v);
+  const roles = new Uint8Array(width * height);
   for (let v = 0; v < height; v++) {
     for (let u = 0; u < width; u++) {
       if (!at(u, v)) continue;
-      const inward = (a: number, b: number) => at(a, b) && !edge(a, b);
       const thick =
-        outline === 'thick' &&
+        frozen?.[v * width + u] !== 1 &&
         edge(u, v) &&
         (inward(u - 1, v) || inward(u + 1, v) || inward(u, v - 1) || inward(u, v + 1));
-      roles[v * width + u] = thick ? KEPT : (inner[v * width + u] ?? KEPT);
+      roles[v * width + u] = thick ? KEPT : (image.roles[v * width + u] ?? KEPT);
     }
   }
-  return { width, height, roles, anchorX: outLeft, anchorY: height };
+  return { ...image, roles };
 }
 
-/** Rôle intérieur d'un bloc : l'œil, ou la région dominante au rang moyen, ou le contour. */
-function interior(
-  weights: Float64Array,
-  opaque: number,
-  f: number,
-  eyes: readonly number[],
-): number {
-  let eye = -1;
-  let eyeWeight = 0;
-  for (const role of eyes) {
-    if ((weights[role] ?? 0) > eyeWeight) {
-      eye = role;
-      eyeWeight = weights[role] ?? 0;
-    }
-  }
-  if (eye >= 0 && eyeWeight >= 0.05 * f * f) return eye;
+/** Rôle intérieur d'un bloc sans œil : la région dominante au rang moyen, ou le contour. */
+function interior(weights: Float64Array, opaque: number, eyes: readonly number[]): number {
   // Région et source dominantes.
   let best = -1;
   let bestWeight = 0;
@@ -396,10 +407,122 @@ function masked(
 }
 
 /**
+ * Colle une tête réduite `face` sur un corps réduit `body` au facteur `fb` : le point d'ancrage de
+ * la tête, (pointX, pointY) dans l'image d'origine `image`, à sa place dans le corps réduit,
+ * arrondie (et, avec `touch`, descendue d'une rangée si l'arrondi laissait un trou au cou). La
+ * tête passe devant le corps ; `head` marque ses pixels dans la figure.
+ */
+function pasteHead(
+  image: RoleImage,
+  body: RoleImage,
+  face: RoleImage,
+  pointX: number,
+  pointY: number,
+  fb: number,
+  touch = false,
+): { figure: RoleImage; head: Uint8Array } {
+  const neckX = body.anchorX + Math.round((pointX - image.anchorX) / fb);
+  let neckY = body.anchorY - Math.round((image.anchorY - pointY) / fb);
+  if (touch && gapUnder(body, face, neckX, neckY)) neckY++;
+  const left = Math.min(0, neckX - face.anchorX);
+  const up = Math.min(0, neckY - face.anchorY);
+  const width = Math.max(body.width, neckX - face.anchorX + face.width) - left;
+  const height = body.height - up;
+  const roles = new Uint8Array(width * height);
+  const head = new Uint8Array(width * height);
+  const paste = (part: RoleImage, ox: number, oy: number, mark: number) => {
+    for (let y = 0; y < part.height; y++) {
+      for (let x = 0; x < part.width; x++) {
+        const role = part.roles[y * part.width + x] ?? 0;
+        if (role === 0) continue;
+        roles[(y + oy) * width + x + ox] = role;
+        head[(y + oy) * width + x + ox] = mark;
+      }
+    }
+  };
+  paste(body, -left, -up, 0);
+  paste(face, neckX - face.anchorX - left, neckY - face.anchorY - up, 1);
+  return { figure: { width, height, roles, anchorX: body.anchorX - left, anchorY: height }, head };
+}
+
+/**
+ * Une rangée vide sépare-t-elle la tête, posée le point d'ancrage en (neckX, neckY) du corps, du
+ * haut du corps ? Sous la dernière rangée de la tête, dans ses colonnes, le corps n'a aucun pixel,
+ * et il en a à la rangée suivante : l'arrondi de la place a laissé un trou au cou.
+ */
+function gapUnder(body: RoleImage, face: RoleImage, neckX: number, neckY: number): boolean {
+  let bottom = -1;
+  for (let index = 0; index < face.roles.length; index++) {
+    if ((face.roles[index] ?? 0) !== 0) bottom = Math.max(bottom, Math.floor(index / face.width));
+  }
+  if (bottom < 0) return false;
+  const opaque = (x: number, y: number) =>
+    x >= 0 &&
+    y >= 0 &&
+    x < body.width &&
+    y < body.height &&
+    (body.roles[y * body.width + x] ?? 0) !== 0;
+  const row = neckY - face.anchorY + bottom + 1;
+  let below = false;
+  for (let x = 0; x < face.width; x++) {
+    if ((face.roles[bottom * face.width + x] ?? 0) === 0) continue;
+    const bx = neckX - face.anchorX + x;
+    if (opaque(bx, row)) return false;
+    if (opaque(bx, row + 1)) below = true;
+  }
+  return below;
+}
+
+/** Grille de la tête d'une réduction : celle des pieds, avec le corps, ou la sienne, calée sous les yeux. */
+export type HeadGrid = 'feet' | 'eyes';
+
+/**
+ * Réduction d'une figure d'adulte d'un facteur f (ADR 0016, § 7). Grille « feet » : reduceRoles,
+ * toute la figure sur la grille de ses pieds. Grille « eyes » : le corps sur la grille de ses
+ * pieds, la tête (les régions `headRegions` et les traits qui les bordent) sur une grille à elle,
+ * dont une ligne passe juste sous les yeux : une rangée de la tête réduite finit sur les yeux, la
+ * suivante n'a que du visage, si bien que l'œil, qui l'emporte dans son bloc, ne prend pas la
+ * rangée du visage. La tête se réduit alors de même à chaque image où son dessin ne fait que se
+ * déplacer : le balancement la monte ou la descend sans changer ce qu'elle montre. Elle se colle
+ * à sa place, arrondie, et descend d'une rangée si l'arrondi laissait un trou au cou. Sans yeux,
+ * sa grille se cale sur le menton. Le contour retracé se pose ensuite sur la figure entière.
+ * Mêmes règles que reduceRoles : aucune couleur nouvelle.
+ */
+export function reduceFigure(
+  image: RoleImage,
+  f: number,
+  outline: OutlineMode,
+  eyes: readonly number[],
+  headRegions: readonly number[],
+  grid: HeadGrid,
+): RoleImage {
+  if (f === 1 || grid === 'feet') return reduceRoles(image, f, outline, eyes);
+  const { mask, chinX, chinY } = headPart(image, headRegions);
+  if (chinY === 0) return reduceRoles(image, f, outline, eyes);
+  let eyeLine = -1;
+  for (let index = 0; index < image.roles.length; index++) {
+    if (mask[index] === 1 && eyes.includes(image.roles[index] ?? 0)) {
+      eyeLine = Math.max(eyeLine, Math.floor(index / image.width) + 1);
+    }
+  }
+  // Le point d'ancrage de la tête : la ligne sous les yeux, descendue d'un nombre entier de blocs
+  // jusqu'au menton ou plus bas, pour que la grille de reduceRoles, qui part de lui, y passe.
+  const point = eyeLine < 0 ? chinY : eyeLine + f * Math.ceil(Math.max(0, chinY - eyeLine) / f);
+  // Tête et corps se votent sans contour ; le contour retracé se pose sur la figure entière : une
+  // seule ligne au cou, et le visage descend jusqu'au cou comme sur la planche.
+  const body = reduceRoles(masked(image, mask, 0, image.anchorX, image.anchorY), f, 'none', eyes);
+  const face = reduceRoles(masked(image, mask, 1, chinX, point), f, 'none', eyes);
+  const { figure } = pasteHead(image, body, face, chinX, point, f, true);
+  return outline === 'thick' ? thickOutline(figure) : figure;
+}
+
+/**
  * Enfant ou nourrisson de `rows` rangées, dont `head` pour la tête, composé de l'image
  * d'adulte `image` : sa tête réduite à `head` rangées, le reste du corps aux autres, le menton
  * posé sur le cou. Mêmes règles de réduction que reduceRoles : aucune couleur nouvelle. La tête
- * est faite des régions `headRegions` (data/humans.json, head).
+ * est faite des régions `headRegions` (data/humans.json, head). Tête et corps se votent sans
+ * contour, et le contour retracé (« thick ») se pose sur la figure entière : une seule ligne au
+ * cou. Une tête gardée à la taille de la planche garde son contour d'origine.
  */
 export function youngRoles(
   image: RoleImage,
@@ -416,27 +539,11 @@ export function youngRoles(
   }
   const fh = Math.max(1, (chinY - top) / head);
   const fb = Math.max(1, (image.anchorY - chinY) / (rows - head));
-  const body = reduceRoles(masked(image, mask, 0, image.anchorX, image.anchorY), fb, outline, eyes);
-  const face = reduceRoles(masked(image, mask, 1, chinX, chinY), fh, outline, eyes);
+  const body = reduceRoles(masked(image, mask, 0, image.anchorX, image.anchorY), fb, 'none', eyes);
+  const face = reduceRoles(masked(image, mask, 1, chinX, chinY), fh, 'none', eyes);
   // Le menton de la tête réduite sur le haut du cou du corps réduit.
-  const neckX = body.anchorX + Math.round((chinX - image.anchorX) / fb);
-  const neckY = body.anchorY - Math.round((image.anchorY - chinY) / fb);
-  const left = Math.min(0, neckX - face.anchorX);
-  const up = Math.min(0, neckY - face.anchorY);
-  const width = Math.max(body.width, neckX - face.anchorX + face.width) - left;
-  const height = body.height - up;
-  const roles = new Uint8Array(width * height);
-  const paste = (part: RoleImage, ox: number, oy: number) => {
-    for (let y = 0; y < part.height; y++) {
-      for (let x = 0; x < part.width; x++) {
-        const role = part.roles[y * part.width + x] ?? 0;
-        if (role !== 0) roles[(y + oy) * width + x + ox] = role;
-      }
-    }
-  };
-  paste(body, -left, -up);
-  paste(face, neckX - face.anchorX - left, neckY - face.anchorY - up);
-  return { width, height, roles, anchorX: body.anchorX - left, anchorY: height };
+  const { figure, head: pasted } = pasteHead(image, body, face, chinX, chinY, fb);
+  return outline === 'thick' ? thickOutline(figure, fh === 1 ? pasted : undefined) : figure;
 }
 
 /** Recadre une image de rôles sur ses pixels opaques, point des pieds gardé. */

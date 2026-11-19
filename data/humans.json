@@ -52,15 +52,15 @@
   ],
   "levels": [
     { "factor": 1, "outline": "keep", "variants": [0] },
-    { "factor": 1.5, "outline": "thick", "variants": [-1, 0, 1] },
-    { "factor": 2, "outline": "thick", "variants": [-1, 0, 1] },
-    { "factor": 3, "outline": "none", "variants": [-1, 0, 1] },
-    { "factor": 4, "outline": "none", "variants": [-1, 0, 1] }
+    { "factor": 1.5, "outline": "thick", "variants": [-1, 0, 1], "head": "eyes" },
+    { "factor": 2, "outline": "thick", "variants": [-1, 0, 1], "head": "eyes" },
+    { "factor": 3, "outline": "none", "variants": [-1, 0, 1], "head": "eyes" },
+    { "factor": 4, "outline": "none", "variants": [-1, 0, 1], "head": "eyes" }
   ],
   "young": {
     "body": "male",
     "child": [
-      { "rows": 26, "head": 9 },
+      { "rows": 26, "head": 10 },
       { "rows": 31, "head": 10 },
       { "rows": 36, "head": 10 }
     ],

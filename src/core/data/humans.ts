@@ -93,6 +93,12 @@ const LevelSchema = z
     outline: z.enum(['keep', 'thick', 'none']),
     /** Variantes de hauteur des adultes, en rangées autour de la réduction : trois au plus. */
     variants: z.array(z.number().int()).min(1).max(3),
+    /**
+     * Grille de la tête des adultes : celle des pieds, avec le corps, ou la sienne, calée sous
+     * les yeux, pour qu'une rangée de visage reste sous la rangée des yeux (src/gen/humans.ts,
+     * reduceFigure ; ADR 0016, § 7).
+     */
+    head: z.enum(['feet', 'eyes']).default('feet'),
   })
   .strict()
   .refine((level) => new Set(level.variants).size === level.variants.length, {

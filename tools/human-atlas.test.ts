@@ -184,6 +184,12 @@ describe('atlas des humains (ADR 0016, § 1, § 7)', () => {
     }
   });
 
+  it('donne au plus petit enfant la tête de l’adulte à la taille de la planche, comme aux autres', () => {
+    // La tête de l'adulte de référence a 10 rangées : réduite d'un facteur 10/9, elle étalait les
+    // yeux en blocs de 2 × 2 et posait une rangée de contour sur celle du corps (relecture 2b.5).
+    expect(humans.young.child.map((size) => size.head)).toEqual([10, 10, 10]);
+  });
+
   it('garde son empreinte : toute retouche d’une grille, d’une planche ou d’une réduction se voit en revue', () => {
     // L'atlas du jeu, et celui de toutes les animations : une retouche d'une grille que le jeu
     // ne montre pas encore (lancer, chute, mort) se voit aussi.
@@ -192,6 +198,167 @@ describe('atlas des humains (ADR 0016, § 1, § 7)', () => {
         ...Buffer.from(atlas.roles, 'base64'),
         ...atlas.motifs.flatMap((v) => [v & 255, v >> 8]),
       ]);
-    expect([fingerprint(game), fingerprint(every)]).toEqual(['99037f81', '189287f2']);
+    expect([fingerprint(game), fingerprint(every)]).toEqual(['113186cc', '17fdb51f']);
+  });
+});
+
+describe('têtes des motifs (ADR 0016, § 7)', () => {
+  const L = humans.levels.length;
+  const face = humans.regions.findIndex((region) => region.head === true && region.hair !== true);
+  const head = new Set(
+    humans.regions.flatMap((region, index) => (region.head === true ? [index] : [])),
+  );
+  const outlines = humans.tones.outline.map((_, index) => 1 + index);
+
+  interface Sequence {
+    readonly name: string;
+    readonly body: number;
+    readonly level: number;
+    readonly loop: boolean;
+    readonly motifs: readonly Uint8Array[];
+    readonly widths: readonly number[];
+  }
+
+  /** Chaque suite de motifs d'un atlas : un corps, un niveau, une variante, une animation. */
+  function sequences(atlas: typeof game): Sequence[] {
+    const out: Sequence[] = [];
+    atlas.bodies.forEach((bodyName, body) => {
+      for (let level = 0; level < L; level++) {
+        for (let variant = 0; variant < 3; variant++) {
+          atlas.animations.forEach((animation, a) => {
+            const slot = ((body * L + level) * 3 + variant) * atlas.animations.length + a;
+            const first = atlas.index[slot] ?? -1;
+            if (first < 0) return;
+            const motifs: Uint8Array[] = [];
+            const widths: number[] = [];
+            for (let frame = 0; frame < animation.frames; frame++) {
+              motifs.push(motifRoles(atlas, first + frame));
+              widths.push(atlas.motifs[(first + frame) * 6 + 2] ?? 1);
+            }
+            const name = `${bodyName} niveau ${String(level)} variante ${String(variant)} ${animation.id}`;
+            out.push({ name, body, level, loop: animation.loop, motifs, widths });
+          });
+        }
+      }
+    });
+    return out;
+  }
+  const count = (roles: Uint8Array, keep: (role: number) => boolean) =>
+    roles.reduce((sum, role) => sum + (keep(role) ? 1 : 0), 0);
+  const isFace = (role: number) => role >= RECOLOR && roleParts(role).region === face;
+  const isEye = (role: number) => every.eyes.includes(role);
+
+  it('gardent un visage à chaque image debout, à chaque niveau et à chaque variante de chaque corps', () => {
+    const faceless = sequences(every)
+      .filter((sequence) => sequence.loop)
+      .flatMap((sequence) =>
+        sequence.motifs.flatMap((roles, frame) =>
+          count(roles, isFace) > 0 ? [] : [`${sequence.name} ${String(frame)}`],
+        ),
+      );
+    expect(faceless).toEqual([]);
+  });
+
+  /**
+   * Le haut de la tête d'un motif, en texte : de sa première rangée opaque à celle qui suit la
+   * dernière rangée des yeux, recadré sur ses colonnes opaques ; vide sans yeux.
+   */
+  function headTop(roles: Uint8Array, width: number): string {
+    const height = roles.length / width;
+    let first = -1;
+    let last = -1;
+    for (let y = 0; y < height; y++) {
+      for (let x = 0; x < width; x++) {
+        const role = roles[y * width + x] ?? 0;
+        if (role !== 0 && first < 0) first = y;
+        if (isEye(role)) last = y;
+      }
+    }
+    if (first < 0 || last < 0) return '';
+    let left = width;
+    let right = -1;
+    for (let y = first; y <= last + 1; y++) {
+      for (let x = 0; x < width; x++) {
+        if ((roles[y * width + x] ?? 0) === 0) continue;
+        left = Math.min(left, x);
+        right = Math.max(right, x);
+      }
+    }
+    const rows: string[] = [];
+    for (let y = first; y <= last + 1; y++) {
+      rows.push(roles.subarray(y * width + left, y * width + right + 1).join(','));
+    }
+    return rows.join('/');
+  }
+
+  it('gardent aux adultes la même tête, du crâne à la rangée sous les yeux, tout au long d’une boucle montrée, à chaque niveau réduit', () => {
+    // Aux niveaux réduits, la tête se réduit à part, sur une grille calée sous les yeux : le
+    // balancement la déplace sans la changer, si bien que ni le visage ni les yeux ne clignotent.
+    // Seul le menton, posé sur le cou, peut gagner ou perdre un pixel là où le contour se
+    // retrace (facteurs 1,5 et 2).
+    const varying = sequences(game)
+      .filter((sequence) => sequence.body < 2 && sequence.level > 0)
+      .flatMap((sequence) => {
+        const heads = new Set(
+          sequence.motifs.map((roles, frame) => headTop(roles, sequence.widths[frame] ?? 1)),
+        );
+        const eyes = new Set(sequence.motifs.map((roles) => count(roles, isEye)));
+        return heads.size === 1 && !heads.has('') && eyes.size === 1 ? [] : [sequence.name];
+      });
+    expect(varying).toEqual([]);
+    expect(humans.levels.map((level) => level.head)).toEqual([
+      'feet',
+      'eyes',
+      'eyes',
+      'eyes',
+      'eyes',
+    ]);
+  });
+
+  it('ne dessinent que des yeux d’un pixel : deux pixels d’yeux au plus, jamais l’un sur l’autre', () => {
+    const wrong = sequences(every).flatMap((sequence) =>
+      sequence.motifs.flatMap((roles, frame) => {
+        const width = sequence.widths[frame] ?? 1;
+        const stacked = roles.some(
+          (role, index) => isEye(role) && isEye(roles[index + width] ?? 0),
+        );
+        return count(roles, isEye) <= 2 && !stacked ? [] : [`${sequence.name} ${String(frame)}`];
+      }),
+    );
+    expect(wrong).toEqual([]);
+  });
+
+  it('ne posent jamais entre la tête et le corps une bande de contour de deux pixels d’épaisseur', () => {
+    // Deux rangées de contour l'une sur l'autre, sur trois colonnes au moins, la tête au-dessus et
+    // le corps au-dessous : le menton d'une tête réduite à part posé sur le contour retracé du
+    // corps, comme chez le plus petit enfant de 2b.5.
+    const banded = sequences(every).flatMap((sequence) =>
+      sequence.motifs.flatMap((roles, frame) => {
+        const width = sequence.widths[frame] ?? 1;
+        const height = roles.length / width;
+        const at = (x: number, y: number) =>
+          x < 0 || y < 0 || x >= width || y >= height ? 0 : (roles[y * width + x] ?? 0);
+        const line = (x: number, y: number) => outlines.includes(at(x, y));
+        const inHead = (role: number) => role >= RECOLOR && head.has(roleParts(role).region);
+        const inBody = (role: number) => role >= RECOLOR && !head.has(roleParts(role).region);
+        for (let y = 1; y + 2 < height; y++) {
+          let run: number[] = [];
+          for (let x = 0; x <= width; x++) {
+            if (x < width && line(x, y) && line(x, y + 1)) {
+              run.push(x);
+              continue;
+            }
+            const band =
+              run.length >= 3 &&
+              run.some((c) => inHead(at(c, y - 1))) &&
+              run.some((c) => inBody(at(c, y + 2)));
+            if (band) return [`${sequence.name} ${String(frame)}`];
+            run = [];
+          }
+        }
+        return [];
+      }),
+    );
+    expect(banded).toEqual([]);
   });
 });
