@@ -1,10 +1,12 @@
 import { fileURLToPath } from 'node:url';
 import { defineConfig } from 'vitest/config';
 import { bundleLicenses } from './tools/bundle-licenses.ts';
+import { humanAtlas, loadHumans } from './tools/human-atlas.ts';
 import { pixelAtlas } from './tools/pixel-atlas.ts';
 
 // Licences et crédits des paquets distribués, contrôlés au build (ADR 0008).
-const licenses = bundleLicenses();
+const root = fileURLToPath(new URL('.', import.meta.url));
+const licenses = bundleLicenses({ assets: [loadHumans(root).credit] });
 
 // Configuration de Vite (serveur de développement et build) et de Vitest (tests). Le mode
 // « bench » (npm run bench) ne lance que les bancs d'essai, tools/*.bench.ts ; le mode
@@ -16,7 +18,12 @@ export default defineConfig(({ mode }) => ({
   // JSX de l'interface, compilé pour Preact.
   oxc: { jsx: { runtime: 'automatic', importSource: 'preact' } },
   // Atlas des sources pixel art (assets/pixel/), rangé au build (AST-04).
-  plugins: [licenses.main, pixelAtlas(fileURLToPath(new URL('assets/pixel', import.meta.url)))],
+  // Atlas des humains des planches de sprites/humans/skin/, habillés à l'exécution (ADR 0016).
+  plugins: [
+    licenses.main,
+    pixelAtlas(fileURLToPath(new URL('assets/pixel', import.meta.url))),
+    humanAtlas(root),
+  ],
   worker: {
     format: 'es',
     plugins: () => [licenses.worker()],
