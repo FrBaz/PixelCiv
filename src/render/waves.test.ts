@@ -408,7 +408,7 @@ describe('mer animée : le miroir du shader (ADR 0015)', () => {
     expect(longest).toBe(MAX_CREST_LENGTH * MAX_CREST_THICKNESS);
   });
 
-  it("se décale d'un pixel vers l'est et d'un vers le nord à chaque pas, sans changer que de longueur", () => {
+  it("se décale d'un pixel vers l'est et d'un vers le nord à chaque pas, et ne change que de longueur", () => {
     // Dans le cadre qui glisse, une crête ne bouge pas : d'un pas au suivant, ses pixels sont
     // les mêmes, au bout près. Au pas s, le pixel q du cadre est le pixel (q.x + s, q.y − s)
     // du monde : un pixel vers l'est et un vers le nord à chaque pas.
