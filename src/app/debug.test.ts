@@ -4,6 +4,7 @@ import { NO_CARRIER, type GroupsFrame, type LegArrays } from '../core/protocol';
 import {
   DAY_WINDOW,
   DebugSampler,
+  displayOverrides,
   DrawCallCounter,
   LEG_BYTES,
   MEMBER_BYTES,
@@ -207,5 +208,37 @@ describe('DebugSampler', () => {
     // Les appels arrivent toujours au contexte.
     expect(calls).toEqual(['elements 4', 'elements 4', 'arrays 5']);
     expect(new DrawCallCounter(undefined).take()).toBe(0);
+  });
+});
+
+describe("réglages de débogage de l'affichage (ADR 0015)", () => {
+  const read = (search: string) => displayOverrides(new URLSearchParams(search));
+
+  it("ne change rien sans eux : l'onde allumée, au pas et au mois du jeu", () => {
+    expect(read('?seed=abc&zoom=2')).toEqual({
+      waves: true,
+      waveStep: undefined,
+      month: undefined,
+    });
+  });
+
+  it("éteint l'onde, fixe son pas et le mois de la carte", () => {
+    expect(read('?waves=off&waveStep=42&month=1.3')).toEqual({
+      waves: false,
+      waveStep: 42,
+      month: 1.3,
+    });
+    expect(read('?waveStep=0&month=0').waveStep).toBe(0);
+    expect(read('?waveStep=0&month=0').month).toBe(0);
+    expect(read('?waves=on').waves).toBe(true);
+  });
+
+  it('ignore un pas qui n’est pas un entier positif, et un mois hors de l’année', () => {
+    for (const step of ['-1', '2.5', 'abc', '', '1e400']) {
+      expect(read(`?waveStep=${step}`).waveStep).toBeUndefined();
+    }
+    for (const month of ['-0.5', '12.5', 'NaN', 'Infinity', 'mars']) {
+      expect(read(`?month=${month}`).month).toBeUndefined();
+    }
   });
 });
