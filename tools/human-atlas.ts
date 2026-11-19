@@ -49,7 +49,12 @@ import { decodeRgba } from './png.ts';
 export const MAX_VARIANTS = 3;
 /** Côté le plus long de l'atlas, en pixels : ce que WebGL 2 garantit à toute texture. */
 export const MAX_ATLAS_SIDE = 2048;
-/** Motifs au plus : leurs tables sont en entiers de 16 bits (src/render/humans.ts). */
+/**
+ * Motifs au plus : une borne de garde, loin des 1 430 de l'atlas de toutes les animations. Aucun
+ * numéro de motif n'est rangé sur moins de 32 bits ; src/render/humans.ts range en octets la
+ * largeur, la hauteur, le pied et le corps de chaque motif, que bornent la case de 80 × 64 pixels
+ * et le nombre de corps.
+ */
 export const MAX_MOTIFS = 65_535;
 
 export interface HumanAtlas {
