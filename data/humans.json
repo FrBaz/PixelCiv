@@ -54,7 +54,7 @@
     { "factor": 1, "outline": "keep", "variants": [0] },
     { "factor": 1.5, "outline": "thick", "variants": [-1, 0, 1] },
     { "factor": 2, "outline": "thick", "variants": [-1, 0, 1] },
-    { "factor": 3, "outline": "thick", "variants": [-1, 0, 1] },
+    { "factor": 3, "outline": "none", "variants": [-1, 0, 1] },
     { "factor": 4, "outline": "none", "variants": [-1, 0, 1] }
   ],
   "young": {
