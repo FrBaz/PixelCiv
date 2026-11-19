@@ -47,10 +47,27 @@ Le cuir chevelu prend les tons des cheveux : la figure porte des cheveux ras.
 
 Le build et les tests lisent chaque pixel des 90 images (`tools/human-atlas.ts`) : un `.` sur un
 pixel opaque, un `o` sur un ton de peau, une lettre sur un ton gardé ou une lettre inconnue
-font échouer le build, avec le fichier, l'image et le pixel en défaut. `tools/human-regions.test.ts`
-compare l'aire de chaque membre, image par image, à celle du repos : un bras compté dans le torse
-en sort, sauf écart justifié dans sa liste. Chaque tenue doit couvrir toutes les régions où un
-corps montre le sous-vêtement des planches (le build le vérifie).
+font échouer le build, avec le fichier, l'image et le pixel en défaut. Cela garantit la
+silhouette, pas la justesse des régions : `tools/human-regions.test.ts` en est la garde, image
+par image, chaque écart justifié dans sa liste, et toute excuse qui ne sert plus refusée.
+
+- **Les aires** : chaque membre garde à peu près son aire du repos (entre la moitié et le
+  double, à un pixel près). Elles attrapent un membre entier compté ailleurs, comme le bras qui
+  longe le torse compté dans le torse, mais pas une bande de quelques pixels.
+- **Les jointures** : une région ne touche, sans contour entre elles, que des régions voisines
+  dans le corps (le ventre ne touche pas la main, le pied ne touche pas la cuisse) ; une bande de
+  ventre dans une main, ou un pixel de pied sur une cuisse, en sort.
+- **Le torse** : un morceau de torse détaché du torse principal tient au cou, à un bras ou à une
+  cuisse, ceux qu'un membre coupe en passant devant.
+- **Les bouts des membres** : chaque main tient à un seul avant-bras, chaque pied à une seule
+  jambe, et un avant-bras ne porte qu'une main, une jambe qu'un pied.
+- **Le repos recopié** : là où une image recopie le repos, pixel et huit voisins compris, après
+  recalage, elle en garde les régions ; là où elle en reprend la tête (même silhouette, traits sur
+  ceux du repos ou sur son visage, comme les yeux clos de la mort), elle en garde la ligne des
+  cheveux.
+
+Chaque tenue doit couvrir toutes les régions où un corps montre le sous-vêtement des planches
+(le build le vérifie).
 
 ## Retoucher une grille
 

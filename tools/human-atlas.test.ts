@@ -192,6 +192,6 @@ describe('atlas des humains (ADR 0016, § 1, § 7)', () => {
         ...Buffer.from(atlas.roles, 'base64'),
         ...atlas.motifs.flatMap((v) => [v & 255, v >> 8]),
       ]);
-    expect([fingerprint(game), fingerprint(every)]).toEqual(['221278fb', 'c20d9401']);
+    expect([fingerprint(game), fingerprint(every)]).toEqual(['99037f81', '189287f2']);
   });
 });
