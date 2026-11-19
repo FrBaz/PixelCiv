@@ -56,11 +56,11 @@ Ce que montrent les planches, vérifié au pixel près (`tools/human-sheets.test
   | marine | 39,2 | 34,8 | 21,5 | 18,7 | **14,4** → ocre 20,3 | 18,5 |
   | ocre | 21,7 | 16,3 | **5,5** → marine 21,5 | **6,5** → marine 18,7 | 20,3 | 31,4 |
   | violet | 36,0 | 31,3 | 17,1 | **14,7** → marine 18,7 | **12,1** → ocre 20,3 | 19,3 |
-  | lin | **7,4** → cuir 36,7 | **4,2** → cuir 31,3 | 16,4 | 18,9 | 33,8 | 44,9 |
+  | lin | **7,4** → marine 39,2 | **4,2** → marine 34,8 | 16,4 | 18,9 | 33,8 | 44,9 |
   | cuir | 36,7 | 31,3 | **14,6** → lin 16,4 | **11,4** → lin 18,9 | **4,0** → lin 33,8 | 15,1 |
   | charbon | 45,8 | 40,8 | 25,4 | 22,2 | **10,8** → lin 33,8 | **9,9** → lin 44,9 |
 
-  La règle : une pièce qui couvre la poitrine, le ventre ou le bassin reste à 15 au moins de la palette de peau qui la porte. Une exception se déclare en données, par un tissu de rechange sur cette palette de peau (`onSkin`), lui-même à 15 au moins ; le test échoue sinon, et le seuil est soumis à l'auteur. L'autre remède, une tenue de culture loin du teint dominant, ne tient pas aux métis ni aux groupes mêlés.
+  La règle : une pièce qui couvre la poitrine, le ventre ou le bassin reste à 15 au moins de la palette de peau qui la porte. Une exception se déclare en données, par un tissu de rechange sur cette palette de peau (`onSkin`), lui-même à 15 au moins ; le test échoue sinon, et le seuil est soumis à l'auteur. L'autre remède, une tenue de culture loin du teint dominant, ne tient pas aux métis ni aux groupes mêlés. La règle ne suffit pas seule : un tissu couleur de peau, même loin de celle qui le porte, fait paraître nu. Le prototype donnait le cuir pour rechange au lin sur les peaux claires ; dans Chromium, ses tuniques collantes se lisaient comme des corps nus à la peau brune (Pixel 5, zoom 8). Le rechange du lin est donc la marine.
 - **D'où vient la tenue en phase 2** : de la culture, comme l'habit de 2.9 — les cultures embryonnaires prennent à tour de rôle les tenues de `cultureOutfits` —, puis du corps, puis de la palette de peau pour le rechange ; l'aîné garde la tenue de l'adulte. Le rang et le métier de REN-04 s'y ajouteront en pièces posées par-dessus (manteau du chef, jambières du chasseur), toujours par substitution ; l'équipement (lance, panier) demandera des pixels nouveaux, dans un calque de motifs propres au jeu.
 - **La bannière** d'un groupe prend le premier tissu de la tenue de sa culture, sans rechange : la couleur de loin annonce celle de près.
 
@@ -103,7 +103,7 @@ Ce que montrent les planches, vérifié au pixel près (`tools/human-sheets.test
   | Pixel 5, zoom 16 (44) | 132 | planche | 3 | 129 | 46,9 | 49,1 |
   | Pixel 5, zoom 24 (66) | 198 | planche | 5 | 215 | 78,2 | 72 |
 
-  Hauteurs relevées dans Chromium sur les trois graines : celles du tableau, à une rangée près selon l'image et la variante.
+  Hauteurs relevées dans Chromium sur les trois graines : celles du tableau, à deux rangées près selon l'image de la marche et la variante.
 - **REN-04 et REN-08** : au zoom le plus faible des individus, le facteur 4 tient le rôle du mini-sprite à l'échelle de la carte, de 10 à 12 pixels ; plus près, les niveaux plus fins sont l'écart décidé par l'auteur pour 2b.3 : une résolution propre aux individus, une densité k commune à tous ceux d'une vue, une autre pour la carte et les bannières, jamais deux dans un même dessin (ADR 0014, § 6). Les sprites de la planche ne se montrent jamais plus petits que leurs pixels : chaque niveau est un motif dédié, tiré d'eux, dont chaque pixel fait k × k pixels physiques. Le prix : un pixel d'individu est 8 à 16 fois plus fin qu'un pixel de carte (PC, zoom 8 : 1 pixel physique contre 8 ; zoom 16 : 1 contre 16 ; Pixel 5 au zoom 3 : 1 pixel physique, 0,36 pixel CSS, contre 8), au lieu de 2,7 à 3,2 fois en 2b.3.
 - **Les mini-sprites de 2.9 sont retirés** (`assets/pixel/sprites/`), et non gardés comme niveau le plus grossier : de face, à l'ombrage calculé, ils changeraient de style au zoom 3. Les bannières restent.
 
@@ -112,7 +112,7 @@ Ce que montrent les planches, vérifié au pixel près (`tools/human-sheets.test
 - **Un shader de palettes**, option (a) de la critique (`src/render/humanShader.ts`) : l'atlas des rôles est une texture (le rôle dans le rouge) ; chaque apparence visible range sa palette, 128 texels, dans une texture des palettes de 1 024 texels de large, à sa première vue, une fois pour le monde ; chaque individu est une particule d'un même `ParticleContainer`, dont le cadre est son motif dans l'atlas des rôles et dont la teinte désigne la place de sa palette. Le shader lit le rôle du pixel, puis sa couleur. Plus de texture recolorée, de page ni de lot pour les humains : un appel de dessin pour tous, quel que soit leur nombre. Le retournement passe par l'échelle de la particule.
 - **Bornes** : l'apparence tient sur 15 bits (palette de peau, allèle des cheveux, cran de gris, tenue, sorte de corps, `LOOK_BITS`), et les données ne peuvent déclarer plus de 8 palettes de peau, 16 tenues ni 16 allèles des cheveux (schéma et `checkContent`) ; la texture des palettes commence à 16 rangées (128 apparences, 64 Kio) et double quand elle est pleine, jusqu'à 2 048 rangées (16 384 apparences), et `checkContent` refuse des données qui permettraient plus d'apparences (aujourd'hui 3 072). Une vue qui en montre beaucoup ne recolore rien à chaque image : le test le vérifie.
 - **Les bannières** gardent leurs textures recolorées, rangées dans les pages de l'atlas dynamique (`pages.ts`, ADR 0014), une poignée par vue.
-- **Mémoire sur le GPU** : l'atlas des rôles, 1 024 × 129 texels RGBA (516 Kio), et les palettes, 64 Kio au départ ; avant 2b.5, jusqu'à 44 à 51 pages de 256 Kio au niveau de la planche dans les mesures de la critique.
+- **Mémoire sur le GPU** : l'atlas des rôles, 1 024 × 129 texels RGBA (516 Kio), et les palettes, 64 Kio au départ. Le prototype, qui recolorait une texture par motif et par apparence, en rangeait jusqu'à 44 à 51 pages de 256 Kio au niveau de la planche (mesures de la critique) ; 599e410, avec ses mini-sprites, une à trois.
 - **Mesures** : voir le tableau du coût (§ 8 bis), avant et après, sur Pixel 5 au zoom 4 ralenti ×4 et sur PC 1 920 × 1 080 au zoom 11.
 
 ### 8 bis. Coût mesuré
@@ -121,7 +121,7 @@ Les mesures avant et après, dans Chromium, suivent ici dès qu'elles sont faite
 
 ### 9. Les tests
 
-Chaque test ci-dessous a été vu échouer quand on retire ce qu'il protège : 47 mutations du code, des données ou des grilles, toutes relevées (script hors du dépôt).
+Les tests ont été mis à l'épreuve de 47 mutations du code, des données et des grilles (script hors du dépôt) : chacune retire ce qu'un test protège, et chacune fait échouer ce test, ou le build de l'atlas qu'il charge. Parmi elles : remettre la marche féminine du prototype, sauter la tenue d'une région, inverser un rang de peau, changer un ton gardé, ôter un tissu de rechange, oublier le retournement autour des pieds, prendre la phase du porté au lieu de celle de sa mère, oublier le sens gardé à l'arrêt, recolorer à chaque image, ne plus augmenter la version du calque.
 
 - **Planches** (`tools/human-sheets.test.ts`) : les douze planches de teinte sont leur base substituée par les palettes des données, tout autre pixel identique, alpha compris ; tons de chaque base, alpha 0 ou 255, grille de cases et cases vides.
 - **Habillage** (`tools/human-dressing.test.ts`) : pour chaque tenue, chaque palette de peau et chaque corps adulte, chaque image des sept animations est comparée pixel à pixel à la planche de base : tons gardés identiques ; pixel d'une région couverte au ton du tissu de même rang que le ton de la planche ; pixel d'une région nue au ton de peau de même rang ; aucun ton de sous-vêtement ; sans tenue, la planche de l'auteur.
@@ -163,7 +163,7 @@ Planches de revue : chaque tenue sur chaque peau, à chaque niveau ; les niveaux
 
 **Le style**
 1. **Les tenues** : huit tenues sur les huit tissus de l'auteur, collantes par construction (la substitution ne peut ni évaser une jupe, ni ajouter un pan) ; une robe se lit comme une combinaison.
-2. **Le tissu de rechange** : sur une peau dont il ne se détache pas, un tissu en prend un autre, si bien qu'une même culture s'habille de cuir sur les peaux claires et de lin ailleurs (la tunique), ou d'ocre sur les peaux brunes (la robe). Le seuil de 15 et les rechanges sont à valider sur les planches.
+2. **Le tissu de rechange** : sur une peau dont il ne se détache pas, un tissu en prend un autre, si bien qu'une même culture s'habille de marine sur les peaux claires et de lin ailleurs (la tunique), ou d'ocre sur les peaux brunes (la robe). Le seuil de 15 et les rechanges sont à valider sur les planches ; le cuir, l'ocre et le bordeaux, proches de certaines peaux, peuvent encore faire paraître nu en tenue collante.
 3. **Femmes et hommes** se distinguent par la coupe des tenues (jambes couvertes ou non, poitrine couverte au pagne), et à peine aux facteurs 3 et 4, où tous ont les cheveux ras ; 2b.3 donnait aux femmes cheveux longs et robe.
 4. **Le grisonnement** : ses trois crans se lisent à la planche et au facteur 1,5, à peine aux facteurs 3 et 4.
 5. **Les tons gardés** : sourire blanc, lèvres roses et paupières restent ceux de la planche sur toutes les peaux, comme dans les planches de l'auteur, et paraissent clairs sur les peaux foncées.

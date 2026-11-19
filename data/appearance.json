@@ -103,8 +103,8 @@
       "id": "linen",
       "tones": ["#f3e8cd", "#d5c7aa", "#a99a82", "#746a60"],
       "onSkin": {
-        "xlight": "leather",
-        "light": "leather"
+        "xlight": "navy",
+        "light": "navy"
       }
     },
     {
