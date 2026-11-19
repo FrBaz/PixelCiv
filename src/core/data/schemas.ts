@@ -4,6 +4,13 @@
  * continue. Les textes affichés sont des clés de traduction.
  */
 import { z } from 'zod';
+import {
+  bakedWaterTone,
+  CREST_TONES,
+  MAX_CREST_LENGTH,
+  MAX_CREST_THICKNESS,
+  MAX_WAVE_BIOMES,
+} from '../waves';
 
 /** Identifiant textuel : minuscules et tirets, comme « deep-ocean ». */
 export const IdSchema = z
@@ -49,6 +56,27 @@ export const VEGETATION_TYPES = [
 
 /** Couvertures saisonnières (C1, D9) : neige, glace d'eau douce, banquise côtière. */
 export const SEASON_COVERS = ['none', 'snow', 'ice', 'sea-ice'] as const;
+
+/**
+ * Mer animée d'un biome d'eau (tâche 2b.4, ADR 0015) : ses crêtes, qui glissent en
+ * diagonale, et ses clapots. Les parts sont celles des blocs de 16 × 16 pixels qui en
+ * portent ; longueur et épaisseur, en pixels de carte, sont bornées pour qu'une crête tienne
+ * dans son bloc (src/core/waves.ts) ; la crête éclaircit jusqu'à la base ou la lumière de la
+ * palette, jamais jusqu'à l'ombre, que prend le clapot.
+ */
+export const WavesSchema = z
+  .object({
+    crest: z
+      .object({
+        share: ShareSchema,
+        length: z.number().int().min(1).max(MAX_CREST_LENGTH),
+        thickness: z.number().int().min(1).max(MAX_CREST_THICKNESS),
+        tone: z.enum(CREST_TONES),
+      })
+      .strict(),
+    ripple: z.object({ share: ShareSchema }).strict(),
+  })
+  .strict();
 
 /** Biome naturel (MON-08, MON-10, C1). */
 export const BiomeSchema = z
@@ -104,6 +132,8 @@ export const BiomeSchema = z
       .refine((seasons) => (seasons.cover === 'none') === (seasons.palette === undefined), {
         message: 'une couverture saisonnière, et elle seule, a sa palette',
       }),
+    /** Mer animée (ADR 0015) : seuls les biomes qui en ont une bougent. */
+    waves: WavesSchema.optional(),
   })
   .strict()
   .superRefine((biome, context) => {
@@ -129,6 +159,13 @@ export const BiomeSchema = z
         path: ['seasons', 'cover'],
       });
     }
+    if (biome.waves !== undefined && biome.family !== 'water') {
+      context.addIssue({
+        code: 'custom',
+        message: 'seules les eaux ont une mer animée',
+        path: ['waves'],
+      });
+    }
     if ((biome.family === 'coast') !== (biome.landing !== undefined)) {
       context.addIssue({
         code: 'custom',
@@ -140,7 +177,11 @@ export const BiomeSchema = z
 
 export type Biome = z.infer<typeof BiomeSchema>;
 
-/** Liste de biomes, aux identifiants uniques. */
+/**
+ * Liste de biomes, aux identifiants uniques. Au plus MAX_WAVE_BIOMES biomes ont une mer
+ * animée, et le ton cuit de chacun de leurs pixels d'eau ne se retrouve dans aucune autre eau :
+ * le shader reconnaît le biome d'un pixel à ce ton (ADR 0015).
+ */
 export const BiomesSchema = z.array(BiomeSchema).superRefine((biomes, context) => {
   const seen = new Set<string>();
   biomes.forEach((biome, index) => {
@@ -152,6 +193,35 @@ export const BiomesSchema = z.array(BiomeSchema).superRefine((biomes, context) =
       });
     }
     seen.add(biome.id);
+  });
+  const animated = biomes.filter((biome) => biome.waves !== undefined);
+  if (animated.length > MAX_WAVE_BIOMES) {
+    context.addIssue({
+      code: 'custom',
+      message: `${String(animated.length)} biomes ont une mer animée, ${String(MAX_WAVE_BIOMES)} au plus`,
+      path: [],
+    });
+  }
+  // Les tons cuits de chaque eau, pour reconnaître une eau animée à son ton.
+  const tones = (biome: Biome) => {
+    const { shadow, base, light } = biome.palette;
+    return new Set([shadow, base, light].map(bakedWaterTone));
+  };
+  const waters = biomes.flatMap((biome, index) =>
+    biome.family === 'water' ? [{ biome, index, tones: tones(biome) }] : [],
+  );
+  waters.forEach((first, rank) => {
+    for (const second of waters.slice(rank + 1)) {
+      if (first.biome.waves === undefined && second.biome.waves === undefined) continue;
+      const shared = [...first.tones].find((tone) => second.tones.has(tone));
+      if (shared === undefined) continue;
+      const hex = `#${shared.toString(16).padStart(6, '0')}`;
+      context.addIssue({
+        code: 'custom',
+        message: `${first.biome.id} et ${second.biome.id} partagent le ton cuit ${hex} : le shader de la mer animée ne saurait plus les distinguer`,
+        path: [second.index, 'palette'],
+      });
+    }
   });
 });
 

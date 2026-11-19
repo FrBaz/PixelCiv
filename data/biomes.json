@@ -26,6 +26,17 @@
     "vegetation": "none",
     "seasons": {
       "cover": "none"
+    },
+    "waves": {
+      "crest": {
+        "share": 0.3,
+        "length": 2,
+        "thickness": 1,
+        "tone": "base"
+      },
+      "ripple": {
+        "share": 0.04
+      }
     }
   },
   {
@@ -55,6 +66,17 @@
     "vegetation": "none",
     "seasons": {
       "cover": "none"
+    },
+    "waves": {
+      "crest": {
+        "share": 0.6,
+        "length": 3,
+        "thickness": 1,
+        "tone": "light"
+      },
+      "ripple": {
+        "share": 0.12
+      }
     }
   },
   {
@@ -88,6 +110,17 @@
         "shadow": "#b2cadc",
         "base": "#d2e4f0",
         "light": "#ecf6fc"
+      }
+    },
+    "waves": {
+      "crest": {
+        "share": 1,
+        "length": 4,
+        "thickness": 2,
+        "tone": "light"
+      },
+      "ripple": {
+        "share": 0.31
       }
     }
   },
