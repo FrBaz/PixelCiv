@@ -46,6 +46,10 @@ function person(overrides: Partial<NewPerson> = {}): NewPerson {
     givenName: 1,
     familyName: 1,
     familyLanguage: 1,
+    gregariousness: 128,
+    x: 0,
+    y: 0,
+    move: 0,
     ...overrides,
   };
 }
@@ -63,6 +67,8 @@ function populated(): SimState {
     leader: 1,
     x: 10,
     y: 20,
+    campX: 10,
+    campY: 20,
     homeX: 10,
     homeY: 20,
     targetX: -1,

@@ -7,12 +7,11 @@
 import type { SaveErrorCode, SaveMeta } from './save/format';
 import type { SpeedId } from './time';
 import type { AgeClass } from './visual';
-import type { WalkArrays } from './walk';
 import { LAYER_NAMES, type GenerationStage, type WorldLayers, type WorldSize } from './world';
 import type { WorldParams } from './worldParams';
 
 /** Version du protocole, vérifiée à la poignée de main. */
-export const PROTOCOL_VERSION = 5;
+export const PROTOCOL_VERSION = 6;
 
 /**
  * Pinceau de biome : donne à une case de terre un autre biome de terre. C'est un outil
@@ -54,8 +53,8 @@ export interface LoggedCommand {
 }
 
 /**
- * Ce qu'on inspecte (IHM-02) : un individu ou un groupe. Le fil principal choisit le groupe
- * touché d'après ce que la carte dessine (render/crowd.ts, pickGroup).
+ * Ce qu'on inspecte (IHM-02) : un individu ou un groupe. Le fil principal choisit l'individu
+ * ou le groupe touché d'après ce que la carte dessine (render/crowd.ts, pickEntity).
  */
 export type InspectTarget =
   | { readonly kind: 'person'; readonly id: number }
@@ -78,7 +77,8 @@ export interface PersonSummary {
 
 /**
  * Un groupe en quelques mots : son nom (celui de son meneur), la case où il se tient ce
- * jour-là, en marche ou au repos (ADR 0013), sa taille.
+ * jour-là, celle de son membre le plus proche du barycentre de ses membres (ADR 0014), sa
+ * taille.
  */
 export interface GroupSummary {
   readonly id: number;
@@ -87,6 +87,10 @@ export interface GroupSummary {
   readonly y: number;
   readonly size: number;
 }
+
+/** Intentions d'un vivant, dans la fiche. */
+export const INTENTIONS = ['rest', 'leave', 'walk', 'carried'] as const;
+export type Intention = (typeof INTENTIONS)[number];
 
 /** Fiche d'un individu (IHM-02) : identité, gènes exprimés, famille, groupe. */
 export interface PersonView extends PersonSummary {
@@ -107,6 +111,11 @@ export interface PersonView extends PersonSummary {
   /** Taille adulte, en centimètres. */
   readonly height: number;
   /**
+   * Grégarité, de 0 à 1, aujourd'hui ou à sa mort : un trait de caractère acquis (IND-07,
+   * ADR 0014), hors du génome.
+   */
+  readonly gregariousness: number;
+  /**
    * Grisonnement de ses cheveux, aujourd'hui ou à sa mort, de 0 à GREY_LEVELS − 1
    * (core/life.ts) : celui de son mini-sprite.
    */
@@ -114,6 +123,11 @@ export interface PersonView extends PersonSummary {
   /** Nutrition, de 0 à 1, et grossesse en cours, pour un vivant. */
   readonly nutrition: number;
   readonly pregnant: boolean;
+  /**
+   * Intention d'un vivant (ADR 0014) : au repos à sa place, en partance, en marche vers sa
+   * place, ou porté par sa mère.
+   */
+  readonly intention?: Intention;
   readonly mother?: PersonSummary;
   readonly father?: PersonSummary;
   readonly partner?: PersonSummary;
@@ -164,33 +178,72 @@ export const CHRONICLE_PAGE = 100;
 
 /**
  * Entiers par groupe dans GroupsFrame.groups : identifiant, x, y, membres, culture. La case
- * (x, y) est celle où le groupe se tient au pas mensuel, au bout de sa marche du mois.
+ * (x, y) est le lieu du groupe au dernier pas mensuel : celle de son membre le plus proche du
+ * barycentre de ses membres (ADR 0014).
  */
 export const GROUP_STRIDE = 5;
 
+/** Aucun porteur, dans GroupsFrame.carriers. */
+export const NO_CARRIER = 0xffffffff;
+
 /**
- * Groupes du monde, pour la carte : GROUP_STRIDE entiers par groupe, un code d'apparence
- * par membre (core/visual.ts), groupe après groupe, et les marches du mois (ADR 0013).
- * Le rendu en tire la position de chaque groupe à tout instant du mois, fractionnaire
- * (walkPosition) : un groupe sans marche se tient au centre de sa case.
+ * Étapes des marcheurs (ADR 0014) : pour chacune, l'emplacement du marcheur, le jour où elle
+ * part (dayIndex de core/time.ts), son point de départ et son pas par jour, x puis y, en
+ * unités de core/position.ts, et ses jours. À l'instant t, fractionnaire, le marcheur se tient
+ * en start + step × min(max(t − day, 0), count) (legAt), x ramené dans le monde : aux jours
+ * entiers, la position exacte du worker. Pour un emplacement, l'étape qui vaut est la dernière
+ * reçue de celles qui sont parties : une étape d'un même jour remplace la précédente (un écart
+ * de côté).
+ */
+export interface LegArrays {
+  readonly slots: Uint32Array<ArrayBuffer>;
+  readonly days: Uint32Array<ArrayBuffer>;
+  readonly start: Int32Array<ArrayBuffer>;
+  readonly step: Int32Array<ArrayBuffer>;
+  readonly count: Uint16Array<ArrayBuffer>;
+}
+
+/**
+ * Groupes du monde, pour la carte (ADR 0014) : GROUP_STRIDE entiers par groupe, puis, membre
+ * par membre, groupe après groupe, son emplacement, son identifiant, son code d'apparence
+ * (core/visual.ts), sa stature en 1/128 de case, sa position (x, y, en unités de
+ * core/position.ts) et l'emplacement de qui le porte (NO_CARRIER s'il marche). `legs` donne
+ * l'étape en cours de chaque marcheur, repartie de l'instant de l'image : jusqu'à l'image
+ * suivante, les deltas apportent les étapes qui commencent.
  */
 export interface GroupsFrame {
   readonly groups: Uint32Array<ArrayBuffer>;
+  readonly slots: Uint32Array<ArrayBuffer>;
+  readonly ids: Uint32Array<ArrayBuffer>;
   readonly sprites: Uint16Array<ArrayBuffer>;
-  readonly walks: WalkArrays;
+  readonly statures: Uint8Array<ArrayBuffer>;
+  readonly positions: Int32Array<ArrayBuffer>;
+  readonly carriers: Uint32Array<ArrayBuffer>;
+  readonly legs: LegArrays;
+}
+
+/** Tampons d'étapes, à transférer. */
+export function legBuffers(legs: LegArrays): ArrayBuffer[] {
+  return [
+    legs.slots.buffer,
+    legs.days.buffer,
+    legs.start.buffer,
+    legs.step.buffer,
+    legs.count.buffer,
+  ];
 }
 
 /** Tampons d'une image des groupes, à transférer. */
-function frameBuffers(frame: GroupsFrame): ArrayBuffer[] {
-  const { walks } = frame;
+export function frameBuffers(frame: GroupsFrame): ArrayBuffer[] {
   return [
     frame.groups.buffer,
+    frame.slots.buffer,
+    frame.ids.buffer,
     frame.sprites.buffer,
-    walks.groups.buffer,
-    walks.ends.buffer,
-    walks.cells.buffer,
-    walks.costs.buffer,
-    walks.budgets.buffer,
+    frame.statures.buffer,
+    frame.positions.buffer,
+    frame.carriers.buffer,
+    ...legBuffers(frame.legs),
   ];
 }
 
@@ -230,7 +283,12 @@ export type MainMessage =
   /** Remplace la partie par celle d'un fichier de sauvegarde. */
   | { readonly type: 'load'; readonly requestId: number; readonly data: ArrayBuffer }
   /** Coût factice ajouté à chaque pas mensuel, en millisecondes (débogage). */
-  | { readonly type: 'debugStepCost'; readonly milliseconds: number };
+  | { readonly type: 'debugStepCost'; readonly milliseconds: number }
+  /**
+   * Tampons d'images et d'étapes déjà lus, rendus au worker, qui les reprend pour les envois
+   * suivants (ADR 0014).
+   */
+  | { readonly type: 'recycle'; readonly buffers: readonly ArrayBuffer[] };
 
 /**
  * Bloc de carte modifié : les couches que la simulation peut changer, sur ses 64 × 64
@@ -271,8 +329,10 @@ export interface StepStats {
   readonly dayMs?: number;
   /** Durée du pas mensuel du lot, s'il y en a eu un. */
   readonly monthMs?: number;
-  /** Marches en cours à la fin du lot. */
-  readonly walks: number;
+  /** Marcheurs à la fin du lot (ADR 0014). */
+  readonly walkers: number;
+  /** Étapes commencées pendant le lot, écarts de côté compris. */
+  readonly legs: number;
 }
 
 /** Messages du worker vers le fil principal. */
@@ -306,8 +366,9 @@ export type WorkerMessage =
   /**
    * Ce qui a changé depuis le dernier message : le temps, les `days` jours du lot (0 pour
    * une commande appliquée en pause, sans que le temps avance), les blocs modifiés, les
-   * faits nouveaux de la chronique, et l'image des groupes quand elle change (pas mensuel,
-   * commande) : elle vaut à partir de l'instant `time`.
+   * faits nouveaux de la chronique, les étapes commencées pendant le lot, chacune datée de
+   * son jour (ADR 0014), et l'image des groupes quand elle change (pas mensuel, commande) :
+   * elle vaut à partir de l'instant `time`, et remplace alors les étapes du lot.
    */
   | {
       readonly type: 'delta';
@@ -315,6 +376,7 @@ export type WorkerMessage =
       readonly days: number;
       readonly chunks: readonly ChunkPatch[];
       readonly chronicle: readonly ChronicleView[];
+      readonly legs?: LegArrays;
       readonly frame?: GroupsFrame;
     }
   /** Fiche demandée ; ni l'un ni l'autre si la cible n'existe pas. */
@@ -387,8 +449,11 @@ export function transferablesOf(message: MainMessage | WorkerMessage): ArrayBuff
     case 'delta':
       return [
         ...message.chunks.map((chunk) => chunk.biome.buffer),
+        ...(message.legs === undefined ? [] : legBuffers(message.legs)),
         ...(message.frame === undefined ? [] : frameBuffers(message.frame)),
       ];
+    case 'recycle':
+      return [...message.buffers];
     case 'previewReady':
       return [message.biome.buffer, message.elevation.buffer];
     case 'saved':

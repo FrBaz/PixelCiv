@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { FIXED } from '../core/position';
 import type { Species } from '../core/data';
 import type { SpawnGroupCommand } from '../core/protocol';
 import type { WorldLayers } from '../core/world';
@@ -158,6 +159,8 @@ function founded(rules: readonly NamingRule[], shape?: (world: WorldLayers) => v
       leader: NONE,
       x: 10 + 2 * index,
       y: 60,
+      campX: 10 + 2 * index,
+      campY: 60,
       homeX: 10 + 2 * index,
       homeY: 60,
       targetX: -1,
@@ -178,6 +181,8 @@ function person(
   changes: Partial<NewPerson> & { readonly years?: number } = {},
 ): number {
   const { years = 25, ...rest } = changes;
+  // Au centre de la case de son groupe, comme une apparition sur cette case.
+  const home = state.society.groups.get(rest.group ?? 1);
   return state.people.add({
     sex: FEMALE,
     birth: state.tick - Math.round(years * MONTHS_PER_YEAR),
@@ -191,6 +196,10 @@ function person(
     givenName: 11,
     familyName: 0,
     familyLanguage: rest.culture ?? 1,
+    gregariousness: 128,
+    x: home === undefined ? 0 : home.x * FIXED + FIXED / 2,
+    y: home === undefined ? 0 : home.y * FIXED + FIXED / 2,
+    move: 0,
     ...rest,
   });
 }
@@ -375,7 +384,9 @@ describe('cycle de vie (tâche 2.3)', () => {
     });
     expect(mixed / births).toBeGreaterThan(0.05);
     expect(mixed / births).toBeLessThan(0.25);
-  });
+    // Sa durée suit la population, que trois siècles portent de 480 à un ou deux milliers :
+    // de 20 à 30 s sur quatre cœurs.
+  }, 90_000);
 
   it("tue davantage de froid les fragiles d'une sous-espèce des sables que les nordiques", () => {
     // Des cases dont le mois le plus froid descend sous −10 °C.
@@ -515,6 +526,10 @@ describe('rigueurs du mois (ADR 0011 ; L-12)', () => {
       givenName: 1,
       familyName: 0,
       familyLanguage: 1,
+      gregariousness: 128,
+      x: 0,
+      y: 0,
+      move: 0,
     });
 
   it('rendent le froid plus dur aux fragiles et aux moins adaptés, la faim égale pour tous', () => {

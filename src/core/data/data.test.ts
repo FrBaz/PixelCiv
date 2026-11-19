@@ -4,7 +4,15 @@ import biomesJson from '../../../data/biomes.json';
 import fr from '../../i18n/fr.json';
 import { DataError, loadCatalog } from './catalog';
 import { checkContent, loadGameData, type GameData, type Genetics, type Species } from './index';
-import { FACE_BOUNDS, GeneticsSchema, geneRoles, NOSE_BOUNDS, SpeciesSchema } from './people';
+import {
+  FACE_BOUNDS,
+  GeneticsSchema,
+  geneRoles,
+  NomadsSchema,
+  NOSE_BOUNDS,
+  SpeciesSchema,
+  type Nomads,
+} from './people';
 import { AltitudeLevelsSchema, BiomesSchema } from './schemas';
 
 /** Les 32 biomes naturels de la séance C1 (D6), par famille, tels que la séance les nomme. */
@@ -271,6 +279,8 @@ describe('rôles des gènes et formes des allèles (D-6, A-10, W-12)', () => {
     expect(genetics.loci[roles.loci.nose]?.role).toBe('nose');
     expect(genetics.traits[roles.traits.skin]?.role).toBe('skin');
     expect(genetics.traits[roles.traits.height]?.role).toBe('height');
+    // La rapidité règle l'allure de la marche (ADR 0014).
+    expect(genetics.traits[roles.traits.speed]?.role).toBe('speed');
   });
 
   it('exige que chaque rôle soit tenu, et par un seul gène', () => {
@@ -281,7 +291,24 @@ describe('rôles des gènes et formes des allèles (D-6, A-10, W-12)', () => {
     expect(problems(anonymous)).toEqual([
       'traits : aucun trait ne tient le rôle skin',
       'traits : aucun trait ne tient le rôle height',
+      'traits : aucun trait ne tient le rôle speed',
     ]);
+    // Le rôle de la rapidité, exigé une fois comme les autres.
+    const slow = {
+      ...genetics,
+      traits: genetics.traits.map(({ role, ...entry }) =>
+        role === 'speed' ? entry : { ...entry, ...(role === undefined ? {} : { role }) },
+      ),
+    };
+    expect(problems(slow)).toEqual(['traits : aucun trait ne tient le rôle speed']);
+    expect(() => geneRoles(slow)).toThrow(DataError);
+    const fast = {
+      ...genetics,
+      traits: genetics.traits.map((entry) =>
+        entry.id === 'strength' ? { ...entry, role: 'speed' } : entry,
+      ),
+    };
+    expect(problems(fast)).toEqual(['traits : plusieurs traits tiennent le rôle speed']);
     expect(() => geneRoles(anonymous)).toThrow(DataError);
     const twice = {
       ...genetics,
@@ -394,6 +421,84 @@ describe('âges de la vie et confort, dans data/species.json (D-6, A-10, U-12)',
     ).toBe(true);
   });
 
+  it("borne la stature à l'octet de l'image des groupes (ADR 0014)", () => {
+    expect(human.display.stature).toBe(0.75);
+    // 0,75 × 2 × 195 / 340 = 0,86 case pour le plus grand adulte : il tient sur un octet.
+    const display = (stature: number, height: [number, number] = human.height) =>
+      valid({ ...human, height, display: { ...human.display, stature } });
+    expect(display(1.7)).toBe(true);
+    expect(display(1.8)).toBe(false);
+    // La plus grande taille compte, que la liste la donne en premier ou en second.
+    expect(display(1.7, [195, 145])).toBe(true);
+    expect(display(1.8, [195, 145])).toBe(false);
+    expect(display(0)).toBe(false);
+  });
+
+  it('refuse une croissance mal ordonnée, ou qui ne finit pas à la stature adulte', () => {
+    const growth = (points: [number, number][]) =>
+      valid({ ...human, display: { ...human.display, growth: points } });
+    expect(
+      growth([
+        [0, 0.4],
+        [12, 0.9],
+        [18, 1],
+      ]),
+    ).toBe(true);
+    expect(
+      growth([
+        [0, 0.4],
+        [12, 0.9],
+        [12, 1],
+      ]),
+    ).toBe(false);
+    expect(
+      growth([
+        [0, 0.4],
+        [18, 1],
+        [12, 0.9],
+      ]),
+    ).toBe(false);
+    expect(
+      growth([
+        [0, 0.4],
+        [18, 0.9],
+      ]),
+    ).toBe(false);
+    expect(
+      growth([
+        [0, 0],
+        [18, 1],
+      ]),
+    ).toBe(false);
+    expect(
+      growth([
+        [0, 0.4],
+        [10, 1.2],
+        [18, 1],
+      ]),
+    ).toBe(false);
+    expect(growth([])).toBe(false);
+  });
+
+  it("refuse une allure dont les âges se suivent mal ou dont les bornes s'inversent", () => {
+    const pace = (change: Partial<Species['pace']>) =>
+      valid({ ...human, pace: { ...human.pace, ...change } });
+    expect(pace({})).toBe(true);
+    expect(pace({ speed: [1.2, 0.8] })).toBe(false);
+    expect(pace({ speed: [0, 1] })).toBe(false);
+    expect(
+      pace({
+        age: [
+          [10, 1],
+          [5, 0.8],
+        ],
+      }),
+    ).toBe(false);
+    expect(pace({ age: [[0, 0]] })).toBe(false);
+    expect(pace({ carrying: 0 })).toBe(false);
+    expect(pace({ pregnant: 1.5 })).toBe(false);
+  });
+
   it('refuse un confort qui ne tient pas entre ses deux extrêmes', () => {
     const hardship = (comfort: [number, number], extremes: [number, number]) =>
       valid({ ...human, hardship: { ...human.hardship, comfort, extremes } });
@@ -401,5 +506,57 @@ describe('âges de la vie et confort, dans data/species.json (D-6, A-10, U-12)',
     expect(hardship([0, 30], [0, 40])).toBe(false);
     expect(hardship([0, 30], [-20, 30])).toBe(false);
     expect(hardship([30, 0], [-20, 40])).toBe(false);
+  });
+});
+
+describe('réglages du mouvement, dans data/nomads.json (ADR 0014)', () => {
+  const { nomads } = loadGameData();
+  const valid = (variant: unknown) => NomadsSchema.safeParse(variant).success;
+  const camp = (change: Partial<Nomads['camp']>) =>
+    valid({ ...nomads, camp: { ...nomads.camp, ...change } });
+  const walkers = (change: Partial<Nomads['walkers']>) =>
+    valid({ ...nomads, walkers: { ...nomads.walkers, ...change } });
+
+  it('donne au camp et aux marcheurs les réglages livrés', () => {
+    expect(valid(nomads)).toBe(true);
+    expect(nomads.camp).toMatchObject({ cohesion: 0.5, gap: 0.45, lag: 20, hurry: 1.25 });
+    expect(nomads.walkers).toEqual({ gap: 0.25, aside: 0.3, every: 3 });
+  });
+
+  it('refuse des réglages hors de leurs bornes', () => {
+    expect(camp({ cohesion: -0.1 })).toBe(false);
+    expect(camp({ cohesion: 1.1 })).toBe(false);
+    expect(camp({ cohesion: 1 })).toBe(true);
+    expect(camp({ lag: 29 })).toBe(true);
+    expect(camp({ lag: 30 })).toBe(false);
+    expect(camp({ lag: 2.5 })).toBe(false);
+    expect(camp({ lag: -1 })).toBe(false);
+    expect(camp({ hurry: 0.9 })).toBe(false);
+    expect(camp({ hurry: 2.1 })).toBe(false);
+    expect(camp({ kin: [-0.1, 1] })).toBe(false);
+    expect(camp({ kin: [1, 3.5] })).toBe(false);
+    expect(camp({ band: [1, 7] })).toBe(true);
+    expect(camp({ band: [1, 7.5] })).toBe(false);
+    expect(camp({ spread: 1.5 })).toBe(false);
+    expect(camp({ wean: 0 })).toBe(false);
+    expect(camp({ wait: -1 })).toBe(false);
+    expect(camp({ field: 4 })).toBe(false);
+    expect(camp({ field: 48.5 })).toBe(false);
+    expect(walkers({ aside: 0 })).toBe(false);
+    expect(walkers({ aside: 0.5 })).toBe(true);
+    expect(walkers({ aside: 0.6 })).toBe(false);
+    expect(walkers({ every: 0 })).toBe(false);
+    expect(walkers({ every: 30 })).toBe(true);
+    expect(walkers({ every: 31 })).toBe(false);
+    expect(walkers({ every: 1.5 })).toBe(false);
+  });
+
+  it("veut l'écart des marcheurs plus petit que celui du repos, tous deux sous une case", () => {
+    expect(walkers({ gap: 0 })).toBe(false);
+    expect(walkers({ gap: 0.45 })).toBe(false);
+    expect(walkers({ gap: 0.44 })).toBe(true);
+    expect(camp({ gap: 1 })).toBe(false);
+    expect(camp({ gap: 0.2 })).toBe(false);
+    expect(valid({ ...nomads, camp: { ...nomads.camp, gap: 0.9 } })).toBe(true);
   });
 });

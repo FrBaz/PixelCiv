@@ -1,4 +1,5 @@
 # Mini-sprite d'une femme adulte, au pas, image 1 sur 2 : cheveux longs, robe.
+# variantes 8 à 10, rangée 7
 ..hh..
 .hssh.
 .hssh.

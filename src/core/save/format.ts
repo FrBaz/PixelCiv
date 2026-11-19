@@ -28,14 +28,16 @@ export const SAVE_MAGIC = 'PXCV';
  * dans l'en-tête, l'ordre des sous-espèces de chaque espèce ; 6, les deux horloges de la
  * tâche 2b.2 : le jour du mois, celui de chaque commande du journal, et les marches du
  * mois (ADR 0013). Le jour va dans les données JSON, non dans les métadonnées, que
- * l'en-tête vérifie avant toute migration.
+ * l'en-tête vérifie avant toute migration. 7, les individus hors de la grille de la tâche
+ * 2b.3 : la position et le mouvement de chacun, sa grégarité, et le camp de chaque groupe ;
+ * les marches des groupes disparaissent (ADR 0014).
  */
-export const SAVE_FORMAT_VERSION = 6;
+export const SAVE_FORMAT_VERSION = 7;
 
 /**
  * Taille maximale d'une sauvegarde, compressée ou non, en octets. Elle borne la mémoire
  * qu'un fichier piégé peut faire allouer à la lecture, non les vraies parties : un monde
- * Immense y compte 28 Mio de couches, chaque vivant 76 octets, chaque mort 67 et chaque
+ * Immense y compte 28 Mio de couches, chaque vivant 105 octets, chaque mort 68 et chaque
  * fait de la chronique 33 ; 50 000 vivants et un million de morts y tiennent en 100 Mio
  * environ. Relire un conteneur à la borne coûte en pointe environ trois fois sa taille.
  */

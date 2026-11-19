@@ -1,109 +1,449 @@
 import { describe, expect, it } from 'vitest';
+import { PositionMirror } from '../app/frames';
 import { loadGameData } from '../core/data';
-import { GROUP_STRIDE, type GroupsFrame } from '../core/protocol';
-import { visualCode } from '../core/visual';
-import { emptyWalks } from '../core/walk';
-import { SPAWN_COUNT } from '../sim/commands';
-import { cultureCloth, frameOf, recolor, ROLE, type Palette } from './atlas';
-import { CHUNK_PX, parseColor } from './bake';
-import { displayScale, TILE_PX, visibleChunks, type Camera } from './camera';
+import { GROUP_STRIDE, NO_CARRIER, type GroupsFrame } from '../core/protocol';
+import { cellOf, FIXED } from '../core/position';
+import { AGE_CLASSES, AGE_CODE, visualCode } from '../core/visual';
+import { frameOf, hasFrame, recolor, ROLE, type Palette } from './atlas';
+import { CHUNK_PX } from './bake';
+import { physicalZoom, TILE_PX, visibleChunks, type Camera } from './camera';
 import {
   BANNER_CSS_HEIGHT,
+  bannerAt,
   bannerBox,
   bannerShapes,
   BANNERS,
   chooseBanner,
-  clusterOffset,
-  clusterReach,
+  CLOSE_CSS_PX,
+  CrowdLayout,
   depth,
-  groupPositions,
-  groupScreen,
+  FINGER_SLOP,
+  groupArea,
+  layoutCrowd,
   mapPixel,
-  memberBox,
-  memberShape,
-  onScreen,
-  pickGroup,
+  memberLooks,
+  motifTable,
+  personBox,
+  pickEntity,
+  POINTER_SLOP,
   spriteName,
-  spriteNames,
-  SPRITE_SCALE,
+  statureRows,
   textureKey,
-  TOUCH_SLOP,
+  textureParts,
+  variantName,
+  viewDensity,
   type Box,
+  type CrowdOptions,
   type MapView,
-  type PickShapes,
 } from './crowd';
 
-describe('grappe des membres d’un groupe (tâche 2.9)', () => {
-  it('place chacun à une position entière, stable, sans superposer les premiers', () => {
-    const seen = new Set<string>();
-    for (let index = 0; index < 50; index++) {
-      const { dx, dy } = clusterOffset(index);
-      expect(Number.isInteger(dx) && Number.isInteger(dy)).toBe(true);
-      expect(clusterOffset(index)).toEqual({ dx, dy });
-      // Une grappe serrée : cinquante personnes tiennent à quelques cases du centre.
-      expect(Math.abs(dx)).toBeLessThanOrEqual(24);
-      expect(Math.abs(dy)).toBeLessThanOrEqual(15);
-      if (index < 20) seen.add(`${String(dx)},${String(dy)}`);
-    }
-    expect(seen.size).toBe(20);
-  });
+const data = loadGameData();
+const human = data.species.entries.at(0);
+if (human === undefined) throw new Error('pas d’humains');
+const { stature: reference, carry } = human.display;
+const motifs = motifTable(hasFrame, frameOf);
+/** Un monde Petit : 512 × 256 cases. */
+const world = { width: 512 * TILE_PX, height: 256 * TILE_PX };
+const desktop = { width: 1280, height: 720 };
+/** Pixel 5 : 393 × 851 pixels CSS, à la densité 2,75. */
+const pixel5 = { width: 1081, height: 2340 };
 
-  it('a un motif dans l’atlas pour chaque âge, chaque sexe et chaque pas', () => {
-    for (let age = 0; age < 4; age++) {
-      for (let sex = 0; sex < 2; sex++) {
-        for (let step = 0; step < 2; step++) {
-          expect(() => frameOf(spriteName(age, sex, step))).not.toThrow();
-          expect(spriteNames()).toContain(spriteName(age, sex, step));
+/** Un membre : x et y en cases, stature en 1/128 de case, code d'apparence, porteur (rang). */
+interface Member {
+  readonly x: number;
+  readonly y: number;
+  readonly stature?: number;
+  readonly code?: number;
+  readonly carrier?: number;
+}
+
+/** Une image de groupes [identifiant, culture, membres] ; les membres sont numérotés de 1. */
+function crowdFrame(...groups: [number, number, Member[]][]): GroupsFrame {
+  const members = groups.flatMap(([, , list]) => list);
+  const total = members.length;
+  return {
+    groups: Uint32Array.from(
+      groups.flatMap(([id, culture, list]) => [
+        id,
+        Math.floor(list[0]?.x ?? 0),
+        Math.floor(list[0]?.y ?? 0),
+        list.length,
+        culture,
+      ]),
+    ),
+    slots: Uint32Array.from({ length: total }, (_, index) => index),
+    ids: Uint32Array.from({ length: total }, (_, index) => index + 1),
+    sprites: Uint16Array.from(members, (member) => member.code ?? visualCode(1, 2, 3, 2, 0)),
+    statures: Uint8Array.from(members, (member) => member.stature ?? Math.round(reference * 128)),
+    positions: Int32Array.from(
+      members.flatMap((member) => [Math.round(member.x * FIXED), Math.round(member.y * FIXED)]),
+    ),
+    carriers: Uint32Array.from(members, (member) => member.carrier ?? NO_CARRIER),
+    legs: {
+      slots: new Uint32Array(0),
+      days: new Uint32Array(0),
+      start: new Int32Array(0),
+      step: new Int32Array(0),
+      count: new Uint16Array(0),
+    },
+  };
+}
+
+/** Caméra visant le point (x, y), en cases. */
+const aimedAt = (x: number, y: number, zoom: number): Camera => ({
+  x: x * TILE_PX,
+  y: y * TILE_PX,
+  zoom,
+});
+
+const options = (passable: (cell: number) => boolean = () => true): CrowdOptions => ({
+  motifs,
+  reference,
+  cloth: (culture) => culture % 4,
+  passable,
+  walkMs: 0,
+  stepMs: 420,
+});
+
+/** La disposition de `frame` vue par `view`, rangée par profondeur. */
+function laid(frame: GroupsFrame, view: MapView, passable?: (cell: number) => boolean) {
+  const source = new PositionMirror({ carry, passable: passable ?? (() => true) });
+  source.reset({ at: 0, tick: 0, frame }, world.width / TILE_PX);
+  const layout = new CrowdLayout();
+  layoutCrowd(layout, source, memberLooks(frame, motifs, reference), view, 0, options(passable));
+  layout.sort();
+  return layout;
+}
+
+/** Les dessins d'une disposition, du fond vers l'avant : leur rectangle et leur membre. */
+function drawnOf(layout: CrowdLayout) {
+  return Array.from({ length: layout.count }, (_, index) => {
+    const at = layout.drawn(index);
+    return { box: layout.box(at), member: layout.member[at] ?? -1, key: layout.key[at] ?? 0 };
+  });
+}
+
+describe('variantes de hauteur des individus (ADR 0014, § 6)', () => {
+  it('a dans l’atlas chaque motif d’âge, de sexe et de pas, en variantes d’une rangée de plus ou de moins', () => {
+    expect(motifs.referenceRows).toBe(9);
+    const ranges = Object.fromEntries(AGE_CLASSES.map((age, index) => [age, motifs.ranges[index]]));
+    expect(ranges).toEqual({ baby: [6, 6], child: [6, 8], adult: [8, 10], elder: [8, 10] });
+    for (let age = 0; age < AGE_CLASSES.length; age++) {
+      const [low, high] = motifs.ranges[age] ?? [0, 0];
+      for (const sex of [0, 1]) {
+        for (const step of [0, 1]) {
+          for (let rows = low; rows <= high; rows++) {
+            const motif = motifs.person(age, sex, step, rows);
+            expect(motifs.heights[motif], `${String(age)}, ${String(rows)}`).toBe(rows);
+            // Une variante, d'une rangée doublée ou ôtée : la même largeur que la source.
+            const base = frameOf(spriteName(age, sex, step));
+            expect(motifs.widths[motif]).toBe(base.width);
+          }
         }
       }
     }
-    expect(spriteName(2, 0, 1)).toBe('sprites/adult-female-1');
-    expect(spriteName(3, 1, 0)).toBe('sprites/adult-male-0');
-    expect(spriteName(0, 1, 0)).toBe('sprites/baby-0');
+    // Les deux images d'une marche, à chaque hauteur.
+    expect(hasFrame(variantName('sprites/adult-female-1', 10))).toBe(true);
+    expect(hasFrame(variantName('sprites/baby-0', 7))).toBe(false);
   });
 
-  it('borne l’étendue de la grappe, quelle que soit la taille du groupe (A-9)', () => {
-    // Chaque motif, posé les pieds sur sa place comme le fait PeopleLayer, tient dans
-    // l'étendue annoncée, pour tout groupe jusqu'à bien au-delà de l'apparition maximale.
-    const frames = spriteNames().map((name) => frameOf(name));
-    const width = Math.max(...frames.map((frame) => frame.width));
-    const height = Math.max(...frames.map((frame) => frame.height));
-    for (let size = 1; size <= 4 * SPAWN_COUNT.max; size++) {
-      const reach = clusterReach(size, width, height);
-      for (let member = 0; member < size; member++) {
-        const { dx, dy } = clusterOffset(member);
-        for (const frame of frames) {
-          const left = dx - Math.floor(frame.width / 2);
-          const top = dy - frame.height + 2;
-          expect(left).toBeGreaterThanOrEqual(-reach.left);
-          expect(left + frame.width).toBeLessThanOrEqual(reach.right);
-          expect(top).toBeGreaterThanOrEqual(-reach.up);
-          expect(top + frame.height).toBeLessThanOrEqual(reach.down);
-        }
+  it('choisit la variante sur la stature, et la garde à tout zoom et toute densité', () => {
+    const adult = motifs.ranges[AGE_CODE.adult] ?? [9, 9];
+    const child = motifs.ranges[AGE_CODE.child] ?? [7, 7];
+    // L'adulte moyen de 0,75 case : 9 rangées ; un plus grand ou un plus petit, une de plus
+    // ou de moins, dans les variantes de sa classe.
+    expect(statureRows(96, reference, 9, adult)).toBe(9);
+    expect(statureRows(108, reference, 9, adult)).toBe(10);
+    expect(statureRows(84, reference, 9, adult)).toBe(8);
+    expect(statureRows(140, reference, 9, adult)).toBe(10);
+    // Un enfant de 10 ans, aux 78 % de sa stature adulte, puis de 6 et de 14 ans.
+    expect(statureRows(Math.round(96 * 0.78), reference, 9, child)).toBe(7);
+    expect(statureRows(Math.round(96 * 0.65), reference, 9, child)).toBe(6);
+    expect(statureRows(Math.round(96 * 0.92), reference, 9, child)).toBe(8);
+    // Dans la vue : chacun garde ses rangées, la hauteur dessinée divisée par k.
+    const frame = crowdFrame([
+      1,
+      1,
+      [
+        { x: 100.5, y: 50.5, stature: 84 },
+        { x: 101.5, y: 50.5, stature: 96 },
+        { x: 102.5, y: 50.5, stature: 108 },
+        { x: 103.5, y: 50.5, stature: 75, code: visualCode(0, AGE_CODE.child, 3, 2, 0) },
+      ],
+    ]);
+    for (const resolution of [1, 2.75]) {
+      for (const zoom of [3, 4, 8, 16, 24]) {
+        const scale = physicalZoom(zoom, resolution);
+        const view = {
+          camera: aimedAt(102, 50.5, scale),
+          viewport: desktop,
+          world,
+          resolution,
+        };
+        const layout = laid(frame, view);
+        const { k } = viewDensity(scale, resolution, reference, [9]);
+        const rows = drawnOf(layout)
+          .sort((a, b) => a.member - b.member)
+          .map(({ box }) => box.height / k);
+        expect(rows, `densité ${String(resolution)}, zoom ${String(zoom)}`).toEqual([8, 9, 10, 7]);
       }
     }
-    // L'ancienne marge fixe, 16 pixels de carte, était plus petite que la grappe d'un
-    // groupe de 30 ou 50 membres.
-    expect(clusterReach(SPAWN_COUNT.max, width, height).left).toBeGreaterThan(16);
-  });
-
-  it('dessine un grand groupe dont la case sort de l’écran tant que sa grappe y entre (A-9)', () => {
-    const viewport = { width: 800, height: 600 };
-    const scale = 3;
-    const reach = clusterReach(SPAWN_COUNT.max, 6, 9);
-    // Une case à 17 pixels de carte à gauche de l'écran : ses membres de droite s'y voient.
-    expect(onScreen(-17 * scale, 300, reach, scale, viewport)).toBe(true);
-    expect(onScreen(viewport.width + 17 * scale, 300, reach, scale, viewport)).toBe(true);
-    expect(onScreen(400, -10 * scale, reach, scale, viewport)).toBe(true);
-    // Trop loin, plus rien ne se voit.
-    expect(onScreen(-(reach.right * scale + 2), 300, reach, scale, viewport)).toBe(false);
-    expect(onScreen(400, viewport.height + reach.up * scale + 2, reach, scale, viewport)).toBe(
-      false,
-    );
   });
 });
 
-describe('bannière d’un groupe vu de loin (REN-08, A-1)', () => {
+describe('densité de la vue et seuil des individus (ADR 0014, § 6)', () => {
+  it('donne à l’adulte moyen la hauteur du tableau, aux densités 1 et 2,75', () => {
+    // Hauteur d'un adulte de taille moyenne, en pixels CSS, aux zooms 3, 4, 8, 16 et 24.
+    const table: Record<number, number[]> = {
+      1: [9, 9, 27, 45, 72],
+      2.75: [9.8, 13.1, 22.9, 49.1, 72],
+    };
+    for (const [resolution, heights] of Object.entries(table)) {
+      const density = Number(resolution);
+      const shown = [3, 4, 8, 16, 24].map((zoom) => {
+        const { k } = viewDensity(physicalZoom(zoom, density), density, reference, [9]);
+        return Math.round(((9 * k) / density) * 10) / 10;
+      });
+      expect(shown, `densité ${resolution}`).toEqual(heights);
+    }
+    // k est le même pour tous les individus d'une vue : celui de l'adulte de référence.
+    expect(viewDensity(8, 1, reference, [9]).k).toBe(3);
+    expect(viewDensity(66, 2.75, reference, [9]).k).toBe(22);
+    // Les humains des planches (2b.5) : le niveau le plus fin dont k reste à 25 % de la cible.
+    expect(viewDensity(66, 2.75, reference, [32, 9]).level).toBe(0);
+    expect(viewDensity(8, 2.75, reference, [32, 9]).level).toBe(1);
+  });
+
+  it('montre les individus dès que l’adulte de référence vise 8 pixels CSS', () => {
+    expect(CLOSE_CSS_PX).toBe(8);
+    // Densité 1 : à partir du zoom 3, comme avant 2b.3.
+    expect(viewDensity(2, 1, reference, [9]).close).toBe(false);
+    expect(viewDensity(3, 1, reference, [9]).close).toBe(true);
+    // Pixel 5 : à partir du zoom 2,9 ; le zoom 3 d'ouverture du téléphone les montre.
+    expect(viewDensity(physicalZoom(2.5, 2.75), 2.75, reference, [9]).close).toBe(false);
+    expect(viewDensity(physicalZoom(2.9, 2.75), 2.75, reference, [9]).close).toBe(true);
+    expect(viewDensity(physicalZoom(3, 2.75), 2.75, reference, [9]).close).toBe(true);
+    // Densité 2 : à l'échelle 6, soit le zoom 3.
+    expect(viewDensity(5, 2, reference, [9]).close).toBe(false);
+    expect(viewDensity(6, 2, reference, [9]).close).toBe(true);
+  });
+
+  it('ne demande que les positions des groupes que l’écran peut montrer', () => {
+    const frame = crowdFrame(
+      [
+        1,
+        1,
+        [
+          { x: 100.5, y: 50.5 },
+          { x: 101, y: 51 },
+        ],
+      ],
+      [
+        2,
+        2,
+        [
+          { x: 300.5, y: 50.5 },
+          { x: 301, y: 50 },
+          { x: 302, y: 50 },
+        ],
+      ],
+    );
+    const layout = laid(frame, {
+      camera: aimedAt(100.5, 50.5, 8),
+      viewport: desktop,
+      world,
+      resolution: 1,
+    });
+    expect(layout.visibleGroups).toBe(1);
+    expect(layout.placed).toBe(2);
+    expect(layout.count).toBe(2);
+    // L'apparence ne se tire que pour les groupes que l'écran montre, une fois par image.
+    const source = new PositionMirror({ carry, passable: () => true });
+    source.reset({ at: 0, tick: 0, frame }, world.width / TILE_PX);
+    const looks = memberLooks(frame, motifs, reference);
+    const view = (x: number): MapView => ({
+      camera: aimedAt(x, 50.5, 8),
+      viewport: desktop,
+      world,
+      resolution: 1,
+    });
+    layoutCrowd(new CrowdLayout(), source, looks, view(100.5), 0, options());
+    expect(Array.from(looks.ready)).toEqual([1, 0]);
+    expect(Array.from(looks.rows)).toEqual([9, 9, 0, 0, 0]);
+    const first = looks.motifs.slice(0, 4);
+    layoutCrowd(new CrowdLayout(), source, looks, view(301), 0, options());
+    expect(Array.from(looks.ready)).toEqual([1, 1]);
+    expect(Array.from(looks.rows)).toEqual([9, 9, 9, 9, 9]);
+    expect(looks.motifs.slice(0, 4)).toEqual(first);
+    // Mêmes code d'apparence et stature : mêmes motifs.
+    expect(looks.motifs.slice(4, 6)).toEqual(first.slice(0, 2));
+  });
+});
+
+describe('appui sur un individu ou son groupe (ADR 0014, § 6)', () => {
+  it('touche un individu sur Pixel 5 au zoom 3, à 12 pixels CSS au doigt, puis son groupe, puis la case', () => {
+    const resolution = 2.75;
+    const scale = physicalZoom(3, resolution);
+    // Quatre membres d'un groupe, à trois cases les uns des autres.
+    const frame = crowdFrame([
+      5,
+      1,
+      [
+        { x: 100.5, y: 50.5 },
+        { x: 103.5, y: 50.5 },
+        { x: 100.5, y: 53.5 },
+        { x: 103.5, y: 53.5 },
+      ],
+    ]);
+    const layout = laid(frame, {
+      camera: aimedAt(102, 52, scale),
+      viewport: pixel5,
+      world,
+      resolution,
+    });
+    expect(layout.close).toBe(true);
+    const drawn = drawnOf(layout).sort((a, b) => a.member - b.member);
+    const first = drawn.at(0)?.box;
+    if (first === undefined) throw new Error('personne');
+    // Un adulte dessiné fait 6,5 × 9,8 pixels CSS, et sa cible au doigt 31 × 34.
+    expect(first.width / resolution).toBeCloseTo(6.5, 1);
+    expect(first.height / resolution).toBeCloseTo(9.8, 1);
+    const slop = FINGER_SLOP * resolution;
+    expect((first.width + 2 * slop) / resolution).toBeCloseTo(30.5, 0);
+    expect((first.height + 2 * slop) / resolution).toBeCloseTo(33.8, 0);
+    const middle = (box: Box) => [box.left + box.width / 2, box.top + box.height / 2] as const;
+    const [cx, cy] = middle(first);
+    expect(pickEntity(layout, cx, cy, slop)).toEqual({ kind: 'person', id: 1 });
+    // Frôlé à 12 pixels CSS, il ouvre encore sa fiche ; au-delà, entre les membres, celle du
+    // groupe, dans la boîte de ses membres élargie de la même marge.
+    const right = first.left + first.width;
+    expect(pickEntity(layout, right + slop, cy, slop)).toEqual({ kind: 'person', id: 1 });
+    expect(pickEntity(layout, right + slop + 1, cy, slop)).toEqual({ kind: 'group', id: 5 });
+    const area = groupArea(layout, 0, slop);
+    const [ax, ay] = middle(area);
+    expect(pickEntity(layout, ax, ay, slop)).toEqual({ kind: 'group', id: 5 });
+    // Hors de la boîte et de sa marge, la case.
+    expect(pickEntity(layout, area.left - 1, ay, slop)).toBeUndefined();
+    expect(pickEntity(layout, area.left + 1, ay, slop)).toEqual({ kind: 'group', id: 5 });
+    // Au pointeur fin, 4 pixels CSS.
+    const fine = POINTER_SLOP * resolution;
+    expect(pickEntity(layout, right + fine, cy, fine)).toEqual({ kind: 'person', id: 1 });
+    expect(pickEntity(layout, right + fine + 1, cy, fine)).toEqual({ kind: 'group', id: 5 });
+  });
+
+  it('préfère, à égalité, l’individu de devant, et, entre deux groupes, celui dont un membre est le plus proche', () => {
+    const frame = crowdFrame(
+      [
+        1,
+        1,
+        [
+          { x: 100.5, y: 50.5 },
+          { x: 100.6, y: 50.52 },
+          { x: 101.6, y: 50.52 },
+        ],
+      ],
+      [
+        2,
+        2,
+        [
+          { x: 104, y: 50.5 },
+          { x: 98, y: 50.5 },
+        ],
+      ],
+    );
+    const layout = laid(frame, {
+      camera: aimedAt(100.5, 50.5, 16),
+      viewport: desktop,
+      world,
+      resolution: 1,
+    });
+    const drawn = drawnOf(layout);
+    // Les deux premiers membres se recouvrent : le plus bas passe devant, et l'emporte.
+    const [a, b] = [drawn.find((d) => d.member === 0), drawn.find((d) => d.member === 1)];
+    if (a === undefined || b === undefined) throw new Error('membres manquants');
+    const x = Math.max(a.box.left, b.box.left) + 1;
+    const y = Math.max(a.box.top, b.box.top) + 1;
+    expect(pickEntity(layout, x, y, 0)).toEqual({ kind: 'person', id: 2 });
+    // Les boîtes des deux groupes se recouvrent : entre deux membres du premier, loin de
+    // tout autre, l'appui désigne le groupe dont un membre est le plus proche, le premier.
+    const c = drawn.find((d) => d.member === 2)?.box;
+    if (c === undefined) throw new Error('membre manquant');
+    const between = (b.box.left + b.box.width + c.left) / 2;
+    expect(groupArea(layout, 0, POINTER_SLOP).left).toBeLessThan(between);
+    expect(pickEntity(layout, between, c.top + 2, POINTER_SLOP)).toEqual({ kind: 'group', id: 1 });
+    // Plus près d'un membre du second, le second.
+    const d = drawn.find((entry) => entry.member === 3)?.box;
+    if (d === undefined) throw new Error('membre manquant');
+    const nearer = d.left - POINTER_SLOP - 10;
+    expect(pickEntity(layout, nearer, d.top + 2, POINTER_SLOP)).toEqual({ kind: 'group', id: 2 });
+  });
+});
+
+describe('ordre des dessins (W-7, ADR 0014)', () => {
+  it('range les dessins par une profondeur unique : le plus bas devant, puis le dernier dessiné', () => {
+    const box = (bottom: number, height: number): Box => ({
+      left: 0,
+      top: bottom - height,
+      width: 7,
+      height,
+    });
+    // Le pied le plus bas passe devant, quels que soient les rangs et les hauteurs.
+    expect(depth(box(10, 8), 0)).toBeGreaterThan(depth(box(9, 36), 2 ** 20 - 1));
+    expect(depth(box(-29, 8), 0)).toBeGreaterThan(depth(box(-30, 16), 5000));
+    // Au même pied, le dernier dessiné, et jamais deux fois la même profondeur.
+    expect(depth(box(10, 8), 3)).toBeGreaterThan(depth(box(10, 24), 2));
+    const seen = new Set<number>();
+    for (let bottom = -40; bottom < 40; bottom++) {
+      for (let rank = 0; rank < 50; rank++) seen.add(depth(box(bottom, 8), rank));
+    }
+    expect(seen.size).toBe(80 * 50);
+  });
+
+  it('dessine du fond vers l’avant, d’après les pieds, et le porté juste devant sa mère', () => {
+    const baby = visualCode(0, AGE_CODE.baby, 3, 2, 0);
+    const frame = crowdFrame([
+      1,
+      1,
+      [
+        // Une mère et son nourrisson, puis deux voisins, l'un plus bas, l'autre aux mêmes
+        // pieds qu'elle.
+        { x: 100.5, y: 50.5 },
+        { x: 100.5, y: 50.5, code: baby, stature: 30, carrier: 0 },
+        { x: 100.6, y: 50.55 },
+        { x: 100.4, y: 50.5 },
+      ],
+    ]);
+    const layout = laid(frame, {
+      camera: aimedAt(100.5, 50.5, 24),
+      viewport: desktop,
+      world,
+      resolution: 1,
+    });
+    const drawn = drawnOf(layout);
+    expect(drawn).toHaveLength(4);
+    // Du fond vers l'avant : les pieds montent, et le rang départage les pieds égaux.
+    for (let index = 1; index < drawn.length; index++) {
+      const [previous, next] = [drawn.at(index - 1), drawn.at(index)];
+      if (previous === undefined || next === undefined) continue;
+      expect(next.key).toBeGreaterThan(previous.key);
+      expect(next.box.top + next.box.height).toBeGreaterThanOrEqual(
+        previous.box.top + previous.box.height,
+      );
+    }
+    const order = drawn.map((entry) => entry.member);
+    // Le nourrisson passe juste devant sa mère, à 0,2 case d'elle, du côté de son identifiant.
+    expect(order.indexOf(1)).toBe(order.indexOf(0) + 1);
+    expect(order.at(-1)).toBe(2);
+    const mother = drawn.find((entry) => entry.member === 0)?.box;
+    const child = drawn.find((entry) => entry.member === 1)?.box;
+    if (mother === undefined || child === undefined) throw new Error('mère ou enfant manquant');
+    expect(child.top + child.height).toBe(mother.top + mother.height);
+    const apart = Math.abs(child.left + child.width / 2 - (mother.left + mother.width / 2));
+    expect(Math.abs(apart - carry * TILE_PX * 24)).toBeLessThanOrEqual(4 * 3);
+  });
+});
+
+describe('bannière d’un groupe vu de loin (REN-08, A-1, ADR 0014)', () => {
   const banners = bannerShapes(frameOf);
   const largest = banners.reduce((tallest, banner) =>
     banner.height > tallest.height ? banner : tallest,
@@ -123,7 +463,9 @@ describe('bannière d’un groupe vu de loin (REN-08, A-1)', () => {
 
   it('est toujours à la densité de la carte, et lisible par la taille de son motif', () => {
     for (const resolution of [1, 1.25, 1.5, 1.75, 2, 2.25, 2.625, 2.75, 3]) {
-      for (const scale of [0.25, 0.5, 1, 2]) {
+      for (const scale of [0.25, 0.5, 1, 2, 4, 7]) {
+        // De loin seulement : à la densité 1, les individus se voient dès l'échelle 3.
+        if (viewDensity(scale, resolution, reference, [9]).close) continue;
         const label = `densité ${String(resolution)}, échelle ${String(scale)}`;
         // Un pixel de bannière par pixel de carte : une seule densité dans la vue.
         const pixel = mapPixel(scale);
@@ -168,320 +510,62 @@ describe('bannière d’un groupe vu de loin (REN-08, A-1)', () => {
         name,
       ).toEqual([ROLE.transparent, ROLE.outline, ROLE.clothShadow, ROLE.cloth, ROLE.clothLight]);
       // La hampe tient la colonne de gauche, de haut en bas : son pied, le coin bas gauche
-      // du motif, se plante sur le centre de la case (bannerBox).
+      // du motif, se plante sur le point de la bannière (bannerBox).
       for (let row = 0; row < height; row++) {
         expect(role(0, row), `${name}, ligne ${String(row)}`).toBe(ROLE.outline);
       }
     }
   });
-});
 
-describe('ordre des dessins (W-7)', () => {
-  it('range les dessins par une profondeur unique : le plus bas devant, puis le dernier dessiné', () => {
-    const box = (bottom: number, height: number): Box => ({
-      left: 0,
-      top: bottom - height,
-      width: 7,
-      height,
-    });
-    // Le pied le plus bas passe devant, quels que soient les rangs et les hauteurs.
-    expect(depth(box(10, 8), 0)).toBeGreaterThan(depth(box(9, 36), 2 ** 20 - 1));
-    expect(depth(box(-29, 8), 0)).toBeGreaterThan(depth(box(-30, 16), 5000));
-    // Au même pied, le dernier dessiné, et jamais deux fois la même profondeur.
-    expect(depth(box(10, 8), 3)).toBeGreaterThan(depth(box(10, 24), 2));
-    const seen = new Set<number>();
-    for (let bottom = -40; bottom < 40; bottom++) {
-      for (let rank = 0; rank < 50; rank++) seen.add(depth(box(bottom, 8), rank));
-    }
-    expect(seen.size).toBe(80 * 50);
+  it('se plante au barycentre des membres, au plus court par la couture, ou au membre le plus proche s’il tombe sur l’eau', () => {
+    const width = 512;
+    const xs = Float64Array.of(511.8 * FIXED, 0.4 * FIXED, 511.9 * FIXED, 0.1 * FIXED);
+    const ys = Float64Array.of(60 * FIXED, 60.5 * FIXED, 61 * FIXED, 60 * FIXED);
+    // Le dernier est porté : il ne compte pas.
+    const carriers = Int32Array.of(-1, -1, -1, 0);
+    const out = new Float64Array(2);
+    bannerAt(xs, ys, carriers, 0, 4, width, () => true, out);
+    expect(out[0] / FIXED).toBeCloseTo(0.0333, 3);
+    expect(out[1] / FIXED).toBeCloseTo(60.5, 9);
+    // Sur l'eau, au membre le plus proche du barycentre.
+    const dry = (cell: number) => cell !== cellOf(0.0333 * FIXED, 60.5 * FIXED, width);
+    bannerAt(xs, ys, carriers, 0, 4, width, dry, out);
+    expect([out[0] / FIXED, out[1] / FIXED]).toEqual([0.4, 60.5]);
+    // Dans la vue lointaine : une bannière par groupe, plantée là.
+    const frame = crowdFrame([
+      9,
+      1,
+      [
+        { x: 200.25, y: 80.5 },
+        { x: 200.75, y: 80.5 },
+      ],
+    ]);
+    const layout = laid(frame, { camera: aimedAt(200.5, 80.5, 1), viewport, world, resolution: 1 });
+    expect(layout.close).toBe(false);
+    expect(layout.count).toBe(1);
+    const box = layout.box(0);
+    expect(box.left).toBe(viewport.width / 2);
+    expect(box.top + box.height).toBe(viewport.height / 2);
+    expect(layout.member[0]).toBe(-1);
+    expect(frame.groups[layout.group[0] * GROUP_STRIDE]).toBe(9);
   });
 });
 
-describe('cache des textures recolorées (A-13)', () => {
-  it('partage les textures de deux cultures de même habit', () => {
-    const { appearance } = loadGameData();
-    const clothing = appearance.clothing.map((color) => parseColor(color));
-    const cloth = (culture: number) => cultureCloth(clothing, culture) ?? [0, 0, 0];
-    const name = 'sprites/adult-male-0';
-    const other = 1 + clothing.length;
-    expect(cloth(other)).toEqual(cloth(1));
-    expect(textureKey(name, 1234, cloth(other))).toBe(textureKey(name, 1234, cloth(1)));
-    expect(textureKey('icons/group', 0, cloth(other))).toBe(textureKey('icons/group', 0, cloth(1)));
-    // Un autre habit, un autre motif ou une autre apparence : une autre texture.
-    expect(textureKey(name, 1234, cloth(2))).not.toBe(textureKey(name, 1234, cloth(1)));
-    expect(textureKey('sprites/adult-male-1', 1234, cloth(1))).not.toBe(
-      textureKey(name, 1234, cloth(1)),
-    );
-    expect(textureKey(name, 1235, cloth(1))).not.toBe(textureKey(name, 1234, cloth(1)));
-    // Autant de clés de bannière que d'habits, quel que soit le nombre de cultures.
-    const banners = new Set<string>();
-    for (let culture = 1; culture <= 40; culture++) {
-      banners.add(textureKey('icons/group', 0, cloth(culture)));
+describe('textures recolorées (A-13)', () => {
+  it('nomme une texture par son motif, son apparence et son habit, sans perte', () => {
+    for (const [motif, code, cloth] of [
+      [0, 0, 0],
+      [17, 8191, 3],
+      [255, 1234, 40],
+    ] as const) {
+      expect(textureParts(textureKey(motif, code, cloth))).toEqual({ motif, code, cloth });
     }
-    expect(banners.size).toBe(new Set(appearance.clothing).size);
-  });
-});
-
-describe('groupe sous un appui (W-7)', () => {
-  const banners = bannerShapes(frameOf);
-  const sprites = spriteNames().map((name) => frameOf(name));
-  const shapes: PickShapes = {
-    banners,
-    largest: {
-      width: Math.max(...sprites.map((frame) => frame.width)),
-      height: Math.max(...sprites.map((frame) => frame.height)),
-    },
-    member: (code) => memberShape(code, frameOf),
-  };
-  const world = { width: 512 * TILE_PX, height: 256 * TILE_PX };
-  const viewport = { width: 1280, height: 720 };
-  /** Tous les rôles en couleur, sauf le transparent : les pixels opaques d'un motif. */
-  const opaque: Palette = Array.from({ length: 14 }, (_, role) =>
-    role === 0 ? undefined : ([1, 1, 1] as const),
-  );
-  /** Centres des pixels opaques du motif `name`, dessiné dans `box`, en pixels physiques. */
-  function visible(name: string, box: Box, pixel: number): [number, number][] {
-    const { width, height } = frameOf(name);
-    const pixels = recolor(name, opaque);
-    const points: [number, number][] = [];
-    for (let row = 0; row < height; row++) {
-      for (let column = 0; column < width; column++) {
-        if ((pixels[(row * width + column) * 4 + 3] ?? 0) === 0) continue;
-        points.push([box.left + (column + 0.5) * pixel, box.top + (row + 0.5) * pixel]);
-      }
-    }
-    return points;
-  }
-  /** L'image de groupes de `size` membres adultes : [identifiant, colonne, ligne, taille]. */
-  function frame(...groups: [number, number, number, number][]): GroupsFrame {
-    const total = groups.reduce((sum, group) => sum + group[3], 0);
-    return {
-      groups: Uint32Array.from(groups.flatMap(([id, x, y, size]) => [id, x, y, size, 1])),
-      sprites: new Uint16Array(total).fill(visualCode(1, 2, 3, 2, 0)),
-      walks: emptyWalks(),
-    };
-  }
-  /** Le groupe sous un point, chaque groupe au repos au centre de sa case (groupPositions). */
-  function pick(
-    groups: GroupsFrame,
-    view: MapView,
-    x: number,
-    y: number,
-    pickShapes: PickShapes,
-    slop?: number,
-  ): number | undefined {
-    const count = groups.groups.length / GROUP_STRIDE;
-    const positions = new Float64Array(count * 2);
-    groupPositions(groups, new Map(), 0, 512, positions, new Uint8Array(count));
-    return pickGroup(groups, positions, view, x, y, pickShapes, slop);
-  }
-  /** Caméra visant le centre de la case (x, y). */
-  const aimedAt = (x: number, y: number, zoom: number): Camera => ({
-    x: x * TILE_PX + TILE_PX / 2,
-    y: y * TILE_PX + TILE_PX / 2,
-    zoom,
+    expect(textureKey(1, 2, 3)).not.toBe(textureKey(2, 1, 3));
+    expect(Number.isSafeInteger(textureKey(255, 8191, 1000))).toBe(true);
   });
 
-  it('touche la bannière partout où elle se voit, à toute échelle et toute densité', () => {
-    const single = frame([7, 100, 50, 20]);
-    expect(single.groups).toHaveLength(GROUP_STRIDE);
-    for (const resolution of [1, 2, 3]) {
-      for (const zoom of [0.25, 0.5, 0.75, 1, 2]) {
-        const view: MapView = { camera: aimedAt(100, 50, zoom), viewport, world, resolution };
-        const pixel = mapPixel(displayScale(zoom));
-        const banner = chooseBanner(banners, pixel, resolution);
-        const box = bannerBox(viewport.width / 2, viewport.height / 2, banner, pixel);
-        const points = visible(banner.name, box, pixel);
-        expect(points.length).toBeGreaterThan(20);
-        for (const [x, y] of points) {
-          expect(pick(single, view, x, y, shapes), `zoom ${String(zoom)}`).toBe(7);
-        }
-        // À côté, à la tolérance près : frôlée, puis manquée.
-        const slop = TOUCH_SLOP * resolution;
-        expect(pick(single, view, box.left - slop, box.top, shapes, slop)).toBe(7);
-        expect(pick(single, view, box.left - slop - 1, box.top, shapes, slop)).toBeUndefined();
-        expect(pick(single, view, box.left - 1, box.top, shapes)).toBeUndefined();
-      }
-    }
-  });
-
-  it('touche chacun des membres, de près, jusqu’au plus éloigné de la grappe', () => {
-    const size = SPAWN_COUNT.max;
-    const single = frame([3, 100, 50, size]);
-    for (const zoom of [SPRITE_SCALE, 6, 12]) {
-      const view: MapView = { camera: aimedAt(100, 50, zoom), viewport, world, resolution: 1 };
-      const scale = displayScale(zoom);
-      for (let member = 0; member < size; member++) {
-        const code = single.sprites[member] ?? 0;
-        const name = spriteName(2, 1, 0);
-        const shape = memberShape(code, frameOf);
-        expect(shape).toEqual(frameOf(name));
-        const box = memberBox(viewport.width / 2, viewport.height / 2, member, shape, scale);
-        for (const [x, y] of visible(name, box, scale)) {
-          expect(pick(single, view, x, y, shapes), `membre ${String(member)}`).toBe(3);
-        }
-      }
-    }
-  });
-
-  it('retrouve un groupe à travers la couture, dans chaque copie visible du monde', () => {
-    const seam = frame([9, 0, 60, 10]);
-    const zoom = 0.25;
-    const resolution = 1;
-    const pixel = mapPixel(zoom);
-    const banner = chooseBanner(banners, pixel, resolution);
-    // La caméra vise la dernière colonne : le groupe de la colonne 0 est juste à droite.
-    const view: MapView = { camera: aimedAt(511, 60, zoom), viewport, world, resolution };
-    const at = groupScreen(
-      0.5,
-      60.5,
-      view,
-      { left: 0, right: banner.width, up: 0, down: 0 },
-      pixel,
-    );
-    expect(at.x).toBeGreaterThan(viewport.width / 2);
-    // Le monde, quatre fois plus étroit que l'écran à ce zoom, s'y voit plusieurs fois.
-    expect(at.span).toBeLessThan(viewport.width);
-    let copies = 0;
-    for (let copy = -at.copies; copy <= at.copies; copy++) {
-      const box = bannerBox(at.x + copy * at.span, at.y, banner, pixel);
-      if (box.left < 0 || box.left + box.width > viewport.width) continue;
-      copies++;
-      const [x, y] = visible(banner.name, box, pixel)[0] ?? [0, 0];
-      expect(pick(seam, view, x, y, shapes)).toBe(9);
-    }
-    expect(copies).toBeGreaterThanOrEqual(2);
-  });
-
-  it('préfère le dessin touché au dessin frôlé, puis celui qui passe devant', () => {
-    // Deux groupes l'un sous l'autre : la bannière du second, plus bas, recouvre le pied
-    // de celle du premier.
-    const pair = frame([1, 100, 50, 5], [2, 100, 51, 5]);
-    const view: MapView = { camera: aimedAt(100, 50, 2), viewport, world, resolution: 1 };
-    const banner = chooseBanner(banners, mapPixel(2), 1);
-    const upper = bannerBox(viewport.width / 2, viewport.height / 2, banner, 2);
-    const lower = bannerBox(viewport.width / 2, viewport.height / 2 + TILE_PX * 2, banner, 2);
-    const inBoth = lower.top + 1;
-    expect(inBoth).toBeLessThan(upper.top + upper.height);
-    expect(pick(pair, view, upper.left + 1, inBoth, shapes, 4)).toBe(2);
-    // Au sommet du premier, hors du second : le premier, même si le second est tout près.
-    expect(pick(pair, view, upper.left + 1, upper.top + 1, shapes, 40)).toBe(1);
-    // Rien sous le point, ni assez près : aucun groupe.
-    expect(pick(pair, view, 0, 0, shapes, 4)).toBeUndefined();
-    expect(pick(frame(), view, upper.left + 1, upper.top + 1, shapes, 4)).toBeUndefined();
-  });
-
-  it('à pied égal, prend le dernier dessiné, que PixiJS montre devant (depth)', () => {
-    // Deux groupes d'une même ligne, en cases voisines : leurs bannières se recouvrent, et
-    // leurs pieds sont à la même hauteur. Le second de l'image est dessiné après.
-    for (const resolution of [1, 2, 3]) {
-      for (const zoom of [0.25, 0.5, 1, 2]) {
-        const view: MapView = { camera: aimedAt(100, 50, zoom), viewport, world, resolution };
-        const pixel = mapPixel(displayScale(zoom));
-        const banner = chooseBanner(banners, pixel, resolution);
-        const left = bannerBox(viewport.width / 2, viewport.height / 2, banner, pixel);
-        const step = TILE_PX * displayScale(zoom);
-        const right = bannerBox(viewport.width / 2 + step, viewport.height / 2, banner, pixel);
-        expect(right.left).toBeLessThan(left.left + left.width);
-        expect(depth(right, 1)).toBeGreaterThan(depth(left, 0));
-        const [x, y] = [right.left + 0.5, right.top + 0.5];
-        const label = `densité ${String(resolution)}, zoom ${String(zoom)}`;
-        expect(pick(frame([1, 100, 50, 5], [2, 101, 50, 5]), view, x, y, shapes), label).toBe(2);
-        expect(pick(frame([2, 101, 50, 5], [1, 100, 50, 5]), view, x, y, shapes), label).toBe(1);
-      }
-    }
-    // De près, deux membres de groupes voisins aux pieds sur la même ligne.
-    const view: MapView = { camera: aimedAt(100, 50, 4), viewport, world, resolution: 1 };
-    const shape = memberShape(visualCode(1, 2, 3, 2, 0), frameOf);
-    const first = memberBox(viewport.width / 2, viewport.height / 2, 0, shape, 4);
-    const second = memberBox(viewport.width / 2 + TILE_PX * 4, viewport.height / 2, 0, shape, 4);
-    expect(second.left).toBeLessThan(first.left + first.width);
-    const [x, y] = [second.left + 0.5, second.top + 0.5];
-    expect(pick(frame([1, 100, 50, 1], [2, 101, 50, 1]), view, x, y, shapes)).toBe(2);
-    expect(pick(frame([2, 101, 50, 1], [1, 100, 50, 1]), view, x, y, shapes)).toBe(1);
-  });
-});
-
-describe('positions des groupes à l’instant affiché (ADR 0013)', () => {
-  const world = { width: 512 * TILE_PX, height: 256 * TILE_PX };
-  const viewport = { width: 1280, height: 720 };
-
-  it('place un groupe au repos au centre de sa case, et un groupe en marche sur son chemin', () => {
-    // Deux groupes : le 4 se repose en (20, 30), le 9 marche de (511, 12) à (1, 12) par la
-    // couture, en (0, 12) au bout de son chemin.
-    const frame: GroupsFrame = {
-      groups: Uint32Array.of(4, 20, 30, 3, 1, 9, 1, 12, 5, 2),
-      sprites: new Uint16Array(8),
-      walks: {
-        groups: Uint32Array.of(9),
-        ends: Uint32Array.of(3),
-        cells: Uint32Array.of(12 * 512 + 511, 12 * 512, 12 * 512 + 1),
-        costs: Float64Array.of(0, 1, 2),
-        budgets: Float64Array.of(30),
-      },
-    };
-    const walkOf = new Map([[9, 0]]);
-    const positions = new Float64Array(4);
-    const moving = new Uint8Array(2);
-    groupPositions(frame, walkOf, 0.25, 512, positions, moving);
-    expect(Array.from(positions)).toEqual([20.5, 30.5, 511.75, 12.5]);
-    expect(Array.from(moving)).toEqual([0, 1]);
-    groupPositions(frame, walkOf, 0.75, 512, positions, moving);
-    expect(positions[2]).toBeCloseTo(0.25, 12);
-    groupPositions(frame, walkOf, 2, 512, positions, moving);
-    expect(Array.from(positions)).toEqual([20.5, 30.5, 1.5, 12.5]);
-    expect(Array.from(moving)).toEqual([0, 0]);
-  });
-
-  it('dessine à des positions entières de l’écran, passe la couture au plus court, et se touche où il se dessine', () => {
-    const banners = bannerShapes(frameOf);
-    const sprites = spriteNames().map((name) => frameOf(name));
-    const shapes: PickShapes = {
-      banners,
-      largest: {
-        width: Math.max(...sprites.map((shape) => shape.width)),
-        height: Math.max(...sprites.map((shape) => shape.height)),
-      },
-      member: (code) => memberShape(code, frameOf),
-    };
-    const single: GroupsFrame = {
-      groups: Uint32Array.of(5, 0, 40, 6, 1),
-      sprites: new Uint16Array(6).fill(visualCode(1, 2, 3, 2, 0)),
-      walks: emptyWalks(),
-    };
-    for (const zoom of [1, 2, 8, 24]) {
-      const scale = displayScale(zoom);
-      const pixel = mapPixel(scale);
-      const reach = { left: 8, right: 8, up: 8, down: 8 };
-      // La caméra vise la couture, un peu au-dessus du groupe.
-      const view: MapView = {
-        camera: { x: 0.37, y: 40 * TILE_PX, zoom },
-        viewport,
-        world,
-        resolution: 1,
-      };
-      let previous: number | undefined;
-      for (let x = 512 - 0.4; x <= 512 + 0.3 + 1e-9; x += 0.05) {
-        const column = x >= 512 ? x - 512 : x;
-        expect(column).toBeGreaterThanOrEqual(0);
-        expect(column).toBeLessThan(512);
-        const at = groupScreen(column, 40.5, view, reach, pixel);
-        // Au plus court : la copie du monde la plus proche de la caméra, sans saut.
-        if (previous !== undefined) {
-          expect(Math.abs(at.x - previous)).toBeLessThanOrEqual(0.05 * TILE_PX * scale + 1e-6);
-        }
-        previous = at.x;
-        const box =
-          scale >= SPRITE_SCALE
-            ? memberBox(at.x, at.y, 3, shapes.largest, pixel)
-            : bannerBox(at.x, at.y, chooseBanner(banners, pixel, 1), pixel);
-        expect(Number.isInteger(box.left) && Number.isInteger(box.top)).toBe(true);
-        // Le groupe se touche là où il se dessine, à sa position fractionnaire.
-        const positions = Float64Array.of(column, 40.5);
-        const inside = { x: box.left + 1, y: box.top + box.height - 2 };
-        const picked = pickGroup(single, positions, view, inside.x, inside.y, shapes, 2);
-        expect(picked, `zoom ${String(zoom)}, x ${x.toFixed(2)}`).toBe(5);
-      }
-    }
+  it('pose chaque individu sur ses pieds, centré sur sa position arrondie au pixel physique', () => {
+    expect(personBox(100.4, 50.6, 6, 9, 3)).toEqual({ left: 91, top: 24, width: 18, height: 27 });
+    expect(personBox(100.6, 50.4, 4, 6, 1)).toEqual({ left: 99, top: 44, width: 4, height: 6 });
   });
 });

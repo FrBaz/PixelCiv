@@ -9,7 +9,6 @@
  * tant que ses identifiants existent encore (ADR 0006).
  */
 import { z } from 'zod';
-import { deltaX } from '../core/cylinder';
 import type { Catalog } from '../core/data/catalog';
 import type { Genetics, Species } from '../core/data/people';
 import type { AltitudeLevel, Biome, Resource } from '../core/data/schemas';
@@ -17,13 +16,14 @@ import type { Worldgen } from '../core/data/worldgen';
 import { Rng } from '../core/rng';
 import { SaveError, type Migrations, type SaveData, type SavedArray } from '../core/save/format';
 import { dayIndex, DAYS_PER_MONTH } from '../core/time';
+import { FIXED, toFixed } from '../core/position';
 import {
   chunkGrid,
   LAYER_NAMES,
   LAYER_TYPES,
   WORLD_SIZES,
   type WorldLayers,
-  type WorldSize,
+  type WorldSizeId,
 } from '../core/world';
 import { worldParamsSchema } from '../core/worldParams';
 import { GameCommandSchema, LoggedCommandSchema } from './commands';
@@ -36,12 +36,11 @@ import {
   type ForageContent,
 } from './forage';
 import { terrainCosts, terrainLands } from './terrain';
-import { Population } from './population';
+import { PLACE, Population } from './population';
+import { Movement, placeMigrated, rebuildMovement } from './movement';
 import { migrateChronicle, restorePeople, savePeople } from './populationSave';
-import { emptySociety, type Society } from './society';
-import { rebuildPositions, type SimState } from './state';
-import type { WalkArrays } from '../core/walk';
-import { DayPositions, Walks } from './walks';
+import { emptySociety } from './society';
+import type { SimState } from './state';
 
 /**
  * Stocks de nourriture d'une sauvegarde : la liste des cases entamées, sans doublon, et
@@ -203,25 +202,8 @@ function migrateFamilyNames(save: SaveData): SaveData {
   return { meta: save.meta, json: save.json, arrays };
 }
 
-/** Noms des tableaux des marches du mois, dans une sauvegarde. */
-const WALK_ARRAYS = {
-  groups: 'walkGroups',
-  ends: 'walkEnds',
-  cells: 'walkCells',
-  costs: 'walkCosts',
-  budgets: 'walkBudgets',
-} as const satisfies Record<keyof WalkArrays, string>;
-
-/** Les marches du mois, en tableaux de sauvegarde. */
-function savedWalks(walks: WalkArrays): Record<string, SavedArray> {
-  return {
-    [WALK_ARRAYS.groups]: walks.groups,
-    [WALK_ARRAYS.ends]: walks.ends,
-    [WALK_ARRAYS.cells]: walks.cells,
-    [WALK_ARRAYS.costs]: walks.costs,
-    [WALK_ARRAYS.budgets]: walks.budgets,
-  };
-}
+/** Noms des tableaux des marches du mois d'une sauvegarde de la version 6 (ADR 0013). */
+const WALK_ARRAYS = ['walkGroups', 'walkEnds', 'walkCells', 'walkCosts', 'walkBudgets'] as const;
 
 /**
  * Version 6 (ADR 0013) : la partie et chaque commande de son journal reçoivent le jour 0.
@@ -242,7 +224,170 @@ function migrateDays(save: SaveData): SaveData {
   return {
     meta: save.meta,
     json: { ...json, day: 0, commandLog },
-    arrays: { ...save.arrays, ...savedWalks(new Walks().arrays()) },
+    arrays: {
+      ...save.arrays,
+      walkGroups: new Uint32Array(0),
+      walkEnds: new Uint32Array(0),
+      walkCells: new Uint32Array(0),
+      walkCosts: new Float64Array(0),
+      walkBudgets: new Float64Array(0),
+    },
+  };
+}
+
+/** Marches d'une sauvegarde de la version 6, lues sans s'y fier : vides si elles sont abîmées. */
+interface OldWalks {
+  readonly groups: Uint32Array;
+  readonly ends: Uint32Array;
+  readonly cells: Uint32Array;
+  readonly costs: Float64Array;
+  readonly budgets: Float64Array;
+}
+
+function oldWalks(save: SaveData): OldWalks {
+  const [groups, ends, cells, costs, budgets] = WALK_ARRAYS.map((name) => save.arrays[name]);
+  const empty = {
+    groups: new Uint32Array(0),
+    ends: new Uint32Array(0),
+    cells: new Uint32Array(0),
+    costs: new Float64Array(0),
+    budgets: new Float64Array(0),
+  };
+  if (
+    !(groups instanceof Uint32Array) ||
+    !(ends instanceof Uint32Array) ||
+    !(cells instanceof Uint32Array) ||
+    !(costs instanceof Float64Array) ||
+    !(budgets instanceof Float64Array) ||
+    ends.length !== groups.length ||
+    budgets.length !== groups.length ||
+    costs.length !== cells.length
+  ) {
+    return empty;
+  }
+  let start = 0;
+  for (const end of ends) {
+    if (end < start + 2 || end > cells.length) return empty;
+    start = end;
+  }
+  return { groups, ends, cells, costs, budgets };
+}
+
+/**
+ * Position, en cases, au soir du jour `day`, d'un groupe sur la marche `index` de la version 6
+ * (ADR 0013) : le point de son chemin de coût cumulé min(total, day × budget / 30), entre les
+ * centres de deux cases voisines, au plus court à travers la couture. Seule la migration de la
+ * version 6 s'en sert encore.
+ */
+function walkPoint(walks: OldWalks, index: number, day: number, width: number): [number, number] {
+  const start = index === 0 ? 0 : (walks.ends[index - 1] ?? 0);
+  const end = walks.ends[index] ?? start;
+  const { cells, costs } = walks;
+  const total = costs[end - 1] ?? 0;
+  const spent = Math.min(total, (day * (walks.budgets[index] ?? 0)) / DAYS_PER_MONTH);
+  let low = start;
+  let high = end - 1;
+  while (high - low > 1) {
+    const middle = (low + high) >> 1;
+    if ((costs[middle] ?? 0) <= spent) low = middle;
+    else high = middle;
+  }
+  const from = cells[low] ?? 0;
+  const fromX = from % width;
+  const fromY = (from - fromX) / width;
+  if (high <= low) return [fromX + 0.5, fromY + 0.5];
+  const to = cells[high] ?? 0;
+  const toX = to % width;
+  const toY = (to - toX) / width;
+  const low0 = costs[low] ?? 0;
+  const span = (costs[high] ?? 0) - low0;
+  const share = span > 0 ? Math.min(1, Math.max(0, (spent - low0) / span)) : 1;
+  let dx = toX - fromX;
+  if (dx > 1) dx -= width;
+  else if (dx < -1) dx += width;
+  let x = fromX + 0.5 + dx * share;
+  if (x < 0) x += width;
+  if (x >= width) x -= width;
+  return [x, fromY + 0.5 + (toY - fromY) * share];
+}
+
+/**
+ * Version 7 (ADR 0014) : chacun reçoit une position et un mouvement, et chaque groupe un camp.
+ * Chaque membre se tient à la position du jour de son groupe, que donnent ses marches de la
+ * version 6 (au centre de sa case, sans marche), toujours franchissable puisque ces chemins ne
+ * coupent aucun coin ; il est « à poser » (PLACE), ce que seule la relecture accepte : elle
+ * porte les nourrissons, et met les autres en partance le jour même vers une place au camp.
+ * Le camp est la case du groupe au bout de sa marche ; son lieu, la case de sa position du
+ * jour. Les marches sont ensuite oubliées, et la grégarité, inconnue, prendra à la relecture
+ * la moyenne de l'ascendance. Un en-tête mal formé reste tel quel : la relecture le refusera.
+ */
+function migratePositions(save: SaveData): SaveData {
+  const json: unknown = save.json;
+  const walkArrays = new Set<string>(WALK_ARRAYS);
+  const arrays: Record<string, SavedArray> = Object.fromEntries(
+    Object.entries(save.arrays).filter(([name]) => !walkArrays.has(name)),
+  );
+  if (typeof json !== 'object' || json === null) return { meta: save.meta, json, arrays };
+  const { day, params, people } = json as { day?: unknown; params?: unknown; people?: unknown };
+  const sizeId: unknown =
+    typeof params === 'object' && params !== null ? (params as { size?: unknown }).size : undefined;
+  const size =
+    WORLD_SIZES[
+      typeof sizeId === 'string' && sizeId in WORLD_SIZES ? (sizeId as WorldSizeId) : 'small'
+    ];
+  const list: unknown =
+    typeof people === 'object' && people !== null
+      ? (people as { groups?: unknown }).groups
+      : undefined;
+  const end: unknown =
+    typeof people === 'object' && people !== null ? (people as { end?: unknown }).end : undefined;
+  if (!Array.isArray(list) || typeof end !== 'number' || !Number.isSafeInteger(end) || end < 0) {
+    return { meta: save.meta, json, arrays };
+  }
+  const walks = oldWalks(save);
+  const walkOf = new Map<number, number>();
+  walks.groups.forEach((group, index) => walkOf.set(group, index));
+  const today = typeof day === 'number' ? day : 0;
+  const positions = new Map<number, [number, number]>();
+  const groups = (list as unknown[]).map((entry) => {
+    if (typeof entry !== 'object' || entry === null) return entry;
+    const { id, x, y } = entry as { id?: unknown; x?: unknown; y?: unknown };
+    if (typeof id !== 'number' || typeof x !== 'number' || typeof y !== 'number') return entry;
+    const walk = walkOf.get(id);
+    const point: [number, number] =
+      walk === undefined ? [x + 0.5, y + 0.5] : walkPoint(walks, walk, today, size.width);
+    positions.set(id, point);
+    return {
+      ...entry,
+      x: Math.min(size.width - 1, Math.floor(point[0])),
+      y: Math.min(size.height - 1, Math.floor(point[1])),
+      campX: x,
+      campY: y,
+    };
+  });
+  const saved: unknown = save.arrays.peopleGroup;
+  const memberGroups =
+    saved instanceof Uint32Array && saved.length === end ? saved : new Uint32Array(0);
+  const px = new Int32Array(end);
+  const py = new Int32Array(end);
+  for (let slot = 0; slot < memberGroups.length; slot++) {
+    const point = positions.get(memberGroups[slot]) ?? [0.5, 0.5];
+    px[slot] = Math.min(size.width * FIXED - 1, toFixed(point[0]));
+    py[slot] = Math.min(size.height * FIXED - 1, toFixed(point[1]));
+  }
+  arrays.peopleX = px;
+  arrays.peopleY = py;
+  arrays.peopleMove = new Uint8Array(end).fill(PLACE);
+  arrays.peopleDepart = new Uint8Array(end);
+  arrays.peopleGoalX = px.slice();
+  arrays.peopleGoalY = py.slice();
+  arrays.peopleStepX = new Int32Array(end);
+  arrays.peopleStepY = new Int32Array(end);
+  arrays.peopleStepDays = new Uint16Array(end);
+  return {
+    meta: save.meta,
+    json: { ...json, people: { ...(people as object), groups } },
+    arrays,
   };
 }
 
@@ -269,6 +414,7 @@ export const MIGRATIONS: Migrations = {
   },
   4: (save) => migrateChronicle(migrateFamilyNames(save)),
   5: migrateDays,
+  6: migratePositions,
 };
 
 /** Copie de l'état, prise d'un coup : la simulation peut repartir aussitôt. */
@@ -286,7 +432,6 @@ export function saveState(state: SimState, generator: number, content: SaveConte
   arrays.foodPlants = stock(0);
   arrays.foodGame = stock(1);
   arrays.foodFish = stock(2);
-  Object.assign(arrays, savedWalks(state.walks.arrays()));
   return {
     meta: { seed: state.params.seed, tick: state.tick },
     json: {
@@ -337,73 +482,6 @@ function remapping(
     table[index] = current;
   });
   return table;
-}
-
-/** Un tableau des marches d'une sauvegarde, du type attendu. */
-function walkArray<T extends Uint32Array<ArrayBuffer> | Float64Array<ArrayBuffer>>(
-  save: SaveData,
-  name: keyof WalkArrays,
-  type: new (length: number) => T,
-): T {
-  const array: unknown = save.arrays[WALK_ARRAYS[name]];
-  if (!(array instanceof type)) throw new SaveError('corrupt', `marches : ${name} illisible`);
-  return array;
-}
-
-/**
- * Marches du mois d'une sauvegarde, vérifiées (ADR 0013) : chacune d'un groupe vivant, qui
- * n'en a pas d'autre ; deux cases au moins, dans le monde, chacune voisine de la
- * précédente, à travers la couture s'il le faut ; la dernière, celle du groupe ; des coûts
- * finis, de 0 au départ, croissants, au plus le budget, fini et positif. Les cases ne sont
- * pas jugées franchissables ou non : les coûts du terrain se recalculent d'après le contenu
- * du moment, qui a pu changer depuis la sauvegarde.
- */
-function restoreWalks(save: SaveData, society: Society, size: WorldSize): WalkArrays {
-  const walks: WalkArrays = {
-    groups: walkArray(save, 'groups', Uint32Array),
-    ends: walkArray(save, 'ends', Uint32Array),
-    cells: walkArray(save, 'cells', Uint32Array),
-    costs: walkArray(save, 'costs', Float64Array),
-    budgets: walkArray(save, 'budgets', Float64Array),
-  };
-  const { groups, ends, cells, costs, budgets } = walks;
-  const corrupt = (reason: string) => new SaveError('corrupt', `marches : ${reason}`);
-  if (ends.length !== groups.length || budgets.length !== groups.length) {
-    throw corrupt('tableaux de longueurs différentes');
-  }
-  if (costs.length !== cells.length) throw corrupt('coûts et cases de longueurs différentes');
-  const { width, height } = size;
-  const seen = new Set<number>();
-  let start = 0;
-  for (let index = 0; index < groups.length; index++) {
-    const id = groups[index] ?? 0;
-    const group = society.groups.get(id);
-    if (group === undefined || seen.has(id)) throw corrupt('groupe inconnu ou en double');
-    seen.add(id);
-    const end = ends[index] ?? 0;
-    if (end < start + 2 || end > cells.length) throw corrupt('chemin trop court ou tronqué');
-    const budget = budgets[index] ?? Number.NaN;
-    if (!(Number.isFinite(budget) && budget > 0)) throw corrupt('budget illisible');
-    if (costs[start] !== 0) throw corrupt('coût de départ non nul');
-    for (let at = start; at < end; at++) {
-      const cell = cells[at] ?? 0;
-      if (cell >= width * height) throw corrupt('case hors du monde');
-      if (at === start) continue;
-      const cost = costs[at] ?? Number.NaN;
-      if (!(Number.isFinite(cost) && cost > (costs[at - 1] ?? 0))) throw corrupt('coûts');
-      const previous = cells[at - 1] ?? 0;
-      const dx = deltaX(previous % width, cell % width, width);
-      const dy = Math.floor(cell / width) - Math.floor(previous / width);
-      if (Math.abs(dx) > 1 || Math.abs(dy) > 1 || (dx === 0 && dy === 0)) {
-        throw corrupt('cases non voisines');
-      }
-    }
-    if (!((costs[end - 1] ?? Number.NaN) <= budget)) throw corrupt('chemin au-delà du budget');
-    if (cells[end - 1] !== group.y * width + group.x) throw corrupt('arrivée hors de la case');
-    start = end;
-  }
-  if (start !== cells.length) throw corrupt('cases en trop');
-  return walks;
 }
 
 /**
@@ -476,8 +554,6 @@ export function restoreState(save: SaveData, content: SaveContent): SimState {
     if (deposit > 0) world.deposit[cell] = (resources[deposit - 1] ?? 0) + 1;
   }
   const { people, society } = restorePeople(save, parsed.data.people, content, size, tick);
-  const walks = new Walks();
-  walks.restore(restoreWalks(save, society, size));
   const food = restoreFood(save, count);
   const grid = chunkGrid(size);
   // Couches dérivées du monde et du contenu, comme à la création de la partie.
@@ -491,8 +567,7 @@ export function restoreState(save: SaveData, content: SaveContent): SimState {
     people,
     society,
     food,
-    walks,
-    dayPositions: new DayPositions(),
+    movement: new Movement(size.width, size.height),
     cost,
     land: terrainLands(cost, size),
     commandLog: [...commandLog],
@@ -500,7 +575,9 @@ export function restoreState(save: SaveData, content: SaveContent): SimState {
     rng: new Rng(save.meta.seed, rng),
     dirtyChunks: new Uint8Array(grid.columns * grid.rows),
   };
-  // Les positions du jour, cache que la sauvegarde ne garde pas, se recalculent.
-  rebuildPositions(state);
+  // Les caches du mouvement, que la sauvegarde ne garde pas, se refont ; les membres d'une
+  // partie de la version 6 se posent (migratePositions).
+  rebuildMovement(state);
+  placeMigrated(state, content);
   return state;
 }

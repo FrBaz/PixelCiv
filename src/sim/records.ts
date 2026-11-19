@@ -21,7 +21,8 @@ type Field =
   | 'culture'
   | 'givenName'
   | 'familyName'
-  | 'familyLanguage';
+  | 'familyLanguage'
+  | 'gregariousness';
 
 /** Un individu, vivant (emplacement) ou mort (ligne de l'archive). */
 export interface PersonRecord {

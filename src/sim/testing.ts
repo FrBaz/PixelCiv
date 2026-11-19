@@ -120,16 +120,7 @@ const HABITABLE = new Set(['temperate', 'tropical', 'arid', 'wetland', 'coast', 
  * sous-espèces des humains à tour de rôle (nordiques, gens des plaines, des sables).
  */
 export function scatteredGroups(state: SimState, count: number, members = 30): SpawnGroupCommand[] {
-  const { width, height } = state.size;
-  const cells: { x: number; y: number }[] = [];
-  for (let y = 4; y < height; y += 8) {
-    for (let x = 4; x < width; x += 8) {
-      const cell = y * width + x;
-      const biome = testData.biomes.entries.at(state.world.biome[cell] ?? 0);
-      const walkable = Number.isFinite(state.cost[cell] ?? Number.POSITIVE_INFINITY);
-      if (biome !== undefined && HABITABLE.has(biome.family) && walkable) cells.push({ x, y });
-    }
-  }
+  const cells = habitableGrid(state);
   const subspecies = testHuman.subspecies.map((entry) => entry.id);
   return Array.from({ length: count }, (_, index) => ({
     type: 'spawnGroup',
@@ -138,4 +129,47 @@ export function scatteredGroups(state: SimState, count: number, members = 30): S
     subspecies: subspecies[index % subspecies.length] ?? 'plains',
     count: members,
   }));
+}
+
+/**
+ * Deux apparitions de `members` gens des plaines sur deux cases voisines, d'ouest en est,
+ * franchissables et habitables : la première case de la grille de scatteredGroups dont la
+ * voisine de l'est l'est aussi. Leurs membres se posent les uns près des autres.
+ */
+export function neighboringGroups(
+  state: SimState,
+  members = 20,
+): [SpawnGroupCommand, SpawnGroupCommand] {
+  const { width } = state.size;
+  const spawnAt = (x: number, y: number): SpawnGroupCommand => ({
+    type: 'spawnGroup',
+    x,
+    y,
+    species: testHuman.id,
+    subspecies: 'plains',
+    count: members,
+  });
+  for (const { x, y } of habitableGrid(state)) {
+    const east = (x + 1) % width;
+    if (habitable(state, east, y)) return [spawnAt(x, y), spawnAt(east, y)];
+  }
+  throw new Error('aucune paire de cases voisines habitables');
+}
+
+/** Case franchissable dont le biome est habitable (HABITABLE). */
+function habitable(state: SimState, x: number, y: number): boolean {
+  const cell = y * state.size.width + x;
+  const biome = testData.biomes.entries.at(state.world.biome[cell] ?? 0);
+  const walkable = Number.isFinite(state.cost[cell] ?? Number.POSITIVE_INFINITY);
+  return biome !== undefined && HABITABLE.has(biome.family) && walkable;
+}
+
+/** Les cases habitables d'une grille de 8 cases, dans l'ordre des cases. */
+function habitableGrid(state: SimState): { x: number; y: number }[] {
+  const { width, height } = state.size;
+  const cells: { x: number; y: number }[] = [];
+  for (let y = 4; y < height; y += 8) {
+    for (let x = 4; x < width; x += 8) if (habitable(state, x, y)) cells.push({ x, y });
+  }
+  return cells;
 }

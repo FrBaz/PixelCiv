@@ -33,11 +33,24 @@ export interface ControlsOptions {
   readonly defaultZoom: () => number;
   /**
    * Appui bref sur la carte, au point (mapX, mapY) en pixels de carte, qui est le point
-   * (screenX, screenY) de l'écran, en pixels physiques.
+   * (screenX, screenY) de l'écran, en pixels physiques ; `finger` dit qu'il vient du doigt,
+   * plutôt que d'une souris ou d'un stylet : il vise alors moins précisément.
    */
-  readonly onTap: (mapX: number, mapY: number, screenX: number, screenY: number) => void;
+  readonly onTap: (
+    mapX: number,
+    mapY: number,
+    screenX: number,
+    screenY: number,
+    finger: boolean,
+  ) => void;
   /** Appui long, sans glissement, aux mêmes points. */
-  readonly onLongPress: (mapX: number, mapY: number, screenX: number, screenY: number) => void;
+  readonly onLongPress: (
+    mapX: number,
+    mapY: number,
+    screenX: number,
+    screenY: number,
+    finger: boolean,
+  ) => void;
   /**
    * Vrai quand un appui long doit attendre le relâcher : il ne se déclare alors que si le
    * geste n'est devenu ni un glisser ni un pincement. Sinon, il part dès que le doigt est
@@ -115,7 +128,7 @@ export class CameraControls {
   private requestedZoom = 1;
   private readonly options: ControlsOptions;
   private readonly pointers = new Map<number, Point>();
-  private tap: { id: number; start: Point; time: number } | undefined;
+  private tap: { id: number; start: Point; time: number; finger: boolean } | undefined;
   private longPress: number | undefined;
   private readonly keys = new Set<string>();
   /**
@@ -242,7 +255,12 @@ export class CameraControls {
     this.pointers.set(event.pointerId, point);
     this.tap =
       this.pointers.size === 1
-        ? { id: event.pointerId, start: point, time: event.timeStamp }
+        ? {
+            id: event.pointerId,
+            start: point,
+            time: event.timeStamp,
+            finger: event.pointerType === 'touch',
+          }
         : undefined;
     this.cancelLongPress();
     // Un appui long qui attend le relâcher n'a pas de minuteur : onPointerUp le déclare.
@@ -256,7 +274,7 @@ export class CameraControls {
         this.tap = undefined;
         const point = this.pointers.get(tap.id) ?? tap.start;
         const target = screenToMap(this.camera, this.options.viewport(), point.x, point.y);
-        this.options.onLongPress(target.x, target.y, point.x, point.y);
+        this.options.onLongPress(target.x, target.y, point.x, point.y, tap.finger);
       }, TAP_DURATION);
     }
   };
@@ -310,9 +328,9 @@ export class CameraControls {
       const point = this.point(event);
       const target = screenToMap(this.camera, this.options.viewport(), point.x, point.y);
       if (event.timeStamp - tap.time < TAP_DURATION) {
-        this.options.onTap(target.x, target.y, point.x, point.y);
+        this.options.onTap(target.x, target.y, point.x, point.y, tap.finger);
       } else {
-        this.options.onLongPress(target.x, target.y, point.x, point.y);
+        this.options.onLongPress(target.x, target.y, point.x, point.y, tap.finger);
       }
     }
     this.tap = undefined;

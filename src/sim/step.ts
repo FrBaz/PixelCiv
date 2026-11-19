@@ -1,11 +1,13 @@
 /**
- * Pas mensuel de la simulation (ADR 0003, ADR 0011, ADR 0013) : les commandes de jeu, et
- * les systèmes du mois, qui s'exécutent dans un ordre fixe : la nourriture repousse, les
- * groupes cherchent leur nourriture et mangent, la population vit (morts, naissances,
- * couples), les groupes trop petits rejoignent un voisin, à un mois de marche au plus, les
- * groupes trop grands se scindent, et tous décident leur marche du mois qui vient, sauf
- * ceux qui viennent de naître d'une scission, déjà partis vers leur aire. Le sous-pas
- * quotidien (day.ts) fait le pas mensuel au soir du trentième jour.
+ * Pas mensuel de la simulation (ADR 0003, ADR 0011, ADR 0013, ADR 0014) : les commandes de
+ * jeu, et les systèmes du mois, qui s'exécutent dans un ordre fixe : le lieu de chaque groupe
+ * se déduit de ses membres, la nourriture repousse, les groupes cherchent leur nourriture et
+ * mangent, la population vit (morts, naissances, couples), les groupes trop petits
+ * rejoignent un voisin, à un mois de marche au plus, les groupes trop grands se scindent, et
+ * le guide de chacun choisit son camp, sauf ceux qui viennent de naître d'une scission, qui
+ * ont déjà le leur, et ceux qui attendent un membre venu d'ailleurs ; enfin le plan du mois
+ * dit qui part, et quand. Le sous-pas quotidien (day.ts) fait le pas mensuel au soir du
+ * trentième jour.
  */
 import type { Cultures, Genetics, Nomads, Species } from '../core/data';
 import type { AltitudeLevel } from '../core/data/schemas';
@@ -18,10 +20,18 @@ import { PARAMETER_NAMES } from '../core/data/worldgen';
 import { depletedCells, feedGroup, FOOD_STRIDE, regrowFood } from './forage';
 import { groupMembers, mergeGroup, moveGroup, Neighborhood, splitGroup } from './groups';
 import { lifeCycle } from './lifecycle';
+import {
+  clearFields,
+  locateGroups,
+  planMonth,
+  rebuildMovement,
+  recordGroups,
+  waiting,
+} from './movement';
 import { NONE } from './population';
 import { fingerprintPeople } from './populationSave';
 import { spawnGroup } from './spawn';
-import { markDirty, rebuildPositions, type SimState } from './state';
+import { markDirty, type SimState } from './state';
 import { cellIndex, walkCost } from './terrain';
 
 /** Contenu dont la simulation se sert. */
@@ -67,6 +77,8 @@ function paintBiome(state: SimState, command: PaintBiomeCommand, content: SimCon
   if (current === target || water(current) || water(target)) return;
   state.world.biome[index] = target;
   state.cost[index] = walkCost(state.world, index, content);
+  // Les champs de distances des camps suivaient l'ancien coût (ADR 0014).
+  clearFields(state);
   markDirty(state, index);
 }
 
@@ -79,12 +91,15 @@ export type RejectedCommand = (command: GameCommand, error: unknown) => void;
 /**
  * Applique des commandes, dans l'ordre, et les journalise avec l'instant où elles
  * s'appliquent : le mois et le jour courants, avant que le jour suivant ne passe. Sans `rejected`,
- * l'exception d'une commande remonte ; avec, la commande est écartée et signalée. Les
- * positions du jour se recalculent ensuite, un groupe ayant pu apparaître.
+ * l'exception d'une commande remonte ; avec, la commande est écartée et signalée. Les caches
+ * du mouvement se refont d'après l'état après chaque commande appliquée, un groupe ayant pu
+ * apparaître : la commande suivante voit les places qu'il tient. Un lot donne donc l'état
+ * de ses commandes appliquées une à une.
  *
- * advanceDay les applique au début du jour. L'hôte, en pause, les applique dès leur
- * réception : rien ne change l'état d'ici le jour suivant, qui commence donc là où il
- * aurait commencé après elles, et le rejeu du journal ne voit aucune différence.
+ * advanceDay les applique au début du jour, et le rejeu par lots d'un même instant. L'hôte,
+ * en pause, les applique une à une, dès leur réception : rien ne change l'état d'ici le jour
+ * suivant, qui commence donc là où il aurait commencé après elles, et le rejeu du journal ne
+ * voit aucune différence.
  */
 export function applyCommands(
   state: SimState,
@@ -96,7 +111,7 @@ export function applyCommands(
   try {
     applyEach(state, commands, content, rejected);
   } finally {
-    rebuildPositions(state);
+    rebuildMovement(state);
   }
 }
 
@@ -120,15 +135,16 @@ function applyEach(
       }
     }
     state.commandLog.push({ tick: state.tick, day: state.day, command });
+    rebuildMovement(state);
   }
 }
 
 /**
  * Pas mensuel : les systèmes du mois, dans un ordre fixe, puis le mois suivant commence
- * (`tick` augmente). Les marches du mois passé, toutes finies, s'oublient avant les
- * scissions, et chaque groupe note la sienne pour le mois qui vient. Renvoie les membres
- * de chaque groupe à la fin du mois, dans l'ordre des emplacements, tels que les
- * donnerait groupMembers. Les commandes ne passent pas par lui, mais par advanceDay.
+ * (`tick` augmente). Le relevé des groupes, au début, dit au plan du mois qui a changé de
+ * groupe et quel camp a changé. Renvoie les membres de chaque groupe à la fin du mois, dans
+ * l'ordre des emplacements, tels que les donnerait groupMembers. Les commandes ne passent pas
+ * par lui, mais par advanceDay.
  */
 export function monthStep(
   state: SimState,
@@ -136,13 +152,15 @@ export function monthStep(
 ): ReadonlyMap<number, readonly number[]> {
   // Systèmes, dans un ordre fixe.
   const { people, society, food, world, size, tick } = state;
-  regrowFood(food, world, size, tick, content);
+  const record = recordGroups(state);
   let members = groupMembers(people);
+  locateGroups(state, members);
+  regrowFood(food, world, size, tick, content);
   for (const group of society.groups.values()) {
     feedGroup(group, members.get(group.id) ?? [], people, food, world, size, tick, content);
   }
-  // Le voisinage des groupes, en temps de trajet : les groupes ne bougent qu'en fin de
-  // mois, et mariages et réunions le partagent.
+  // Le voisinage des groupes, en temps de trajet, depuis leur lieu : mariages et réunions le
+  // partagent.
   const neighbors = new Neighborhood(state, content.nomads.marriage);
   lifeCycle(state, content, members, neighbors);
   // Les fusions se décident toutes sur les membres d'après le cycle de vie ; les listes
@@ -157,8 +175,6 @@ export function monthStep(
     members.set(into, mergeSlots(members.get(into) ?? [], members.get(from) ?? []));
     members.delete(from);
   }
-  // Les marches du mois passé sont finies : chaque groupe note la sienne ci-dessous.
-  state.walks.clear();
   const random = state.rng.stream('sim.groups');
   const groupOf = people.columns.group;
   for (const group of [...society.groups.values()]) {
@@ -175,10 +191,14 @@ export function monthStep(
     );
   }
   for (const group of society.groups.values()) {
-    // Un groupe né d'une scission ce mois-ci a déjà fait sa marche du mois (splitGroup).
+    // Un groupe né d'une scission ce mois-ci a déjà son camp (splitGroup) ; un groupe attend
+    // le membre venu d'ailleurs qui n'est pas encore près de son camp.
     if (group.founded === tick && group.parent !== NONE) continue;
-    moveGroup(state, group, members.get(group.id) ?? [], content, random);
+    const list = members.get(group.id) ?? [];
+    if (waiting(state, content, group, list, record)) continue;
+    moveGroup(state, group, list, content, random);
   }
+  planMonth(state, content, record, members);
   state.tick++;
   return members;
 }
@@ -222,16 +242,7 @@ export function fingerprint(state: SimState): string {
     fingerprint.string(name);
     for (const word of words) fingerprint.uint32(word);
   }
-  // Le jour du mois et les marches en cours (ADR 0013) ; les positions du jour s'en déduisent.
-  const walks = state.walks.arrays();
-  fingerprint
-    .uint32(state.day)
-    .uint32(walks.groups.length)
-    .uint32(walks.cells.length)
-    .typedArray(walks.groups)
-    .typedArray(walks.ends)
-    .typedArray(walks.cells)
-    .typedArray(walks.costs)
-    .typedArray(walks.budgets);
+  // Le jour du mois (ADR 0013) ; positions et mouvements sont dans les colonnes des vivants.
+  fingerprint.uint32(state.day);
   return fingerprint.hex();
 }

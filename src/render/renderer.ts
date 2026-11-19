@@ -1,4 +1,4 @@
-import { Application, TextureSource, UPDATE_PRIORITY } from 'pixi.js';
+import { Application, TextureSource, UPDATE_PRIORITY, type Ticker } from 'pixi.js';
 
 /** Couleur de fond de la carte, assortie à la page. */
 export const BACKGROUND = '#14120f';
@@ -55,4 +55,27 @@ function followContainer(app: Application, container: HTMLElement): void {
   };
   follow();
   app.ticker.add(follow, undefined, UPDATE_PRIORITY.HIGH);
+}
+
+/**
+ * Mesure le rendu de la scène, que l'application de PixiJS fait à chaque image depuis son
+ * ticker, à la priorité LOW, après les rappels de l'image (débogage, ADR 0014) : deux rappels
+ * l'encadrent, juste avant et juste après, et `measured` en reçoit la durée, en millisecondes.
+ */
+export function timeRendering(ticker: Ticker, measured: (milliseconds: number) => void): void {
+  let start = 0;
+  ticker.add(
+    () => {
+      start = performance.now();
+    },
+    undefined,
+    UPDATE_PRIORITY.LOW + 1,
+  );
+  ticker.add(
+    () => {
+      measured(performance.now() - start);
+    },
+    undefined,
+    UPDATE_PRIORITY.LOW - 1,
+  );
 }

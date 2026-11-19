@@ -52,9 +52,26 @@ export interface DebugInfo {
   readonly dayMs: number | undefined;
   readonly monthMs: number | undefined;
   readonly worstMonthMs: number | undefined;
-  /** Jours par lot, en moyenne, et marches en cours au dernier lot. */
+  /** Jours par lot, en moyenne, et marcheurs au dernier lot (ADR 0014). */
   readonly batchDays: number | undefined;
-  readonly walks: number | undefined;
+  readonly walkers: number | undefined;
+  /** Étapes et octets de positions reçus par seconde. */
+  readonly legsPerSecond: number | undefined;
+  readonly positionBytesPerSecond: number | undefined;
+  /**
+   * Durée moyenne par image, en millisecondes : sa mise à jour et son rendu par PixiJS ;
+   * l'instant affiché de la chronologie des individus et les messages qu'elle reçoit ; les
+   * positions des individus, leur tri et la mise à jour de leurs sprites. À la dernière image,
+   * sprites dessinés, textures distinctes et gardées, appels de dessin.
+   */
+  readonly main: { readonly update: number; readonly render: number };
+  readonly timeline: { readonly show: number; readonly receive: number };
+  readonly crowd: { readonly positions: number; readonly sort: number; readonly sprites: number };
+  readonly drawn: number | undefined;
+  readonly textures: number | undefined;
+  readonly cachedTextures: number | undefined;
+  readonly pages: number | undefined;
+  readonly drawCalls: number | undefined;
   readonly memoryMb: number | undefined;
   /** Moteur de rendu (webgl, webgpu) et densité de pixels de l'écran. */
   readonly renderer: { readonly name: string; readonly resolution: number };

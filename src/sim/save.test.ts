@@ -1,16 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import { loadCatalog } from '../core/data/catalog';
 import { BiomesSchema } from '../core/data/schemas';
-import {
-  encodeSave,
-  readSave,
-  SaveError,
-  writeSave,
-  type SaveData,
-  type SavedArray,
-} from '../core/save/format';
+import { encodeSave, readSave, SaveError, writeSave, type SaveData } from '../core/save/format';
 import { LAYER_NAMES } from '../core/world';
 import { GENERATOR_VERSION } from '../worldgen/generate';
+import { FIXED } from '../core/position';
+import { describeMovement } from './movement';
+import { ANCESTRY_SLOTS, CARRIED, INTENTION, LEAVE, NONE, REST, WALK } from './population';
 import { replay } from './replay';
 import { MIGRATIONS, restoreState, saveState } from './save';
 import type { SimState } from './state';
@@ -24,7 +20,9 @@ import {
   testParams,
   testState,
   testWorld,
+  withHuman,
 } from './testing';
+import { meanGregariousness } from './temper';
 import biomesJson from '../../data/biomes.json';
 
 const land = (family: string) => family !== 'water';
@@ -223,8 +221,9 @@ describe('sauvegarde de la simulation', () => {
 
   it('refuse les sauvegardes de la phase 0, sans monde à reprendre', async () => {
     // Seules les versions 3, celle de la phase 1, qui reçoit une population vide, 4, celle
-    // de la phase 2 avant sa relecture, et 5, celle d'avant les deux horloges, se migrent.
-    expect(Object.keys(MIGRATIONS)).toEqual(['3', '4', '5']);
+    // de la phase 2 avant sa relecture, 5, celle d'avant les deux horloges, et 6, celle
+    // d'avant les individus hors de la grille, se migrent.
+    expect(Object.keys(MIGRATIONS)).toEqual(['3', '4', '5', '6']);
     for (let version = 1; version < 3; version++) {
       const old = encodeSave(save(played(1)), version);
       await expect(readSave(old, MIGRATIONS)).rejects.toMatchObject({ code: 'obsolete' });
@@ -268,6 +267,44 @@ describe('sauvegarde de la simulation', () => {
     const cell = firstCellOf(first, land);
     step(first, [{ type: 'paintBiome', ...cell, biome: 'glacier' }], testData);
     expect(fingerprint(second)).toBe(before);
+  });
+
+  it("donne la moyenne de son ascendance au caractère qu'une sauvegarde ne connaît pas", () => {
+    const state = testState();
+    step(state, scatteredGroups(state, 10, 30), testData);
+    for (let tick = 0; tick < 6; tick++) step(state, [], testData);
+    const data = save(state);
+    const arrays = { ...data.arrays };
+    delete arrays.peopleGregariousness;
+    delete arrays.archiveGregariousness;
+    // Des sous-espèces de grégarités différentes : chacun reçoit celle de son ascendance.
+    const { species } = withHuman((human) => ({
+      ...human,
+      subspecies: human.subspecies.map((entry, index) => ({
+        ...entry,
+        temperament: { gregariousness: { mean: [0.2, 0.6, 0.9][index] ?? 0.5, sd: 0.1 } },
+      })),
+    }));
+    const content = { ...testData, species };
+    const restored = restoreState({ ...data, arrays }, content);
+    const human = content.species.entries.at(0);
+    if (human === undefined) throw new Error('pas d’humains');
+    const { people } = restored;
+    expect(people.count).toBeGreaterThan(0);
+    people.forEach((slot) => {
+      const expected = meanGregariousness(human, people.columns.ancestry, slot * ANCESTRY_SLOTS);
+      expect(people.get('gregariousness', slot)).toBe(expected);
+    });
+    const archive = people.archive;
+    expect(archive.rows).toBeGreaterThan(0);
+    for (let row = 0; row < archive.rows; row++) {
+      const expected = meanGregariousness(human, archive.columns.ancestry, row * ANCESTRY_SLOTS);
+      expect(archive.columns.gregariousness[row]).toBe(expected);
+    }
+    // Les autres colonnes ne manquent jamais.
+    const truncated = { ...data.arrays };
+    delete truncated.peopleNutrition;
+    expect(() => restore({ ...data, arrays: truncated })).toThrow(SaveError);
   });
 
   it('refuse un état incohérent', () => {
@@ -331,7 +368,7 @@ describe('sauvegarde de la simulation', () => {
   });
 });
 
-describe('sauvegarde des deux horloges (ADR 0013)', () => {
+describe('sauvegarde des deux horloges et des positions (ADR 0013, ADR 0014)', () => {
   /** Une partie de groupes nomades, arrêtée au jour `day` d'un mois où ils marchent. */
   function midMonth(day: number): SimState {
     const state = testState();
@@ -341,86 +378,74 @@ describe('sauvegarde des deux horloges (ADR 0013)', () => {
     return state;
   }
 
-  it('se relit en cours de mois, marches comprises, et se poursuit à l’identique', async () => {
-    const original = midMonth(11);
-    expect(original.walks.count).toBeGreaterThan(10);
-    expect(original.dayPositions.walking).toBeGreaterThan(0);
+  it('se relit en cours de mois, positions et marches comprises, et se poursuit à l’identique', async () => {
+    const original = midMonth(7);
+    expect(original.movement.activeCount).toBeGreaterThan(10);
     const data = save(original);
     expect(data.meta).toEqual({ seed: 'graine', tick: 2 });
-    expect((data.json as { day: number }).day).toBe(11);
+    expect((data.json as { day: number }).day).toBe(7);
     const restored = restore(await readSave(await writeSave(data), MIGRATIONS));
-    expect([restored.tick, restored.day]).toEqual([2, 11]);
-    expect(restored.walks.arrays()).toEqual(original.walks.arrays());
+    expect([restored.tick, restored.day]).toEqual([2, 7]);
     expect(fingerprint(restored)).toBe(fingerprint(original));
-    // Les positions du jour, que la sauvegarde ne garde pas, sont les mêmes.
-    expect(restored.dayPositions.positions).toEqual(original.dayPositions.positions);
-    expect(restored.dayPositions.walking).toBe(original.dayPositions.walking);
+    // Les caches du mouvement, que la sauvegarde ne garde pas, se refont à l'identique.
+    expect(describeMovement(restored).text).toBe(describeMovement(original).text);
     const cell = firstCellOf(original, land);
-    for (let day = 0; day < 45; day++) {
-      const commands = day === 7 ? [{ type: 'paintBiome' as const, ...cell, biome: 'taiga' }] : [];
+    for (let day = 0; day < 40; day++) {
+      const commands = day === 5 ? [{ type: 'paintBiome' as const, ...cell, biome: 'taiga' }] : [];
       advanceDay(original, commands, testData);
       advanceDay(restored, commands, testData);
-      expect(restored.dayPositions.positions).toEqual(original.dayPositions.positions);
+      const end = original.people.end;
+      expect(restored.people.end).toBe(end);
+      const columns = (state: SimState) =>
+        [state.people.columns.x, state.people.columns.y].map((column) => column.subarray(0, end));
+      expect(columns(restored), `jour ${String(day)}`).toEqual(columns(original));
     }
     expect(fingerprint(restored)).toBe(fingerprint(original));
   });
 
-  it('refuse un jour, un journal ou des marches abîmés', () => {
+  it('refuse un jour, un journal, une position ou un mouvement abîmés', () => {
     const original = midMonth(6);
     const data = save(original);
     const json = data.json as Record<string, unknown>;
     const paint = { type: 'paintBiome', x: 1, y: 1, biome: 'desert' };
-    const arrays = data.arrays;
-    const walks = original.walks.arrays();
-    const groups = [...original.society.groups.values()];
-    expect(walks.groups.length).toBeGreaterThan(3);
-    /** La sauvegarde, une marche ou un tableau des marches changé. */
-    const forged = (change: Partial<Record<keyof typeof walks, SavedArray>>): SaveData => ({
+    const { people } = original;
+    const { width, height } = original.size;
+    // Un marcheur, un porté, et un autre vivant.
+    let walker = -1;
+    let carried = -1;
+    people.forEach((slot) => {
+      const intention = people.get('move', slot) & INTENTION;
+      if (intention === WALK && people.get('stepDays', slot) > 0 && walker < 0) walker = slot;
+      if (intention === CARRIED && carried < 0) carried = slot;
+    });
+    expect(walker).toBeGreaterThanOrEqual(0);
+    expect(carried).toBeGreaterThanOrEqual(0);
+    /** La sauvegarde, la colonne `name` changée pour l'emplacement `slot`. */
+    const column = (name: string, slot: number, value: number): SaveData => {
+      const key = `people${name.charAt(0).toUpperCase()}${name.slice(1)}`;
+      if (!Object.hasOwn(data.arrays, key)) throw new Error(`colonne ${key} absente`);
+      const copy = data.arrays[key].slice();
+      copy[slot] = value;
+      return { ...data, arrays: { ...data.arrays, [key]: copy } };
+    };
+    const peopleJson = json.people as { groups: { campX: number }[] };
+    const camp = (value: number): SaveData => ({
       ...data,
-      arrays: {
-        ...arrays,
-        ...Object.fromEntries(
-          Object.entries(change).map(([name, array]) => [
-            `walk${name.charAt(0).toUpperCase()}${name.slice(1)}`,
-            array,
-          ]),
-        ),
+      json: {
+        ...json,
+        people: {
+          ...peopleJson,
+          groups: peopleJson.groups.map((group, index) =>
+            index === 0 ? { ...group, campX: value } : group,
+          ),
+        },
       },
     });
-    const firstEnd = walks.ends.at(0) ?? 0;
-    const width = original.size.width;
-    /** Les cases de la première marche, la case `at` changée. */
-    const cells = (at: number, cell: number) => {
-      const copy = walks.cells.slice();
-      copy[at] = cell;
-      return copy;
-    };
-    const costs = (at: number, cost: number) => {
-      const copy = walks.costs.slice();
-      copy[at] = cost;
-      return copy;
-    };
-    const budgets = (budget: number) => {
-      const copy = walks.budgets.slice();
-      copy[0] = budget;
-      return copy;
-    };
-    const ids = (id: number, at = 0) => {
-      const copy = walks.groups.slice();
-      copy[at] = id;
-      return copy;
-    };
-    const unknown = Math.max(...groups.map((group) => group.id)) + 1;
     // Témoin : la sauvegarde telle quelle, et une commande au jour même de la sauvegarde.
-    expect(restore(data).walks.arrays()).toEqual(walks);
+    expect(fingerprint(restore(data))).toBe(fingerprint(original));
     const today = [{ tick: data.meta.tick, day: 6, command: paint }];
     expect(restore({ ...data, json: { ...json, commandLog: today } }).commandLog).toEqual(today);
-    // Chaque sauvegarde abîmée, et la raison du refus : l'en-tête et le journal, puis les
-    // marches, chacune abîmée d'une seule façon.
-    const count = walks.groups.length;
-    const swapped = walks.groups.slice();
-    swapped[0] = walks.groups.at(1) ?? 0;
-    swapped[1] = walks.groups.at(0) ?? 0;
+    const days = people.get('stepDays', walker);
     const cases: [string, SaveData, string][] = [
       ['jour 30', { ...data, json: { ...json, day: 30 } }, 'état illisible'],
       ['jour négatif', { ...data, json: { ...json, day: -1 } }, 'état illisible'],
@@ -440,76 +465,34 @@ describe('sauvegarde des deux horloges (ADR 0013)', () => {
         'journal illisible',
       ],
       [
-        'journal désordonné dans le mois',
-        {
-          ...data,
-          json: {
-            ...json,
-            commandLog: [
-              { tick: 1, day: 4, command: paint },
-              { tick: 1, day: 3, command: paint },
-            ],
-          },
-        },
-        'journal des commandes incohérent',
+        'position hors du monde, à l’est',
+        column('x', walker, width * FIXED),
+        'position hors du monde',
       ],
+      ['position négative', column('x', walker, -1), 'position hors du monde'],
+      ['position au-delà du pôle', column('y', walker, height * FIXED), 'position hors du monde'],
       [
-        'cases non voisines',
-        forged({ cells: cells(1, ((walks.cells.at(0) ?? 0) + 2) % (width * 256)) }),
-        'cases non voisines',
+        'place hors du monde',
+        column('goalY', walker, height * FIXED + 5),
+        'position hors du monde',
       ],
-      ['case hors du monde', forged({ cells: cells(1, width * 256) }), 'case hors du monde'],
-      ['case répétée', forged({ cells: cells(1, walks.cells.at(0) ?? 0) }), 'cases non voisines'],
-      ['arrivée hors de la case du groupe', forged({ groups: swapped }), 'arrivée hors de la case'],
-      ['coûts décroissants', forged({ costs: costs(1, -1) }), 'coûts'],
-      ['coût de départ non nul', forged({ costs: costs(0, 0.5) }), 'coût de départ non nul'],
-      ['coût NaN', forged({ costs: costs(1, Number.NaN) }), 'coûts'],
+      ['intention inconnue', column('move', walker, 5), 'intention inconnue'],
+      ['intention 7', column('move', walker, 7), 'intention inconnue'],
+      ['jour de départ 30', column('depart', walker, 30), 'jour de départ'],
+      ['étape de plus de mille jours', column('stepDays', walker, 1001), 'étape illisible'],
+      ['pas de plus de quatre cases', column('stepX', walker, 5 * FIXED), 'étape illisible'],
       [
-        'chemin au-delà du budget',
-        forged({ budgets: budgets((walks.costs[firstEnd - 1] ?? 0) - 0.01) }),
-        'chemin au-delà du budget',
+        'étape qui finit au-delà du pôle',
+        column('stepY', walker, Math.ceil((height * FIXED) / Math.max(1, days))),
+        'étape illisible',
       ],
-      ['budget nul', forged({ budgets: budgets(0) }), 'budget illisible'],
-      ['budget infini', forged({ budgets: budgets(Number.POSITIVE_INFINITY) }), 'budget illisible'],
-      ['groupe inconnu', forged({ groups: ids(unknown) }), 'groupe inconnu ou en double'],
+      ['porté sans mère', column('mother', carried, NONE), 'porté sans sa mère'],
       [
-        'groupe en double',
-        forged({ groups: ids(walks.groups.at(0) ?? 0, count - 1) }),
-        'groupe inconnu ou en double',
+        'porté d’un autre groupe',
+        column('group', carried, (people.get('group', carried) % 3) + 1),
+        '',
       ],
-      [
-        'chemin d’une seule case',
-        forged({ ends: Uint32Array.from(walks.ends, (end, i) => (i === 0 ? 1 : end)) }),
-        'chemin trop court',
-      ],
-      [
-        'cases en trop',
-        forged({
-          cells: Uint32Array.of(...walks.cells, 0),
-          costs: Float64Array.of(...walks.costs, 99),
-        }),
-        'cases en trop',
-      ],
-      [
-        'budgets trop courts',
-        forged({ budgets: walks.budgets.slice(1) }),
-        'tableaux de longueurs différentes',
-      ],
-      [
-        'coûts de mauvais type',
-        forged({ costs: Float32Array.from(walks.costs) }),
-        'costs illisible',
-      ],
-      [
-        'marches absentes',
-        {
-          ...data,
-          arrays: Object.fromEntries(
-            Object.entries(arrays).filter(([name]) => name !== 'walkCells'),
-          ),
-        },
-        'cells illisible',
-      ],
+      ['camp hors du monde', camp(width), 'groupes incohérents'],
     ];
     for (const [label, broken, reason] of cases) {
       expect(() => restore(broken), label).toThrow(
@@ -521,23 +504,124 @@ describe('sauvegarde des deux horloges (ADR 0013)', () => {
     }
   });
 
-  it('migre une partie de la version 5, qui se poursuit comme son rejeu', async () => {
+  /**
+   * Une sauvegarde de la version 6, tirée d'une partie d'aujourd'hui : sans les colonnes de
+   * position, de mouvement et de grégarité, sans camps, et avec les marches du mois de 2b.2 :
+   * pour chaque groupe dont les cases à l'ouest se franchissent, une marche droite de huit
+   * cases qui finit sur sa case, au coût cumulé du terrain, d'un budget de 30.
+   */
+  function version6(state: SimState): SaveData {
+    const current = save(state);
+    const json = current.json as Record<string, unknown> & {
+      people: { groups: Record<string, unknown>[] };
+    };
+    const groups = json.people.groups.map(({ campX: _x, campY: _y, ...group }) => group);
+    const { width } = state.size;
+    const walkGroups: number[] = [];
+    const walkEnds: number[] = [];
+    const walkCells: number[] = [];
+    const walkCosts: number[] = [];
+    for (const group of state.society.groups.values()) {
+      const path = Array.from({ length: 9 }, (_, k) => {
+        const x = (group.x - 8 + k + width) % width;
+        return group.y * width + x;
+      });
+      if (!path.every((cell) => (state.cost[cell] ?? Infinity) < Infinity)) continue;
+      let spent = 0;
+      path.forEach((cell, k) => {
+        if (k > 0) spent += state.cost[cell] ?? 0;
+        walkCells.push(cell);
+        walkCosts.push(spent);
+      });
+      walkGroups.push(group.id);
+      walkEnds.push(walkCells.length);
+    }
+    const v7 =
+      /^(people(X|Y|Move|Depart|GoalX|GoalY|StepX|StepY|StepDays|Gregariousness)|archiveGregariousness)$/;
+    return {
+      meta: current.meta,
+      json: { ...json, people: { ...json.people, groups } },
+      arrays: {
+        ...Object.fromEntries(Object.entries(current.arrays).filter(([name]) => !v7.test(name))),
+        walkGroups: Uint32Array.from(walkGroups),
+        walkEnds: Uint32Array.from(walkEnds),
+        walkCells: Uint32Array.from(walkCells),
+        walkCosts: Float64Array.from(walkCosts),
+        walkBudgets: new Float64Array(walkGroups.length).fill(30),
+      },
+    };
+  }
+
+  it('migre une partie de la version 6 en cours de mois : chacun se pose, et rejoint le camp', async () => {
+    const original = midMonth(6);
+    const v6 = version6(original);
+    const walks = (v6.arrays.walkGroups as Uint32Array).length;
+    expect(walks).toBeGreaterThan(5);
+    const file = encodeSave(v6, 6);
+    const read = await readSave(file, MIGRATIONS);
+    expect(read.arrays.walkCells).toBeUndefined();
+    const migrated = restore(read);
+    expect([migrated.tick, migrated.day]).toEqual([original.tick, 6]);
+    expect(migrated.commandLog).toEqual(original.commandLog);
+    const { people } = migrated;
+    const { move, x, y, group, gregariousness } = people.columns;
+    // Chacun se tient à la position du jour de son groupe, en partance le jour même, sauf les
+    // nourrissons, portés par leur mère ; la grégarité prend la moyenne de l'ascendance.
+    const camps = new Map([...migrated.society.groups.values()].map((entry) => [entry.id, entry]));
+    let leaving = 0;
+    people.forEach((slot) => {
+      const intention = (move[slot] ?? 0) & INTENTION;
+      expect([LEAVE, CARRIED]).toContain(intention);
+      if (intention === LEAVE) {
+        leaving++;
+        expect(people.get('depart', slot)).toBe(6);
+      }
+      expect(gregariousness[slot]).toBe(128);
+      const home = camps.get(group[slot] ?? 0);
+      expect(home).toBeDefined();
+      const cell =
+        Math.floor((y[slot] ?? 0) / FIXED) * migrated.size.width +
+        Math.floor((x[slot] ?? 0) / FIXED);
+      expect(migrated.cost[cell]).toBeLessThan(Infinity);
+    });
+    expect(leaving).toBeGreaterThan(people.count / 2);
+    // Les membres d'un groupe qui marchait se tiennent ensemble, en route : son camp est la
+    // case du bout de la marche, et sa case du jour, une case du chemin, à l'ouest du camp.
+    const walked = (v6.arrays.walkGroups as Uint32Array)[0];
+    const home = camps.get(walked);
+    if (home === undefined) throw new Error('groupe introuvable');
+    expect(home.x).toBeLessThan(home.campX + (home.campX < 8 ? migrated.size.width : 0));
+    // La partie continue : chacun rejoint le camp de son groupe, de façon déterministe.
+    const again = restore(await readSave(file, MIGRATIONS));
+    for (let day = 0; day < 40; day++) {
+      advanceDay(migrated, [], testData);
+      advanceDay(again, [], testData);
+    }
+    expect(fingerprint(again)).toBe(fingerprint(migrated));
+    let resting = 0;
+    migrated.people.forEach((slot) => {
+      if ((migrated.people.get('move', slot) & INTENTION) === REST) resting++;
+    });
+    expect(resting).toBeGreaterThan(migrated.people.count / 3);
+  });
+
+  it('migre une partie de la version 5, qui se poursuit de façon déterministe', async () => {
     // Une vraie partie de la version 5 : sans jour dans les données ni au journal, et sans
     // marches ; ses groupes se tiennent sur leur case, à un pas mensuel juste fait.
     const original = played(8);
     step(original, scatteredGroups(original, 20, 30), testData);
     step(original, [], testData);
-    const current = save(original);
-    const { day, commandLog, ...rest } = current.json as {
+    const v6 = version6(original);
+    const { day, commandLog, ...rest } = v6.json as {
       day: number;
       commandLog: { tick: number; day: number; command: unknown }[];
     };
     expect(day).toBe(0);
     const v5: SaveData = {
-      meta: current.meta,
+      meta: v6.meta,
       json: { ...rest, commandLog: commandLog.map(({ tick, command }) => ({ tick, command })) },
       arrays: Object.fromEntries(
-        Object.entries(current.arrays).filter(([name]) => !name.startsWith('walk')),
+        Object.entries(v6.arrays).filter(([name]) => !name.startsWith('walk')),
       ),
     };
     const file = encodeSave(v5, 5);
@@ -550,27 +634,23 @@ describe('sauvegarde des deux horloges (ADR 0013)', () => {
     expect(header.meta).toEqual({ seed: 'graine', tick: 10 });
     const migrated = restore(await readSave(file, MIGRATIONS));
     expect([migrated.tick, migrated.day]).toEqual([10, 0]);
-    expect(migrated.walks.count).toBe(0);
     expect(migrated.commandLog).toEqual(original.commandLog);
     expect(migrated.commandLog.every((entry) => entry.day === 0)).toBe(true);
-    // Ses groupes se tiennent au centre de leur case jusqu'au pas mensuel suivant.
-    [...migrated.society.groups.values()].forEach((group, rank) => {
-      expect(migrated.dayPositions.positions[rank * 2]).toBe(group.x + 0.5);
-      expect(migrated.dayPositions.positions[rank * 2 + 1]).toBe(group.y + 0.5);
+    // Sans marches, chacun se tient au centre de la case de son groupe, qui est son camp.
+    const { x, y, group } = migrated.people.columns;
+    migrated.people.forEach((slot) => {
+      const home = migrated.society.groups.get(group[slot] ?? 0);
+      if (home === undefined) throw new Error('groupe introuvable');
+      expect([home.campX, home.campY]).toEqual([home.x, home.y]);
+      expect(x[slot]).toBe(home.x * FIXED + FIXED / 2);
+      expect(y[slot]).toBe(home.y * FIXED + FIXED / 2);
     });
-    // Après un pas mensuel, la partie migrée et son rejeu ne font plus qu'une : le pas
-    // décide les mêmes marches, de la même case.
-    const replayed = replay(
-      testParams(),
-      testWorld(),
-      migrated.commandLog,
-      { tick: 10, day: 0 },
-      testData,
-    );
+    // Elle se poursuit de façon déterministe, mais ne rejoint plus son rejeu (ADR 0014).
+    const again = restore(await readSave(file, MIGRATIONS));
     for (let month = 0; month < 3; month++) {
       step(migrated, [], testData);
-      step(replayed, [], testData);
-      expect(fingerprint(migrated), `mois ${String(month)}`).toBe(fingerprint(replayed));
+      step(again, [], testData);
+      expect(fingerprint(migrated), `mois ${String(month)}`).toBe(fingerprint(again));
     }
   });
 });

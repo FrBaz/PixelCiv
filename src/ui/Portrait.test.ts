@@ -45,6 +45,7 @@ function person(age: number, alleles: ReadonlyMap<string, string> = new Map()): 
     })),
     traits: data.genetics.traits.map((entry) => ({ trait: entry.id, value: 0.5 })),
     height: 170,
+    gregariousness: 0.5,
     grey: greyLevel(human, age),
     nutrition: 1,
     pregnant: false,

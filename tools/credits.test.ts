@@ -43,7 +43,6 @@ const SIGNATURES: readonly { readonly algorithm: string; readonly signature: Reg
   { algorithm: 'Mortalité de Siler', signature: /\bSiler\b/ },
   { algorithm: 'Transformation de Box et Muller', signature: /Box et Muller/ },
   { algorithm: 'Tramage ordonné de Bayer', signature: /\bBayer\b/ },
-  { algorithm: 'Spirale de Vogel', signature: /\bGOLDEN_ANGLE\b/ },
 ];
 
 describe('crédits des algorithmes', () => {

@@ -22,8 +22,8 @@ function rows(): Map<string, string> {
   );
 }
 
-describe('panneau de débogage (ADR 0013)', () => {
-  it('montre la durée d’un jour et du pas mensuel, les jours par lot et les marches', () => {
+describe('panneau de débogage (ADR 0013, ADR 0014)', () => {
+  it('montre la durée d’un jour et du pas mensuel, les jours par lot, les marcheurs et ce que coûtent les individus', () => {
     debugOpen.value = true;
     debugInfo.value = {
       fps: 59.6,
@@ -32,7 +32,17 @@ describe('panneau de débogage (ADR 0013)', () => {
       monthMs: 12.37,
       worstMonthMs: 20.5,
       batchDays: 2.6,
-      walks: 412,
+      walkers: 412,
+      legsPerSecond: 1234.4,
+      positionBytesPerSecond: 64 * 1024,
+      main: { update: 6.004, render: 5.126 },
+      timeline: { show: 0.31, receive: 0.058 },
+      crowd: { positions: 1.234, sort: 0.5, sprites: 2.25 },
+      drawn: 1987,
+      textures: 140,
+      cachedTextures: 412,
+      pages: 1,
+      drawCalls: 37,
       memoryMb: 140,
       renderer: { name: 'webgl', resolution: 1 },
       chunks: 0,
@@ -43,15 +53,31 @@ describe('panneau de débogage (ADR 0013)', () => {
     expect(shown.get('Durée moyenne du pas mensuel')).toBe('12,4 ms');
     expect(shown.get('Pas mensuel le plus long')).toBe('20,5 ms');
     expect(shown.get('Jours par lot')).toBe('2,6');
-    expect(shown.get('Marches en cours')).toBe('412');
+    expect(shown.get('Marcheurs')).toBe('412');
+    // Ce que coûte une image au fil principal : sa mise à jour et son rendu par PixiJS, puis,
+    // dans la mise à jour, l'instant affiché de la chronologie, à côté des messages qu'elle
+    // reçoit.
+    expect(shown.get("Mise à jour, rendu de l'image")).toBe('6 + 5,13 ms');
+    expect(shown.get('Chronologie : affichage, messages')).toBe('0,31 + 0,06 ms');
+    // Les positions reçues, et ce que coûte au fil principal le dessin des individus.
+    expect(shown.get('Positions reçues')).toBe('1\u202f234 étapes/s · 64 Kio/s');
+    expect(shown.get('Positions, tri, sprites')).toBe('1,23 + 0,5 + 2,25 ms');
+    expect(shown.get('Sprites dessinés')).toBe('1\u202f987');
+    expect(shown.get('Textures')).toBe("140 dans l'image, 412 gardées");
+    expect(shown.get("Pages de l'atlas")).toBe('1');
+    expect(shown.get('Appels de dessin')).toBe('37');
     // Sans mesure, chaque ligne le dit.
     debugInfo.value = {
       ...debugInfo.value,
       dayMs: undefined,
       monthMs: undefined,
-      walks: undefined,
+      walkers: undefined,
+      legsPerSecond: undefined,
+      drawCalls: undefined,
     };
-    expect(rows().get('Marches en cours')).toBe('indisponible');
+    expect(rows().get('Marcheurs')).toBe('indisponible');
+    expect(rows().get('Positions reçues')).toBe('indisponible');
+    expect(rows().get('Appels de dessin')).toBe('indisponible');
   });
 });
 

@@ -30,5 +30,23 @@
       "covered": 0.3
     }
   },
-  "river": [0, 0.09, 0.18, 0.3]
+  "river": [0, 0.09, 0.18, 0.3],
+  "camp": {
+    "cohesion": 0.5,
+    "gap": 0.45,
+    "guide": 0.3,
+    "kin": [0.6, 1.2],
+    "band": [0.8, 5],
+    "spread": 0.18,
+    "lag": 20,
+    "hurry": 1.25,
+    "wean": 0.3,
+    "wait": 2,
+    "field": 48
+  },
+  "walkers": {
+    "gap": 0.25,
+    "aside": 0.3,
+    "every": 3
+  }
 }

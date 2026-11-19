@@ -1,8 +1,11 @@
 /**
- * Panneau de débogage (NF-01, ADR 0013) : images par seconde, durée d'un jour et du pas
- * mensuel, jours par lot, marches en cours, mémoire, monde (graine, taille, durée de la
- * génération, blocs à cuire), contenu et auto-test du déterminisme. Il s'ouvre par son
- * bouton, ou par F3 et la touche ², au-dessus de Tab.
+ * Panneau de débogage (NF-01, ADR 0013, ADR 0014) : images par seconde, ce que coûte une
+ * image au fil principal (mise à jour et rendu, chronologie des individus, dessin des
+ * individus : positions, tri, sprites), durée d'un jour et du pas mensuel, jours par lot,
+ * marcheurs, positions reçues, sprites, textures et appels de dessin, mémoire, monde (graine,
+ * taille, durée de la génération, blocs à cuire), contenu et auto-test du déterminisme. Il
+ * s'ouvre par son bouton, ou par F3 et la touche ², au-dessus de Tab ; il défile s'il ne tient
+ * pas à l'écran.
  */
 import { useEffect } from 'preact/hooks';
 import { t, type MessageKey } from '../i18n';
@@ -63,12 +66,58 @@ export function DebugPanel() {
       info === undefined ? t('debug.unavailable') : t('unit.number', { value: round(info.fps, 0) }),
     ],
     ['debug.frame', milliseconds(info?.worstFrameMs)],
+    [
+      'debug.frameCost',
+      info === undefined
+        ? t('debug.unavailable')
+        : t('debug.frameCostValue', {
+            update: round(info.main.update, 2),
+            render: round(info.main.render, 2),
+          }),
+    ],
     // Un jour ne coûte que quelques microsecondes dans un petit monde : trois décimales.
     ['debug.day', milliseconds(info?.dayMs, 3)],
     ['debug.month', milliseconds(info?.monthMs)],
     ['debug.monthMax', milliseconds(info?.worstMonthMs)],
     ['debug.batchDays', number(info?.batchDays, 1)],
-    ['debug.walks', number(info?.walks, 0)],
+    ['debug.walkers', number(info?.walkers, 0)],
+    [
+      'debug.positions',
+      info?.legsPerSecond === undefined || info.positionBytesPerSecond === undefined
+        ? t('debug.unavailable')
+        : t('debug.positionsValue', {
+            legs: Math.round(info.legsPerSecond),
+            kib: round(info.positionBytesPerSecond / 1024),
+          }),
+    ],
+    [
+      'debug.timeline',
+      info === undefined
+        ? t('debug.unavailable')
+        : t('debug.timelineValue', {
+            show: round(info.timeline.show, 2),
+            receive: round(info.timeline.receive, 2),
+          }),
+    ],
+    [
+      'debug.crowdTime',
+      info === undefined
+        ? t('debug.unavailable')
+        : t('debug.crowdTimeValue', {
+            positions: round(info.crowd.positions, 2),
+            sort: round(info.crowd.sort, 2),
+            sprites: round(info.crowd.sprites, 2),
+          }),
+    ],
+    ['debug.drawn', number(info?.drawn, 0)],
+    [
+      'debug.textures',
+      info?.textures === undefined || info.cachedTextures === undefined
+        ? t('debug.unavailable')
+        : t('debug.texturesValue', { used: info.textures, cached: info.cachedTextures }),
+    ],
+    ['debug.pages', number(info?.pages, 0)],
+    ['debug.drawCalls', number(info?.drawCalls, 0)],
     [
       'debug.memory',
       info?.memoryMb === undefined

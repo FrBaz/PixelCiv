@@ -33,6 +33,10 @@ function add(people: Population, changes: Partial<NewPerson>): number {
     givenName: 5,
     familyName: 0,
     familyLanguage: changes.culture ?? 1,
+    gregariousness: 128,
+    x: 0,
+    y: 0,
+    move: 0,
     ...changes,
   });
   return people.get('id', slot);

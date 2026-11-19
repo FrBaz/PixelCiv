@@ -1,12 +1,16 @@
 import { describe, expect, it } from 'vitest';
+import { deltaFixedX, FIXED } from '../core/position';
 import type { GameCommand } from '../core/protocol';
 import { dayIndex, timeOfDayIndex } from '../core/time';
 import { advanceDay, step } from './day';
+import { describeMovement } from './movement';
 import { replay } from './replay';
+import type { SimState } from './state';
 import { applyCommands, fingerprint } from './step';
 import {
   cellsOf,
   firstCellOf,
+  neighboringGroups,
   scatteredGroups,
   testData,
   testParams,
@@ -61,6 +65,26 @@ describe('replay', () => {
       testData,
     );
     expect(fingerprint(replayed)).toBe(fingerprint(inStep));
+  });
+
+  it('ne distingue pas un lot de commandes des mêmes commandes une à une, même voisines', () => {
+    // Deux apparitions sur des cases voisines : la seconde pose ses membres d'après les places
+    // que tient la première. En marche et au rejeu, elles s'appliquent d'un lot ; en pause,
+    // l'hôte les applique une à une, dès leur réception.
+    const commands = neighboringGroups(testState(), 20);
+    const batch = testState();
+    applyCommands(batch, commands, testData);
+    const oneByOne = testState();
+    for (const command of commands) applyCommands(oneByOne, [command], testData);
+    expect(fingerprint(batch)).toBe(fingerprint(oneByOne));
+    expect(closestStrangers(batch)).toBeGreaterThanOrEqual(testData.nomads.camp.gap);
+    for (let day = 0; day < 40; day++) {
+      advanceDay(batch, [], testData);
+      advanceDay(oneByOne, [], testData);
+    }
+    expect(fingerprint(batch)).toBe(fingerprint(oneByOne));
+    const replayed = replay(testParams(), testWorld(), oneByOne.commandLog, oneByOne, testData);
+    expect(fingerprint(replayed)).toBe(fingerprint(oneByOne));
   });
 
   it('redonne une partie en pause, commandes de son pas courant comprises, même d’un journal plus long (U-7)', () => {
@@ -172,10 +196,29 @@ describe('replay', () => {
     }
     const end = replay(testParams(), testWorld(), state.commandLog, state, testData);
     expect(fingerprint(end)).toBe(fingerprint(state));
-    expect(end.dayPositions.positions).toEqual(state.dayPositions.positions);
+    // Positions et caches du mouvement compris (ADR 0014).
+    expect(end.people.columns.x).toEqual(state.people.columns.x);
+    expect(describeMovement(end).text).toBe(describeMovement(state).text);
   });
 
   it("s'arrête au pas demandé", () => {
     expect(replay(testParams(), testWorld(), [], { tick: 7, day: 0 }, testData).tick).toBe(7);
   });
 });
+
+/** Plus courte distance, en cases, entre deux vivants de groupes différents. */
+function closestStrangers(state: SimState): number {
+  const { x, y, group } = state.people.columns;
+  const slots: number[] = [];
+  state.people.forEach((slot) => slots.push(slot));
+  let best = Number.POSITIVE_INFINITY;
+  for (const a of slots) {
+    for (const b of slots) {
+      if (group[a] === group[b]) continue;
+      const dx = deltaFixedX(x[a] ?? 0, x[b] ?? 0, state.size.width) / FIXED;
+      const dy = ((y[b] ?? 0) - (y[a] ?? 0)) / FIXED;
+      best = Math.min(best, Math.hypot(dx, dy));
+    }
+  }
+  return best;
+}

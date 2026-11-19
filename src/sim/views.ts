@@ -11,25 +11,42 @@
 import {
   CHRONICLE_PAGE,
   GROUP_STRIDE,
+  NO_CARRIER,
   type ChronicleView,
   type GroupsFrame,
   type GroupSummary,
   type GroupView,
   type InspectTarget,
+  type Intention,
+  type LegArrays,
   type PersonSummary,
   type PersonView,
 } from '../core/protocol';
+import { freshArrays, type Allocator } from '../core/buffers';
+import { dayIndex } from '../core/time';
 import { geneRoles } from '../core/data/people';
 import { ageClass, greyLevel, lifeTable, type LifeAges } from '../core/life';
 import { AGE_CODE, SKIN_TONES, visualCode, type AgeClass } from '../core/visual';
 import { expressed, trait } from './genetics';
 import { groupMembers } from './groups';
-import { DEATH_CAUSES, GENOME_WORDS, NEVER, NONE, type Population } from './population';
+import { centralMember, curveAt } from './movement';
+import {
+  CARRIED,
+  DEATH_CAUSES,
+  GENOME_WORDS,
+  INTENTION,
+  LEAVE,
+  NEVER,
+  NONE,
+  WALK,
+  type Population,
+} from './population';
 import { MONTHS_PER_YEAR } from './people';
 import { childrenOf, field, heredity, personName, recordOf, type PersonRecord } from './records';
 import { cultureOf, type ChronicleEntry } from './society';
 import type { SimState } from './state';
 import type { SimContent } from './step';
+import { TEMPER_MAX } from './temper';
 
 /** Âge exact, en années, d'un vivant aujourd'hui ou d'un mort à sa mort. */
 function yearsOf(state: SimState, record: PersonRecord): number {
@@ -69,16 +86,36 @@ export function groupName(state: SimState, leader: number): string {
 }
 
 /**
- * Un groupe en quelques mots, à la case où il se tient ce jour-là : en marche, celle de sa
- * position du jour (ADR 0013), au repos, la sienne.
+ * Un groupe en quelques mots, à la case où il se tient ce jour-là : celle de son membre le
+ * plus proche du barycentre de ses membres, aux positions du jour (ADR 0014), la règle du
+ * lieu des groupes du pas mensuel ; sa case du pas mensuel s'il n'a personne qui marche.
  */
-function groupSummary(state: SimState, id: number, size: number): GroupSummary | undefined {
+function groupSummary(
+  state: SimState,
+  id: number,
+  members: readonly number[],
+): GroupSummary | undefined {
   const group = state.society.groups.get(id);
   if (group === undefined) return undefined;
-  const at = state.dayPositions.positionOf(id);
-  const x = at === undefined ? group.x : Math.floor(at.x);
-  const y = at === undefined ? group.y : Math.floor(at.y);
-  return { id, name: groupName(state, group.leader), x, y, size };
+  const cell = centralMember(state, members);
+  const { width } = state.size;
+  const x = cell < 0 ? group.x : cell % width;
+  const y = cell < 0 ? group.y : (cell - x) / width;
+  return { id, name: groupName(state, group.leader), x, y, size: members.length };
+}
+
+/** Intention d'un vivant, pour sa fiche. */
+function intentionOf(state: SimState, slot: number): Intention {
+  switch (state.people.get('move', slot) & INTENTION) {
+    case LEAVE:
+      return 'leave';
+    case WALK:
+      return 'walk';
+    case CARRIED:
+      return 'carried';
+    default:
+      return 'rest';
+  }
 }
 
 /** Fiche d'un individu, vivant ou mort. */
@@ -125,7 +162,7 @@ export function personView(
       return found === undefined ? [] : [found];
     });
   const groupId = field(people, record, 'group');
-  const size = groupMembers(people).get(groupId)?.length ?? 0;
+  const groupList = groupMembers(people).get(groupId) ?? [];
   const death = record.alive ? undefined : people.archive.columns.death[record.index];
   const cause = record.alive
     ? undefined
@@ -142,15 +179,17 @@ export function personView(
     loci,
     traits,
     height,
+    gregariousness: field(people, record, 'gregariousness') / TEMPER_MAX,
     grey: species === undefined ? 0 : greyLevel(species, yearsOf(state, record)),
     nutrition: record.alive ? people.get('nutrition', record.index) / 255 : 0,
     pregnant: record.alive && people.get('conceived', record.index) !== NEVER,
+    ...(record.alive ? { intention: intentionOf(state, record.index) } : {}),
     ...optional('mother', summary(state, content, mother)),
     ...optional('father', summary(state, content, father)),
     ...optional('partner', summary(state, content, field(people, record, 'partner'))),
     children: list(childrenOf(people, id)),
     siblings: list(siblings),
-    ...optional('group', record.alive ? groupSummary(state, groupId, size) : undefined),
+    ...optional('group', record.alive ? groupSummary(state, groupId, groupList) : undefined),
   };
 }
 
@@ -164,10 +203,10 @@ export function groupView(state: SimState, content: SimContent, id: number): Gro
   if (group === undefined) return undefined;
   const all = groupMembers(state.people);
   const members = all.get(id) ?? [];
-  const base = groupSummary(state, id, members.length);
+  const base = groupSummary(state, id, members);
   if (base === undefined) return undefined;
   const need = members.length > 0 ? members.length : 1;
-  const parent = groupSummary(state, group.parent, all.get(group.parent)?.length ?? 0);
+  const parent = groupSummary(state, group.parent, all.get(group.parent) ?? []);
   return {
     ...base,
     founded: group.founded,
@@ -276,37 +315,65 @@ function looks(people: Population): Looks {
 }
 
 /**
- * Image des groupes pour la carte, un code d'apparence par membre, et les marches du mois,
- * copiées (ADR 0013) ; `members` évite de recompter les membres que le pas vient de donner.
+ * Stature de chaque emplacement, en 1/128 de case (ADR 0014) : la stature de référence de son
+ * espèce, fois sa croissance à son âge, fois sa taille sur la taille moyenne de l'espèce, sur
+ * un octet (le schéma garantit que le plus grand adulte y tient).
+ */
+function statureOf(state: SimState, content: SimContent, slot: number, heightTrait: number) {
+  const { columns } = state.people;
+  const species = content.species.entries.at(columns.species[slot] ?? 0);
+  if (species === undefined) return 0;
+  const [short, tall] = species.height;
+  const height = short + (tall - short) * trait(columns.genome, slot * GENOME_WORDS, heightTrait);
+  const years = Math.max(0, state.tick - (columns.birth[slot] ?? 0)) / MONTHS_PER_YEAR;
+  const stature =
+    (species.display.stature * curveAt(species.display.growth, years) * height * 2) /
+    (short + tall);
+  return Math.min(255, Math.max(0, Math.round(stature * 128)));
+}
+
+/**
+ * Image des groupes pour la carte (ADR 0014) : chaque membre, son emplacement, son
+ * identifiant, son code d'apparence, sa stature, sa position, qui le porte, et l'étape en
+ * cours de chaque marcheur, repartie de l'instant de l'image. `members` évite de recompter
+ * les membres que le pas vient de donner.
  */
 export function groupsFrame(
   state: SimState,
   content: SimContent,
   members: ReadonlyMap<number, readonly number[]> = groupMembers(state.people),
+  arrays: Allocator = freshArrays,
 ): GroupsFrame {
   const { people, tick } = state;
-  const groups = new Uint32Array(state.society.groups.size * GROUP_STRIDE);
+  const groups = arrays.uint32(state.society.groups.size * GROUP_STRIDE);
   let total = 0;
   for (const group of state.society.groups.values()) total += members.get(group.id)?.length ?? 0;
-  const sprites = new Uint16Array(total);
+  const slots = arrays.uint32(total);
+  const ids = arrays.uint32(total);
+  const sprites = arrays.uint16(total);
+  const statures = arrays.uint8(total);
+  const positions = arrays.int32(2 * total);
+  const carriers = arrays.uint32(total).fill(NO_CARRIER);
   const { genetics } = content;
   const roles = geneRoles(genetics);
   const hairLocus = roles.loci.hair;
   const skinTrait = roles.traits.skin;
+  const heightTrait = roles.traits.height;
   const cache = looks(people);
-  const { id: ids, sex, birth, species: kinds, genome } = people.columns;
+  const { id: idColumn, sex, birth, species: kinds, genome, x, y } = people.columns;
+  const movement = state.movement;
   // Classe d'âge et gris par mois d'âge, de chaque espèce (core/life.ts) ; un adulte sans
   // gris pour une espèce inconnue, comme le dit stageOf.
   const lives = content.species.entries.map((entry) => lifeTable(entry));
   const unknown = AGE_CODE.adult;
   let index = 0;
-  let sprite = 0;
+  let member = 0;
   for (const group of state.society.groups.values()) {
     const list = members.get(group.id) ?? [];
     groups.set([group.id, group.x, group.y, list.length, group.culture], index * GROUP_STRIDE);
     index++;
     for (const slot of list) {
-      const id = ids[slot] ?? 0;
+      const id = idColumn[slot] ?? 0;
       if (cache.ids[slot] !== id) {
         const offset = slot * GENOME_WORDS;
         cache.ids[slot] = id;
@@ -319,14 +386,63 @@ export function groupsFrame(
       const life = lives.at(kinds[slot] ?? 0);
       const months = Math.max(0, tick - (birth[slot] ?? 0));
       const aging = life === undefined ? unknown : (life[Math.min(months, life.length - 1)] ?? 0);
-      sprites[sprite++] = visualCode(
+      slots[member] = slot;
+      ids[member] = id;
+      sprites[member] = visualCode(
         sex[slot] ?? 0,
         aging & 3,
         cache.skin[slot] ?? 0,
         cache.hair[slot] ?? 0,
         aging >> 2,
       );
+      statures[member] = statureOf(state, content, slot, heightTrait);
+      positions[2 * member] = x[slot] ?? 0;
+      positions[2 * member + 1] = y[slot] ?? 0;
+      const carrier = movement.carrier[slot] ?? -1;
+      if (carrier >= 0) carriers[member] = carrier;
+      member++;
     }
   }
-  return { groups, sprites, walks: state.walks.arrays() };
+  return {
+    groups,
+    slots,
+    ids,
+    sprites,
+    statures,
+    positions,
+    carriers,
+    legs: currentLegs(state, arrays),
+  };
+}
+
+/** Étape en cours de chaque marcheur, repartie de l'instant courant. */
+export function currentLegs(state: SimState, arrays: Allocator = freshArrays): LegArrays {
+  const movement = state.movement;
+  const { x, y, stepX, stepY, stepDays } = state.people.columns;
+  // Dans l'ordre des emplacements : l'image ne dépend pas de l'ordre des marcheurs.
+  const walkers = Array.from(movement.active.subarray(0, movement.activeCount))
+    .filter((slot) => movement.isActive(slot) && (stepDays[slot] ?? 0) > 0)
+    .sort((a, b) => a - b);
+  const count = walkers.length;
+  const legs: LegArrays = {
+    slots: arrays.uint32(count),
+    days: arrays.uint32(count),
+    start: arrays.int32(2 * count),
+    step: arrays.int32(2 * count),
+    count: arrays.uint16(count),
+  };
+  const day = dayIndex(state);
+  let at = 0;
+  for (const slot of walkers) {
+    const days = stepDays[slot] ?? 0;
+    legs.slots[at] = slot;
+    legs.days[at] = day;
+    legs.start[2 * at] = x[slot] ?? 0;
+    legs.start[2 * at + 1] = y[slot] ?? 0;
+    legs.step[2 * at] = stepX[slot] ?? 0;
+    legs.step[2 * at + 1] = stepY[slot] ?? 0;
+    legs.count[at] = days;
+    at++;
+  }
+  return legs;
 }
