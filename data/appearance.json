@@ -1,18 +1,432 @@
 {
-  "skin": ["#f3d7c4", "#e6bb9c", "#d29e7a", "#b67e58", "#93603f", "#6e432b", "#4e2f1f"],
-  "grey": "#aea9a2",
   "outline": "#2b211b",
   "backdrop": "#5f6b6e",
   "white": "#f2ede4",
   "mouth": "#9b5048",
-  "clothing": [
-    "#7b5b3c",
-    "#8c6b45",
-    "#6a4a33",
-    "#9c7f58",
-    "#5e5a3c",
-    "#7a4b3a",
-    "#86744f",
-    "#5b4636"
-  ]
+  "skinPalettes": [
+    {
+      "id": "xlight",
+      "tones": ["#ffe9da", "#f9d8c1", "#efb89b", "#d98e73"],
+      "upTo": 2
+    },
+    {
+      "id": "light",
+      "tones": ["#ffe0ca", "#f2c3a5", "#dfa080", "#c97960"],
+      "upTo": 5
+    },
+    {
+      "id": "medium",
+      "tones": ["#e4a987", "#c98768", "#a9654e", "#854636"],
+      "upTo": 7
+    },
+    {
+      "id": "olive",
+      "tones": ["#d59a75", "#b98161", "#956047", "#6e3f31"],
+      "upTo": 10
+    },
+    {
+      "id": "dark",
+      "tones": ["#b76f4e", "#8d5238", "#6e392a", "#4d271f"],
+      "upTo": 13
+    },
+    {
+      "id": "xdark",
+      "tones": ["#854c34", "#633725", "#4a281d", "#301a16"],
+      "upTo": 15
+    }
+  ],
+  "hair": {
+    "black": ["#2a211f", "#1d1716", "#111010"],
+    "brown": ["#74402d", "#55291f", "#381a17"],
+    "blond": ["#f2c05c", "#dfa43b", "#b97922"],
+    "red": ["#f06b20", "#c84a16", "#8d2f12"]
+  },
+  "greyRamps": {
+    "grey": ["#d5c9a9", "#a99d7e", "#756c57"],
+    "white": ["#f0ede0", "#cfc9b7", "#a8a18e"]
+  },
+  "greying": [
+    {
+      "ramp": "grey",
+      "ranks": [0, 1]
+    },
+    {
+      "ramp": "grey",
+      "ranks": [0, 1, 2, 3]
+    },
+    {
+      "ramp": "white",
+      "ranks": [0, 1, 2, 3]
+    }
+  ],
+  "fabrics": [
+    {
+      "id": "forest",
+      "tones": ["#8d9d70", "#647752", "#42543b", "#293a30"],
+      "onSkin": {
+        "olive": "linen",
+        "dark": "ochre"
+      }
+    },
+    {
+      "id": "burgundy",
+      "tones": ["#bd7470", "#964c54", "#703742", "#462a36"],
+      "onSkin": {
+        "dark": "ochre",
+        "xdark": "ochre"
+      }
+    },
+    {
+      "id": "navy",
+      "tones": ["#829caf", "#526d8b", "#354963", "#263046"],
+      "onSkin": {
+        "dark": "ochre"
+      }
+    },
+    {
+      "id": "ochre",
+      "tones": ["#e4be75", "#c2944c", "#906335", "#5b402b"],
+      "onSkin": {
+        "medium": "navy",
+        "olive": "navy"
+      }
+    },
+    {
+      "id": "violet",
+      "tones": ["#af8eb1", "#85668e", "#604b70", "#3d324e"],
+      "onSkin": {
+        "olive": "navy",
+        "dark": "ochre"
+      }
+    },
+    {
+      "id": "linen",
+      "tones": ["#f3e8cd", "#d5c7aa", "#a99a82", "#746a60"],
+      "onSkin": {
+        "xlight": "leather",
+        "light": "leather"
+      }
+    },
+    {
+      "id": "leather",
+      "tones": ["#bd8660", "#916149", "#674233", "#422f2c"],
+      "onSkin": {
+        "medium": "linen",
+        "olive": "linen",
+        "dark": "linen"
+      }
+    },
+    {
+      "id": "charcoal",
+      "tones": ["#7c8189", "#53555b", "#383a43", "#242630"],
+      "onSkin": {
+        "dark": "linen",
+        "xdark": "linen"
+      }
+    }
+  ],
+  "outfits": [
+    {
+      "id": "tunic",
+      "female": [
+        {
+          "fabric": "linen",
+          "regions": ["shoulders", "chest", "belly", "upper-arm", "hips", "thigh", "shin"]
+        }
+      ],
+      "male": [
+        {
+          "fabric": "linen",
+          "regions": ["shoulders", "chest", "belly", "upper-arm", "hips", "thigh"]
+        }
+      ],
+      "child": [
+        {
+          "fabric": "linen",
+          "regions": ["shoulders", "chest", "belly", "upper-arm", "hips", "thigh"]
+        }
+      ],
+      "baby": [
+        {
+          "fabric": "linen",
+          "regions": ["chest", "belly", "hips"]
+        }
+      ]
+    },
+    {
+      "id": "loincloth",
+      "female": [
+        {
+          "fabric": "leather",
+          "regions": ["chest", "hips"]
+        }
+      ],
+      "male": [
+        {
+          "fabric": "leather",
+          "regions": ["hips"]
+        }
+      ],
+      "child": [
+        {
+          "fabric": "leather",
+          "regions": ["hips"]
+        }
+      ],
+      "baby": [
+        {
+          "fabric": "leather",
+          "regions": ["hips"]
+        }
+      ]
+    },
+    {
+      "id": "furs",
+      "female": [
+        {
+          "fabric": "charcoal",
+          "regions": [
+            "neck",
+            "shoulders",
+            "chest",
+            "belly",
+            "upper-arm",
+            "forearm",
+            "hips",
+            "thigh",
+            "shin"
+          ]
+        },
+        {
+          "fabric": "leather",
+          "regions": ["foot"]
+        }
+      ],
+      "male": [
+        {
+          "fabric": "charcoal",
+          "regions": [
+            "neck",
+            "shoulders",
+            "chest",
+            "belly",
+            "upper-arm",
+            "forearm",
+            "hips",
+            "thigh"
+          ]
+        },
+        {
+          "fabric": "leather",
+          "regions": ["shin", "foot"]
+        }
+      ],
+      "child": [
+        {
+          "fabric": "charcoal",
+          "regions": [
+            "neck",
+            "shoulders",
+            "chest",
+            "belly",
+            "upper-arm",
+            "forearm",
+            "hips",
+            "thigh"
+          ]
+        },
+        {
+          "fabric": "leather",
+          "regions": ["shin", "foot"]
+        }
+      ],
+      "baby": [
+        {
+          "fabric": "charcoal",
+          "regions": ["chest", "belly", "hips"]
+        }
+      ]
+    },
+    {
+      "id": "robe",
+      "female": [
+        {
+          "fabric": "burgundy",
+          "regions": [
+            "shoulders",
+            "chest",
+            "belly",
+            "upper-arm",
+            "forearm",
+            "hips",
+            "thigh",
+            "shin"
+          ]
+        }
+      ],
+      "male": [
+        {
+          "fabric": "burgundy",
+          "regions": ["shoulders", "chest", "belly", "upper-arm", "hips", "thigh"]
+        },
+        {
+          "fabric": "leather",
+          "regions": ["foot"]
+        }
+      ],
+      "child": [
+        {
+          "fabric": "burgundy",
+          "regions": ["shoulders", "chest", "belly", "upper-arm", "hips", "thigh"]
+        }
+      ],
+      "baby": [
+        {
+          "fabric": "burgundy",
+          "regions": ["chest", "belly", "hips"]
+        }
+      ]
+    },
+    {
+      "id": "dyed",
+      "female": [
+        {
+          "fabric": "navy",
+          "regions": ["shoulders", "chest", "belly", "upper-arm", "forearm", "hips"]
+        },
+        {
+          "fabric": "linen",
+          "regions": ["thigh", "shin"]
+        },
+        {
+          "fabric": "leather",
+          "regions": ["foot"]
+        }
+      ],
+      "male": [
+        {
+          "fabric": "navy",
+          "regions": ["shoulders", "chest", "belly", "upper-arm", "forearm", "hips"]
+        },
+        {
+          "fabric": "charcoal",
+          "regions": ["thigh", "shin"]
+        },
+        {
+          "fabric": "leather",
+          "regions": ["foot"]
+        }
+      ],
+      "child": [
+        {
+          "fabric": "navy",
+          "regions": ["shoulders", "chest", "belly", "upper-arm", "hips"]
+        },
+        {
+          "fabric": "charcoal",
+          "regions": ["thigh"]
+        }
+      ],
+      "baby": [
+        {
+          "fabric": "navy",
+          "regions": ["chest", "belly", "hips"]
+        }
+      ]
+    },
+    {
+      "id": "wrap",
+      "female": [
+        {
+          "fabric": "ochre",
+          "regions": ["chest", "belly", "hips", "thigh", "shin"]
+        }
+      ],
+      "male": [
+        {
+          "fabric": "ochre",
+          "regions": ["hips", "thigh"]
+        }
+      ],
+      "child": [
+        {
+          "fabric": "ochre",
+          "regions": ["hips", "thigh"]
+        }
+      ],
+      "baby": [
+        {
+          "fabric": "ochre",
+          "regions": ["hips"]
+        }
+      ]
+    },
+    {
+      "id": "mantle",
+      "female": [
+        {
+          "fabric": "forest",
+          "regions": ["shoulders", "upper-arm", "chest", "belly", "hips", "thigh", "shin"]
+        }
+      ],
+      "male": [
+        {
+          "fabric": "forest",
+          "regions": ["shoulders", "upper-arm", "chest"]
+        },
+        {
+          "fabric": "leather",
+          "regions": ["belly", "hips", "thigh"]
+        }
+      ],
+      "child": [
+        {
+          "fabric": "forest",
+          "regions": ["shoulders", "upper-arm", "chest"]
+        },
+        {
+          "fabric": "leather",
+          "regions": ["belly", "hips"]
+        }
+      ],
+      "baby": [
+        {
+          "fabric": "forest",
+          "regions": ["chest", "belly", "hips"]
+        }
+      ]
+    },
+    {
+      "id": "sash",
+      "female": [
+        {
+          "fabric": "violet",
+          "regions": ["shoulders", "chest", "belly", "hips", "thigh", "shin"]
+        }
+      ],
+      "male": [
+        {
+          "fabric": "violet",
+          "regions": ["shoulders", "chest", "belly", "hips"]
+        },
+        {
+          "fabric": "charcoal",
+          "regions": ["thigh"]
+        }
+      ],
+      "child": [
+        {
+          "fabric": "violet",
+          "regions": ["chest", "belly", "hips"]
+        }
+      ],
+      "baby": [
+        {
+          "fabric": "violet",
+          "regions": ["chest", "belly", "hips"]
+        }
+      ]
+    }
+  ],
+  "cultureOutfits": ["tunic", "loincloth", "furs", "robe", "dyed", "wrap", "mantle", "sash"]
 }
