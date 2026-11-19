@@ -269,6 +269,14 @@ export class PositionMirror implements CrowdSource {
   private stepX = new Float64Array(0);
   private stepY = new Float64Array(0);
   private legCount = new Uint16Array(0);
+  /**
+   * Sens de chaque membre, −1 vers l'ouest, 1 vers l'est, 0 inconnu : celui du dernier pas
+   * horizontal de ses étapes, gardé d'une image des groupes à l'autre pour qui reste le même
+   * (même emplacement, même identifiant), si bien qu'un individu arrêté ne se retourne pas au
+   * pas mensuel (2b.5). Deux tableaux, pour reprendre l'un dans l'autre.
+   */
+  private facingOf = new Int8Array(0);
+  private facingSpare = new Int8Array(0);
   /** Ce que peuvent atteindre les membres de chaque groupe (BOX_STRIDE valeurs). */
   private box = new Float64Array(0);
   private readonly carry: number;
@@ -283,7 +291,9 @@ export class PositionMirror implements CrowdSource {
 
   /** L'image `dated`, sur un monde de `width` colonnes, avec les étapes en cours qu'elle porte. */
   reset(dated: DatedFrame | undefined, width: number): void {
+    const previous = this.frame;
     const frame = dated?.frame;
+    this.keepFacing(previous, frame);
     this.frame = frame;
     this.at = dated?.at ?? 0;
     this.width = width;
@@ -373,6 +383,31 @@ export class PositionMirror implements CrowdSource {
     }
   }
 
+  /**
+   * Reprend dans la nouvelle image `frame` le sens de chacun de l'image `previous` : avant que
+   * memberOf ne passe à la nouvelle, il dit encore le rang de chaque emplacement dans l'ancienne.
+   */
+  private keepFacing(previous: GroupsFrame | undefined, frame: GroupsFrame | undefined): void {
+    const count = frame?.ids.length ?? 0;
+    let next = this.facingSpare;
+    if (next.length < count) next = new Int8Array(Math.max(count, next.length * 2));
+    next.fill(0, 0, count);
+    if (previous !== undefined && frame !== undefined && previous !== frame) {
+      const { slots, ids } = frame;
+      for (let member = 0; member < count; member++) {
+        const slot = slots[member] ?? 0;
+        const before = this.memberOf[slot] ?? -1;
+        if (before >= 0 && previous.ids[before] === ids[member]) {
+          next[member] = this.facingOf[before] ?? 0;
+        }
+      }
+    } else if (previous === frame) {
+      next.set(this.facingOf.subarray(0, count));
+    }
+    this.facingSpare = this.facingOf;
+    this.facingOf = next;
+  }
+
   /** Étend la boîte du groupe au point (x, y), en unités. */
   private include(group: number, x: number, y: number): void {
     const at = group * BOX_STRIDE;
@@ -424,6 +459,8 @@ export class PositionMirror implements CrowdSource {
     this.stepX.set(other.stepX.subarray(0, count));
     this.stepY.set(other.stepY.subarray(0, count));
     this.legCount.set(other.legCount.subarray(0, count));
+    if (this.facingOf.length < count) this.facingOf = new Int8Array(count);
+    this.facingOf.set(other.facingOf.subarray(0, count));
     this.box.set(other.box.subarray(0, this.groupCount * BOX_STRIDE));
     this.applied = other.applied;
   }
@@ -472,7 +509,14 @@ export class PositionMirror implements CrowdSource {
     return this.passable(cellOf(wrapFixedX(x + offset, this.width), y, this.width)) ? offset : 0;
   }
 
-  positions(group: number, t: number, xs: Float64Array, ys: Float64Array, moving: Uint8Array) {
+  positions(
+    group: number,
+    t: number,
+    xs: Float64Array,
+    ys: Float64Array,
+    moving: Uint8Array,
+    facing?: Int8Array,
+  ) {
     if (this.frame === undefined) return;
     const first = this.firsts[group] ?? 0;
     const end = first + (this.sizes[group] ?? 0);
@@ -481,6 +525,15 @@ export class PositionMirror implements CrowdSource {
       moving[member] = this.place(member, t) ? 1 : 0;
       xs[member] = placed[0];
       ys[member] = placed[1];
+      // Son sens : celui du pas horizontal de son étape, en cours ou finie ; sans étape, ou
+      // sur un pas vertical, celui qu'il avait, gardé d'une image des groupes à l'autre.
+      if (facing !== undefined) {
+        const step = Number.isNaN(this.legDay[member] ?? Number.NaN)
+          ? 0
+          : (this.stepX[member] ?? 0);
+        if (step !== 0) this.facingOf[member] = step > 0 ? 1 : -1;
+        facing[member] = this.facingOf[member] ?? 0;
+      }
     }
     // Les portés, contre leur mère. Leur écart se décide aux jours entiers, aux positions de
     // leur mère, comme le worker au sevrage, et passe d'un jour à l'autre sans saut : il

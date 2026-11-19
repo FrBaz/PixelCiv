@@ -1,10 +1,12 @@
 /**
  * Atlas dynamique des textures recolorées (ADR 0014, § 6) : des pages de PAGE × PAGE pixels,
- * où chaque motif recoloré (motif, variante, apparence, habit) prend sa place, rangé en
- * étagères avec un pixel de marge. Les individus d'une page se dessinent ensemble : un appel
- * de dessin couvre jusqu'à seize pages, et un sprite qui change de texture pour une autre de
- * ses pages ne fait pas refaire le lot. Avec une texture par motif recoloré, une foule de
- * 12 000 individus demandait quelque 2 400 textures et 370 appels de dessin par image.
+ * où chaque motif recoloré prend sa place, rangé en étagères avec un pixel de marge. Les
+ * sprites d'une page se dessinent ensemble : un appel de dessin couvre jusqu'à seize pages, et
+ * un sprite qui change de texture pour une autre de ses pages ne fait pas refaire le lot. Avec
+ * une texture par motif recoloré, une foule de 12 000 individus demandait quelque 2 400
+ * textures et 370 appels de dessin par image. Depuis 2b.5, seules les bannières des groupes y
+ * vont : les humains des planches se peignent au shader, sans texture recolorée
+ * (humanShader.ts, ADR 0016).
  */
 import { BufferImageSource, Rectangle, Texture } from 'pixi.js';
 
@@ -107,6 +109,11 @@ export class TexturePages {
   /** Nombre de pages. */
   get count(): number {
     return this.pages.length;
+  }
+
+  /** Octets des pages, en mémoire et sur le GPU. */
+  get bytes(): number {
+    return this.pages.length * this.size * this.size * 4;
   }
 
   /** Les sources des pages, dans leur ordre. */

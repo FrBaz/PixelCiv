@@ -1,7 +1,0 @@
-# Mini-sprite d'un nourrisson, au pas, image 2 sur 2.
-.hh.
-hssh
-.ss.
-sccs
-.cc.
-o..o

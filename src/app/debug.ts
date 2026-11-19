@@ -57,14 +57,19 @@ export interface DebugSample {
    */
   readonly crowd: { readonly positions: number; readonly sort: number; readonly sprites: number };
   /**
-   * À la dernière image : sprites dessinés, textures distinctes et gardées, pages de l'atlas
-   * dynamique, appels de dessin.
+   * À la dernière image : dessins (individus ou bannières), apparences distinctes et gardées
+   * (palettes des humains, textures des bannières), pages de l'atlas dynamique des bannières,
+   * appels de dessin ; niveau de motifs et densité de la vue rapprochée (−1 de loin), et octets
+   * des textures du calque des individus (ADR 0016).
    */
   readonly drawn: number | undefined;
   readonly textures: number | undefined;
   readonly cachedTextures: number | undefined;
   readonly pages: number | undefined;
   readonly drawCalls: number | undefined;
+  readonly level: number | undefined;
+  readonly k: number | undefined;
+  readonly textureBytes: number | undefined;
 }
 
 /**
@@ -79,8 +84,12 @@ export interface FrameCost {
   readonly drawn: number;
   readonly textures: number;
   readonly cached: number;
-  /** Pages de l'atlas dynamique des textures (render/pages.ts). */
+  /** Pages de l'atlas dynamique des textures des bannières (render/pages.ts). */
   readonly pages: number;
+  /** Niveau de motifs et densité de la vue rapprochée, −1 de loin ; octets des textures. */
+  readonly level?: number;
+  readonly k?: number;
+  readonly textureBytes?: number;
   /** Appels de dessin de l'image, s'ils se comptent (DrawCallCounter). */
   readonly drawCalls?: number;
   /** Le rappel de l'image, et le rendu de la scène par PixiJS qui le suit. */
@@ -222,6 +231,9 @@ export class DebugSampler {
       cachedTextures: last?.cached,
       pages: last?.pages,
       drawCalls: last?.drawCalls,
+      level: last?.level,
+      k: last?.k,
+      textureBytes: last?.textureBytes,
     };
   }
 }

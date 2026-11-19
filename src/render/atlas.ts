@@ -3,12 +3,12 @@
  *
  * L'atlas, rangé au build par tools/pixel-atlas.ts, donne pour chaque pixel un rôle de
  * teinte. Une palette associe une couleur à chaque rôle : recolorer un motif, c'est
- * remplacer chaque rôle par sa couleur. Les rôles d'ombre et de lumière se déduisent de la
- * base, assombrie ou éclaircie, pour rester dans une gamme restreinte.
+ * remplacer chaque rôle par sa couleur. Les rôles de lumière, de base et d'ombre prennent les
+ * tons de même rang d'une rampe des données : aucune couleur n'est calculée (ADR 0016).
  */
 import atlas from 'virtual:pixel-atlas';
-import type { Appearance, Locus } from '../core/data';
-import { GREY_LEVELS, ROLE } from '../core/visual';
+import type { Appearance } from '../core/data';
+import { ROLE } from '../core/visual';
 import { parseColor, type Rgb } from './bake';
 
 export { ROLE } from '../core/visual';
@@ -65,83 +65,37 @@ export function recolor(name: string, palette: Palette): Uint8ClampedArray<Array
   return recolorRoles(roles, palette);
 }
 
-/** Couleur assombrie (facteur < 1) ou éclaircie (> 1), arrondie. */
-export function shade(color: Rgb, factor: number): Rgb {
-  return [
-    Math.min(255, Math.round(color[0] * factor)),
-    Math.min(255, Math.round(color[1] * factor)),
-    Math.min(255, Math.round(color[2] * factor)),
-  ];
-}
-
-/** Teint de la rampe de data/appearance.json, de 0 (clair) à 1 (foncé), interpolé. */
-export function skinColor(appearance: Appearance, value: number): Rgb {
-  const ramp = appearance.skin.map((color) => parseColor(color));
-  const position = Math.min(1, Math.max(0, value)) * (ramp.length - 1);
-  const low = Math.floor(position);
-  const a = ramp.at(low) ?? ramp.at(0) ?? [0, 0, 0];
-  const b = ramp.at(Math.min(ramp.length - 1, low + 1)) ?? a;
-  const t = position - low;
-  return [
-    Math.round(a[0] + (b[0] - a[0]) * t),
-    Math.round(a[1] + (b[1] - a[1]) * t),
-    Math.round(a[2] + (b[2] - a[2]) * t),
-  ];
-}
-
 /**
- * Couleur de chaque allèle d'un locus, dans l'ordre des allèles : le schéma en donne une à
- * chaque allèle des rôles « eyes » et « hair » ; `missing` pour un allèle qui n'en a pas.
+ * Palette d'un individu, pour son portrait : sa peau, ses cheveux et son habit, chacun pris rang
+ * pour rang dans une rampe des données (lumière, base, ombre ; src/render/looks.ts), les yeux de
+ * son allèle, et les couleurs communes. Aucune couleur n'est calculée (ADR 0016).
  */
-export function alleleColors(locus: Locus | undefined, missing: Rgb): Rgb[] {
-  return (locus?.alleles ?? []).map((allele) =>
-    allele.color === undefined ? missing : parseColor(allele.color),
-  );
-}
-
-/**
- * Cheveux grisonnants : la couleur des cheveux mêlée au gris au cran `level`, de 0 (aucun
- * gris) à GREY_LEVELS − 1 (tout gris), le même pour le mini-sprite et le portrait
- * (core/life.ts).
- */
-export function greyed(hair: Rgb, grey: Rgb, level: number): Rgb {
-  const t = Math.min(1, Math.max(0, level / (GREY_LEVELS - 1)));
-  return [
-    Math.round(hair[0] + (grey[0] - hair[0]) * t),
-    Math.round(hair[1] + (grey[1] - hair[1]) * t),
-    Math.round(hair[2] + (grey[2] - hair[2]) * t),
-  ];
-}
-
-/**
- * Habit d'une culture : les cultures embryonnaires prennent à tour de rôle les habits de
- * data/appearance.json, le premier pour la culture 1. Indéfini sans habit.
- */
-export function cultureCloth<T>(clothing: readonly T[], culture: number): T | undefined {
-  return clothing[(Math.max(1, culture) - 1) % clothing.length];
-}
-
-/** Ombre et lumière d'une teinte de base. */
-const SHADOW = 0.78;
-const LIGHT = 1.16;
-
-/** Palette d'un individu : teint, cheveux, habit, et les couleurs communes. */
 export function personPalette(
   appearance: Appearance,
-  colors: { readonly skin: Rgb; readonly hair: Rgb; readonly cloth: Rgb; readonly eye?: Rgb },
+  tones: {
+    readonly skin: readonly string[];
+    readonly hair: readonly string[];
+    readonly cloth: readonly string[];
+    readonly eye?: Rgb;
+  },
 ): Palette {
+  const outline = parseColor(appearance.outline);
+  const rank = (ramp: readonly string[], index: number) => {
+    const color = ramp.at(index);
+    return color === undefined ? outline : parseColor(color);
+  };
   const palette: (Rgb | undefined)[] = [];
-  palette[ROLE.outline] = parseColor(appearance.outline);
-  palette[ROLE.skinShadow] = shade(colors.skin, SHADOW);
-  palette[ROLE.skin] = colors.skin;
-  palette[ROLE.skinLight] = shade(colors.skin, LIGHT);
-  palette[ROLE.hairShadow] = shade(colors.hair, SHADOW);
-  palette[ROLE.hair] = colors.hair;
-  palette[ROLE.hairLight] = shade(colors.hair, LIGHT);
-  palette[ROLE.clothShadow] = shade(colors.cloth, SHADOW);
-  palette[ROLE.cloth] = colors.cloth;
-  palette[ROLE.clothLight] = shade(colors.cloth, LIGHT);
-  palette[ROLE.eye] = colors.eye ?? parseColor(appearance.outline);
+  palette[ROLE.outline] = outline;
+  palette[ROLE.skinLight] = rank(tones.skin, 0);
+  palette[ROLE.skin] = rank(tones.skin, 1);
+  palette[ROLE.skinShadow] = rank(tones.skin, 2);
+  palette[ROLE.hairLight] = rank(tones.hair, 0);
+  palette[ROLE.hair] = rank(tones.hair, 1);
+  palette[ROLE.hairShadow] = rank(tones.hair, 2);
+  palette[ROLE.clothLight] = rank(tones.cloth, 0);
+  palette[ROLE.cloth] = rank(tones.cloth, 1);
+  palette[ROLE.clothShadow] = rank(tones.cloth, 2);
+  palette[ROLE.eye] = tones.eye ?? outline;
   palette[ROLE.white] = parseColor(appearance.white);
   palette[ROLE.mouth] = parseColor(appearance.mouth);
   return palette;

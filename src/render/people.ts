@@ -1,40 +1,54 @@
 /**
- * Individus et groupes sur la carte (tâches 2.9, 2b.2 et 2b.3 ; REN-03, REN-04, REN-08 ;
- * ADR 0011, ADR 0013, ADR 0014).
+ * Individus et groupes sur la carte (tâches 2.9, 2b.2, 2b.3 et 2b.5 ; REN-03, REN-04, REN-08,
+ * REN-09 ; ADR 0011, ADR 0013, ADR 0014, ADR 0016).
  *
- * - De près, chaque individu à sa position de l'instant affiché (app/frames.ts), à la
- *   variante de sa stature et à la densité k de la vue, la même pour tous ses individus :
- *   un pixel de motif fait k × k pixels physiques, à une position entière de l'écran, en
- *   échantillonnage au plus proche (crowd.ts, layoutCrowd). Le marcheur alterne ses deux
- *   images de marche à la cadence du rendu, figée en pause ; le nourrisson porté se dessine
- *   contre sa mère.
- * - De loin, une bannière par groupe, aux couleurs de l'habit de sa culture, à la densité de
- *   la carte : sa taille à l'écran passe par celle de son motif (chooseBanner).
+ * - De près, chaque individu est un humain des planches (src/render/humans.ts), à sa position
+ *   de l'instant affiché (app/frames.ts), au niveau de motifs et à la densité k de la vue, les
+ *   mêmes pour tous ses individus : un pixel de motif fait k × k pixels physiques, à une
+ *   position entière de l'écran, en échantillonnage au plus proche (crowd.ts, layoutCrowd). Il
+ *   montre l'image de son animation à la cadence du rendu, figée en pause, et se retourne pour
+ *   aller vers l'est ; le nourrisson porté se dessine contre sa mère.
+ * - De loin, une bannière par groupe, aux couleurs du premier tissu de la tenue de sa culture,
+ *   à la densité de la carte : sa taille à l'écran passe par celle de son motif (chooseBanner).
  *
- * Les sprites se prennent dans une réserve, dans l'ordre de la profondeur : le i-ième sprite
- * dessine le i-ième dessin, du fond vers l'avant, et PixiJS n'a rien à trier. Les textures
- * recolorées se gardent d'une image à l'autre, une par motif, variante, apparence et couleur
- * d'habit, rangées dans les pages d'un atlas dynamique (pages.ts) : les individus se
- * dessinent en quelques appels. Le calque est un groupe de rendu de PixiJS : ce qui y change
- * ne fait pas refaire les instructions de la carte. Il mesure ce que coûte chaque image :
- * positions, tri, sprites.
+ * Les humains sont les particules d'un ParticleContainer, peintes par le shader des humains
+ * (humanShader.ts) : chacune prend le cadre de son motif dans l'atlas des rôles, et sa palette
+ * dans la texture des palettes, où chaque apparence se range une fois, à sa première vue. Tous
+ * se dessinent en un appel, sans texture recolorée. Les bannières restent des sprites aux
+ * textures recolorées, rangées dans les pages d'un atlas dynamique (pages.ts).
+ *
+ * Particules et sprites se prennent dans des réserves, dans l'ordre de la profondeur : le i-ième
+ * dessine le i-ième dessin, du fond vers l'avant, et PixiJS n'a rien à trier. Le calque est un
+ * groupe de rendu de PixiJS : ce qui y change ne fait pas refaire les instructions de la carte.
+ * Il mesure ce que coûte chaque image : positions, tri, sprites.
  */
-import { Container, Sprite, type Application, type Texture } from 'pixi.js';
+import {
+  Container,
+  Particle,
+  ParticleContainer,
+  Rectangle,
+  Sprite,
+  Texture,
+  type Application,
+  type BufferImageSource,
+  type Shader,
+} from 'pixi.js';
 import type { Appearance, Genetics } from '../core/data';
 import { geneRoles } from '../core/data/people';
 import { GROUP_STRIDE } from '../core/protocol';
-import { decodeVisual, SKIN_TONES } from '../core/visual';
-import {
-  alleleColors,
-  frameOf,
-  greyed,
-  hasFrame,
-  personPalette,
-  recolor,
-  skinColor,
-  type Palette,
-} from './atlas';
+import { frameOf, recolor, ROLE, type Palette } from './atlas';
 import { parseColor, type Rgb } from './bake';
+import { followPalettes, humanShader, PaletteTexture, roleSource, slotColor } from './humanShader';
+import {
+  ATLAS_ROLES,
+  humanAtlas,
+  humanPalette,
+  humanTable,
+  lookParts,
+  MOTIF_COUNT,
+  motifBox,
+} from './humans';
+import { cultureOutfit, outfitColor } from './looks';
 import { TexturePages } from './pages';
 import type { Camera, Extent } from './camera';
 import {
@@ -45,6 +59,7 @@ import {
   pickEntity,
   textureParts,
   type CrowdSource,
+  type HumanTable,
   type MemberLooks,
   type MotifTable,
   type Picked,
@@ -56,12 +71,12 @@ import {
  */
 export const STEP_MS = { slowest: 420, fastest: 200 } as const;
 
-/** Images entre deux comptes des textures distinctes de l'image. */
+/** Images entre deux comptes des apparences distinctes de l'image. */
 const SEEN_EVERY = 16;
 /**
- * La réserve garde deux fois le pic récent des sprites dessinés, plus POOL_SLACK : ce pic
- * perd 1 % par image dessinée (PEAK_DECAY), et la réserve d'une foule passée s'oublie en
- * quelques secondes.
+ * Les réserves gardent deux fois le pic récent des dessins, plus POOL_SLACK : ce pic perd 1 %
+ * par image dessinée (PEAK_DECAY), et la réserve d'une foule passée s'oublie en quelques
+ * secondes.
  */
 const POOL_SLACK = 64;
 const PEAK_DECAY = 0.99;
@@ -84,14 +99,22 @@ export interface PeopleStats {
   readonly positionsMs: number;
   readonly sortMs: number;
   readonly spritesMs: number;
-  /** Sprites dessinés, membres dont la position a été calculée, groupes visibles. */
+  /** Dessins (individus ou bannières), membres dont la position a été calculée, groupes visibles. */
   readonly drawn: number;
   readonly placed: number;
   readonly groups: number;
-  /** Textures distinctes de l'image, textures gardées, et pages de l'atlas dynamique. */
+  /**
+   * Apparences distinctes de l'image (palettes des humains, textures des bannières), apparences
+   * gardées, et pages de l'atlas dynamique des bannières.
+   */
   readonly textures: number;
   readonly cached: number;
   readonly pages: number;
+  /** Niveau de motifs et densité k de la vue rapprochée, −1 de loin. */
+  readonly level: number;
+  readonly k: number;
+  /** Octets des textures du calque : atlas des rôles, palettes, pages des bannières. */
+  readonly textureBytes: number;
 }
 
 /** Ce que la carte montre de près ou de loin, à l'instant affiché. */
@@ -106,42 +129,65 @@ export interface PeopleScene {
   readonly passable: (cell: number) => boolean;
 }
 
+/** Palette d'une bannière : son contour, et les tons d'un tissu sur ses rôles d'habit. */
+export function bannerPalette(appearance: Appearance, fabric: readonly string[]): Palette {
+  const palette: (Rgb | undefined)[] = [];
+  palette[ROLE.outline] = parseColor(appearance.outline);
+  palette[ROLE.clothLight] = parseColor(fabric[0] ?? appearance.outline);
+  palette[ROLE.cloth] = parseColor(fabric[1] ?? appearance.outline);
+  palette[ROLE.clothShadow] = parseColor(fabric[2] ?? appearance.outline);
+  return palette;
+}
+
 export class PeopleLayer {
   private readonly app: Application;
   private readonly layer = new Container({ isRenderGroup: true });
   private readonly data: PeopleData;
-  private readonly hairColors: readonly Rgb[];
-  private readonly grey: Rgb;
-  private readonly clothing: readonly Rgb[];
-  /** Rang de la première couleur de même valeur de chaque habit des données. */
-  private readonly clothSlots: readonly number[];
-  private readonly textures = new Map<number, Texture>();
+  /** Bannières : leur calque, leurs textures recolorées et leurs pages. */
+  private readonly banners = new Container();
+  private readonly bannerTextures = new Map<number, Texture>();
   private pages = new TexturePages();
   private readonly sprites: Sprite[] = [];
-  /** Sprites de la dernière image dessinée, et pic récent de ce nombre (PEAK_DECAY). */
-  private shownCount = 0;
+  /** Humains : leurs particules, le cadre de chaque motif, l'atlas des rôles et les palettes. */
+  private readonly humans: ParticleContainer<Particle>;
+  private readonly particles: Particle[] = [];
+  private readonly motifTextures: Texture[];
+  private readonly roles: BufferImageSource;
+  private palettes = new PaletteTexture();
+  /** Le shader des humains, créé au premier dessin d'un rendu WebGL (ensureShader). */
+  private shader: Shader | undefined;
+  /** Sprites et particules de la dernière image dessinée, et pic récent de leur nombre. */
+  private shownSprites = 0;
+  private shownParticles = 0;
   private peak = 0;
   /**
-   * Ce que montre chaque sprite : sa clé de texture, et l'identifiant de son étiquette (outils
-   * de PixiJS, essais) ; un sprite qui montre la même chose ne se touche pas.
+   * Ce que montre chaque sprite de bannière : sa clé de texture, et l'identifiant de son
+   * étiquette (outils de PixiJS, essais) ; un sprite qui montre la même chose ne se touche pas.
    */
   private shownKeys = new Float64Array(0);
   private shownIds = new Float64Array(0);
+  /** L'identifiant de l'individu que montre chaque particule de la dernière image (essais). */
+  private particleIds = new Float64Array(0);
   readonly motifs: MotifTable;
+  /** La table des humains, vue de la disposition (crowd.ts). */
+  private readonly table: HumanTable;
+  private readonly hairIds: readonly string[];
+  /** Tissu de bannière de chaque culture, compté comme son rang parmi les tissus. */
+  private readonly clothOf: (culture: number) => number;
   private looks: MemberLooks | undefined;
   private readonly layout = new CrowdLayout();
   private readonly seen = new Set<number>();
-  /** Images dessinées : les textures distinctes ne se comptent que toutes les SEEN_EVERY. */
+  /** Images dessinées : les apparences distinctes ne se comptent que toutes les SEEN_EVERY. */
   private draws = 0;
-  /** Le compte des textures distinctes date d'avant la dernière image dessinée. */
+  /** Le compte des apparences distinctes date d'avant la dernière image dessinée. */
   private texturesStale = false;
   /** Ce que montrait la dernière image ; la même vue, au même instant, ne se refait pas. */
   private drawnWith: readonly unknown[] = [];
   /** Version de ce que le calque ne voit pas changer : la franchissabilité des cases. */
   private version = 0;
   /**
-   * Version de ce que le calque dessine, augmentée chaque fois qu'il se refait, pages de
-   * l'atlas comprises, ou se vide : la signature de l'image la lit (rendu à la demande, ADR 0010).
+   * Version de ce que le calque dessine, augmentée chaque fois qu'il se refait, palettes et
+   * pages comprises, ou se vide : la signature de l'image la lit (rendu à la demande, ADR 0010).
    */
   private drawn = 0;
   stats: PeopleStats = {
@@ -154,67 +200,97 @@ export class PeopleLayer {
     textures: 0,
     cached: 0,
     pages: 0,
+    level: -1,
+    k: 1,
+    textureBytes: 0,
   };
 
   constructor(app: Application, data: PeopleData) {
     this.app = app;
     this.data = data;
-    this.grey = parseColor(data.appearance.grey);
-    // Les couleurs des cheveux : celles des allèles du locus qui en tient le rôle.
-    this.hairColors = alleleColors(
-      data.genetics.loci[geneRoles(data.genetics).loci.hair],
-      this.grey,
+    const appearance = data.appearance;
+    this.motifs = motifTable(frameOf);
+    this.hairIds = (data.genetics.loci[geneRoles(data.genetics).loci.hair]?.alleles ?? []).map(
+      (allele) => allele.id,
     );
-    this.clothing = data.appearance.clothing.map((color) => parseColor(color));
-    const colors = data.appearance.clothing;
-    this.clothSlots = colors.map((color) => colors.indexOf(color));
-    this.motifs = motifTable(hasFrame, frameOf);
+    const fabrics = appearance.fabrics.map((fabric) => fabric.id);
+    this.clothOf = (culture) => {
+      const outfit = appearance.outfits.at(cultureOutfit(appearance, culture));
+      return Math.max(0, fabrics.indexOf(outfit?.female.at(0)?.fabric ?? ''));
+    };
+    this.table = humanTable(appearance);
+    this.roles = roleSource(ATLAS_ROLES, humanAtlas.width, humanAtlas.height);
+    this.motifTextures = Array.from({ length: MOTIF_COUNT }, (_, motif) => {
+      const { x, y, width, height } = motifBox(motif);
+      return new Texture({ source: this.roles, frame: new Rectangle(x, y, width, height) });
+    });
+    this.humans = new ParticleContainer<Particle>({
+      texture: this.motifTextures[0] ?? Texture.EMPTY,
+      dynamicProperties: {
+        vertex: false,
+        position: false,
+        rotation: false,
+        uvs: false,
+        color: false,
+      },
+    });
+    this.layer.addChild(this.banners, this.humans);
     app.stage.addChild(this.layer);
   }
 
-  /** Habit d'une culture : le rang de sa couleur (cultureCloth), compté comme textureKey. */
-  private readonly cloth = (culture: number): number => {
-    const slots = this.clothSlots;
-    return slots.length === 0 ? 0 : (slots[(Math.max(1, culture) - 1) % slots.length] ?? 0);
-  };
-
-  /** Texture d'une clé (textureKey), recolorée à la demande, gardée d'une image à l'autre. */
-  private texture(key: number): Texture {
-    const known = this.textures.get(key);
+  /** Texture d'une bannière (textureKey), recolorée à la demande, gardée d'une image à l'autre. */
+  private bannerTexture(key: number): Texture {
+    const known = this.bannerTextures.get(key);
     if (known !== undefined) return known;
-    const { motif, code, cloth } = textureParts(key);
+    const { motif, cloth } = textureParts(key);
     const name = this.motifs.names[motif] ?? '';
-    const clothColor = this.clothing[cloth] ?? [120, 90, 60];
-    let palette: Palette;
-    if (name.startsWith('icons/')) {
-      palette = personPalette(this.data.appearance, {
-        skin: [0, 0, 0],
-        hair: [0, 0, 0],
-        cloth: clothColor,
-      });
-    } else {
-      const visual = decodeVisual(code);
-      palette = personPalette(this.data.appearance, {
-        skin: skinColor(this.data.appearance, (visual.skin + 0.5) / SKIN_TONES),
-        hair: greyed(this.hairColors[visual.hair] ?? this.grey, this.grey, visual.grey),
-        cloth: clothColor,
-      });
-    }
+    const appearance = this.data.appearance;
+    const fabric = appearance.fabrics.at(cloth)?.tones ?? [];
     const frame = frameOf(name);
-    const texture = this.pages.add(recolor(name, palette), frame.width, frame.height);
-    this.textures.set(key, texture);
+    const texture = this.pages.add(
+      recolor(name, bannerPalette(appearance, fabric)),
+      frame.width,
+      frame.height,
+    );
+    this.bannerTextures.set(key, texture);
     return texture;
+  }
+
+  /**
+   * Le programme des humains se compile au premier dessin d'un rendu WebGL, qui seul en a
+   * besoin : les essais, sans GPU, disposent et rangent les palettes sans lui.
+   */
+  private ensureShader(): void {
+    if (this.shader !== undefined || !('gl' in this.app.renderer)) return;
+    this.shader = humanShader(this.roles, this.palettes);
+    this.humans.shader = this.shader;
+  }
+
+  /** La place d'une apparence dans la texture des palettes, rangée à sa première vue. */
+  private slot(look: number): number {
+    return this.palettes.slotOf(look, () =>
+      humanPalette(this.data.appearance, this.hairIds, lookParts(look)),
+    );
   }
 
   private sprite(index: number): Sprite {
     let sprite = this.sprites.at(index);
     if (sprite === undefined) {
       sprite = new Sprite();
-      this.layer.addChild(sprite);
+      this.banners.addChild(sprite);
       this.sprites.push(sprite);
     }
     sprite.visible = true;
     return sprite;
+  }
+
+  private particle(index: number): Particle {
+    let particle = this.particles.at(index);
+    if (particle === undefined) {
+      particle = new Particle({ texture: this.motifTextures[0] ?? Texture.EMPTY });
+      this.particles.push(particle);
+    }
+    return particle;
   }
 
   /** Dessine, depuis la caméra, ce que montre `scene` à son instant. */
@@ -241,7 +317,7 @@ export class PeopleLayer {
       this.version,
     ];
     if (signature.every((value, index) => value === this.drawnWith[index])) {
-      // Une image inchangée, en pause : le compte des textures, sauté par la dernière image
+      // Une image inchangée, en pause : le compte des apparences, sauté par la dernière image
       // dessinée, se fait une fois.
       const textures = this.texturesStale ? this.countTextures() : this.stats.textures;
       this.texturesStale = false;
@@ -250,9 +326,10 @@ export class PeopleLayer {
     }
     this.drawnWith = signature;
     this.drawn++;
+    this.ensureShader();
     let looks = this.looks;
     if (looks === undefined || looks.frame !== frame) {
-      looks = memberLooks(frame, this.motifs, this.data.reference);
+      looks = memberLooks(frame, this.table, this.data.reference);
       this.looks = looks;
     }
     const layout = this.layout;
@@ -262,7 +339,7 @@ export class PeopleLayer {
       layoutCrowd(layout, source, looks, { camera, viewport, world, resolution }, scene.t, {
         motifs: this.motifs,
         reference: this.data.reference,
-        cloth: this.cloth,
+        cloth: this.clothOf,
         passable: scene.passable,
         walkMs: scene.walkMs,
         stepMs: scene.stepMs,
@@ -271,7 +348,7 @@ export class PeopleLayer {
     const laid = performance.now();
     layout.sort();
     const sorted = performance.now();
-    // Les textures distinctes, pour le panneau de débogage : une image sur SEEN_EVERY suffit.
+    // Les apparences distinctes, pour le panneau de débogage : une image sur SEEN_EVERY suffit.
     const seen = this.draws++ % SEEN_EVERY === 0 ? this.seen : undefined;
     seen?.clear();
     this.texturesStale = seen === undefined;
@@ -284,40 +361,64 @@ export class PeopleLayer {
       this.shownIds = ids;
       this.shownKeys = keys;
     }
+    const children = this.humans.particleChildren;
+    if (this.particleIds.length < layout.count) {
+      this.particleIds = new Float64Array(Math.max(layout.count, this.particleIds.length * 2));
+    }
+    let people = 0;
+    let flags = 0;
     for (let index = 0; index < layout.count; index++) {
       const drawn = layout.drawn(index);
-      const key = layout.texture[drawn] ?? 0;
-      seen?.add(key);
-      const sprite = this.sprite(index);
-      if (this.shownKeys[index] !== key) {
-        this.shownKeys[index] = key;
-        sprite.texture = this.texture(key);
+      const look = layout.look[drawn] ?? -1;
+      const unit = layout.unit[drawn] ?? 1;
+      const left = layout.left[drawn] ?? 0;
+      const top = layout.top[drawn] ?? 0;
+      if (look >= 0) {
+        // Un humain : le cadre de son motif, sa palette, et l'échelle de sa densité, négative
+        // pour un motif retourné d'est en ouest autour de son bord droit.
+        seen?.add(look);
+        const particle = this.particle(people);
+        this.particleIds[people] = frame?.ids[layout.member[drawn] ?? 0] ?? 0;
+        children[people++] = particle;
+        particle.texture = this.motifTextures[layout.texture[drawn] ?? 0] ?? Texture.EMPTY;
+        particle.color = slotColor(this.slot(look));
+        particle.scaleX = unit / resolution;
+        particle.scaleY = Math.abs(unit) / resolution;
+        particle.x = (left + (unit < 0 ? (layout.width[drawn] ?? 0) : 0)) / resolution;
+        particle.y = top / resolution;
+        continue;
       }
-      sprite.scale.set((layout.unit[drawn] ?? 1) / resolution);
-      sprite.position.set(
-        (layout.left[drawn] ?? 0) / resolution,
-        (layout.top[drawn] ?? 0) / resolution,
-      );
-      // L'étiquette dit qui le sprite montre : l'identifiant de l'individu, ou, en négatif,
-      // celui du groupe d'une bannière ; elle ne change qu'avec lui.
-      const member = layout.member[drawn] ?? -1;
-      const id =
-        member >= 0
-          ? (frame?.ids[member] ?? 0)
-          : -(frame?.groups[(layout.group[drawn] ?? 0) * GROUP_STRIDE] ?? 0);
-      if (this.shownIds[index] !== id) {
-        this.shownIds[index] = id;
+      const key = layout.texture[drawn] ?? 0;
+      seen?.add(-1 - key);
+      const sprite = this.sprite(flags);
+      if (this.shownKeys[flags] !== key) {
+        this.shownKeys[flags] = key;
+        sprite.texture = this.bannerTexture(key);
+      }
+      sprite.scale.set(unit / resolution);
+      sprite.position.set(left / resolution, top / resolution);
+      // L'étiquette dit quel groupe la bannière montre, en négatif ; elle ne change qu'avec lui.
+      const id = -(frame?.groups[(layout.group[drawn] ?? 0) * GROUP_STRIDE] ?? 0);
+      if (this.shownIds[flags] !== id) {
+        this.shownIds[flags] = id;
         sprite.label = String(id);
       }
+      flags++;
     }
+    children.length = people;
+    this.humans.update();
     // Ne se cachent que les sprites que montrait la dernière image, et non toute la réserve.
-    for (let index = layout.count; index < this.shownCount; index++) {
+    for (let index = flags; index < this.shownSprites; index++) {
       const unused = this.sprites.at(index);
       if (unused !== undefined) unused.visible = false;
     }
-    this.shownCount = layout.count;
-    this.trimPool(layout.count);
-    // Les motifs recolorés de cette image partent au GPU avec leurs pages.
+    this.shownSprites = flags;
+    this.shownParticles = people;
+    this.trimPools(Math.max(flags, people));
+    // Les palettes rangées et les bannières recolorées de cette image partent au GPU.
+    this.palettes.flush();
+    if (this.shader === undefined) this.palettes.release();
+    else followPalettes(this.shader, this.palettes);
     this.pages.flush();
     const finished = performance.now();
     this.stats = {
@@ -328,33 +429,45 @@ export class PeopleLayer {
       placed: layout.placed,
       groups: layout.visibleGroups,
       textures: seen === undefined ? this.stats.textures : seen.size,
-      cached: this.textures.size,
+      cached: this.palettes.count + this.bannerTextures.size,
       pages: this.pages.count,
+      level: layout.close ? (layout.density?.level ?? -1) : -1,
+      k: layout.density?.k ?? 1,
+      textureBytes: this.textureBytes(),
     };
   }
 
-  /** Textures distinctes de la dernière image dessinée. */
+  /** Octets des textures du calque, en mémoire et sur le GPU. */
+  private textureBytes(): number {
+    return this.roles.width * this.roles.height * 4 + this.palettes.bytes + this.pages.bytes;
+  }
+
+  /** Apparences distinctes de la dernière image dessinée. */
   private countTextures(): number {
     const { layout, seen } = this;
     seen.clear();
     for (let index = 0; index < layout.count; index++) {
-      seen.add(layout.texture[layout.drawn(index)] ?? 0);
+      const drawn = layout.drawn(index);
+      const look = layout.look[drawn] ?? -1;
+      seen.add(look >= 0 ? look : -1 - (layout.texture[drawn] ?? 0));
     }
     return seen.size;
   }
 
   /**
-   * Détruit les sprites de la réserve au-delà de deux fois le pic récent de ceux qu'on
-   * dessine, plus POOL_SLACK : après une grande foule, elle ne pèse plus sur chaque image.
+   * Détruit les sprites et les particules des réserves au-delà de deux fois le pic récent des
+   * dessins, plus POOL_SLACK : après une grande foule, elles ne pèsent plus sur chaque image.
    */
-  private trimPool(count: number): void {
+  private trimPools(count: number): void {
     this.peak = Math.max(count, Math.floor(this.peak * PEAK_DECAY));
     const keep = 2 * this.peak + POOL_SLACK;
-    if (this.sprites.length <= keep) return;
-    for (const sprite of this.layer.removeChildren(keep)) sprite.destroy();
-    this.sprites.length = keep;
-    this.shownKeys.fill(Number.NaN, keep);
-    this.shownIds.fill(Number.NaN, keep);
+    if (this.sprites.length > keep) {
+      for (const sprite of this.banners.removeChildren(keep)) sprite.destroy();
+      this.sprites.length = keep;
+      this.shownKeys.fill(Number.NaN, keep);
+      this.shownIds.fill(Number.NaN, keep);
+    }
+    if (this.particles.length > keep) this.particles.length = keep;
   }
 
   /**
@@ -384,18 +497,53 @@ export class PeopleLayer {
   }
 
   /**
-   * Vide la réserve des sprites, les textures et leurs pages (changement de monde : rien ne
-   * s'y rattache plus).
+   * Les particules des humains et les sprites des bannières de la dernière image, dans l'ordre
+   * du dessin, et l'identifiant de l'individu que montre chaque particule (essais, outils).
+   */
+  get shown(): {
+    readonly particles: readonly Particle[];
+    readonly ids: readonly number[];
+    readonly sprites: readonly Sprite[];
+  } {
+    return {
+      particles: this.humans.particleChildren.slice(0, this.shownParticles),
+      ids: Array.from(this.particleIds.subarray(0, this.shownParticles)),
+      sprites: this.sprites.slice(0, this.shownSprites),
+    };
+  }
+
+  /** Particules et sprites gardés en réserve. */
+  get pooled(): { readonly particles: number; readonly sprites: number } {
+    return { particles: this.particles.length, sprites: this.sprites.length };
+  }
+
+  /** La texture des palettes, telle que la lit le shader (essais). */
+  get paletteTexture(): PaletteTexture {
+    return this.palettes;
+  }
+
+  /**
+   * Vide les réserves, les palettes, les textures des bannières et leurs pages (changement de
+   * monde : rien ne s'y rattache plus).
    */
   clear(): void {
-    for (const sprite of this.layer.removeChildren()) sprite.destroy();
+    for (const sprite of this.banners.removeChildren()) sprite.destroy();
     this.sprites.length = 0;
-    this.shownCount = 0;
+    this.humans.particleChildren.length = 0;
+    this.humans.update();
+    this.particles.length = 0;
+    this.shownSprites = 0;
+    this.shownParticles = 0;
     this.peak = 0;
-    for (const texture of this.textures.values()) texture.destroy(false);
-    this.textures.clear();
+    for (const texture of this.bannerTextures.values()) texture.destroy(false);
+    this.bannerTextures.clear();
     this.pages.destroy();
     this.pages = new TexturePages();
+    // Le shader lit la nouvelle texture des palettes avant que l'ancienne ne se libère.
+    const previous = this.palettes;
+    this.palettes = new PaletteTexture();
+    if (this.shader !== undefined) followPalettes(this.shader, this.palettes);
+    previous.destroy();
     this.looks = undefined;
     this.layout.reset(undefined);
     this.shownIds.fill(Number.NaN);
@@ -403,4 +551,9 @@ export class PeopleLayer {
     this.drawnWith = [];
     this.drawn++;
   }
+}
+
+/** Le tissu de bannière d'une culture, sans palette de peau (outfitColor), pour les essais. */
+export function cultureBanner(appearance: Appearance, culture: number): readonly string[] {
+  return outfitColor(appearance, cultureOutfit(appearance, culture), 'female') ?? [];
 }
