@@ -9,7 +9,7 @@
  * dit qui part, et quand. Le sous-pas quotidien (day.ts) fait le pas mensuel au soir du
  * trentième jour.
  */
-import type { Cultures, Genetics, Nomads, Species } from '../core/data';
+import type { Cultures, FaunaRules, FaunaSpecies, Genetics, Nomads, Species } from '../core/data';
 import type { AltitudeLevel } from '../core/data/schemas';
 import type { Catalog } from '../core/data/catalog';
 import type { Biome } from '../core/data/schemas';
@@ -17,6 +17,7 @@ import { Fingerprint } from '../core/hash';
 import type { GameCommand, PaintBiomeCommand } from '../core/protocol';
 import { LAYER_NAMES } from '../core/world';
 import { PARAMETER_NAMES } from '../core/data/worldgen';
+import { FAUNA_STREAM, faunaMonth, fingerprintFauna } from './fauna';
 import { depletedCells, feedGroup, FOOD_STRIDE, regrowFood } from './forage';
 import { groupMembers, mergeGroup, moveGroup, Neighborhood, splitGroup } from './groups';
 import { lifeCycle } from './lifecycle';
@@ -42,6 +43,9 @@ export interface SimContent {
   readonly cultures: Cultures;
   readonly altitudeLevels: Catalog<AltitudeLevel>;
   readonly nomads: Nomads;
+  /** Le gibier (ADR 0018) : ses espèces et ses règles communes. */
+  readonly fauna: Catalog<FaunaSpecies>;
+  readonly faunaRules: FaunaRules;
 }
 
 /**
@@ -79,6 +83,8 @@ function paintBiome(state: SimState, command: PaintBiomeCommand, content: SimCon
   state.cost[index] = walkCost(state.world, index, content);
   // Les champs de distances des camps suivaient l'ancien coût (ADR 0014).
   clearFields(state);
+  // Les cibles du gibier suivent l'habitat, qui suit le biome (ADR 0018).
+  state.fauna.base = undefined;
   markDirty(state, index);
 }
 
@@ -199,6 +205,8 @@ export function monthStep(
     moveGroup(state, group, list, content, random);
   }
   planMonth(state, content, record, members);
+  // Le gibier se tient au stock, une fois la chasse du mois faite (ADR 0018).
+  faunaMonth(state, content);
   state.tick++;
   return members;
 }
@@ -222,8 +230,13 @@ function mergeSlots(a: readonly number[], b: readonly number[]): number[] {
   return merged;
 }
 
-/** Empreinte de l'état du monde, pour les tests de déterminisme. */
-export function fingerprint(state: SimState): string {
+/**
+ * Empreinte de l'état du monde, pour les tests de déterminisme. Sans le gibier (`fauna: false`),
+ * ni ses colonnes ni son flux n'y entrent : c'est l'empreinte d'avant la tâche 2b.6, qui montre
+ * que la suite des humains ne change pas avec lui (ADR 0018, § 6).
+ */
+export function fingerprint(state: SimState, options: { readonly fauna?: boolean } = {}): string {
+  const withFauna = options.fauna ?? true;
   const fingerprint = new Fingerprint()
     .string(state.params.seed)
     .string(state.params.size)
@@ -231,6 +244,7 @@ export function fingerprint(state: SimState): string {
   for (const name of PARAMETER_NAMES) fingerprint.string(name).float64(state.params[name]);
   for (const name of LAYER_NAMES) fingerprint.string(name).typedArray(state.world[name]);
   fingerprintPeople(fingerprint, state.people, state.society);
+  if (withFauna) fingerprintFauna(fingerprint, state.fauna);
   for (const cell of depletedCells(state.food)) {
     fingerprint
       .uint32(cell)
@@ -239,6 +253,7 @@ export function fingerprint(state: SimState): string {
       .float64(state.food.stocks[cell * FOOD_STRIDE + 2] ?? 0);
   }
   for (const [name, words] of Object.entries(state.rng.states())) {
+    if (!withFauna && name === FAUNA_STREAM) continue;
     fingerprint.string(name);
     for (const word of words) fingerprint.uint32(word);
   }

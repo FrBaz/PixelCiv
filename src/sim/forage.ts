@@ -186,6 +186,42 @@ export function cellFood(
   return cellFoodWith(table, climate, content.nomads, world, size.width, cell);
 }
 
+/** Température d'une case ce mois-ci, en degrés. */
+function monthTemperature(
+  climate: MonthClimate,
+  world: WorldLayers,
+  width: number,
+  cell: number,
+): number {
+  const season = climate.season[Math.floor(cell / width)] ?? 0;
+  return ((world.temperature[cell] ?? 0) + (world.amplitude[cell] ?? 0) * season) / 10;
+}
+
+/** Ce que rend la chasse d'une case du biome `biome`, par mois, à la température `temperature`. */
+function gameYield(table: BiomeTable, nomads: Nomads, biome: number, temperature: number): number {
+  return (table.game[biome] ?? 0) * gameSeason(temperature, nomads.stocks.game.cold);
+}
+
+/**
+ * Plafond du stock de gibier d'une case ce mois-ci, celui de cellFood (sa cinquième valeur), par
+ * la même formule : le gibier (ADR 0018) y rapporte le stock qui reste.
+ */
+export function gameCap(
+  world: WorldLayers,
+  size: WorldSize,
+  cell: number,
+  tick: number,
+  content: ForageContent,
+): number {
+  const table = biomeTable(content.biomes);
+  const climate = monthClimate(size.height, tick);
+  const temperature = monthTemperature(climate, world, size.width, cell);
+  return (
+    gameYield(table, content.nomads, world.biome[cell] ?? 0, temperature) *
+    content.nomads.stocks.game.capacity
+  );
+}
+
 /** cellFood, la table des biomes et le climat du mois déjà en main. */
 function cellFoodWith(
   table: BiomeTable,
@@ -197,11 +233,10 @@ function cellFoodWith(
 ): Float64Array {
   const { stocks, river } = nomads;
   const y = Math.floor(cell / width);
-  const season = climate.season[y] ?? 0;
-  const temperature = ((world.temperature[cell] ?? 0) + (world.amplitude[cell] ?? 0) * season) / 10;
+  const temperature = monthTemperature(climate, world, width, cell);
   const biome = world.biome[cell] ?? 0;
   const plants = (table.plants[biome] ?? 0) * plantSeason(temperature, climate.rain[y] ?? 1);
-  const game = (table.game[biome] ?? 0) * gameSeason(temperature, stocks.game.cold);
+  const game = gameYield(table, nomads, biome, temperature);
   const { covered } = stocks.fish;
   const cover = table.cover[biome] ?? COVER_RAMPS.none;
   let fish = (table.fish[biome] ?? 0) * fishSeason(coverShare(cover, temperature), covered);

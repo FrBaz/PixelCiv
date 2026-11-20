@@ -23,7 +23,13 @@ import { spawnGroup } from './spawn';
 import { createState, type SimState } from './state';
 import { step } from './day';
 import { fingerprint, type SimContent } from './step';
-import { testData, testParams, testState, testWorld, withHuman } from './testing';
+import { testData, testParams, testState, testWorld, withHuman, withoutFauna } from './testing';
+
+/**
+ * Le contenu des longues vies de groupes, sans gibier : la suite des humains n'en dépend pas
+ * (state.test.ts), et ces tests ne paient pas le gibier, que fauna.test.ts éprouve.
+ */
+const HUMANS = withoutFauna(testData);
 
 /** Première case d'un biome, et sa position. */
 function cellOf(state: SimState, biome: string): { cell: number; x: number; y: number } {
@@ -136,9 +142,9 @@ function live(
   let deaths = 0;
   for (const start of starts) {
     const state = make();
-    step(state, [nordics(start, 30)], testData);
+    step(state, [nordics(start, 30)], HUMANS);
     for (let month = 1; month < years * 12; month++) {
-      const members = step(state, [], testData);
+      const members = step(state, [], HUMANS);
       if (month < 12) continue;
       const tick = state.tick - 1;
       const cold = freezing(state);
@@ -181,7 +187,7 @@ function uniform(biome: string): () => SimState {
     world.biome.forEach((current, cell) => {
       if (testData.biomes.entries.at(current)?.family !== 'water') world.biome[cell] = index;
     });
-    return createState(testParams(), world, testData);
+    return createState(testParams(), world, HUMANS);
   };
 }
 
@@ -425,7 +431,7 @@ describe('survie (tâche 2.4)', () => {
     const cold = freezing(probe);
     const forests = startsIn(probe, ['temperate-forest'], 40, 54, 6, cold);
     const north = live(
-      () => testState(),
+      () => testState('graine', HUMANS),
       [
         ...forests,
         ...startsIn(probe, ['taiga', 'cold-forest'], 50, 65, 4, cold),
@@ -438,7 +444,7 @@ describe('survie (tâche 2.4)', () => {
     // Les mal nourris sont plus nombreux à la fin de l'hiver qu'à la fin de l'été.
     expect(north.hungry[MARCH] ?? 0).toBeGreaterThan((north.hungry[SEPTEMBER] ?? 0) * 2);
     // Même en forêt tempérée, la réserve sert là où l'hiver gèle.
-    const forest = live(() => testState(), forests, 15, true);
+    const forest = live(() => testState('graine', HUMANS), forests, 15, true);
     expect(forest.reserve[MARCH] ?? 0).toBeLessThan((forest.reserve[SEPTEMBER] ?? 0) - 0.1);
   });
 
@@ -446,8 +452,16 @@ describe('survie (tâche 2.4)', () => {
     // Huit départs de chaque biome, chacun sous son climat, quinze ans : la toundra affame,
     // et la forêt compte nettement plus de monde à la fin.
     const probe = testState();
-    const forest = live(() => testState(), startsIn(probe, ['temperate-forest'], 36, 54, 8), 15);
-    const tundra = live(() => testState(), startsIn(probe, ['tundra'], 54, 72, 8), 15);
+    const forest = live(
+      () => testState('graine', HUMANS),
+      startsIn(probe, ['temperate-forest'], 36, 54, 8),
+      15,
+    );
+    const tundra = live(
+      () => testState('graine', HUMANS),
+      startsIn(probe, ['tundra'], 54, 72, 8),
+      15,
+    );
     expect(tundra.famine).toBeGreaterThan(forest.famine + 20);
     expect(forest.alive).toBeGreaterThan(tundra.alive * 1.2);
     expect(forest.nutrition).toBeGreaterThan(tundra.nutrition);

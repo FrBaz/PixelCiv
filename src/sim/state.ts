@@ -14,6 +14,7 @@ import {
   type WorldSize,
 } from '../core/world';
 import type { WorldParams } from '../core/worldParams';
+import { Fauna, seedFauna, type FaunaContent } from './fauna';
 import { emptyStocks, type FoodStocks } from './forage';
 import type { GroupsContent } from './groups';
 import { Movement } from './movement';
@@ -39,6 +40,8 @@ export interface SimState {
   readonly society: Society;
   /** Stocks de nourriture des cases entamées : cueillette, gibier, poisson. */
   readonly food: FoodStocks;
+  /** Gibier (ADR 0018) : animaux et hardes, en colonnes, et leurs caches. */
+  readonly fauna: Fauna;
   /**
    * Caches du mouvement (ADR 0014) : marcheurs, départs, places tenues, portés, guides et
    * champs de distances. Ils se déduisent des colonnes des vivants et des groupes
@@ -76,16 +79,19 @@ export interface SimState {
   readonly dirtyChunks: Uint8Array;
 }
 
-/** Nouvel état, sur un monde qui vient d'être généré pour ces paramètres. */
+/**
+ * Nouvel état, sur un monde qui vient d'être généré pour ces paramètres. Avec le contenu du
+ * gibier, le gibier se sème avec le monde, d'après l'habitat (ADR 0018).
+ */
 export function createState(
   params: WorldParams,
   world: WorldLayers,
-  content: Pick<GroupsContent, 'biomes' | 'altitudeLevels'>,
+  content: Pick<GroupsContent, 'biomes' | 'altitudeLevels'> & Partial<FaunaContent>,
 ): SimState {
   const size = WORLD_SIZES[params.size];
   const grid = chunkGrid(size);
   const cost = terrainCosts(world, content);
-  return {
+  const state: SimState = {
     params,
     size,
     tick: 0,
@@ -94,6 +100,7 @@ export function createState(
     people: new Population(),
     society: emptySociety(),
     food: emptyStocks(world.biome.length),
+    fauna: new Fauna(),
     movement: new Movement(size.width, size.height),
     cost,
     land: terrainLands(cost, size),
@@ -102,6 +109,16 @@ export function createState(
     rng: new Rng(params.seed),
     dirtyChunks: new Uint8Array(grid.columns * grid.rows),
   };
+  const { fauna, faunaRules, nomads, species } = content;
+  if (
+    fauna !== undefined &&
+    faunaRules !== undefined &&
+    nomads !== undefined &&
+    species !== undefined
+  ) {
+    seedFauna(state, { ...content, fauna, faunaRules, nomads, species });
+  }
+  return state;
 }
 
 /** Marque le bloc de la case `index` comme modifié. */

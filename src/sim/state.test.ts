@@ -192,8 +192,9 @@ describe('pas', () => {
     // 91fb9419 à 107b7392. Puis les positions des individus (ADR 0014) : les marches des
     // groupes quittent l'empreinte, les colonnes de position et de mouvement des vivants et le
     // camp de chaque groupe y entrent, vides ici ; rien d'autre ne change (de 107b7392 à
-    // f363d517).
-    expect(fingerprint(state)).toBe('f363d517');
+    // f363d517). Tâche 2b.6 : le gibier entre dans l'état (ADR 0018) ; sans sa partie ni son
+    // flux, l'empreinte reste celle d'avant : la suite des humains ne change pas.
+    expect(fingerprint(state, { fauna: false })).toBe('f363d517');
   });
 
   it("redonnent l'empreinte de référence de vingt ans d'une population (ADR 0003)", () => {
@@ -229,7 +230,8 @@ describe('pas', () => {
     // porté se pose là où on le dessinait, contre sa mère, et non sur elle : rien ne saute à
     // l'image (de 8c0c534a à 0baafb76). Relecture de 2b.3 : le nourrisson sevré part avec sa
     // mère, le même jour qu'elle, ou le jour 0 si elle marche (de 0baafb76 à 567d06a4).
-    expect(fingerprint(state)).toBe('567d06a4');
+    // Tâche 2b.6 : sans la partie du gibier ni son flux, l'empreinte reste celle d'avant.
+    expect(fingerprint(state, { fauna: false })).toBe('567d06a4');
   });
 
   it("redonnent l'empreinte de référence de trente mois de trois mille individus (ADR 0011)", () => {
@@ -257,6 +259,7 @@ describe('pas', () => {
     expect(state.society.groups.size).toBeGreaterThan(100);
     expect(state.people.count).toBeGreaterThan(2000);
     expect(state.people.archive.rows).toBeGreaterThan(500);
-    expect(fingerprint(state)).toBe('cd841d8f');
+    // Tâche 2b.6 : sans la partie du gibier ni son flux, l'empreinte reste celle d'avant.
+    expect(fingerprint(state, { fauna: false })).toBe('cd841d8f');
   });
 });

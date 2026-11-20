@@ -222,6 +222,44 @@ export interface GroupsFrame {
   readonly legs: LegArrays;
 }
 
+/**
+ * Allures du gibier (ADR 0018) : au repos, au pas, au galop. Une étape d'arrêt (zéro jour) a
+ * l'allure du repos.
+ */
+export const FAUNA_GAIT = { rest: 0, walk: 1, run: 2 } as const;
+
+/**
+ * Étapes du gibier (protocole 7) : celles des humains (LegArrays), et l'allure de chacune
+ * (FAUNA_GAIT), dont le rendu tire l'image de l'animal, et non de sa vitesse apparente. Une étape
+ * de zéro jour arrête l'animal à son départ : celle d'un animal qui coupe son étape pour repartir,
+ * qu'une étape du même jour remplace s'il repart.
+ */
+export interface FaunaLegArrays extends LegArrays {
+  readonly gaits: Uint8Array<ArrayBuffer>;
+}
+
+/**
+ * Gibier (protocole 7, ADR 0018) : chaque animal vivant, par emplacements croissants, son
+ * emplacement, son identifiant, sa sorte (FAUNA_SPECIES, FAUNA_YOUNG, FAUNA_MALE, FAUNA_RUN),
+ * l'identifiant de sa harde, sa position (x, y, en unités de core/position.ts), et l'étape en cours
+ * de qui marche, repartie de l'instant de l'image, à l'allure que dit FAUNA_RUN. Les deltas
+ * apportent ensuite les étapes qui commencent (FaunaLegArrays).
+ */
+export interface FaunaFrame {
+  readonly slots: Uint32Array<ArrayBuffer>;
+  readonly ids: Uint32Array<ArrayBuffer>;
+  readonly kinds: Uint8Array<ArrayBuffer>;
+  readonly herds: Uint32Array<ArrayBuffer>;
+  readonly positions: Int32Array<ArrayBuffer>;
+  readonly legs: LegArrays;
+}
+
+/** Bits de FaunaFrame.kinds : l'espèce (rang dans data/fauna.json), puis jeune, mâle adulte, au galop. */
+export const FAUNA_SPECIES = 0x0f;
+export const FAUNA_YOUNG = 0x10;
+export const FAUNA_MALE = 0x20;
+export const FAUNA_RUN = 0x40;
+
 /** Tampons d'étapes, à transférer. */
 export function legBuffers(legs: LegArrays): ArrayBuffer[] {
   return [
@@ -230,6 +268,23 @@ export function legBuffers(legs: LegArrays): ArrayBuffer[] {
     legs.start.buffer,
     legs.step.buffer,
     legs.count.buffer,
+  ];
+}
+
+/** Tampons d'étapes du gibier, à transférer. */
+export function faunaLegBuffers(legs: FaunaLegArrays): ArrayBuffer[] {
+  return [...legBuffers(legs), legs.gaits.buffer];
+}
+
+/** Tampons d'une image du gibier, à transférer. */
+export function faunaBuffers(frame: FaunaFrame): ArrayBuffer[] {
+  return [
+    frame.slots.buffer,
+    frame.ids.buffer,
+    frame.kinds.buffer,
+    frame.herds.buffer,
+    frame.positions.buffer,
+    ...legBuffers(frame.legs),
   ];
 }
 

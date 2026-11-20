@@ -8,11 +8,13 @@
  * fixe : les départs du jour, (2b.8 : les activités), la marche, l'espacement des marcheurs
  * un jour sur `walkers.every` (trois, data/nomads.json), puis les arrivées. Seuls les
  * marcheurs et les partants du jour coûtent ; ce qu'ils décident ne dépend pas de l'ordre des
- * listes, ou passe dans un ordre canonique, et ne tire au sort que sur `sim.camp`. L'état ne
- * dépend donc ni de la vitesse ni du regroupement des jours en lots.
+ * listes, ou passe dans un ordre canonique, et ne tire au sort que sur `sim.camp`. Le gibier
+ * (fauna.ts, ADR 0018) suit, sur son propre flux, `sim.fauna`, et ne change rien des humains.
+ * L'état ne dépend donc ni de la vitesse ni du regroupement des jours en lots.
  */
 import type { GameCommand } from '../core/protocol';
 import { DAYS_PER_MONTH } from '../core/time';
+import { faunaDay, rebuildFauna } from './fauna';
 import { moveDay, rebuildMovement } from './movement';
 import type { SimState } from './state';
 import { applyCommands, monthStep, type RejectedCommand, type SimContent } from './step';
@@ -32,13 +34,20 @@ export function advanceDay(
   commands: readonly GameCommand[],
   content: SimContent,
   rejected?: RejectedCommand,
+  marks?: DayMarks,
 ): ReadonlyMap<number, readonly number[]> | undefined {
   applyCommands(state, commands, content, rejected);
-  // Systèmes quotidiens, dans un ordre fixe, chacun sur ses actifs : le mouvement.
+  // Systèmes quotidiens, dans un ordre fixe, chacun sur ses actifs : le mouvement des humains,
+  // puis le gibier, qui les fuit (ADR 0018).
   try {
+    marks?.mark('start');
     moveDay(state, content);
+    marks?.mark('move');
+    faunaDay(state, content);
+    marks?.mark('fauna');
   } catch (error) {
     rebuildMovement(state);
+    rebuildFauna(state.fauna);
     throw error;
   }
   if (state.day < DAYS_PER_MONTH - 1) {
@@ -52,8 +61,18 @@ export function advanceDay(
     return members;
   } catch (error) {
     rebuildMovement(state);
+    rebuildFauna(state.fauna);
     throw error;
   }
+}
+
+/**
+ * Repères d'un jour, que l'hôte du worker pose pour mesurer ses systèmes : il lit l'heure, la
+ * simulation jamais (ADR 0004). `start` avant le mouvement des humains, `move` après lui, `fauna`
+ * après le gibier.
+ */
+export interface DayMarks {
+  mark(phase: 'start' | 'move' | 'fauna'): void;
 }
 
 /**

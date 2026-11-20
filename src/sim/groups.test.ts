@@ -23,7 +23,18 @@ import type { SimState } from './state';
 import { step } from './day';
 import { fingerprint, type SimContent } from './step';
 import { terrainLands } from './terrain';
-import { flatState, flooded, scatteredGroups, testData, testHuman, testState } from './testing';
+import {
+  flatState,
+  flooded,
+  scatteredGroups,
+  testData,
+  testHuman,
+  testState,
+  withoutFauna,
+} from './testing';
+
+/** Le contenu des siècles de groupes, sans gibier : la suite des humains n'en dépend pas. */
+const HUMANS = withoutFauna(testData);
 
 /** Première case d'un biome. */
 function cellOf(state: SimState, biome: string): { x: number; y: number } {
@@ -178,11 +189,11 @@ function playCentury(seed = 'graine', count = 16): Century {
   const key = `${seed}:${String(count)}`;
   const known = centuries.get(key);
   if (known !== undefined) return known;
-  const state = testState(seed);
+  const state = testState(seed, HUMANS);
   const land = lands(state.cost, state.size);
   const { width } = state.size;
   const landOf = (group: { x: number; y: number }) => land[group.y * width + group.x] ?? -1;
-  step(state, scatteredGroups(state, count), testData);
+  step(state, scatteredGroups(state, count), HUMANS);
   const seen = new Map<number, { land: number; at: string }>();
   for (const group of state.society.groups.values()) {
     seen.set(group.id, { land: landOf(group), at: `${group.x},${group.y}` });
@@ -213,7 +224,7 @@ function playCentury(seed = 'graine', count = 16): Century {
       homes.set(group.id, `${String(group.homeX)},${String(group.homeY)}`);
     }
     const facts = society.chronicle.length;
-    step(state, [], testData);
+    step(state, [], HUMANS);
     people.forEach((slot) => {
       const id = people.get('id', slot);
       const group = society.groups.get(people.get('group', slot));

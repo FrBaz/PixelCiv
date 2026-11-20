@@ -36,6 +36,8 @@ import {
   type ForageContent,
 } from './forage';
 import { terrainCosts, terrainLands } from './terrain';
+import { Fauna, FAUNA_STREAM, seedFauna, type FaunaContent } from './fauna';
+import { FaunaSaveError, restoreFauna, saveFauna } from './faunaSave';
 import { PLACE, Population } from './population';
 import { Movement, placeMigrated, rebuildMovement } from './movement';
 import { migrateChronicle, restorePeople, savePeople } from './populationSave';
@@ -75,8 +77,11 @@ function restoreFood(save: SaveData, count: number): FoodStocks {
   return food;
 }
 
-/** Contenu dont la sauvegarde se sert : les catalogues et les bornes des paramètres. */
-export interface SaveContent extends ForageContent {
+/**
+ * Contenu dont la sauvegarde se sert : les catalogues et les bornes des paramètres, et le gibier,
+ * qu'une partie de la version 7 reçoit à la relecture (FaunaContent).
+ */
+export interface SaveContent extends ForageContent, FaunaContent {
   readonly biomes: Catalog<Biome>;
   readonly altitudeLevels: Catalog<AltitudeLevel>;
   readonly resources: Catalog<Resource>;
@@ -130,6 +135,8 @@ const SimJsonSchema = z
     commandLog: z.array(z.unknown()),
     pending: z.array(z.unknown()),
     people: z.unknown(),
+    /** Gibier (version 8, ADR 0018) ; null pour une partie de la version 7, qui le sème. */
+    fauna: z.unknown(),
     rng: z.custom<Readonly<Record<string, unknown>>>(
       (value) =>
         typeof value === 'object' &&
@@ -415,7 +422,28 @@ export const MIGRATIONS: Migrations = {
   4: (save) => migrateChronicle(migrateFamilyNames(save)),
   5: migrateDays,
   6: migratePositions,
+  7: migrateFauna,
 };
+
+/**
+ * Version 8 (tâche 2b.6, ADR 0018) : le gibier. Une partie de la version 7 n'en a pas
+ * (`fauna: null`) : la relecture le sème d'après son état, ses stocks entamés compris, sur un flux
+ * `sim.fauna` neuf. Une sauvegarde de la version 7 n'a pas ce flux ; une sauvegarde forgée qui en
+ * porterait un le perd, pour que deux relectures donnent la même partie.
+ */
+function migrateFauna(save: SaveData): SaveData {
+  const json = (typeof save.json === 'object' && save.json !== null ? save.json : {}) as Record<
+    string,
+    unknown
+  >;
+  const saved: unknown = json.rng;
+  let rng = saved;
+  if (typeof saved === 'object' && saved !== null && Object.hasOwn(saved, FAUNA_STREAM)) {
+    const { [FAUNA_STREAM]: _dropped, ...rest } = saved as Record<string, unknown>;
+    rng = rest;
+  }
+  return { meta: save.meta, json: { ...json, rng, fauna: null }, arrays: save.arrays };
+}
 
 /** Copie de l'état, prise d'un coup : la simulation peut repartir aussitôt. */
 export function saveState(state: SimState, generator: number, content: SaveContent): SaveData {
@@ -432,6 +460,8 @@ export function saveState(state: SimState, generator: number, content: SaveConte
   arrays.foodPlants = stock(0);
   arrays.foodGame = stock(1);
   arrays.foodFish = stock(2);
+  const fauna = saveFauna(state.fauna, content);
+  Object.assign(arrays, fauna.arrays);
   return {
     meta: { seed: state.params.seed, tick: state.tick },
     json: {
@@ -446,6 +476,7 @@ export function saveState(state: SimState, generator: number, content: SaveConte
       commandLog: [...state.commandLog],
       pending: [...state.pending],
       people: people.json,
+      fauna: fauna.json,
       rng: state.rng.states(),
     },
     arrays,
@@ -567,6 +598,8 @@ export function restoreState(save: SaveData, content: SaveContent): SimState {
     people,
     society,
     food,
+    fauna:
+      parsed.data.fauna === null ? new Fauna() : savedFauna(parsed.data.fauna, save, content, size),
     movement: new Movement(size.width, size.height),
     cost,
     land: terrainLands(cost, size),
@@ -579,5 +612,23 @@ export function restoreState(save: SaveData, content: SaveContent): SimState {
   // partie de la version 6 se posent (migratePositions).
   rebuildMovement(state);
   placeMigrated(state, content);
+  // Une partie de la version 7 n'a pas de gibier : il se sème d'après son état, de façon
+  // déterministe (migrateFauna).
+  if (parsed.data.fauna === null) seedFauna(state, content);
   return state;
+}
+
+/** Le gibier d'une sauvegarde, ou l'erreur d'une sauvegarde abîmée. */
+function savedFauna(
+  json: unknown,
+  save: SaveData,
+  content: SaveContent,
+  size: { readonly width: number; readonly height: number },
+): Fauna {
+  try {
+    return restoreFauna(json, save.arrays, content, size);
+  } catch (error) {
+    if (error instanceof FaunaSaveError) throw new SaveError('corrupt', error.message);
+    throw error;
+  }
 }
