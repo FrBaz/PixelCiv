@@ -2,7 +2,14 @@
 // de simulation, puis les relie.
 import { h, render } from 'preact';
 import { loadGameData, type GameData } from '../core/data';
-import { frameBuffers, legBuffers, PROTOCOL_VERSION, type InspectTarget } from '../core/protocol';
+import {
+  faunaBuffers,
+  faunaLegBuffers,
+  frameBuffers,
+  legBuffers,
+  PROTOCOL_VERSION,
+  type InspectTarget,
+} from '../core/protocol';
 import { dayIndex, SPEED_FACTORS, type GameTime } from '../core/time';
 import { WORLD_SIZES, type WorldLayers, type WorldSizeId } from '../core/world';
 import { defaultWorldParams, type WorldParams } from '../core/worldParams';
@@ -91,6 +98,7 @@ import { describeCell } from './inspect';
 import { SheetRequests } from './sheets';
 import { crowdCells, crowdGroups, CROWD_GROUP, OccupiedCells, spawnTarget } from './spawn';
 import { CrowdTimeline } from './frames';
+import { FaunaTimeline } from './faunaFrames';
 import { GameClock } from './gameClock';
 import { PreviewScheduler } from './preview';
 import { SimulationClient } from './simulation';
@@ -175,6 +183,16 @@ async function main(): Promise<void> {
       simulation.send({ type: 'recycle', buffers: legBuffers(legs) });
     },
   });
+  // Le gibier (ADR 0018), à l'instant affiché comme les individus : ses images et ses étapes
+  // datées, avec leur allure ; leurs tampons lus retournent au worker.
+  const fauna = new FaunaTimeline(
+    (legs) => {
+      simulation.send({ type: 'recycle', buffers: faunaLegBuffers(legs) });
+    },
+    (frame) => {
+      simulation.send({ type: 'recycle', buffers: faunaBuffers(frame) });
+    },
+  );
   const modeData = {
     biomes: data.biomes.entries,
     altitudeLevels: data.altitudeLevels.entries,
@@ -478,6 +496,7 @@ async function main(): Promise<void> {
     map.setSeason(month);
     const showing = performance.now();
     crowd.show(shown);
+    fauna.show(shown);
     frameCost.showMs = performance.now() - showing;
     const today: GameTime = clock.today();
     if (dayIndex(today) !== shownIndex && time.value !== undefined) {
@@ -579,6 +598,7 @@ async function main(): Promise<void> {
         sheet.value = undefined;
         people.clear();
         crowd.reset(message.frame, message.time, message.world.size.width);
+        fauna.reset(message.fauna, message.time, message.world.size.width);
         sampler.receive(performance.now(), 0, positionBytes(undefined, message.frame));
         occupied.reset();
         chronicleRequest++;
@@ -623,6 +643,7 @@ async function main(): Promise<void> {
         );
         const receiving = performance.now();
         crowd.receive(message.time, message.legs, message.frame);
+        fauna.receive(message.time, message.faunaLegs, message.fauna);
         frameCost.receiveMs += performance.now() - receiving;
         const info = worldInfo.value;
         if (info !== undefined) occupied.update(message.chronicle, info.size);

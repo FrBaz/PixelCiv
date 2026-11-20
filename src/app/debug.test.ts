@@ -42,16 +42,40 @@ describe('DebugSampler', () => {
     // derniers lots, sur mille jours au moins.
     expect(DAY_WINDOW).toBe(1000);
     for (let batch = 0; batch < 500; batch++) {
-      sampler.batch({ batchMs: 1, days: 3, dayMs: 2, walkers: 40, legs: 0 });
+      sampler.batch({
+        batchMs: 1,
+        days: 3,
+        dayMs: 2,
+        walkers: 40,
+        legs: 0,
+        animals: 0,
+        faunaLegs: 0,
+      });
     }
     expect(sampler.sample().dayMs).toBe(2);
     for (let batch = 0; batch < 100; batch++) {
-      sampler.batch({ batchMs: 1, days: 3, dayMs: 0.5, walkers: 40 + batch, legs: 0 });
+      sampler.batch({
+        batchMs: 1,
+        days: 3,
+        dayMs: 0.5,
+        walkers: 40 + batch,
+        legs: 0,
+        animals: 0,
+        faunaLegs: 0,
+      });
     }
     // Les 300 jours rapides, et les 702 jours lents qui les précèdent.
     expect(sampler.sample().dayMs).toBeCloseTo((300 * 0.5 + 702 * 2) / 1002, 9);
     for (let batch = 100; batch < 334; batch++) {
-      sampler.batch({ batchMs: 1, days: 3, dayMs: 0.5, walkers: 40 + batch, legs: 0 });
+      sampler.batch({
+        batchMs: 1,
+        days: 3,
+        dayMs: 0.5,
+        walkers: 40 + batch,
+        legs: 0,
+        animals: 0,
+        faunaLegs: 0,
+      });
     }
     expect(sampler.sample().dayMs).toBe(0.5);
     expect(sampler.sample().batchDays).toBe(3);
@@ -64,6 +88,8 @@ describe('DebugSampler', () => {
         monthMs: month < 2 ? 900 : 50 + month,
         walkers: 7,
         legs: 0,
+        animals: 0,
+        faunaLegs: 0,
       });
     }
     expect(sampler.sample().dayMs).toBe(0.5);
@@ -71,9 +97,55 @@ describe('DebugSampler', () => {
     expect(sampler.sample().worstMonthMs).toBe(63);
     expect(sampler.sample().walkers).toBe(7);
     // Un lot de deux jours et d'un pas mensuel : deux jours ordinaires.
-    sampler.batch({ batchMs: 5, days: 3, dayMs: 1, monthMs: 40, walkers: 3, legs: 0 });
+    sampler.batch({
+      batchMs: 5,
+      days: 3,
+      dayMs: 1,
+      monthMs: 40,
+      walkers: 3,
+      legs: 0,
+      animals: 0,
+      faunaLegs: 0,
+    });
     expect(sampler.sample().dayMs).toBeCloseTo((333 * 3 * 0.5 + 2) / 1001, 9);
     expect(sampler.sample().batchDays).toBeCloseTo((3 * 15 + 14 + 3) / 30, 9);
+  });
+
+  it('moyenne le jour du gibier sur les mêmes jours, et garde ses animaux du dernier lot', () => {
+    const sampler = new DebugSampler();
+    expect(sampler.sample()).toMatchObject({ animals: undefined, faunaDayMs: undefined });
+    sampler.batch({
+      batchMs: 3,
+      days: 3,
+      dayMs: 1,
+      walkers: 0,
+      legs: 0,
+      animals: 600,
+      faunaLegs: 40,
+      faunaMs: 0.3,
+    });
+    sampler.batch({
+      batchMs: 3,
+      days: 1,
+      dayMs: 1,
+      walkers: 0,
+      legs: 0,
+      animals: 612,
+      faunaLegs: 9,
+      faunaMs: 0.7,
+    });
+    // Le pas mensuel d'un lot n'en est pas : seuls ses jours ordinaires comptent.
+    sampler.batch({
+      batchMs: 60,
+      days: 1,
+      monthMs: 50,
+      walkers: 0,
+      legs: 0,
+      animals: 605,
+      faunaLegs: 0,
+    });
+    expect(sampler.sample().faunaDayMs).toBeCloseTo((3 * 0.3 + 0.7) / 4, 9);
+    expect(sampler.sample().animals).toBe(605);
   });
 
   it('approche un jour de 4 µs, que l’horloge du worker ne mesure qu’à 0,1 ms près', () => {
@@ -89,7 +161,15 @@ describe('DebugSampler', () => {
         if (rank % 25 === 0) measured = rank + random.nextInt(25);
         if (rank === measured) total += 0.1;
       }
-      sampler.batch({ batchMs: total, days: 3, dayMs: total / 3, walkers: 0, legs: 0 });
+      sampler.batch({
+        batchMs: total,
+        days: 3,
+        dayMs: total / 3,
+        walkers: 0,
+        legs: 0,
+        animals: 0,
+        faunaLegs: 0,
+      });
       if (day + 3 < DAY_WINDOW) continue;
       // Passé mille jours, la moyenne reste à un quart près de la vraie durée.
       const shown = sampler.sample().dayMs ?? 0;

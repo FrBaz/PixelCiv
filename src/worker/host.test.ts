@@ -3,6 +3,10 @@ import type { GameData } from '../core/data';
 import {
   CHRONICLE_PAGE,
   CHRONICLE_RECENT,
+  FAUNA_GAIT,
+  FAUNA_RUN,
+  faunaBuffers,
+  faunaLegBuffers,
   frameBuffers,
   GROUP_STRIDE,
   legBuffers,
@@ -172,8 +176,10 @@ describe('partie', () => {
     expect(snapshot?.layers.biome).toEqual(testWorld().biome);
     const entry = env.sent.find((sent) => sent.message.type === 'snapshot');
     // Les couches du monde, plus les sept tableaux de l'image des groupes et les cinq des
-    // étapes en cours (ADR 0014).
-    expect(entry?.transfer).toHaveLength(LAYER_NAMES.length + 12);
+    // étapes en cours (ADR 0014), puis les cinq de l'image du gibier et les cinq de ses étapes
+    // en cours (protocole 7, ADR 0018).
+    expect(entry?.transfer).toHaveLength(LAYER_NAMES.length + 22);
+    expect(snapshot?.fauna.ids.length).toBeGreaterThan(400);
     expect(snapshot?.time).toEqual({ tick: 0, day: 0, paused: false, speed: 'normal' });
     expect(entry?.transfer.every((buffer) => buffer instanceof ArrayBuffer)).toBe(true);
   });
@@ -1220,6 +1226,52 @@ describe('deux horloges (ADR 0013)', () => {
     expect(stats.some((message) => message.stats.legs > 0)).toBe(true);
   });
 
+  it('envoie l’image du gibier à l’instantané et au pas mensuel, et ses étapes datées, à leur allure, à chaque lot', async () => {
+    const { env, host } = await startedHost();
+    for (const command of spawns(10, 25)) host.receive({ type: 'game', command });
+    env.advance(NORMAL_MONTH_MS * 2 + WAKE_SLACK_MS);
+    const deltas = env.messages('delta');
+    expect(deltas).toHaveLength(2 * DAYS_PER_MONTH);
+    // L'image du gibier : aux seuls pas mensuels, ni à l'apparition des groupes ni les autres jours.
+    const framed = deltas.flatMap((delta, index) => (delta.fauna === undefined ? [] : [index]));
+    expect(framed).toEqual([DAYS_PER_MONTH - 1, 2 * DAYS_PER_MONTH - 1]);
+    // Ses étapes, chaque lot, datées de ses jours, chacune avec son allure.
+    const legged = deltas.filter((delta) => delta.faunaLegs !== undefined);
+    expect(legged.length).toBeGreaterThan(DAYS_PER_MONTH);
+    let runs = 0;
+    for (const delta of legged) {
+      const legs = delta.faunaLegs;
+      if (legs === undefined) continue;
+      expect(legs.gaits.length).toBe(legs.slots.length);
+      const end = dayIndex(delta.time);
+      for (let leg = 0; leg < legs.slots.length; leg++) {
+        expect(legs.days[leg]).toBeLessThan(end);
+        expect(legs.days[leg]).toBeGreaterThanOrEqual(end - delta.days);
+        const gait = legs.gaits[leg] ?? 0;
+        expect([FAUNA_GAIT.rest, FAUNA_GAIT.walk, FAUNA_GAIT.run]).toContain(gait);
+        // Une étape d'arrêt, et elle seule, a l'allure du repos.
+        expect(gait === FAUNA_GAIT.rest).toBe(legs.count[leg] === 0);
+        if (gait === FAUNA_GAIT.run) runs++;
+      }
+    }
+    expect(runs).toBeGreaterThan(0);
+    // L'image porte chaque animal ; son étape en cours, avec l'allure de l'état.
+    const frame = deltas.at(-1)?.fauna;
+    if (frame === undefined) throw new Error('pas d’image du gibier');
+    expect(frame.positions.length).toBe(2 * frame.ids.length);
+    expect(frame.legs.slots.length).toBeLessThanOrEqual(frame.ids.length);
+    expect([...frame.kinds].every((kind) => (kind & ~0x7f) === 0)).toBe(true);
+    expect([...frame.kinds].some((kind) => (kind & FAUNA_RUN) === 0)).toBe(true);
+    // Les tampons voyagent sans copie.
+    const entry = env.sent.findLast((sent) => sent.message.type === 'delta');
+    expect(entry?.transfer).toEqual(expect.arrayContaining(faunaBuffers(frame)));
+    // Les statistiques comptent les animaux, leurs étapes et le jour du gibier.
+    const stats = env.messages('stats');
+    expect(stats.every((message) => message.stats.animals > 400)).toBe(true);
+    expect(stats.some((message) => message.stats.faunaLegs > 0)).toBe(true);
+    expect(stats.some((message) => (message.stats.faunaMs ?? -1) >= 0)).toBe(true);
+  });
+
   it('reprend les tampons que le fil principal lui rend', async () => {
     const { env, host } = await startedHost();
     for (const command of spawns(6, 20)) host.receive({ type: 'game', command });
@@ -1231,6 +1283,8 @@ describe('deux horloges (ADR 0013)', () => {
       .flatMap((delta) => [
         ...(delta.frame === undefined ? [] : frameBuffers(delta.frame)),
         ...(delta.legs === undefined ? [] : legBuffers(delta.legs)),
+        ...(delta.fauna === undefined ? [] : faunaBuffers(delta.fauna)),
+        ...(delta.faunaLegs === undefined ? [] : faunaLegBuffers(delta.faunaLegs)),
       ])
       .filter((buffer) => buffer.byteLength > 0);
     expect(returned.length).toBeGreaterThan(5);

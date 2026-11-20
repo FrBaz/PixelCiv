@@ -51,6 +51,9 @@ describe('panneau de débogage (ADR 0013, ADR 0014, ADR 0015)', () => {
       objectsMs: 0.4172,
       decorChunks: 12,
       decorBuildMs: 6.31,
+      animals: 652,
+      faunaDayMs: 0.3184,
+      faunaDrawn: 37,
       memoryMb: 140,
       renderer: { name: 'webgl', resolution: 1 },
       chunks: 0,
@@ -81,6 +84,10 @@ describe('panneau de débogage (ADR 0013, ADR 0014, ADR 0015)', () => {
     expect(shown.get('Décor : objets, mise à jour, blocs posés')).toBe(
       '5\u202f123 objets · 0,42 ms · 12 blocs en 6,3 ms',
     );
+    // Le gibier (ADR 0018) : ses animaux, ceux de la vue, et son jour, à trois décimales.
+    expect(shown.get('Gibier : animaux, dessinés, jour')).toBe(
+      '652 animaux · 37 dessinés · 0,318 ms par jour',
+    );
     // Le rendu à la demande ne dessine que les images qui changent (ADR 0015) : les tics de
     // l'animation, et parmi eux les images dessinées.
     expect(shown.get('Tics par seconde')).toBe('60');
@@ -96,12 +103,14 @@ describe('panneau de débogage (ADR 0013, ADR 0014, ADR 0015)', () => {
       drawCalls: undefined,
       level: -1,
       objects: undefined,
+      animals: undefined,
     };
     expect(rows().get('Individus : niveau, densité')).toBe('bannières');
     expect(rows().get('Marcheurs')).toBe('indisponible');
     expect(rows().get('Positions reçues')).toBe('indisponible');
     expect(rows().get('Appels de dessin')).toBe('indisponible');
     expect(rows().get('Décor : objets, mise à jour, blocs posés')).toBe('indisponible');
+    expect(rows().get('Gibier : animaux, dessinés, jour')).toBe('indisponible');
   });
 });
 

@@ -11,7 +11,7 @@ import { LAYER_NAMES, type GenerationStage, type WorldLayers, type WorldSize } f
 import type { WorldParams } from './worldParams';
 
 /** Version du protocole, vérifiée à la poignée de main. */
-export const PROTOCOL_VERSION = 6;
+export const PROTOCOL_VERSION = 7;
 
 /**
  * Pinceau de biome : donne à une case de terre un autre biome de terre. C'est un outil
@@ -388,6 +388,11 @@ export interface StepStats {
   readonly walkers: number;
   /** Étapes commencées pendant le lot, écarts de côté compris. */
   readonly legs: number;
+  /** Animaux du gibier à la fin du lot, et leurs étapes commencées pendant le lot (ADR 0018). */
+  readonly animals: number;
+  readonly faunaLegs: number;
+  /** Durée moyenne du jour du gibier, sur les jours ordinaires du lot. */
+  readonly faunaMs?: number;
 }
 
 /** Messages du worker vers le fil principal. */
@@ -416,6 +421,8 @@ export type WorkerMessage =
       readonly time: TimeInfo;
       readonly layers: WorldLayers;
       readonly frame: GroupsFrame;
+      /** Le gibier, à l'instant de l'état (protocole 7, ADR 0018). */
+      readonly fauna: FaunaFrame;
       readonly chronicle: readonly ChronicleView[];
     }
   /**
@@ -433,6 +440,13 @@ export type WorkerMessage =
       readonly chronicle: readonly ChronicleView[];
       readonly legs?: LegArrays;
       readonly frame?: GroupsFrame;
+      /**
+       * Étapes du gibier commencées pendant le lot, avec leur allure, et l'image du gibier quand
+       * elle change (pas mensuel, apparitions et disparitions hors du mois) ; elle vaut à partir de
+       * l'instant `time` (protocole 7).
+       */
+      readonly faunaLegs?: FaunaLegArrays;
+      readonly fauna?: FaunaFrame;
     }
   /** Fiche demandée ; ni l'un ni l'autre si la cible n'existe pas. */
   | {
@@ -500,12 +514,15 @@ export function transferablesOf(message: MainMessage | WorkerMessage): ArrayBuff
       return [
         ...LAYER_NAMES.map((name) => message.layers[name].buffer),
         ...frameBuffers(message.frame),
+        ...faunaBuffers(message.fauna),
       ];
     case 'delta':
       return [
         ...message.chunks.map((chunk) => chunk.biome.buffer),
         ...(message.legs === undefined ? [] : legBuffers(message.legs)),
         ...(message.frame === undefined ? [] : frameBuffers(message.frame)),
+        ...(message.faunaLegs === undefined ? [] : faunaLegBuffers(message.faunaLegs)),
+        ...(message.fauna === undefined ? [] : faunaBuffers(message.fauna)),
       ];
     case 'recycle':
       return [...message.buffers];

@@ -22,7 +22,9 @@
  * au pas mensuel et après une commande qui change les groupes, porte les positions de tous et
  * l'étape en cours de chaque marcheur. Image et étapes voyagent en tableaux typés transférés,
  * pris dans une réserve de tampons que le fil principal remplit en rendant ceux qu'il a lus
- * (message `recycle`).
+ * (message `recycle`). Le gibier (ADR 0018) suit la même voie : ses étapes, avec leur allure,
+ * partent avec chaque lot ; son image, à l'instantané, au pas mensuel, et dès que des animaux
+ * apparaissent ou disparaissent hors du mois (Fauna.changed).
  *
  * L'environnement (messagerie, horloge, minuteries) est injecté : le worker fournit
  * le vrai, les tests une imitation.
@@ -67,6 +69,8 @@ import { advanceDay } from '../sim/day';
 import { LegJournal } from '../sim/movement';
 import { applyCommands, type RejectedCommand } from '../sim/step';
 import { chroniclePage, chronicleViews, groupsFrame, inspect } from '../sim/views';
+import { FaunaJournal, faunaFrame } from '../sim/fauna';
+import type { DayMarks } from '../sim/day';
 import { GENERATOR_VERSION, type GenerationParams } from '../worldgen/generate';
 
 export interface HostEnvironment {
@@ -113,6 +117,8 @@ interface Batch {
   daily: number;
   /** Durée du pas mensuel, s'il y en a eu un. */
   monthMs: number | undefined;
+  /** Durée totale du jour du gibier sur les jours ordinaires (DayMarks). */
+  faunaMs: number;
   /** Le pas mensuel a levé une exception. */
   failed: boolean;
 }
@@ -497,6 +503,10 @@ export class SimulationHost {
     const frame = groupsFrame(state, this.data, undefined, this.pool);
     // Les étapes qui commencent désormais partent avec les deltas ; l'image dit celles en cours.
     state.movement.journal = new LegJournal();
+    // De même pour le gibier (protocole 7, ADR 0018).
+    const fauna = faunaFrame(state, this.data, this.pool);
+    state.fauna.journal = new FaunaJournal();
+    state.fauna.changed = false;
     // Les derniers faits de la chronique ; les suivants viendront avec les deltas, les plus
     // anciens à la demande, par pages.
     const total = state.society.chronicle.length;
@@ -509,6 +519,7 @@ export class SimulationHost {
       time: this.time(state),
       layers,
       frame,
+      fauna,
       chronicle,
     });
     // Le jour en cours commence : il durera un jour entier, et le premier lot partira
@@ -612,14 +623,24 @@ export class SimulationHost {
       dailyMs: 0,
       daily: 0,
       monthMs: undefined,
+      faunaMs: 0,
       failed: false,
+    };
+    // Le jour du gibier, mesuré entre les repères de advanceDay : l'heure reste à l'hôte.
+    const day = { moved: 0, faunaMs: 0 };
+    const marks: DayMarks = {
+      mark: (phase) => {
+        if (phase === 'move') day.moved = this.env.now();
+        else if (phase === 'fauna') day.faunaMs = this.env.now() - day.moved;
+      },
     };
     while (batch.days < target) {
       const commands = batch.days === 0 ? state.pending.splice(0) : [];
       const monthly = state.day === DAYS_PER_MONTH - 1;
       const dayStart = this.env.now();
       try {
-        batch.members = advanceDay(state, commands, this.data, this.rejected);
+        day.faunaMs = 0;
+        batch.members = advanceDay(state, commands, this.data, this.rejected, marks);
       } catch (error) {
         console.error(error);
         this.send({ type: 'error', code: 'internal', detail: String(error) });
@@ -638,10 +659,12 @@ export class SimulationHost {
         break;
       }
       batch.dailyMs += this.env.now() - dayStart;
+      batch.faunaMs += day.faunaMs;
       batch.daily++;
     }
     const changed = batch.members !== undefined || this.groupsChanged(state, logged);
     if (batch.days === 0 && !changed && state.commandLog.length === logged) return batch;
+    const faunaLegs = state.fauna.journal?.count ?? 0;
     const legs = this.sendDelta(state, batch.days, changed, batch.members);
     // Le lot compte son delta : l'image des groupes, la chronique et leur envoi (W-11).
     this.send({
@@ -653,6 +676,9 @@ export class SimulationHost {
         ...(batch.monthMs === undefined ? {} : { monthMs: batch.monthMs }),
         walkers: state.movement.walkers,
         legs,
+        animals: state.fauna.count,
+        faunaLegs,
+        ...(batch.daily > 0 ? { faunaMs: batch.faunaMs / batch.daily } : {}),
       },
     });
     return batch;
@@ -672,6 +698,16 @@ export class SimulationHost {
     const total = state.society.chronicle.length;
     const journal = state.movement.journal;
     const legs = journal !== undefined && journal.count > 0 ? journal.take(this.pool) : undefined;
+    // Le gibier : ses étapes du lot, et son image au pas mensuel (members connus) ou quand des
+    // animaux ont paru ou disparu hors du mois.
+    const herding = state.fauna.journal;
+    const faunaLegs =
+      herding !== undefined && herding.count > 0 ? herding.take(this.pool) : undefined;
+    const fauna =
+      members !== undefined || state.fauna.changed
+        ? faunaFrame(state, this.data, this.pool)
+        : undefined;
+    state.fauna.changed = false;
     // Compté avant l'envoi, qui transfère les tampons.
     const count = legs?.slots.length ?? 0;
     this.send({
@@ -682,6 +718,8 @@ export class SimulationHost {
       chronicle: chronicleViews(state, this.chronicleSent, total),
       ...(legs === undefined ? {} : { legs }),
       ...(frame ? { frame: groupsFrame(state, this.data, members, this.pool) } : {}),
+      ...(faunaLegs === undefined ? {} : { faunaLegs }),
+      ...(fauna === undefined ? {} : { fauna }),
     });
     this.chronicleSent = total;
     return count;

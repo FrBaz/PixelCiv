@@ -35,6 +35,12 @@ export interface DebugSample {
   readonly batchDays: number | undefined;
   /** Marcheurs à la fin du dernier lot (ADR 0014). */
   readonly walkers: number | undefined;
+  /**
+   * Gibier (ADR 0018) : ses animaux au dernier lot, et la durée moyenne de son jour, sur les mêmes
+   * jours que celle du jour entier.
+   */
+  readonly animals: number | undefined;
+  readonly faunaDayMs: number | undefined;
   /** Étapes et octets de positions (étapes et images des groupes) reçus par seconde. */
   readonly legsPerSecond: number | undefined;
   readonly positionBytesPerSecond: number | undefined;
@@ -154,11 +160,12 @@ export class DebugSampler {
   /** Positions reçues : instant (ms), étapes, octets. */
   private received: { readonly at: number; readonly legs: number; readonly bytes: number }[] = [];
   /** Durée totale des jours ordinaires de chacun des derniers lots, et leur nombre. */
-  private days: { readonly total: number; readonly count: number }[] = [];
+  private days: { readonly total: number; readonly fauna: number; readonly count: number }[] = [];
   private dayCount = 0;
   private months: number[] = [];
   private batches: number[] = [];
   private walkers: number | undefined;
+  private animals: number | undefined;
 
   /** Enregistre la durée d'une image, et ce qu'y ont coûté les individus. */
   frame(durationMs: number, cost?: FrameCost): void {
@@ -181,7 +188,11 @@ export class DebugSampler {
   batch(stats: StepStats): void {
     const ordinary = stats.days - (stats.monthMs === undefined ? 0 : 1);
     if (stats.dayMs !== undefined && ordinary > 0) {
-      this.days.push({ total: stats.dayMs * ordinary, count: ordinary });
+      this.days.push({
+        total: stats.dayMs * ordinary,
+        fauna: (stats.faunaMs ?? 0) * ordinary,
+        count: ordinary,
+      });
       this.dayCount += ordinary;
       // Les lots les plus anciens s'oublient, tant qu'il reste DAY_WINDOW jours sans eux.
       let first = this.days.at(0);
@@ -194,6 +205,7 @@ export class DebugSampler {
     if (stats.monthMs !== undefined) keep(this.months, stats.monthMs, MONTH_WINDOW);
     if (stats.days > 0) keep(this.batches, stats.days, BATCH_WINDOW);
     this.walkers = stats.walkers;
+    this.animals = stats.animals;
   }
 
   /** Les mesures ; `now` (ms) date les positions reçues, comptées sur la dernière seconde. */
@@ -220,6 +232,11 @@ export class DebugSampler {
       worstMonthMs: this.months.length > 0 ? Math.max(...this.months) : undefined,
       batchDays: mean(this.batches),
       walkers: this.walkers,
+      animals: this.animals,
+      faunaDayMs:
+        this.dayCount > 0
+          ? this.days.reduce((sum, batch) => sum + batch.fauna, 0) / this.dayCount
+          : undefined,
       legsPerSecond: recent?.reduce((sum, entry) => sum + entry.legs, 0),
       positionBytesPerSecond: recent?.reduce((sum, entry) => sum + entry.bytes, 0),
       main: {

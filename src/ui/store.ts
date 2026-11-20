@@ -57,6 +57,9 @@ export interface DebugInfo {
   /** Jours par lot, en moyenne, et marcheurs au dernier lot (ADR 0014). */
   readonly batchDays: number | undefined;
   readonly walkers: number | undefined;
+  /** Gibier (ADR 0018) : animaux au dernier lot, et durée moyenne de son jour. */
+  readonly animals?: number | undefined;
+  readonly faunaDayMs?: number | undefined;
   /** Étapes et octets de positions reçus par seconde. */
   readonly legsPerSecond: number | undefined;
   readonly positionBytesPerSecond: number | undefined;
@@ -86,6 +89,8 @@ export interface DebugInfo {
   readonly objectsMs: number;
   readonly decorChunks?: number;
   readonly decorBuildMs?: number;
+  /** Gibier (ADR 0018) : animaux dessinés à la dernière image. */
+  readonly faunaDrawn?: number;
   readonly memoryMb: number | undefined;
   /** Moteur de rendu (webgl, webgpu) et densité de pixels de l'écran. */
   readonly renderer: { readonly name: string; readonly resolution: number };

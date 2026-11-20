@@ -146,6 +146,16 @@ export function DebugPanel() {
           }),
     ],
     [
+      'debug.fauna',
+      info?.animals === undefined
+        ? t('debug.unavailable')
+        : t('debug.faunaValue', {
+            animals: info.animals,
+            drawn: info.faunaDrawn ?? 0,
+            ms: round(info.faunaDayMs ?? 0, 3),
+          }),
+    ],
+    [
       'debug.memory',
       info?.memoryMb === undefined
         ? t('debug.unavailable')
