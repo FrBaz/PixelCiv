@@ -12,6 +12,7 @@ import {
   type Species,
 } from './index';
 import { HumansSchema, LEVEL_STEP, MAX_OUTFITS, MAX_SKIN_PALETTES } from './humans';
+import { DecorSchema, FloraLookSchema } from './decor';
 import {
   AppearanceSchema,
   FACE_BOUNDS,
@@ -22,7 +23,7 @@ import {
   SpeciesSchema,
   type Nomads,
 } from './people';
-import { AltitudeLevelsSchema, BiomesSchema } from './schemas';
+import { AltitudeLevelsSchema, BiomeSchema, BiomesSchema, FloraSchema } from './schemas';
 import {
   bakedWaterTone,
   CREST_TONES,
@@ -885,5 +886,171 @@ describe('humains des planches et leurs tenues (ADR 0016)', () => {
     expect(issues(HumansSchema, withHumans({ animations }))).toContain(
       "animations : l'animation walk est montrée",
     );
+  });
+});
+
+describe('décor : data/flora.json et data/decor.json (ADR 0017)', () => {
+  const data = loadGameData();
+  /** Les problèmes qu'un schéma relève, chemin compris ; aucun si la valeur est valide. */
+  const issues = (schema: { safeParse: (value: unknown) => SafeResult }, value: unknown) => {
+    const parsed = schema.safeParse(value);
+    return parsed.success
+      ? []
+      : (parsed.error?.issues ?? []).map((issue) => `${issue.path.join('.')} : ${issue.message}`);
+  };
+  interface SafeResult {
+    success: boolean;
+    error?: { issues: { path: PropertyKey[]; message: string }[] };
+  }
+  const decor = data.decor;
+  const withDecor = (change: object) => ({ ...decor, ...change });
+  const look = (id: string) => {
+    const entry = data.flora.entries.at(data.flora.indexOf(id) ?? -1);
+    if (entry === undefined) throw new Error(`espèce ${id} absente`);
+    return entry.look;
+  };
+  const ramp = ['#111111', '#222222', '#333333', '#444444'];
+
+  it('donne une apparence à chaque espèce, des saisons aux buissons, des fruits à leurs mois', () => {
+    for (const entry of data.flora.entries) expect(FloraSchema.parse(entry)).toEqual(entry);
+    // Les buissons ont leurs saisons (consigne de 2b.6, C1 D9) : baies, roseaux et saule nain
+    // sont caducs, sans grille nue, avec des tons d'hiver.
+    for (const id of ['berry-bush', 'reed', 'dwarf-willow']) {
+      expect(look(id).phenology, id).toBe('deciduous');
+      expect(look(id).bare, id).toBeUndefined();
+      expect(look(id).foliage.bare, id).toBeDefined();
+    }
+    expect(look('berry-bush').fruit?.months).not.toContain(0);
+    expect(DecorSchema.parse(decor)).toEqual(decor);
+  });
+
+  it('refuse une apparence incomplète ou contradictoire', () => {
+    const broadleaf = look('broadleaf');
+    const berry = look('berry-bush');
+    expect(issues(FloraLookSchema, broadleaf)).toEqual([]);
+    expect(issues(FloraLookSchema, berry)).toEqual([]);
+    // Une rampe de trois tons.
+    expect(issues(FloraLookSchema, { ...broadleaf, wood: ramp.slice(0, 3) }).join()).toMatch(
+      /^wood/,
+    );
+    expect(
+      issues(FloraLookSchema, { ...broadleaf, wood: ['#11111', ...ramp.slice(1)] }).join(),
+    ).toMatch(/wood\.0 : couleur #rrggbb/);
+    // Une caduque sans automne, sans forme nue ni tons d'hiver.
+    expect(issues(FloraLookSchema, { ...broadleaf, foliage: { summer: ramp } })).toContain(
+      "foliage.autumn : une espèce caduque a ses tons d'automne",
+    );
+    const { bare: _bare, ...noBare } = broadleaf;
+    expect(issues(FloraLookSchema, noBare)).toContain(
+      "bare : une espèce caduque a sa forme nue ou ses tons d'hiver",
+    );
+    expect(
+      issues(FloraLookSchema, { ...noBare, foliage: { ...broadleaf.foliage, bare: ramp } }),
+    ).toEqual([]);
+    // Une persistante n'a ni automne, ni hiver ; une sèche a ses tons secs, et elle seule.
+    const conifer = look('conifer');
+    expect(
+      issues(FloraLookSchema, { ...conifer, foliage: { ...conifer.foliage, autumn: ramp } }),
+    ).toContain("foliage.autumn : seule une espèce caduque a des tons d'automne");
+    expect(issues(FloraLookSchema, { ...conifer, bare: 'larch-bare' })).toContain(
+      "bare : seule une espèce caduque a une forme ou des tons d'hiver",
+    );
+    const acacia = look('acacia');
+    expect(issues(FloraLookSchema, { ...acacia, foliage: { summer: ramp } })).toContain(
+      'foliage.dry : une espèce de saison sèche, et elle seule, a ses tons secs',
+    );
+    expect(
+      issues(FloraLookSchema, { ...conifer, foliage: { ...conifer.foliage, dry: ramp } }),
+    ).toContain('foliage.dry : une espèce de saison sèche, et elle seule, a ses tons secs');
+    // Un fruit hors des mois de l'année, deux fois le même mois, ou sans mois.
+    const fruit = (months: number[]) => ({ ...berry, fruit: { tones: ramp, months } });
+    expect(issues(FloraLookSchema, fruit([12])).join()).toMatch(/fruit\.months\.0/);
+    expect(issues(FloraLookSchema, fruit([-1])).join()).toMatch(/fruit\.months\.0/);
+    expect(issues(FloraLookSchema, fruit([6.5])).join()).toMatch(/fruit\.months\.0/);
+    expect(issues(FloraLookSchema, fruit([6, 6]))).toContain('fruit.months : chaque mois une fois');
+    expect(issues(FloraLookSchema, fruit([])).join()).toMatch(/fruit\.months/);
+    expect(issues(FloraLookSchema, { ...broadleaf, shape: 'tall' }).join()).toMatch(/shape/);
+  });
+
+  it('refuse chaque réglage du décor hors de ses bornes', () => {
+    expect(issues(DecorSchema, decor)).toEqual([]);
+    const refused: [object, RegExp][] = [
+      [{ outline: '#13131' }, /^outline : couleur/],
+      [{ shadow: { ...decor.shadow, alpha: 1.2 } }, /^shadow\.alpha/],
+      [{ shadow: { ...decor.shadow, alpha: -0.1 } }, /^shadow\.alpha/],
+      [{ shadow: { ...decor.shadow, sx: 1.6 } }, /^shadow\.sx/],
+      [{ shadow: { ...decor.shadow, sy: 1.1 } }, /^shadow\.sy/],
+      [{ shadow: { ...decor.shadow, sy: -0.1 } }, /^shadow\.sy/],
+      [{ shadow: { ...decor.shadow, method: 'blur' } }, /^shadow\.method/],
+      [{ snow: { ...decor.snow, share: 1.5 } }, /^snow\.share/],
+      [{ snow: { ...decor.snow, deep: 'blanc' } }, /^snow\.deep/],
+      [{ foliage: { ...decor.foliage, bareBelow: -31 } }, /^foliage\.bareBelow/],
+      [{ foliage: { ...decor.foliage, autumnBelow: 41 } }, /^foliage\.autumnBelow/],
+      [{ foliage: { ...decor.foliage, bareBelow: 13 } }, /^foliage : l'automne commence/],
+      [{ foliage: { ...decor.foliage, dryShare: 1.2 } }, /^foliage\.dryShare/],
+      [{ place: { ...decor.place, jitter: 0.46 } }, /^place\.jitter/],
+      [{ place: { ...decor.place, jitter: -0.01 } }, /^place\.jitter/],
+      [
+        { place: { ...decor.place, shrub: { ...decor.place.shrub, side: [0.5, 0.3] } } },
+        /^place\.shrub\.side : une étendue/,
+      ],
+      [
+        { place: { ...decor.place, shrub: { ...decor.place.shrub, depth: [0.7, 1.2] } } },
+        /^place\.shrub\.depth\.1/,
+      ],
+      [
+        { place: { ...decor.place, rock: { ...decor.place.rock, side: 0.5 } } },
+        /^place\.rock\.side/,
+      ],
+      [{ stone: ramp.slice(0, 3) }, /^stone/],
+      [{ rocks: { mountain: 1.5 } }, /^rocks\.mountain/],
+      [{ rocks: { Mountain: 0.5 } }, /^rocks/],
+      [{ deposits: { iron: { form: 'ore-rock', ore: ramp.slice(0, 3) } } }, /^deposits\.iron\.ore/],
+      [{ deposits: { iron: { form: 'ore-rock', colour: 'red' } } }, /^deposits\.iron/],
+      [
+        { landUse: { field: { trees: 0, shrubs: 0, rocks: 1 } } },
+        /^landUse : l'occupation « none »/,
+      ],
+      [{ landUse: { none: { trees: 1.2, shrubs: 1, rocks: 1 } } }, /^landUse\.none\.trees/],
+      [{ landUse: { none: { trees: 1, shrubs: 1 } } }, /^landUse\.none\.rocks/],
+      [{ seasons: true }, /seasons/],
+    ];
+    for (const [change, expected] of refused) {
+      const found = issues(DecorSchema, withDecor(change));
+      expect(found.join(' | '), JSON.stringify(change)).toMatch(expected);
+    }
+  });
+
+  it('borne les poids de la flore des biomes à leurs espèces', () => {
+    const taiga = data.biomes.entries.at(data.biomes.indexOf('taiga') ?? -1);
+    if (taiga === undefined) throw new Error('taïga absente');
+    expect(issues(BiomeSchema, taiga)).toEqual([]);
+    const withWeights = (weights: Record<string, number>) => ({
+      ...taiga,
+      flora: { ...taiga.flora, weights },
+    });
+    expect(issues(BiomeSchema, withWeights({ palm: 2 }))).toContain(
+      'flora.weights : un poids pour une espèce du biome',
+    );
+    expect(issues(BiomeSchema, withWeights({ conifer: 0 })).join()).toMatch(
+      /flora\.weights\.conifer/,
+    );
+    expect(issues(BiomeSchema, withWeights({ conifer: 101 })).join()).toMatch(
+      /flora\.weights\.conifer/,
+    );
+  });
+
+  it('relève un biome ou un minerai inconnu du décor, et un minerai sans rocher', () => {
+    const withSettings = (change: object): GameData => ({ ...data, decor: withDecor(change) });
+    expect(checkContent(withSettings({ rocks: { ...decor.rocks, volcano: 0.5 } }))).toEqual([
+      'data/decor.json (rochers) : biomes inconnus : volcano',
+    ]);
+    const { gold: _gold, ...withoutGold } = decor.deposits;
+    expect(checkContent(withSettings({ deposits: withoutGold }))).toEqual([
+      'data/decor.json (gisements) : minerais sans rocher : gold',
+    ]);
+    expect(
+      checkContent(withSettings({ deposits: { ...decor.deposits, fish: { form: 'rock' } } })),
+    ).toEqual(['data/decor.json (gisements) : minerais inconnus : fish']);
   });
 });

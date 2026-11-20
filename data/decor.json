@@ -1,0 +1,57 @@
+{
+  "outline": "#13131c",
+  "shadow": { "method": "ground", "alpha": 0.38, "sx": 0.42, "sy": 0.16 },
+  "snow": { "share": 0.35, "deep": "#7f939c" },
+  "foliage": { "bareBelow": 5, "autumnBelow": 12, "dryShare": 0.65 },
+  "place": {
+    "jitter": 0.32,
+    "shrub": {
+      "side": [0.3, 0.45],
+      "depth": [0.72, 0.92]
+    },
+    "rock": {
+      "side": 0.28,
+      "depth": [0.35, 0.85]
+    }
+  },
+  "stone": ["#bdb6a6", "#938c7d", "#6c665a", "#47433b"],
+  "rocks": { "rocky-coast": 0.2, "cliff": 0.3, "mountain": 0.22, "high-mountain": 0.3 },
+  "deposits": {
+    "stone": { "form": "rock" },
+    "copper": {
+      "form": "ore-rock",
+      "ore": ["#7fd1a8", "#3e9f7a", "#2a6b55", "#1b4337"]
+    },
+    "tin": {
+      "form": "ore-rock",
+      "ore": ["#e2e6ea", "#b8bec6", "#868d96", "#5a6068"]
+    },
+    "iron": {
+      "form": "ore-rock",
+      "ore": ["#d08a63", "#a8553b", "#733728", "#47211a"]
+    },
+    "coal": {
+      "form": "ore-rock",
+      "ore": ["#5a5552", "#2e2a2a", "#1d1a1a", "#100e0e"]
+    },
+    "gold": {
+      "form": "ore-rock",
+      "ore": ["#fff08a", "#f1c232", "#b38b1e", "#6e5410"]
+    },
+    "silver": {
+      "form": "ore-rock",
+      "ore": ["#ffffff", "#dfe6ee", "#aab3bd", "#717a85"]
+    },
+    "salt": {
+      "form": "salt-crust",
+      "ore": ["#fbfaf4", "#e9e5d6", "#c9c3ad", "#9c9680"]
+    },
+    "gems": {
+      "form": "ore-rock",
+      "ore": ["#e7a6ff", "#b04fd6", "#7a2f99", "#4a1a5e"]
+    }
+  },
+  "landUse": {
+    "none": { "trees": 1, "shrubs": 1, "rocks": 1 }
+  }
+}

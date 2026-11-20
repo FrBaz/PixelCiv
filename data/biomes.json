@@ -582,7 +582,8 @@
     "flora": {
       "trees": 0.7,
       "shrubs": 0.2,
-      "species": ["conifer", "larch", "berry-bush"]
+      "species": ["conifer", "larch", "berry-bush"],
+      "weights": { "conifer": 3, "larch": 1 }
     },
     "palette": {
       "shadow": "#22534f",
@@ -616,7 +617,8 @@
     "flora": {
       "trees": 0.6,
       "shrubs": 0.25,
-      "species": ["larch", "birch", "conifer", "berry-bush"]
+      "species": ["larch", "birch", "conifer", "berry-bush"],
+      "weights": { "conifer": 2, "larch": 1, "birch": 1 }
     },
     "palette": {
       "shadow": "#2a5b43",
@@ -854,7 +856,8 @@
     "flora": {
       "trees": 0.75,
       "shrubs": 0.3,
-      "species": ["broadleaf", "birch", "berry-bush"]
+      "species": ["broadleaf", "birch", "berry-bush"],
+      "weights": { "broadleaf": 3, "birch": 1 }
     },
     "palette": {
       "shadow": "#24602b",
@@ -888,7 +891,8 @@
     "flora": {
       "trees": 0.9,
       "shrubs": 0.4,
-      "species": ["conifer", "broadleaf", "berry-bush"]
+      "species": ["conifer", "broadleaf", "berry-bush"],
+      "weights": { "conifer": 2, "broadleaf": 1 }
     },
     "palette": {
       "shadow": "#1b5030",
@@ -1024,7 +1028,8 @@
     "flora": {
       "trees": 0.05,
       "shrubs": 0.2,
-      "species": ["acacia", "palm", "scrub"]
+      "species": ["acacia", "palm", "scrub"],
+      "weights": { "acacia": 3, "palm": 1 }
     },
     "palette": {
       "shadow": "#6d883e",
@@ -1058,7 +1063,8 @@
     "flora": {
       "trees": 0.8,
       "shrubs": 0.4,
-      "species": ["tropical-hardwood", "palm", "scrub"]
+      "species": ["tropical-hardwood", "palm", "scrub"],
+      "weights": { "tropical-hardwood": 4, "palm": 1 }
     },
     "palette": {
       "shadow": "#1f6330",
@@ -1092,7 +1098,8 @@
     "flora": {
       "trees": 0.95,
       "shrubs": 0.5,
-      "species": ["tropical-hardwood", "palm", "berry-bush"]
+      "species": ["tropical-hardwood", "palm", "berry-bush"],
+      "weights": { "tropical-hardwood": 5, "palm": 1 }
     },
     "palette": {
       "shadow": "#17532b",

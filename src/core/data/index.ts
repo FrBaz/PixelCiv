@@ -3,6 +3,7 @@ import altitudeLevels from '../../../data/altitude-levels.json';
 import appearance from '../../../data/appearance.json';
 import biomes from '../../../data/biomes.json';
 import cultures from '../../../data/cultures.json';
+import decor from '../../../data/decor.json';
 import flora from '../../../data/flora.json';
 import genetics from '../../../data/genetics.json';
 import humans from '../../../data/humans.json';
@@ -11,6 +12,7 @@ import resources from '../../../data/resources.json';
 import species from '../../../data/species.json';
 import worldgen from '../../../data/worldgen.json';
 import { DataError, loadCatalog, loadSettings, type Catalog } from './catalog';
+import { DecorSchema } from './decor';
 import { BODY_KINDS, HumansSchema, LOOK_BITS } from './humans';
 import {
   AppearanceSchema,
@@ -42,6 +44,7 @@ export type {
   TraitRole,
 } from './people';
 export type { AltitudeLevel, Biome, Flora, Resource } from './schemas';
+export type { Decor, DecorRamp, FloraLook, LandUse, Phenology, ShadowMethod } from './decor';
 export type { Parameter, ParameterName, Worldgen } from './worldgen';
 export type { BodyKind, Humans, Outfit, Piece, Ramp3, Ramp4, Region } from './humans';
 
@@ -52,6 +55,7 @@ export function loadGameData() {
     altitudeLevels: loadCatalog('data/altitude-levels.json', AltitudeLevelsSchema, altitudeLevels),
     resources: loadCatalog('data/resources.json', ResourcesSchema, resources),
     flora: loadCatalog('data/flora.json', FlorasSchema, flora),
+    decor: loadSettings('data/decor.json', DecorSchema, decor),
     worldgen: loadSettings('data/worldgen.json', WorldgenSchema, worldgen),
     species: loadCatalog('data/species.json', SpeciesListSchema, species),
     genetics: loadSettings('data/genetics.json', GeneticsSchema, genetics),
@@ -112,6 +116,7 @@ export function checkContent(data: GameData): string[] {
         problems.push(`data/biomes.json (flore) : ${biome.id} liste des ${kind} sans densité`);
     }
   }
+  problems.push(...checkDecor(data));
   // Espèces : leurs biomes existent, et leur apparence décrit chaque locus et chaque
   // trait de data/genetics.json, avec des allèles connus et au moins un de fréquence
   // non nulle.
@@ -158,6 +163,37 @@ export function checkContent(data: GameData): string[] {
     problems.push(
       'data/resources.json : 255 ressources au plus (couche des gisements sur un octet)',
     );
+  return problems;
+}
+
+/**
+ * Cohérence du décor (ADR 0017) : les biomes des rochers épars existent ; chaque minerai de
+ * data/resources.json a l'aspect de son rocher, et data/decor.json n'en décrit pas d'autre.
+ * Les formes que nomment le décor et la flore ont leurs grilles, ce que vérifie le build de
+ * l'atlas du décor (tools/decor-atlas.ts).
+ */
+export function checkDecor(data: GameData): string[] {
+  const problems: string[] = [];
+  const { decor } = data;
+  const unknownBiomes = Object.keys(decor.rocks).filter(
+    (id) => data.biomes.indexOf(id) === undefined,
+  );
+  if (unknownBiomes.length > 0) {
+    problems.push(`data/decor.json (rochers) : biomes inconnus : ${unknownBiomes.join(', ')}`);
+  }
+  const minerals = data.resources.entries.filter((resource) => resource.deposit !== undefined);
+  const missing = minerals.filter((resource) => !Object.hasOwn(decor.deposits, resource.id));
+  if (missing.length > 0) {
+    problems.push(
+      `data/decor.json (gisements) : minerais sans rocher : ${missing.map((m) => m.id).join(', ')}`,
+    );
+  }
+  const extra = Object.keys(decor.deposits).filter(
+    (id) => !minerals.some((resource) => resource.id === id),
+  );
+  if (extra.length > 0) {
+    problems.push(`data/decor.json (gisements) : minerais inconnus : ${extra.join(', ')}`);
+  }
   return problems;
 }
 
