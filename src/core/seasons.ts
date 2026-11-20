@@ -41,6 +41,13 @@ export const COVER_RAMPS: Readonly<Record<SeasonCover, CoverRamp>> = {
   'sea-ice': { onset: -6, span: 4, full: 0.85 },
 };
 
+/**
+ * Part de la neige qu'une case de forêt garde : les arbres dépassent. Le shader de la carte et le
+ * décor la lisent ici (render/mapShader.ts, render/seasons.ts), pour qu'un arbre enneigé se
+ * tienne sur un sol enneigé.
+ */
+export const FOREST_SNOW_SHARE = 0.7;
+
 /** Part de la case que couvre une couverture saisonnière au mois de température `celsius`. */
 export function coverShare(ramp: CoverRamp, celsius: number): number {
   return Math.min(1, Math.max(0, (ramp.onset - celsius) / ramp.span)) * ramp.full;

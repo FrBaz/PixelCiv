@@ -24,11 +24,13 @@ import {
 } from '../render/camera';
 import { FINGER_SLOP, POINTER_SLOP } from '../render/crowd';
 import { PeopleLayer, stepDuration } from '../render/people';
+import { DECOR_ATLAS, DecorSource } from '../render/decor';
 import { previewPixels } from '../render/preview';
 import { SPAWN_COUNT } from '../sim/commands';
 import { walkCost } from '../sim/terrain';
 import type { SheetContent } from '../ui/Sheet';
 import { FrameGate, invalidateOnRestore } from '../render/frameGate';
+import { SHADOW_METHODS, type ShadowMethod } from '../core/data/decor';
 import { createRenderer, renderOnDemand, timeRendering } from '../render/renderer';
 import { App } from '../ui/App';
 import { escapeKey } from '../ui/escape';
@@ -133,9 +135,18 @@ async function main(): Promise<void> {
     genetics: data.genetics,
     appearance: data.appearance,
     reference: species.display.stature,
+    objects: [DECOR_ATLAS],
   });
   // Couches du monde affiché, pour l'inspection, les légendes et la franchissabilité.
   let worldLayers: WorldLayers | undefined;
+  // Le décor du monde (ADR 0017), en mode naturel. Débogage : ?decor=off le retire ;
+  // ?shadow=ground|multiply|dither|none change la méthode de l'ombre portée.
+  let decor: DecorSource | undefined;
+  const decorOff = query.get('decor') === 'off';
+  const shadowQuery = query.get('shadow');
+  const shadowMethod = SHADOW_METHODS.find(
+    (method): method is ShadowMethod => method === shadowQuery,
+  );
   /**
    * La case, comptée comme cellIndex, se franchit-elle ? Comme pour la simulation (walkCost),
    * gardé par case : 1 oui, 2 non, 0 pas encore lu. Une case repeinte s'oublie.
@@ -463,7 +474,8 @@ async function main(): Promise<void> {
     const shown = clock.advance(now);
     if (shown > shownInstant) walkMs += ticker.elapsedMS;
     shownInstant = shown;
-    map.setSeason(overrides.month ?? clock.month());
+    const month = overrides.month ?? clock.month();
+    map.setSeason(month);
     const showing = performance.now();
     crowd.show(shown);
     frameCost.showMs = performance.now() - showing;
@@ -485,6 +497,8 @@ async function main(): Promise<void> {
         walkMs,
         stepMs: stepDuration(SPEED_FACTORS[speed]),
         passable,
+        objects: mapMode.value === 'natural' && decor !== undefined ? [decor] : [],
+        month,
       },
       camera,
       map.viewport,
@@ -512,6 +526,8 @@ async function main(): Promise<void> {
       memoryMb: usedMemoryMb(),
       renderer,
       chunks: map.pendingChunks,
+      decorChunks: decor?.stats.chunksBuilt,
+      decorBuildMs: decor?.stats.buildMs,
     };
     refreshInspected();
     // La fiche ouverte suit la vie de l'individu ou du groupe, chaque seconde, sauf si une
@@ -552,6 +568,10 @@ async function main(): Promise<void> {
         worldInfo.value = message.world;
         const layers = message.layers;
         worldLayers = layers;
+        decor = decorOff
+          ? undefined
+          : new DecorSource(data, layers, message.world.size, message.world.params.seed);
+        if (decor !== undefined && shadowMethod !== undefined) decor.shadow = shadowMethod;
         passability = new Uint8Array(layers.biome.length);
         inspected.value = undefined;
         // Une autre partie : les réponses attendues portent sur l'ancienne, et sont ignorées.
@@ -566,9 +586,16 @@ async function main(): Promise<void> {
         showFacts(snapshotFacts(message.chronicle));
         const { width } = message.world.size;
         map.setWorld(message.world, layers, (mode) => overlayTexels(mode, layers, modeData, width));
+        const ground = map.ground;
+        if (ground !== undefined) people.setGround(ground);
         actions.setMapMode(mapMode.value);
         const world = map.world;
         if (world !== undefined) controls.center(world);
+        // Débogage et captures : ?at=x,y vise la case (x, y).
+        const at = (query.get('at') ?? '').split(',').map(Number);
+        if (at.length === 2 && at.every(Number.isFinite)) {
+          controls.aim(((at[0] ?? 0) + 0.5) * TILE_PX, ((at[1] ?? 0) + 0.5) * TILE_PX);
+        }
         time.value = message.time;
         clock.reset(message.time, performance.now());
         shownIndex = dayIndex(message.time);
@@ -583,6 +610,9 @@ async function main(): Promise<void> {
         if (message.chunks.length > 0) {
           passability.fill(0);
           people.invalidate();
+          // Les blocs repeints se reposent (ADR 0017, § 1 ; l'occupation du sol de la phase 3
+          // passera par là).
+          decor?.invalidate(message.chunks);
         }
         // Les étapes du lot attendent leur jour ; l'image des groupes, quand elle change, vaut
         // à partir de l'instant du delta (ADR 0014).

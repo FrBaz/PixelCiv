@@ -21,6 +21,13 @@
  * dessine le i-ième dessin, du fond vers l'avant, et PixiJS n'a rien à trier. Le calque est un
  * groupe de rendu de PixiJS : ce qui y change ne fait pas refaire les instructions de la carte.
  * Il mesure ce que coûte chaque image : positions, tri, sprites.
+ *
+ * Calque commun (tâche 2b.6, ADR 0017, § 7) : le décor, puis le gibier, sont des sources d'objets
+ * (objects.ts), dont les motifs se rangent sous ceux des humains dans la même texture des rôles,
+ * et les palettes dans la même texture des palettes. Leurs listes, triées par les pieds, se
+ * fusionnent à chaque image avec les humains triés : un humain dont les pieds sont au-dessus de
+ * ceux d'un arbre passe derrière son houppier, sans tri global. Un appui touche ce qu'on voit
+ * (ADR 0014) : un pixel d'objet devant un humain le cache à l'appui.
  */
 import {
   Container,
@@ -39,19 +46,39 @@ import { GROUP_STRIDE } from '../core/protocol';
 import { decodeVisual } from '../core/visual';
 import { frameOf, recolor, ROLE, type Palette } from './atlas';
 import { parseColor, type Rgb } from './bake';
-import { followPalettes, humanShader, PaletteTexture, roleSource, slotColor } from './humanShader';
+import {
+  emptyGround,
+  followGround,
+  followPalettes,
+  humanShader,
+  PaletteTexture,
+  roleSource,
+  SHADOW_ROLE_RANGE,
+  slotColor,
+  type GroundTextures,
+} from './humanShader';
 import {
   ATLAS_ROLES,
   humanAtlas,
   humanPalette,
   humanTable,
+  LEVEL_ROWS,
   lookParts,
   MOTIF_COUNT,
   motifBox,
 } from './humans';
 import { bannerFabric } from './looks';
 import { TexturePages } from './pages';
-import type { Camera, Extent } from './camera';
+import { displayScale, type Camera, type Extent } from './camera';
+import { seasonFactor } from '../core/seasons';
+import {
+  mapOrigin,
+  OBJECT_FLAG,
+  type ObjectAtlas,
+  type ObjectList,
+  type ObjectSource,
+  type PaletteSlots,
+} from './objects';
 import {
   CrowdLayout,
   layoutCrowd,
@@ -59,6 +86,7 @@ import {
   motifTable,
   pickEntity,
   textureParts,
+  viewDensity,
   type CrowdOptions,
   type CrowdSource,
   type HumanTable,
@@ -93,6 +121,11 @@ export interface PeopleData {
   readonly appearance: Appearance;
   /** Stature de l'adulte de référence, en cases (display.stature de data/species.json). */
   readonly reference: number;
+  /**
+   * Atlas des objets du calque commun (le décor, le gibier), rangés sous celui des humains dans la
+   * texture des rôles, dans cet ordre : les sources de la scène n'en montrent pas d'autres.
+   */
+  readonly objects?: readonly ObjectAtlas[];
 }
 
 /** Ce que coûte et ce que dessine une image, pour le panneau de débogage. */
@@ -117,6 +150,9 @@ export interface PeopleStats {
   readonly k: number;
   /** Octets des textures du calque : atlas des rôles, palettes, pages des bannières. */
   readonly textureBytes: number;
+  /** Objets du calque commun dessinés, et durée de la mise à jour de leurs sources (ms). */
+  readonly objects: number;
+  readonly objectsMs: number;
 }
 
 /** Ce que la carte montre de près ou de loin, à l'instant affiché. */
@@ -129,6 +165,9 @@ export interface PeopleScene {
   readonly stepMs: number;
   /** La case, comptée comme cellIndex, se franchit-elle ? */
   readonly passable: (cell: number) => boolean;
+  /** Les sources d'objets que montre la vue rapprochée (le décor), et le mois continu de la carte. */
+  readonly objects?: readonly ObjectSource[];
+  readonly month?: number;
 }
 
 /** Palette d'une bannière : son contour, et les tons d'un tissu sur ses rôles d'habit. */
@@ -154,8 +193,28 @@ export class PeopleLayer {
   private readonly humans: ParticleContainer<Particle>;
   private readonly particles: Particle[] = [];
   private readonly motifTextures: Texture[];
+  /** Motifs des objets, de chaque atlas à la suite, et le premier motif de chaque atlas. */
+  private readonly objectTextures: Texture[] = [];
+  private readonly objectBase = new Map<ObjectAtlas, number>();
+  /** Rôles de la texture commune, un octet par pixel : les humains, puis chaque atlas d'objets. */
+  private readonly allRoles: Uint8Array;
   private readonly roles: BufferImageSource;
   private palettes = new PaletteTexture();
+  /** Le sol que lit l'ombre « ground » des objets (setGround). */
+  private ground: GroundTextures = emptyGround();
+  /** Les places des palettes des objets, d'une génération par texture des palettes (clear). */
+  private slots: PaletteSlots = this.paletteSlots(0);
+  /** Objets dessinés à la dernière image, dans l'ordre du dessin : de quoi répondre à l'appui. */
+  private shownObjects = 0;
+  private objectLeft = new Int32Array(0);
+  private objectTop = new Int32Array(0);
+  private objectMotif = new Int32Array(0);
+  private objectUnit = new Int32Array(0);
+  private objectFlip = new Uint8Array(0);
+  /** L'ordre du dessin : un rang de la disposition (humain, bannière), ou −1 − rang d'objet. */
+  private drawOrder = new Int32Array(0);
+  private drawCount = 0;
+  private objectsMs = 0;
   /** Le shader des humains, créé au premier dessin d'un rendu WebGL (ensureShader). */
   private shader: Shader | undefined;
   /** Sprites et particules de la dernière image dessinée, et pic récent de leur nombre. */
@@ -205,6 +264,8 @@ export class PeopleLayer {
     level: -1,
     k: 1,
     textureBytes: 0,
+    objects: 0,
+    objectsMs: 0,
   };
 
   constructor(app: Application, data: PeopleData) {
@@ -217,10 +278,44 @@ export class PeopleLayer {
     );
     this.clothOf = bannerCloth(appearance);
     this.table = humanTable(appearance);
-    this.roles = roleSource(ATLAS_ROLES, humanAtlas.width, humanAtlas.height);
+    // Une seule texture des rôles : l'atlas des humains, puis chaque atlas d'objets, de même
+    // largeur, pour que tous soient les particules d'un même conteneur (ADR 0017, § 7).
+    const atlases = data.objects ?? [];
+    let rows = humanAtlas.height;
+    for (const atlas of atlases) {
+      if (atlas.width !== humanAtlas.width) {
+        throw new Error(
+          `atlas d'objets de ${String(atlas.width)} de large, et non ${String(humanAtlas.width)}`,
+        );
+      }
+      rows += atlas.height;
+    }
+    this.allRoles = new Uint8Array(humanAtlas.width * rows);
+    this.allRoles.set(ATLAS_ROLES);
+    let row = humanAtlas.height;
+    const starts: number[] = [];
+    for (const atlas of atlases) {
+      this.allRoles.set(atlas.roles, row * humanAtlas.width);
+      starts.push(row);
+      row += atlas.height;
+    }
+    this.roles = roleSource(this.allRoles, humanAtlas.width, rows);
     this.motifTextures = Array.from({ length: MOTIF_COUNT }, (_, motif) => {
       const { x, y, width, height } = motifBox(motif);
       return new Texture({ source: this.roles, frame: new Rectangle(x, y, width, height) });
+    });
+    atlases.forEach((atlas, index) => {
+      this.objectBase.set(atlas, this.objectTextures.length);
+      const top = starts[index] ?? 0;
+      for (let at = 0; at + 5 < atlas.motifs.length; at += 6) {
+        const frame = new Rectangle(
+          atlas.motifs[at] ?? 0,
+          top + (atlas.motifs[at + 1] ?? 0),
+          atlas.motifs[at + 2] ?? 1,
+          atlas.motifs[at + 3] ?? 1,
+        );
+        this.objectTextures.push(new Texture({ source: this.roles, frame }));
+      }
     });
     this.humans = new ParticleContainer<Particle>({
       texture: this.motifTextures[0] ?? Texture.EMPTY,
@@ -260,8 +355,22 @@ export class PeopleLayer {
    */
   private ensureShader(): void {
     if (this.shader !== undefined || !('gl' in this.app.renderer)) return;
-    this.shader = humanShader(this.roles, this.palettes);
+    this.shader = humanShader(this.roles, this.palettes, this.ground);
     this.humans.shader = this.shader;
+  }
+
+  /**
+   * Le sol du monde, que lit l'ombre « ground » des objets : la texture des saisons de la carte
+   * (map.ts) et les tons d'ombre de ses biomes (seasons.ts, shadowTones).
+   */
+  setGround(ground: GroundTextures): void {
+    this.ground = ground;
+    this.version++;
+  }
+
+  /** Les places des palettes des objets dans la texture des palettes du moment. */
+  private paletteSlots(generation: number): PaletteSlots {
+    return { generation, slot: (key, palette) => this.palettes.slotOf(key, palette) };
   }
 
   /** La place d'une apparence dans la texture des palettes, rangée à sa première vue. */
@@ -313,8 +422,14 @@ export class PeopleLayer {
       world?.width,
       resolution,
       this.version,
+      scene.month,
+      ...(scene.objects ?? []).flatMap((objects) => [objects, objects.version]),
+      scene.objects?.length ?? 0,
     ];
-    if (signature.every((value, index) => value === this.drawnWith[index])) {
+    if (
+      signature.length === this.drawnWith.length &&
+      signature.every((value, index) => value === this.drawnWith[index])
+    ) {
       // Une image inchangée, en pause : le compte des apparences, sauté par la dernière image
       // dessinée, se fait une fois.
       const textures = this.texturesStale ? this.countTextures() : this.stats.textures;
@@ -343,6 +458,8 @@ export class PeopleLayer {
         stepMs: scene.stepMs,
       });
     }
+    // Les objets de la vue rapprochée, chaque source triée par les pieds (ADR 0017, § 7).
+    const lists = this.objectLists(scene, camera, viewport, world, resolution);
     const laid = performance.now();
     layout.sort();
     const sorted = performance.now();
@@ -360,13 +477,95 @@ export class PeopleLayer {
       this.shownKeys = keys;
     }
     const children = this.humans.particleChildren;
-    if (this.particleIds.length < layout.count) {
-      this.particleIds = new Float64Array(Math.max(layout.count, this.particleIds.length * 2));
+    const total = layout.count + lists.reduce((sum, list) => sum + list.count, 0);
+    if (this.particleIds.length < total) {
+      this.particleIds = new Float64Array(Math.max(total, this.particleIds.length * 2));
     }
     let people = 0;
     let flags = 0;
-    for (let index = 0; index < layout.count; index++) {
-      const drawn = layout.drawn(index);
+    // Fusion des humains, triés par la disposition, et des objets de chaque source, triés par
+    // leurs pieds : le plus haut à l'écran d'abord ; à pieds égaux, l'objet derrière l'humain.
+    const origin = mapOrigin(camera, viewport);
+    const cursors = lists.map(() => 0);
+    const nextVisible = (source: number): number => {
+      const list = lists.at(source);
+      if (list === undefined) return -1;
+      let cursor = cursors[source] ?? 0;
+      while (cursor < list.count) {
+        const at = list.order[cursor] ?? 0;
+        const left = origin.x + (list.left[at] ?? 0);
+        const top = origin.y + (list.top[at] ?? 0);
+        if (
+          left < viewport.width &&
+          left + (list.width[at] ?? 0) > 0 &&
+          top < viewport.height &&
+          top + (list.height[at] ?? 0) > 0
+        ) {
+          cursors[source] = cursor;
+          return at;
+        }
+        cursor++;
+      }
+      cursors[source] = cursor;
+      return -1;
+    };
+    const heads = lists.map((_, source) => nextVisible(source));
+    let human = 0;
+    let shownObjects = 0;
+    let order = 0;
+    this.reserveOrder(total);
+    for (;;) {
+      let source = -1;
+      let feet = Number.POSITIVE_INFINITY;
+      heads.forEach((at, index) => {
+        if (at < 0) return;
+        const objectFeet = origin.y + (lists[index]?.feet[at] ?? 0);
+        if (objectFeet < feet) {
+          feet = objectFeet;
+          source = index;
+        }
+      });
+      const humanDrawn = human < layout.count ? layout.drawn(human) : -1;
+      const humanFeet =
+        humanDrawn < 0
+          ? Number.POSITIVE_INFINITY
+          : (layout.top[humanDrawn] ?? 0) + (layout.height[humanDrawn] ?? 0);
+      if (source < 0 && humanDrawn < 0) break;
+      if (source >= 0 && feet <= humanFeet) {
+        const list = lists.at(source);
+        const at = heads.at(source) ?? -1;
+        if (list !== undefined && at >= 0) {
+          const atlas = scene.objects?.[source]?.atlas;
+          const base = atlas === undefined ? 0 : (this.objectBase.get(atlas) ?? 0);
+          const motif = base + (list.motif[at] ?? 0);
+          const unit = list.unit[at] ?? 1;
+          const left = origin.x + (list.left[at] ?? 0);
+          const top = origin.y + (list.top[at] ?? 0);
+          const flip = ((list.flags[at] ?? 0) & OBJECT_FLAG.flip) !== 0;
+          const particle = this.particle(people);
+          this.particleIds[people] = 0;
+          children[people++] = particle;
+          particle.texture = this.objectTextures[motif] ?? Texture.EMPTY;
+          particle.color = slotColor(list.slot[at] ?? 0, list.flags[at] ?? 0);
+          particle.scaleX = (flip ? -unit : unit) / resolution;
+          particle.scaleY = unit / resolution;
+          particle.x = (left + (flip ? (list.width[at] ?? 0) : 0)) / resolution;
+          particle.y = top / resolution;
+          this.objectLeft[shownObjects] = left;
+          this.objectTop[shownObjects] = top;
+          this.objectMotif[shownObjects] = motif;
+          this.objectUnit[shownObjects] = unit;
+          this.objectFlip[shownObjects] = flip ? 1 : 0;
+          this.drawOrder[order++] = -1 - shownObjects;
+          shownObjects++;
+        }
+        cursors[source] = (cursors[source] ?? 0) + 1;
+        heads[source] = nextVisible(source);
+        continue;
+      }
+      human++;
+      const drawn = humanDrawn;
+      this.drawOrder[order++] = drawn;
       const look = layout.look[drawn] ?? -1;
       const unit = layout.unit[drawn] ?? 1;
       const left = layout.left[drawn] ?? 0;
@@ -403,6 +602,8 @@ export class PeopleLayer {
       }
       flags++;
     }
+    this.shownObjects = shownObjects;
+    this.drawCount = order;
     children.length = people;
     this.humans.update();
     // Ne se cachent que les sprites que montrait la dernière image, et non toute la réserve.
@@ -416,7 +617,16 @@ export class PeopleLayer {
     // Les palettes rangées et les bannières recolorées de cette image partent au GPU.
     this.palettes.flush();
     if (this.shader === undefined) this.palettes.release();
-    else followPalettes(this.shader, this.palettes);
+    else {
+      followPalettes(this.shader, this.palettes);
+      const scale = displayScale(camera.zoom);
+      followGround(this.shader, this.ground, {
+        x: origin.x / resolution,
+        y: origin.y / resolution,
+        scale: scale / resolution,
+        season: seasonFactor(scene.month ?? 0),
+      });
+    }
     this.pages.flush();
     const finished = performance.now();
     this.stats = {
@@ -432,7 +642,100 @@ export class PeopleLayer {
       level: layout.close ? (layout.density?.level ?? -1) : -1,
       k: layout.density?.k ?? 1,
       textureBytes: this.textureBytes(),
+      objects: shownObjects,
+      objectsMs: this.objectsMs,
     };
+  }
+
+  /**
+   * Les listes des sources d'objets de la scène, mises à jour pour la vue rapprochée ; aucune de
+   * loin, ni avant le monde. La densité est celle des individus (viewDensity, aux niveaux de
+   * leurs motifs), calculée ici : le décor se montre aussi sur un monde sans foule, ou avant sa
+   * première image. La durée de leur mise à jour va au panneau de débogage.
+   */
+  private objectLists(
+    scene: PeopleScene,
+    camera: Camera,
+    viewport: Extent,
+    world: Extent | undefined,
+    resolution: number,
+  ): ObjectList[] {
+    const sources = scene.objects ?? [];
+    this.objectsMs = 0;
+    if (sources.length === 0 || world === undefined) return [];
+    const scale = displayScale(camera.zoom);
+    const density = viewDensity(scale, resolution, this.data.reference, LEVEL_ROWS);
+    if (!density.close) return [];
+    const started = performance.now();
+    const halfWidth = viewport.width / 2 / scale;
+    const halfHeight = viewport.height / 2 / scale;
+    const view = {
+      scale,
+      resolution,
+      level: density.level,
+      k: density.k,
+      left: camera.x - halfWidth,
+      right: camera.x + halfWidth,
+      top: camera.y - halfHeight,
+      bottom: camera.y + halfHeight,
+      t: scene.t,
+      month: scene.month ?? 0,
+      walkMs: scene.walkMs,
+    };
+    const lists = sources.map((source) => {
+      if (!this.objectBase.has(source.atlas)) {
+        throw new Error('source d’objets dont l’atlas n’est pas celui du calque');
+      }
+      return source.update(view, this.slots);
+    });
+    this.objectsMs = performance.now() - started;
+    return lists;
+  }
+
+  /** Place pour l'ordre du dessin de `count` dessins. */
+  private reserveOrder(count: number): void {
+    if (this.drawOrder.length >= count) return;
+    const size = Math.max(count, this.drawOrder.length * 2, 256);
+    this.drawOrder = new Int32Array(size);
+    this.objectLeft = new Int32Array(size);
+    this.objectTop = new Int32Array(size);
+    this.objectMotif = new Int32Array(size);
+    this.objectUnit = new Int32Array(size);
+    this.objectFlip = new Uint8Array(size);
+  }
+
+  /**
+   * Le dessin de devant au point (x, y) de l'écran, dans la dernière image : −1 − le rang d'un
+   * objet dont un pixel peint le couvre (son ombre portée, au sol, ne compte pas), un rang de la
+   * disposition dont le rectangle le contient (un humain, une bannière, comme pickEntity), ou
+   * undefined.
+   */
+  private frontAt(x: number, y: number): number | undefined {
+    const width = humanAtlas.width;
+    const [shadowFrom, shadowTo] = SHADOW_ROLE_RANGE;
+    for (let index = this.drawCount - 1; index >= 0; index--) {
+      const drawn = this.drawOrder[index] ?? 0;
+      if (drawn >= 0) {
+        const box = this.layout.box(drawn);
+        if (x >= box.left && x < box.left + box.width && y >= box.top && y < box.top + box.height) {
+          return drawn;
+        }
+        continue;
+      }
+      const object = -1 - drawn;
+      const texture = this.objectTextures.at(this.objectMotif[object] ?? 0);
+      if (texture === undefined) continue;
+      const unit = this.objectUnit[object] ?? 1;
+      const frame = texture.frame;
+      const u = Math.floor((x - (this.objectLeft[object] ?? 0)) / unit);
+      const v = Math.floor((y - (this.objectTop[object] ?? 0)) / unit);
+      if (u < 0 || v < 0 || u >= frame.width || v >= frame.height) continue;
+      const column = frame.x + (this.objectFlip[object] === 1 ? frame.width - 1 - u : u);
+      const role = this.allRoles[(frame.y + v) * width + column] ?? 0;
+      if (role === 0 || (role >= shadowFrom && role <= shadowTo)) continue;
+      return drawn;
+    }
+    return undefined;
   }
 
   /** Octets des textures du calque, en mémoire et sur le GPU. */
@@ -473,6 +776,10 @@ export class PeopleLayer {
    * dernière image dessinée (pickEntity), à `slop` pixels CSS près.
    */
   pick(x: number, y: number, slop: number): Picked | undefined {
+    // On touche ce qu'on voit (ADR 0014) : un objet peint devant un humain le cache à l'appui,
+    // qui désigne alors la case.
+    const front = this.frontAt(x, y);
+    if (front !== undefined && front < 0) return undefined;
     return pickEntity(this.layout, x, y, slop * this.app.renderer.resolution);
   }
 
@@ -540,12 +847,16 @@ export class PeopleLayer {
     // Le shader lit la nouvelle texture des palettes avant que l'ancienne ne se libère.
     const previous = this.palettes;
     this.palettes = new PaletteTexture();
+    // Les places que gardent les sources d'objets ne valent plus : elles les redemandent.
+    this.slots = this.paletteSlots(this.slots.generation + 1);
     if (this.shader !== undefined) followPalettes(this.shader, this.palettes);
     previous.destroy();
     this.looks = undefined;
     this.layout.reset(undefined);
     this.shownIds.fill(Number.NaN);
     this.shownKeys.fill(Number.NaN);
+    this.shownObjects = 0;
+    this.drawCount = 0;
     this.drawnWith = [];
     this.drawn++;
   }

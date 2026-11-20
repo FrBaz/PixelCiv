@@ -78,6 +78,14 @@ export interface DebugInfo {
   readonly level: number | undefined;
   readonly k: number | undefined;
   readonly textureBytes: number | undefined;
+  /**
+   * Décor (ADR 0017) : objets dessinés à la dernière image, durée moyenne de leur mise à jour
+   * par image, blocs posés depuis le début de la partie et leur durée totale.
+   */
+  readonly objects: number | undefined;
+  readonly objectsMs: number;
+  readonly decorChunks?: number;
+  readonly decorBuildMs?: number;
   readonly memoryMb: number | undefined;
   /** Moteur de rendu (webgl, webgpu) et densité de pixels de l'écran. */
   readonly renderer: { readonly name: string; readonly resolution: number };

@@ -70,6 +70,12 @@ export interface DebugSample {
   readonly level: number | undefined;
   readonly k: number | undefined;
   readonly textureBytes: number | undefined;
+  /**
+   * Objets du décor dessinés à la dernière image, et durée moyenne, par image, de la mise à jour
+   * de leurs sources, comprise dans la mise à jour (ADR 0017).
+   */
+  readonly objects: number | undefined;
+  readonly objectsMs: number;
 }
 
 /**
@@ -92,6 +98,9 @@ export interface FrameCost {
   readonly textureBytes?: number;
   /** Appels de dessin de l'image, s'ils se comptent (DrawCallCounter). */
   readonly drawCalls?: number;
+  /** Objets du calque commun dessinés, et la mise à jour de leurs sources (ms). */
+  readonly objects?: number;
+  readonly objectsMs?: number;
   /** Le rappel de l'image, et le rendu de la scène par PixiJS qui le suit. */
   readonly updateMs?: number;
   readonly renderMs?: number;
@@ -234,6 +243,8 @@ export class DebugSampler {
       level: last?.level,
       k: last?.k,
       textureBytes: last?.textureBytes,
+      objects: last?.objects,
+      objectsMs: average((cost) => cost.objectsMs ?? 0),
     };
   }
 }

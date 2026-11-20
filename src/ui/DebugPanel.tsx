@@ -135,6 +135,17 @@ export function DebugPanel() {
     ],
     ['debug.drawCalls', number(info?.drawCalls, 0)],
     [
+      'debug.decor',
+      info?.objects === undefined
+        ? t('debug.unavailable')
+        : t('debug.decorValue', {
+            objects: info.objects,
+            ms: round(info.objectsMs, 2),
+            chunks: info.decorChunks ?? 0,
+            build: round(info.decorBuildMs ?? 0, 1),
+          }),
+    ],
+    [
       'debug.memory',
       info?.memoryMb === undefined
         ? t('debug.unavailable')

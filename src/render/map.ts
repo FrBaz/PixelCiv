@@ -46,7 +46,8 @@ import {
   type Extent,
 } from './camera';
 import { MAP_FRAGMENT, MAP_FRAGMENT_WAVES, MAP_VERTEX } from './mapShader';
-import { seasonPalettes, seasonTexels } from './seasons';
+import { seasonPalettes, seasonTexels, shadowTones } from './seasons';
+import type { GroundTextures } from './humanShader';
 import {
   MAX_WAVE_BIOMES,
   seaInRect,
@@ -193,6 +194,8 @@ export class MapView {
    */
   private version = 0;
   private readonly palettes: BufferImageSource;
+  /** Tons d'ombre des biomes, pour l'ombre portée « ground » des objets (ADR 0017, § 4). */
+  private readonly tones: BufferImageSource;
   private readonly baker: Baker;
   private grid: ChunkGrid | undefined;
   private size: WorldSize | undefined;
@@ -212,6 +215,7 @@ export class MapView {
     if (river === undefined) throw new Error('biome « rivière » absent de data/biomes.json');
     this.globals.uniforms.uRiverColor = new Float32Array(river.base.map((value) => value / 255));
     this.palettes = dataSource(seasonPalettes(biomes), 3, biomes.length);
+    this.tones = dataSource(shadowTones(biomes), 2, biomes.length);
     this.globals.uniforms.uBiomes = biomes.length;
     this.globals.uniforms.uRiver = this.riverBiome;
     this.globals.uniforms.uSnow = Math.max(
@@ -238,6 +242,21 @@ export class MapView {
     return {
       width: Math.round(this.app.screen.width * resolution),
       height: Math.round(this.app.screen.height * resolution),
+    };
+  }
+
+  /**
+   * Le sol du monde, que lit l'ombre portée « ground » des objets (people.ts) : la texture des
+   * saisons, une valeur par case, et les tons d'ombre des biomes. Une texture neuve par monde.
+   */
+  get ground(): GroundTextures | undefined {
+    if (this.data === undefined || this.size === undefined) return undefined;
+    return {
+      data: this.data,
+      tones: this.tones,
+      columns: this.size.width,
+      rows: this.size.height,
+      biomes: this.biomes.length,
     };
   }
 

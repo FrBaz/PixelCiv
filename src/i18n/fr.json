@@ -160,6 +160,8 @@
   "debug.levelFar": "bannières",
   "debug.textureMemory": "Textures des individus",
   "debug.drawCalls": "Appels de dessin",
+  "debug.decor": "Décor : objets, mise à jour, blocs posés",
+  "debug.decorValue": "{objects} objets · {ms} ms · {chunks} blocs en {build} ms",
   "debug.memory": "Mémoire",
   "debug.renderer": "Rendu",
   "debug.seed": "Graine",

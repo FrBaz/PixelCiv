@@ -200,6 +200,11 @@ export class CameraControls {
     };
   }
 
+  /** Débogage et captures (?at=x,y) : vise le point (x, y) de la carte, en pixels de carte. */
+  aim(x: number, y: number): void {
+    this.shown = { ...this.shown, x, y };
+  }
+
   /** Bornes du zoom pour l'écran et le monde du moment, ou undefined avant la partie. */
   private limits(): ZoomLimits | undefined {
     const world = this.options.world();
