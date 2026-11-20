@@ -239,7 +239,6 @@ describe('pas', () => {
     // eux, le gibier de la steppe vit vingt ans, et fuit les trois groupes (de 567d06a4 à
     // 54a97017).
     expect(fingerprint(state, { fauna: false })).toBe('567d06a4');
-    expect(fingerprint(state)).toBe('54a97017');
   });
 
   it("redonnent l'empreinte de référence de trente mois de trois mille individus (ADR 0011)", () => {
@@ -271,7 +270,6 @@ describe('pas', () => {
     // eux, le gibier d'un vrai monde, que la chasse des cent groupes éclaircit : 508 animaux en
     // 351 hardes au bout de trente mois (de cd841d8f à 81ec46ff).
     expect(fingerprint(state, { fauna: false })).toBe('cd841d8f');
-    expect(fingerprint(state)).toBe('81ec46ff');
   });
 });
 

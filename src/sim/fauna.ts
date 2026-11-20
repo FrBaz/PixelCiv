@@ -58,6 +58,12 @@ const NO = -1;
 export const FAUNA_STREAM = 'sim.fauna';
 /** Côté des tuiles de la présence des humains, en cases : celles de Movement.heldInTile. */
 const HUMAN_TILE_SHIFT = 3;
+/**
+ * Portée de la recherche de l'humain le plus proche, au-delà de la distance gardée aux camps, en
+ * cases : une tuile tenue touche cette distance, et ses humains se tiennent à moins de 8√2 cases
+ * de ses bords ; au-delà, tous les buts se valent.
+ */
+const CAMP_ROOM = 12;
 const TWO_POW_32 = 4294967296;
 
 /** Le contenu dont le gibier se sert. */
@@ -607,6 +613,7 @@ export class HumanIndex {
     const today = dayIndex(state);
     if (this.day === today) return;
     this.day = today;
+    this.listed = NO;
     const { width, height } = state.size;
     this.tilesX = (width + 7) >> HUMAN_TILE_SHIFT;
     this.tilesY = (height + 7) >> HUMAN_TILE_SHIFT;
@@ -650,6 +657,56 @@ export class HumanIndex {
       }
     }
     return false;
+  }
+
+  /** Jour des listes des humains par tuile (`nearest`), refaites à la première demande du jour. */
+  private listed = NO;
+  /** Premier humain de chaque tuile, puis le suivant de chacun : par emplacements croissants. */
+  private head = new Int32Array(0);
+  private link = new Int32Array(0);
+
+  /**
+   * Distance, en cases, du point (px, py) au plus proche des humains vivants, à leur position du
+   * jour, au plus court à travers la couture ; `limit` au plus, et `limit` si aucun ne s'en
+   * approche. Les humains se rangent par tuiles de 8 × 8 cases, une fois par jour, à la première
+   * demande : seules les hardes qu'un camp gêne la font.
+   */
+  nearest(state: SimState, px: number, py: number, limit: number): number {
+    const today = dayIndex(state);
+    const { people } = state;
+    const { x, y } = people.columns;
+    const tiles = this.tilesX * this.tilesY;
+    if (this.listed !== today || this.head.length !== tiles) {
+      this.listed = today;
+      if (this.head.length !== tiles) this.head = new Int32Array(tiles);
+      this.head.fill(NO);
+      if (this.link.length < people.end) this.link = new Int32Array(people.end * 2);
+      for (let slot = people.end - 1; slot >= 0; slot--) {
+        if (people.alive[slot] !== 1) continue;
+        const tile = this.tileAt(x[slot] ?? 0, y[slot] ?? 0);
+        if (tile < 0) continue;
+        this.link[slot] = this.head[tile] ?? NO;
+        this.head[tile] = slot;
+      }
+    }
+    const { width } = state.size;
+    const reach = limit * FIXED;
+    const top = Math.max(0, Math.floor((py - reach) / FIXED) >> HUMAN_TILE_SHIFT);
+    const bottom = Math.min(this.tilesY - 1, Math.floor((py + reach) / FIXED) >> HUMAN_TILE_SHIFT);
+    const left = Math.floor((px - reach) / FIXED) >> HUMAN_TILE_SHIFT;
+    const right = Math.floor((px + reach) / FIXED) >> HUMAN_TILE_SHIFT;
+    let best = limit * limit;
+    for (let row = top; row <= bottom; row++) {
+      for (let column = left; column <= right; column++) {
+        const tile = row * this.tilesX + (((column % this.tilesX) + this.tilesX) % this.tilesX);
+        for (let slot = this.head[tile] ?? NO; slot !== NO; slot = this.link[slot] ?? NO) {
+          const dx = deltaFixedX(px, x[slot] ?? 0, width) / FIXED;
+          const dy = ((y[slot] ?? 0) - py) / FIXED;
+          best = Math.min(best, dx * dx + dy * dy);
+        }
+      }
+    }
+    return Math.sqrt(best);
   }
 }
 
@@ -859,12 +916,23 @@ function roam(
   const avoid = rules.camps * species.flee.distance;
   const humans = state.people.count > 0 && avoid > 0 ? state.fauna.humans : undefined;
   humans?.build(state);
+  // Une harde dont le but est déjà dans la zone d'un camp (un camp posé à côté d'elle, une fuite
+  // qui l'y a menée) n'y trouverait aucun but à `roam` cases, la zone se comptant par tuiles de
+  // 8 × 8 cases : elle resterait là, au camp, des mois. Elle y garde alors le droit de choisir un
+  // but à `camps` distances d'alarme au moins de l'humain vivant le plus proche, ou, si le sien en
+  // est déjà plus près, pas plus près que lui : elle va et vient sans approcher le camp, et s'en
+  // écarte (ADR 0018, § 2).
+  const room = avoid + CAMP_ROOM;
+  const here =
+    humans?.any(gx, gy, avoid, false) === true ? humans.nearest(state, gx, gy, room) : NO;
   for (let index = 0; index < found; index++) {
     const cx = candidateX[index] ?? 0;
     const cy = candidateY[index] ?? 0;
     // Loin des camps : aucune tuile de 8 × 8 cases où se tient un humain à moins de `camps`
     // distances d'alarme (présence du jour, sans chercher l'humain le plus proche).
-    if (humans?.any(cx, cy, avoid, false) === true) continue;
+    if (humans?.any(cx, cy, avoid, false) === true) {
+      if (here === NO || humans.nearest(state, cx, cy, room) < Math.min(here, avoid)) continue;
+    }
     if (!trace(state.cost, width, height, gx, gy, gx + deltaFixedX(gx, cx, width), cy).clear) {
       continue;
     }

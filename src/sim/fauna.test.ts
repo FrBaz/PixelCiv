@@ -699,6 +699,96 @@ describe('mouvements du gibier (ADR 0018, § 2)', () => {
     expect(goals).toBeGreaterThan(20);
   });
 
+  it('ne reste pas figée près d’un camp posé à côté d’elle, et ne s’en approche pas', () => {
+    // Le camp au centre de sa tuile de 8 × 8 cases ; huit hardes autour de lui, à 2,6 cases, dans la
+    // zone qu'il interdit aux buts, et à plus de `roam` cases de sa sortie : avant la reprise de
+    // 2b.6, aucun tirage n'y trouvait de but, et elles restaient là, au camp, tant qu'il durait.
+    const state = blank('temperate-forest');
+    applyCommands(
+      state,
+      [{ type: 'spawnGroup', x: 100, y: 100, species: 'human', subspecies: 'plains', count: 20 }],
+      HUMANS,
+    );
+    // Des campeurs : ils tiennent leur place et ne marchent pas, si bien que rien n'alarme les hardes.
+    const people: [number, number][] = [];
+    let cx = 0;
+    let cy = 0;
+    state.people.forEach((slot) => {
+      state.movement.removeActive(slot);
+      const x = state.people.columns.x[slot] ?? 0;
+      const y = state.people.columns.y[slot] ?? 0;
+      people.push([x, y]);
+      cx += x / FIXED / 20;
+      cy += y / FIXED / 20;
+    });
+    const fauna = state.fauna;
+    const avoid = RULES.camps * species(DEER).flee.distance;
+    const nearest = (x: number, y: number) =>
+      Math.min(...people.map(([hx, hy]) => distance(state, hx, hy, x, y)));
+    const D = 0.7071;
+    const around: [number, number][] = [
+      [1, 0],
+      [D, D],
+      [0, 1],
+      [-D, D],
+      [-1, 0],
+      [-D, -D],
+      [0, -1],
+      [D, -D],
+    ];
+    const herds = around.map(([ux, uy]) => herdAt(state, DEER, cx + 2.6 * ux, cy + 2.6 * uy, 3, 0));
+    fauna.humans.build(state);
+    const before = herds.map((herd) => {
+      const gx = fauna.goalX[herd] ?? 0;
+      const gy = fauna.goalY[herd] ?? 0;
+      expect(fauna.humans.any(gx, gy, avoid, false)).toBe(true);
+      expect(nearest(gx, gy)).toBeLessThan(avoid);
+      return nearest(gx, gy);
+    });
+    const goals = herds.map(() => 0);
+    for (let days = 0; days < 60; days++) {
+      const last = herds.map((herd) => [fauna.goalX[herd], fauna.goalY[herd]]);
+      for (const herd of herds) fauna.next[herd] = Math.min(fauna.next[herd] ?? 0, dayIndex(state));
+      day(state);
+      herds.forEach((herd, k) => {
+        const gx = fauna.goalX[herd] ?? 0;
+        const gy = fauna.goalY[herd] ?? 0;
+        if (gx === last[k]?.[0] && gy === last[k]?.[1]) return;
+        goals[k] = (goals[k] ?? 0) + 1;
+        // Chaque but nouveau garde ses distances : à `avoid` au moins de l'humain le plus proche,
+        // ou, si le précédent en était plus près, pas plus près que lui.
+        const now = nearest(gx, gy);
+        expect(now).toBeGreaterThanOrEqual(Math.min(before[k] ?? 0, avoid) - 1e-9);
+        before[k] = now;
+      });
+    }
+    expect(fauna.counts.flights).toBe(0);
+    for (const count of goals) expect(count).toBeGreaterThan(5);
+    for (const far of before) expect(far).toBeGreaterThanOrEqual(avoid);
+  });
+
+  it('mesure la distance à l’humain le plus proche, du jour, à travers la couture', () => {
+    const state = blank('temperate-forest');
+    walker(state, 511.5, 50.5);
+    const b = walker(state, 300.5, 120.5);
+    const humans = state.fauna.humans;
+    humans.build(state);
+    const at = (x: number, y: number) =>
+      humans.nearest(state, Math.round(x * FIXED), Math.round(y * FIXED), 20);
+    expect(at(0.5, 50.5)).toBeCloseTo(1, 9);
+    expect(at(300.5, 123.5)).toBeCloseTo(3, 9);
+    expect(at(200.5, 120.5)).toBe(20);
+    // Les listes suivent les humains, le jour même quand l'index se refait, et le lendemain.
+    moveWalker(state, b, 200.5, 118.5);
+    humans.build(state);
+    expect(at(200.5, 120.5)).toBeCloseTo(2, 9);
+    expect(at(300.5, 123.5)).toBe(20);
+    moveWalker(state, b, 300.5, 121.5);
+    day(state);
+    humans.build(state);
+    expect(at(300.5, 123.5)).toBeCloseTo(2, 9);
+  });
+
   it('ne dépend ni de ses caches ni de l’ordre où ils se refont', () => {
     const a = testState('autre');
     const b = testState('autre');
