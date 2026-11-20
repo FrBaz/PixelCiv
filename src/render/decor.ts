@@ -588,9 +588,9 @@ export class DecorSource implements ObjectSource {
   /**
    * Les états de saison des objets collectés au mois de la vue, et ce qui en dépend. Un objet ne se
    * réévalue que lorsque le facteur de saison sort de l'intervalle où sa composition ne change
-   * pas, ou que change ce qui vaut pour tous (le refroidissement, le mois des fruits) ; rien ne
-   * s'y alloue, et seuls les objets dont la composition change reprennent motif et palette
-   * (relecture 2b.6, problème 17 : chaque jour, tous les objets collectés se réévaluaient).
+   * pas, quand le refroidissement change, ou quand son fruit paraît ou disparaît au nouveau
+   * mois ; seuls les objets dont la composition change reprennent motif et palette (relecture
+   * 2b.6, problème 17 : chaque jour, tous les objets collectés se réévaluaient).
    */
   private refreshStates(view: ObjectView, palettes: PaletteSlots): void {
     const list = this.list;
@@ -604,18 +604,42 @@ export class DecorSource implements ObjectSource {
     const { factor } = moment;
     const cooling = (moment.coolingNorth ? 1 : 0) + (moment.coolingSouth ? 2 : 0);
     const month = Math.floor(moment.month) % 12;
+    const previousMonth = this.lastMonth;
     const coolingChanged = cooling !== this.lastCooling;
-    const monthChanged = month !== this.lastMonth;
+    const monthChanged = month !== previousMonth;
     this.lastCooling = cooling;
     this.lastMonth = month;
+    // Les seuils de g les plus proches de part et d'autre, que bound resserre (ci-dessous) : une
+    // seule fonction pour toute la passe, sans allocation par objet.
+    let g = 0;
+    let low = Number.NEGATIVE_INFINITY;
+    let high = Number.POSITIVE_INFINITY;
+    const bound = (threshold: number) => {
+      if (Number.isNaN(threshold)) return;
+      if (threshold < g - INTERVAL_MARGIN) low = Math.max(low, threshold);
+      else if (threshold > g + INTERVAL_MARGIN) high = Math.min(high, threshold);
+      else {
+        low = Number.POSITIVE_INFINITY;
+        high = Number.NEGATIVE_INFINITY;
+      }
+    };
     for (let at = 0; at < list.count; at++) {
       const lookIndex = this.looks[at] ?? 0;
       const mask = this.fruitMasks[lookIndex] ?? 0;
       const south = this.souths[at] === 1;
-      const g = south ? -factor : factor;
+      g = south ? -factor : factor;
+      // Le fruit ne change qu'entre un mois où il se montre et un mois où il ne se montre pas : au
+      // nouveau mois, seuls les objets dont le fruit paraît ou disparaît se réévaluent.
+      const shift = south ? 6 : 0;
+      const fruitChanged =
+        monthChanged &&
+        mask !== 0 &&
+        (previousMonth < 0 ||
+          ((mask >> ((month + shift) % 12)) & 1) !==
+            ((mask >> ((previousMonth + shift) % 12)) & 1));
       if (
         !coolingChanged &&
-        (!monthChanged || mask === 0) &&
+        !fruitChanged &&
         g > (this.lows[at] ?? 0) &&
         g < (this.highs[at] ?? 0)
       ) {
@@ -649,17 +673,8 @@ export class DecorSource implements ObjectSource {
       // les saisons de l'espèce, le feuillage nu, l'automne, la saison sèche.
       // Un seuil à moins de INTERVAL_MARGIN de g laisse l'état incertain : l'intervalle est vide,
       // et l'objet se réévalue jusqu'à s'en écarter.
-      let low = Number.NEGATIVE_INFINITY;
-      let high = Number.POSITIVE_INFINITY;
-      const bound = (threshold: number) => {
-        if (Number.isNaN(threshold)) return;
-        if (threshold < g - INTERVAL_MARGIN) low = Math.max(low, threshold);
-        else if (threshold > g + INTERVAL_MARGIN) high = Math.min(high, threshold);
-        else {
-          low = Number.POSITIVE_INFINITY;
-          high = Number.NEGATIVE_INFINITY;
-        }
-      };
+      low = Number.NEGATIVE_INFINITY;
+      high = Number.POSITIVE_INFINITY;
       bound(snowThreshold(temperatureCode, amplitudeCode, flagCode, rules.snow.share));
       if (amplitude > 0 && look.phenology === 'deciduous') {
         const { bareBelow, autumnBelow, autumnDrop } = rules.foliage;
