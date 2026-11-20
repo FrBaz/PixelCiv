@@ -1,7 +1,7 @@
 {
   // Code exécuté sous Node : configuration de Vite et outils de tools/, tests compris. Les
-  // tests de tools/ lisent aussi le rendu des humains et du décor, qui importent leurs atlas
-  // du build.
+  // tests de tools/ lisent aussi le rendu des humains, du décor et du gibier, qui importent
+  // leurs atlas du build.
   // Le chargeur natif de Vite, appelé à devenir la règle, exige l'extension .ts dans
   // les imports de la configuration et des modules qu'elle charge.
   "extends": "./tsconfig.base.json",
@@ -14,6 +14,7 @@
     "vite.config.ts",
     "tools",
     "src/render/human-atlas.d.ts",
-    "src/render/decor-atlas.d.ts"
+    "src/render/decor-atlas.d.ts",
+    "src/render/fauna-atlas.d.ts"
   ]
 }

@@ -1,6 +1,6 @@
 /**
- * Légendes des grilles de rôles (tâche 2b.6 ; AST-04 ; ADR 0017, § 3 et 7) : chaque atlas
- * d'objets du calque commun (le décor, puis le gibier) déclare la sienne, sous un nom que chaque
+ * Légendes des grilles de rôles (tâche 2b.6 ; AST-04 ; ADR 0017, § 3 et 7 ; ADR 0018, § 7) :
+ * chaque atlas d'objets du calque commun (le décor, le gibier) déclare la sienne, sous un nom que chaque
  * grille rappelle en tête (« # légende decor »). Une grille lue avec la légende d'un autre atlas
  * est refusée, même si ses caractères y avaient un sens (tools/role-grids.ts).
  *
@@ -91,3 +91,26 @@ export const DECOR_LEGEND: RoleLegend = {
     { id: 'cap', chars: 'CcjJ' },
   ],
 };
+
+/**
+ * Légende du gibier (assets/fauna/README.md ; ADR 0018, § 7) : le pelage, les parties claires
+ * (ventre, gorge, miroir, groin), les parties sombres (sabots, crinière, bouts d'oreille ; l'œil est
+ * l'ombre profonde, « E », que la réduction garde d'un pixel) et les bois ou les défenses. Les
+ * mêmes lettres ont ailleurs d'autres sens (C est le chaperon du décor) : une grille du gibier lue
+ * avec la légende du décor est refusée. Pas d'ombre portée : le gibier n'en a pas.
+ */
+export const FAUNA_LEGEND: RoleLegend = {
+  name: 'fauna',
+  empty: '.',
+  outline: 'o',
+  regions: [
+    { id: 'coat', chars: 'CcvV' },
+    { id: 'pale', chars: 'PpqQ' },
+    { id: 'dark', chars: 'DdeE' },
+    { id: 'horn', chars: 'HhjJ' },
+  ],
+};
+
+/** Régions du gibier, dans l'ordre de leur code : celles de la légende, aux rampes de data/fauna.json. */
+export const FAUNA_REGIONS = ['coat', 'pale', 'dark', 'horn'] as const;
+export type FaunaRegion = (typeof FAUNA_REGIONS)[number];

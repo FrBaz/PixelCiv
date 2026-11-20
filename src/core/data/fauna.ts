@@ -207,6 +207,20 @@ export const FaunaRulesSchema = z
     cadence: z
       .object({ walk: z.number().min(0.5).max(8), run: z.number().min(0.5).max(16) })
       .strict(),
+    /**
+     * Rendu : un animal mort entre deux images du gibier tombe là où il était, en millisecondes de
+     * l'horloge de la marche : il trébuche jusqu'à `stumble`, il est couché jusqu'à `lie`, puis il
+     * disparaît.
+     */
+    fall: z
+      .object({
+        stumble: z.number().int().min(0).max(5000),
+        lie: z.number().int().min(0).max(10_000),
+      })
+      .strict()
+      .refine((fall) => fall.stumble <= fall.lie, { message: 'stumble ≤ lie' }),
+    /** Le contour des motifs, celui des planches de sprites/ et du décor. */
+    outline: ColorSchema,
   })
   .strict();
 export type FaunaRules = z.infer<typeof FaunaRulesSchema>;

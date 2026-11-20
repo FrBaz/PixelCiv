@@ -1,8 +1,8 @@
 /**
  * Grilles de rôles des objets du calque commun (tâche 2b.6 ; AST-04 ; ADR 0017, § 3, 4 et 7) :
  * la lecture d'une grille de texte selon la légende de son atlas, l'ombre portée d'un motif, et
- * le rangement des motifs dans un atlas de rôles. Le décor s'en sert (tools/decor-atlas.ts) ;
- * le gibier s'en servira, avec sa propre légende et sans ombre.
+ * le rangement des motifs dans un atlas de rôles. Le décor s'en sert (tools/decor-atlas.ts), et le
+ * gibier (tools/fauna-atlas.ts), avec sa propre légende, ses grilles d'animation et sans ombre.
  *
  * Une grille (assets/decor/README.md) : un caractère par pixel, des lignes de même longueur ;
  * en tête, « # légende <nom> », le nom de la légende de son atlas, et « # pieds N », la colonne
@@ -78,6 +78,93 @@ export function parseRoleGrid(name: string, text: string, legend: RoleLegend): R
     throw new Error(`${name}, ligne ${String(lastLine)} : dernière rangée vide, sous les pieds`);
   }
   return { width, height, roles: image, anchorX, anchorY: height };
+}
+
+/**
+ * Lit une grille d'animation `name` (assets/fauna/README.md) selon la légende `legend` : en tête,
+ * « # légende <nom> » et « # pieds N » ; puis ses images, chacune ouverte par « # image k », k
+ * de 0 à n − 1 dans l'ordre, toutes de même taille. Les pieds se posent sur la dernière rangée
+ * de l'image, la ligne du sol : un animal au galop ou qui bondit la quitte, mais une image au
+ * moins de la grille s'y pose. Lève une erreur qui nomme la grille, la ligne et l'image.
+ */
+export function parseRoleFrames(name: string, text: string, legend: RoleLegend): RoleImage[] {
+  const roles = legendRoles(legend);
+  const lines = text.replace(/^\uFEFF/u, '').split(/\r?\n/u);
+  let declared: string | undefined;
+  let anchorX: number | undefined;
+  const frames: { rows: string[]; line: number }[] = [];
+  lines.forEach((raw, index) => {
+    const line = raw.trimEnd();
+    const where = `${name}, ligne ${String(index + 1)}`;
+    const heading = /^#\s*légende\s+(\S+)\s*$/u.exec(line);
+    if (heading !== null) {
+      declared = heading[1];
+      if (declared !== legend.name) {
+        throw new Error(`${where} : légende « ${heading[1]} », l'atlas lit « ${legend.name} »`);
+      }
+      return;
+    }
+    const feet = /^#\s*pieds\s+(\d+)\s*$/u.exec(line);
+    if (feet !== null) {
+      anchorX = Number(feet[1]);
+      return;
+    }
+    const image = /^#\s*image\s+(\d+)\s*$/u.exec(line);
+    if (image !== null) {
+      if (Number(image[1]) !== frames.length) {
+        throw new Error(`${where} : image ${image[1]}, la grille attend ${String(frames.length)}`);
+      }
+      frames.push({ rows: [], line: index + 1 });
+      return;
+    }
+    if (line === '' || line.startsWith('#')) return;
+    if (declared === undefined) {
+      throw new Error(`${where} : la légende se déclare en tête (« # légende ${legend.name} »)`);
+    }
+    const frame = frames.at(-1);
+    if (frame === undefined) throw new Error(`${where} : pixels hors d'une image (« # image 0 »)`);
+    const width = frames[0]?.rows[0]?.length ?? line.length;
+    if (line.length !== width) {
+      throw new Error(`${where} : ${String(line.length)} pixels, la grille en a ${String(width)}`);
+    }
+    for (let column = 0; column < line.length; column++) {
+      const char = line.charAt(column);
+      if (!roles.has(char)) {
+        throw new Error(
+          `${where}, colonne ${String(column + 1)} : « ${char} » hors de la légende ${legend.name}`,
+        );
+      }
+    }
+    frame.rows.push(line);
+  });
+  if (declared === undefined) {
+    throw new Error(`${name} : légende absente (« # légende ${legend.name} »)`);
+  }
+  if (frames.length === 0) throw new Error(`${name} : aucune image (« # image 0 »)`);
+  if (anchorX === undefined) throw new Error(`${name} : colonne des pieds absente (« # pieds N »)`);
+  const height = frames[0]?.rows.length ?? 0;
+  const width = frames[0]?.rows[0]?.length ?? 0;
+  if (anchorX >= width) {
+    throw new Error(`${name} : pieds en colonne ${String(anchorX)}, hors de ${String(width)}`);
+  }
+  const feet = anchorX;
+  const images = frames.map(({ rows, line }, frame) => {
+    if (rows.length !== height) {
+      throw new Error(
+        `${name}, ligne ${String(line)} : image ${String(frame)} de ${String(rows.length)} rangées, la grille en a ${String(height)}`,
+      );
+    }
+    const image = new Uint8Array(width * height);
+    rows.forEach((row, y) => {
+      for (let x = 0; x < width; x++) image[y * width + x] = roles.get(row.charAt(x)) ?? 0;
+    });
+    return { width, height, roles: image, anchorX: feet, anchorY: height };
+  });
+  const grounded = images.some(({ roles: image }) =>
+    image.subarray((height - 1) * width).some((role) => role !== 0),
+  );
+  if (!grounded) throw new Error(`${name} : aucune image ne se pose sur la dernière rangée`);
+  return images;
 }
 
 /**

@@ -1187,6 +1187,9 @@ describe('gibier : data/fauna.json et les habitats des biomes (ADR 0018)', () =>
       [{ idle: { ...rules.idle, chew: 50 } }, /^idle\.chew/],
       [{ cadence: { ...rules.cadence, walk: 0.2 } }, /^cadence\.walk/],
       [{ cadence: { ...rules.cadence, run: 17 } }, /^cadence\.run/],
+      [{ fall: { stumble: 900, lie: 800 } }, /^fall : stumble ≤ lie/],
+      [{ fall: { stumble: 100, lie: 20_000 } }, /^fall\.lie/],
+      [{ outline: '#13131' }, /^outline : couleur/],
       [{ herds: 3 }, /herds/],
     ];
     for (const [change, expected] of refused) {

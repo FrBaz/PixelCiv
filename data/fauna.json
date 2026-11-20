@@ -20,7 +20,12 @@
     "cadence": {
       "walk": 2,
       "run": 4
-    }
+    },
+    "fall": {
+      "stumble": 400,
+      "lie": 1600
+    },
+    "outline": "#13131c"
   },
   "species": [
     {

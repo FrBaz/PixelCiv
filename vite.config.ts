@@ -2,6 +2,7 @@ import { fileURLToPath } from 'node:url';
 import { defineConfig } from 'vitest/config';
 import { bundleLicenses } from './tools/bundle-licenses.ts';
 import { decorAtlas } from './tools/decor-atlas.ts';
+import { faunaAtlas } from './tools/fauna-atlas.ts';
 import { humanAtlas, loadHumans } from './tools/human-atlas.ts';
 import { pixelAtlas } from './tools/pixel-atlas.ts';
 
@@ -21,12 +22,13 @@ export default defineConfig(({ mode }) => ({
   oxc: { jsx: { runtime: 'automatic', importSource: 'preact' } },
   // Atlas des sources pixel art (assets/pixel/), rangé au build (AST-04).
   // Atlas des humains des planches de sprites/humans/skin/, habillés à l'exécution (ADR 0016).
-  // Atlas du décor, des grilles d'assets/decor/ (ADR 0017).
+  // Atlas du décor, des grilles d'assets/decor/ (ADR 0017), et du gibier, d'assets/fauna/ (ADR 0018).
   plugins: [
     licenses.main,
     pixelAtlas(fileURLToPath(new URL('assets/pixel', import.meta.url))),
     humanAtlas(root),
     decorAtlas(root),
+    faunaAtlas(root),
   ],
   worker: {
     format: 'es',

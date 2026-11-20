@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { Fingerprint } from '../src/core/hash';
-import { DECOR_LEGEND, legendRole, legendRoles, type RoleLegend } from '../src/gen/legend';
+import { DECOR_LEGEND, FAUNA_LEGEND, legendRole, legendRoles } from '../src/gen/legend';
 import { KEPT } from '../src/gen/humans';
 import { humanAtlas } from '../src/render/humans';
 import { buildDecorAtlas, decorGrids, namedForms } from './decor-atlas';
@@ -67,19 +67,11 @@ describe('grilles du décor (ADR 0017, § 3 et 7)', () => {
   });
 
   it('refusent une grille du gibier lue avec la légende du décor, même faite de lettres communes', () => {
-    // Le gibier aura sa légende (ADR 0018) : les mêmes lettres y ont d'autres sens.
-    const fauna: RoleLegend = {
-      name: 'fauna',
-      empty: '.',
-      outline: 'o',
-      regions: [
-        { id: 'coat', chars: 'CcvV' },
-        { id: 'light', chars: 'PpqQ' },
-        { id: 'dark', chars: 'DdeE' },
-      ],
-    };
+    // Le gibier a sa légende (ADR 0018, src/gen/legend.ts) : les mêmes lettres y ont d'autres
+    // sens (C, le pelage ; c'est le chaperon du décor). Les grilles d'assets/fauna/ le sont
+    // aussi (tools/fauna-atlas.test.ts).
     const deer = grid('fauna', ['.Cc.', 'oVvo']);
-    expect(() => parseRoleGrid('cerf-0.txt', deer, fauna)).not.toThrow();
+    expect(() => parseRoleGrid('cerf-0.txt', deer, FAUNA_LEGEND)).not.toThrow();
     expect(() => parseRoleGrid('cerf-0.txt', deer, DECOR_LEGEND)).toThrow(
       /^cerf-0\.txt, ligne 1 : légende « fauna », l'atlas lit « decor »/,
     );
