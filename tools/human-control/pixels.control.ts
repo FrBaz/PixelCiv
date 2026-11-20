@@ -15,6 +15,12 @@
  * pixels comparés, les particules retournées et la plus haute place, pour qu'une vue vide ne
  * passe pas pour un succès ; sur l'ensemble des vues, il veut une place au-delà de 255 (la
  * texture doublée deux fois), k = 1 et k = 2, et les deux densités d'écran.
+ *
+ * Calque commun (tâche 2b.6, ADR 0017, § 7) : le décor est fait de particules du même conteneur,
+ * dont les motifs se rangent sous ceux des humains dans la même texture des rôles. Leurs pixels
+ * se comparent de même, dans l'ordre du dessin, au rôle lu dans l'atlas du décor du build
+ * (src/render/decor.ts) ; seuls les pixels de leur ombre portée, que l'ombre « ground » peint
+ * du ton du sol et non de la palette, ne se comparent pas : ils cachent ce qui est dessous.
  */
 import { existsSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
@@ -27,6 +33,16 @@ import {
   paletteTexel,
 } from '../../src/render/humanShader';
 import { ATLAS_ROLES, humanAtlas } from '../../src/render/humans';
+import { DECOR_ATLAS, SHADOW_ROLES } from '../../src/render/decor';
+
+/** Le rôle du pixel (x, y) de la texture des rôles commune : les humains, puis le décor. */
+function roleAt(x: number, y: number): number {
+  if (y < humanAtlas.height) return ATLAS_ROLES[y * humanAtlas.width + x] ?? 0;
+  return DECOR_ATLAS.roles[(y - humanAtlas.height) * DECOR_ATLAS.width + x] ?? 0;
+}
+const SHADOWS: ReadonlySet<number> = new Set(SHADOW_ROLES);
+/** Un pixel qu'une ombre portée recouvre : rien ne s'y compare. */
+const UNKNOWN = -2;
 
 /** Ce que capture.cjs écrit dans le meta.json de chaque vue. */
 interface Meta {
@@ -56,6 +72,9 @@ interface Meta {
 
 interface Result {
   readonly particles: number;
+  /** Particules et pixels comparés du décor. */
+  readonly objects: number;
+  readonly comparedObjects: number;
   readonly compared: number;
   readonly mismatch: number;
   readonly undeclared: number;
@@ -75,6 +94,9 @@ const hex = (color: number) => `#${color.toString(16).padStart(6, '0')}`;
 function compare(meta: Meta, frame: Uint8Array, palettes: Uint8Array): Result {
   const { width, height, resolution } = meta;
   const expected = new Int32Array(width * height).fill(-1);
+  /** Le pixel attendu vient-il d'un objet du décor ? */
+  const fromObject = new Uint8Array(width * height);
+  let objects = 0;
   let undeclared = 0;
   let flipped = 0;
   let maxSlot = 0;
@@ -82,6 +104,8 @@ function compare(meta: Meta, frame: Uint8Array, palettes: Uint8Array): Result {
   for (const particle of meta.particles) {
     const [fx = 0, fy = 0, fw = 0, fh = 0, x = 0, y = 0, scaleX = 1, , color = 0] = particle;
     const slot = colorSlot(color);
+    const object = fy >= humanAtlas.height;
+    if (object) objects++;
     maxSlot = Math.max(maxSlot, slot);
     const k = Math.round(Math.abs(scaleX) * resolution);
     densities.add(k);
@@ -92,32 +116,39 @@ function compare(meta: Meta, frame: Uint8Array, palettes: Uint8Array): Result {
     const top = Math.round(y * resolution);
     for (let v = 0; v < fh; v++) {
       for (let u = 0; u < fw; u++) {
-        const role = ATLAS_ROLES[(fy + v) * humanAtlas.width + fx + u] ?? 0;
+        const role = roleAt(fx + u, fy + v);
         if (role === 0) continue;
         const { column, row } = paletteTexel(slot, role);
         const at = (row * PALETTE_WIDTH + column) * 4;
-        if ((palettes[at + 3] ?? 0) !== 255) undeclared++;
-        const rgb =
-          ((palettes[at] ?? 0) << 16) | ((palettes[at + 1] ?? 0) << 8) | (palettes[at + 2] ?? 0);
+        const shadow = object && SHADOWS.has(role);
+        if (!shadow && (palettes[at + 3] ?? 0) !== 255) undeclared++;
+        const rgb = shadow
+          ? UNKNOWN
+          : ((palettes[at] ?? 0) << 16) | ((palettes[at + 1] ?? 0) << 8) | (palettes[at + 2] ?? 0);
         const sx = left + (flip ? fw - 1 - u : u) * k;
         const sy = top + v * k;
         for (let dy = 0; dy < k; dy++) {
           for (let dx = 0; dx < k; dx++) {
             const px = sx + dx;
             const py = sy + dy;
-            if (px >= 0 && px < width && py >= 0 && py < height) expected[py * width + px] = rgb;
+            if (px >= 0 && px < width && py >= 0 && py < height) {
+              expected[py * width + px] = rgb;
+              fromObject[py * width + px] = object ? 1 : 0;
+            }
           }
         }
       }
     }
   }
   let compared = 0;
+  let comparedObjects = 0;
   let mismatch = 0;
   const samples: string[] = [];
   for (let index = 0; index < width * height; index++) {
     const want = expected[index] ?? -1;
     if (want < 0) continue;
     compared++;
+    if (fromObject[index] === 1) comparedObjects++;
     const got =
       ((frame[index * 4] ?? 0) << 16) |
       ((frame[index * 4 + 1] ?? 0) << 8) |
@@ -132,6 +163,8 @@ function compare(meta: Meta, frame: Uint8Array, palettes: Uint8Array): Result {
   }
   return {
     particles: meta.particles.length,
+    objects,
+    comparedObjects,
     compared,
     mismatch,
     undeclared,
@@ -155,7 +188,11 @@ describe('pixels des humains dans Chromium (ADR 0016, § 9)', () => {
       const palettes = readFileSync(path.join(folder, 'palettes.rgba'));
       expect(meta.errors).toEqual([]);
       expect(meta.shader).toMatch(/^pixelciv-humans-fragment/);
-      expect([meta.atlasWidth, meta.atlasHeight]).toEqual([humanAtlas.width, humanAtlas.height]);
+      // La texture des rôles commune : les humains, puis le décor (ADR 0017, § 7).
+      expect([meta.atlasWidth, meta.atlasHeight]).toEqual([
+        humanAtlas.width,
+        humanAtlas.height + DECOR_ATLAS.height,
+      ]);
       expect([meta.paletteWidth, meta.paletteHeight]).toEqual([PALETTE_WIDTH, meta.rows]);
       expect(frame.length).toBe(meta.width * meta.height * 4);
       expect(palettes.length).toBe(PALETTE_WIDTH * meta.rows * 4);
@@ -167,6 +204,9 @@ describe('pixels des humains dans Chromium (ADR 0016, § 9)', () => {
       expect(result.undeclared).toBe(0);
       expect(result.particles).toBeGreaterThan(50);
       expect(result.compared).toBeGreaterThan(5000);
+      // Le décor de la vue, en mode naturel, comparé comme les humains.
+      expect(result.objects).toBeGreaterThan(20);
+      expect(result.comparedObjects).toBeGreaterThan(5000);
       expect(result.flipped).toBeGreaterThan(0);
       expect(result.maxSlot).toBeLessThan(meta.rows * PALETTES_PER_ROW);
     });

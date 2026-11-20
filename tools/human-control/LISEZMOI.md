@@ -1,10 +1,10 @@
 # Contrôle des pixels des humains
 
-Vitest ne voit pas le shader des humains (`src/render/humanShader.ts`). Les tests le gardent hors du GPU : `humanShader.test.ts` évalue, en flottants de 32 bits, les expressions GLSL de l'adressage des palettes (`PALETTE_ADDRESS`), que le shader assemble, contre `slotColor` et `paletteTexel` ; `people.test.ts` vérifie, sur un faux rendu WebGL, que le calque pose le shader, envoie les palettes au GPU et fait suivre au shader la texture qui double. Ce contrôle vérifie, dans Chromium, que le GPU peint bien chaque pixel des humains de la couleur de son rôle dans sa palette (ADR 0016, § 9).
+Vitest ne voit pas le shader des humains (`src/render/humanShader.ts`). Les tests le gardent hors du GPU : `humanShader.test.ts` évalue, en flottants de 32 bits, les expressions GLSL de l'adressage des palettes (`PALETTE_ADDRESS`), que le shader assemble, contre `slotColor` et `paletteTexel` ; `people.test.ts` vérifie, sur un faux rendu WebGL, que le calque pose le shader, envoie les palettes au GPU et fait suivre au shader la texture qui double. Ce contrôle vérifie, dans Chromium, que le GPU peint bien chaque pixel des humains, et des objets du décor qui partagent leur calque, de la couleur de son rôle dans sa palette (ADR 0016, § 9 ; ADR 0017, § 7).
 
 ## Quand le lancer
 
-Quand le shader des humains, la texture des palettes, l'atlas des rôles ou la façon dont le calque pose ses particules changent (`src/render/humanShader.ts`, `src/render/people.ts`, `tools/human-atlas.ts`), et l'on joint son résultat à la PR. Une retouche des grilles, des tenues ou des palettes n'en demande aucun : elle change ce que l'atlas et les palettes contiennent, que le contrôle relit, et non la façon dont le GPU les lit.
+Quand le shader des humains, la texture des palettes, l'atlas des rôles ou la façon dont le calque pose ses particules changent (`src/render/humanShader.ts`, `src/render/people.ts`, `src/render/decor.ts`, `tools/human-atlas.ts`, `tools/decor-atlas.ts`), et l'on joint son résultat à la PR. Une retouche des grilles, des tenues ou des palettes n'en demande aucun : elle change ce que l'atlas et les palettes contiennent, que le contrôle relit, et non la façon dont le GPU les lit.
 
 ## Ce qu'il faut
 
@@ -49,6 +49,7 @@ Le contrôle échoue au moindre écart. Pour chaque vue :
 - `undeclared` : 0. Aucun rôle d'un motif n'est sans couleur dans sa palette.
 - Le programme posé est celui des humains, l'atlas des rôles de la page est celui du build, et la page n'a écrit aucune erreur.
 - `compared`, `flipped` et `maxSlot` : des pixels comparés, des particules retournées, et une place plus petite que ce que tient la texture.
+- Le décor (tâche 2b.6, ADR 0017, § 7) : ses objets sont des particules du même conteneur, leurs motifs rangés sous ceux des humains dans la même texture des rôles (l'atlas de la page a la hauteur des deux), leurs palettes dans la même texture. Leurs pixels se comparent comme ceux des humains, dans l'ordre du dessin, au rôle lu dans l'atlas du décor du build ; ceux de leur ombre portée, que l'ombre « ground » peint du ton du sol, ne se comparent pas, et cachent ce qu'ils recouvrent. `objects` et `comparedObjects` : des objets et des pixels d'objets comparés. Les vues du tableau sont en mode naturel : le décor s'y montre.
 
 Sur l'ensemble des vues : une place au-delà de 255 et une texture des palettes doublée deux fois au moins, k = 1 et k = 2, les deux densités d'écran. Une mutation de l'adressage (l'octet haut de la place lu dans le bleu, les rangées figées à 16), un envoi des palettes oublié ou un shader qui ne suit plus la texture qui double y font des milliers d'écarts.
 
