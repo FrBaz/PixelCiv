@@ -368,22 +368,45 @@ export function decorSeason(
   climate: FoliageClimate,
   rules: Pick<Decor, 'snow' | 'foliage'>,
 ): DecorSeason {
-  const snowy = snow > 0 && snow >= rules.snow.share;
+  const code = decorSeasonCode(
+    snow,
+    phenology,
+    climate.monthly,
+    climate.coldest,
+    climate.warmest,
+    climate.cooling,
+    climate.rain,
+    rules,
+  );
+  return { state: (code & 3) as DecorState, snowy: code >= 4 };
+}
+
+/**
+ * decorSeason sans objet : le même état, codé `état + 4 × enneigé`, d'après les seules valeurs du
+ * climat de la case au moment voulu (FoliageClimate). Le rendu l'appelle pour chaque objet de la
+ * vue, à chaque jour : rien ne s'y alloue.
+ */
+export function decorSeasonCode(
+  snow: number,
+  phenology: Phenology,
+  monthly: number,
+  coldest: number,
+  warmest: number,
+  cooling: boolean,
+  rain: number,
+  rules: Pick<Decor, 'snow' | 'foliage'>,
+): number {
+  const snowy = snow > 0 && snow >= rules.snow.share ? 4 : 0;
   const { bareBelow, autumnBelow, autumnDrop, dryShare } = rules.foliage;
-  let state: DecorState = DECOR_STATE.summer;
-  if (phenology === 'deciduous' && climate.coldest < bareBelow) {
-    if (climate.monthly < bareBelow) state = DECOR_STATE.bare;
-    else if (
-      climate.cooling &&
-      climate.monthly < autumnBelow &&
-      climate.monthly <= climate.warmest - autumnDrop
-    ) {
-      state = DECOR_STATE.autumn;
+  if (phenology === 'deciduous' && coldest < bareBelow) {
+    if (monthly < bareBelow) return DECOR_STATE.bare + snowy;
+    if (cooling && monthly < autumnBelow && monthly <= warmest - autumnDrop) {
+      return DECOR_STATE.autumn + snowy;
     }
-  } else if (phenology === 'dry' && climate.rain < dryShare) {
-    state = DECOR_STATE.dry;
+  } else if (phenology === 'dry' && rain < dryShare) {
+    return DECOR_STATE.dry + snowy;
   }
-  return { state, snowy };
+  return DECOR_STATE.summer + snowy;
 }
 
 /**
@@ -393,4 +416,15 @@ export function decorSeason(
 export function fruiting(months: readonly number[], month: number, south: boolean): boolean {
   const local = Math.floor(month + (south ? 6 : 0)) % 12;
   return months.includes(local);
+}
+
+/** Les mois d'un fruit en masque, un bit par mois du nord (fruitingMask). */
+export function monthMask(months: readonly number[]): number {
+  return months.reduce((mask, month) => mask | (1 << month), 0);
+}
+
+/** fruiting, d'après le masque de ses mois (monthMask) : sans tableau, pour chaque objet. */
+export function fruitingMask(mask: number, month: number, south: boolean): boolean {
+  const local = Math.floor(month + (south ? 6 : 0)) % 12;
+  return ((mask >> local) & 1) === 1;
 }

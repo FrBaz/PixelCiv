@@ -24,6 +24,7 @@ import {
   animationOf,
   FAUNA_ANIMATION,
   FAUNA_ATLAS,
+  FAUNA_BUCKET_CELLS,
   faunaPalette,
   FaunaLayer,
   idleFrame,
@@ -83,6 +84,7 @@ const noLegs = () => ({
 class FakeMotion implements FaunaMotion {
   frame: FaunaFrame;
   version = 1;
+  readonly moved: number[] = [];
   fallen = {
     count: 0,
     at: 0,
@@ -115,6 +117,12 @@ class FakeMotion implements FaunaMotion {
   facing(index: number): number {
     return this.animals[index]?.facing ?? 0;
   }
+  span(index: number, out: Float64Array): void {
+    out[0] = this.frame.positions[2 * index] ?? 0;
+    out[1] = 0;
+    out[2] = this.frame.positions[2 * index + 1] ?? 0;
+    out[3] = 0;
+  }
 }
 
 /** La vue d'un écran de 1 280 × 720 pixels CSS visant le point (x, y), en cases. */
@@ -132,6 +140,7 @@ function viewAt(
     resolution,
     level: density.level,
     k: density.k,
+    target: density.target,
     left: x * TILE_PX - halfWidth,
     right: x * TILE_PX + halfWidth,
     top: y * TILE_PX - halfHeight,
@@ -375,6 +384,95 @@ describe('le gibier dans le calque commun (ADR 0018, § 7 ; ADR 0017, § 7)', ()
     expect(feet(viewAt(200.5, 120.5, scale))).toEqual([]);
   });
 
+  it('ne regarde que les animaux des carrés de cases que la vue touche, étapes et couture comprises', () => {
+    // Relecture 2b.6, problèmes 11 et 18 : le calque calculait position et image de chaque animal
+    // du monde, à chaque image. Quatre mille animaux répartis sur le monde ; le calque n'en
+    // regarde qu'une petite part, et montre exactement ceux que la vue montre.
+    const animals: Animal[] = [];
+    for (let at = 0; at < 4000; at++) {
+      animals.push({ x: (at * 7.31) % WIDTH, y: 10 + ((at * 3.17) % 230), facing: -1 });
+    }
+    const motion = new FakeMotion(animals);
+    // Un animal en route vers l'est, parti à l'ouest de la vue : sa position est dans la vue,
+    // le départ de son étape à six cases de là ; un autre en route vers le nord-ouest.
+    const legs = new Map<number, [number, number, number, number]>([
+      [0, [94.5, 50.5, 12, 0]],
+      [1, [107.5, 52.5, -10, -3]],
+    ]);
+    motion.frame.positions[0] = Math.round(100.5 * FIXED);
+    motion.frame.positions[1] = Math.round(50.5 * FIXED);
+    motion.frame.positions[2] = Math.round(99.5 * FIXED);
+    motion.frame.positions[3] = Math.round(49.5 * FIXED);
+    motion.span = (index: number, out: Float64Array) => {
+      const leg = legs.get(index);
+      out[0] = leg === undefined ? (motion.frame.positions[2 * index] ?? 0) : leg[0] * FIXED;
+      out[1] = leg === undefined ? 0 : leg[2] * FIXED;
+      out[2] = leg === undefined ? (motion.frame.positions[2 * index + 1] ?? 0) : leg[1] * FIXED;
+      out[3] = leg === undefined ? 0 : leg[3] * FIXED;
+    };
+    const layer = new FaunaLayer(data, motion, WIDTH);
+    for (const [x, y] of [
+      [100.5, 50.5],
+      [0, 120],
+      [WIDTH - 2, 30],
+      [256, 240],
+    ] as const) {
+      const scale = 8;
+      const view = viewAt(x, y, scale);
+      const list = layer.update(view, new Slots());
+      const stats = layer.stats;
+      expect(stats.examined, `${String(x)}, ${String(y)}`).toBeLessThan(animals.length / 10);
+      // Les mêmes que si le calque les regardait tous : un calque témoin, dont l'index n'a
+      // qu'un carré, où tous se rangent.
+      const seen = (entries: ReturnType<typeof objects>) =>
+        entries.map((entry) => `${String(entry.left)},${String(entry.feet)}`).sort();
+      const brute = new FaunaLayer(data, motion, WIDTH);
+      const inside = brute as unknown as {
+        rebuild: (frame: FaunaFrame) => void;
+        follow: (frame: FaunaFrame) => void;
+        bucketsX: number;
+        bucketRows: number;
+        head: Int32Array;
+        next: Int32Array;
+        reachX: number;
+        reachY: number;
+        indexedFrame: FaunaFrame | undefined;
+      };
+      inside.rebuild = (frame: FaunaFrame) => {
+        const n = frame.ids.length;
+        inside.bucketsX = 1;
+        inside.bucketRows = 1;
+        inside.head = Int32Array.of(n > 0 ? 0 : -1);
+        inside.next = Int32Array.from({ length: n }, (_, index) =>
+          index + 1 < n ? index + 1 : -1,
+        );
+        inside.reachX = WIDTH;
+        inside.reachY = 256;
+        inside.indexedFrame = frame;
+      };
+      inside.follow = () => undefined;
+      expect(seen(objects(list)), `${String(x)}, ${String(y)}`).toEqual(
+        seen(objects(brute.update(view, new Slots()))),
+      );
+      // « Dessinés » : les animaux dont un pixel au moins tombe dans la vue, et non ceux que le
+      // calque a regardés ou posés autour d'elle (relecture 2b.6, problème 20).
+      const onScreen = objects(list).filter(
+        (entry) =>
+          entry.left < view.right * scale &&
+          entry.left + entry.width > view.left * scale &&
+          entry.top < view.bottom * scale &&
+          entry.feet > view.top * scale,
+      ).length;
+      expect(stats.drawn).toBeGreaterThan(0);
+      expect(stats.drawn).toBe(onScreen);
+      expect(brute.stats.drawn).toBe(onScreen);
+      expect(brute.stats.examined).toBe(animals.length);
+    }
+    // Les deux animaux en route, vus à leur place.
+    const near = objects(layer.update(viewAt(100.5, 50.5, 24), new Slots()));
+    expect(near.length).toBeGreaterThanOrEqual(2);
+  });
+
   it('anime la marche et la course à leur cadence et le repos en son cycle, figés en pause', () => {
     const view = (walkMs: number) => viewAt(100.5, 50.5, 8, { walkMs });
     const motion = new FakeMotion([
@@ -462,6 +560,111 @@ describe('le gibier dans le calque commun (ADR 0018, § 7 ; ADR 0017, § 7)', ()
       ['deer', 0, true],
       ['boar', 0, false],
     ]);
+  });
+
+  it('suit, étape après étape, les animaux qui changent de carré de cases, comme un calque sans index', () => {
+    // Relecture 2b.6, problèmes 11 et 18 : l'index se tient à jour à chaque étape appliquée. De
+    // l'état du worker au calque, quarante jours d'un monde peuplé : chaque jour, en plusieurs
+    // vues, le calque indexé montre exactement ce que montre un calque qui regarde tout le monde.
+    const state = flatState('index', (world) =>
+      world.biome.fill(data.biomes.indexOf('grassland') ?? 0),
+    );
+    step(state, scatteredGroups(state, 60), data);
+    const journal = new FaunaJournal();
+    state.fauna.journal = journal;
+    const timeline = new FaunaTimeline(() => undefined);
+    timeline.reset(faunaFrame(state, data), state, state.size.width);
+    const layer = new FaunaLayer(data, timeline, state.size.width);
+    const slots = new Slots();
+    /** Un calque témoin : un seul carré, où tout se range, sans suivi. */
+    const brute = new FaunaLayer(data, timeline, state.size.width);
+    const inside = brute as unknown as {
+      rebuild: (frame: FaunaFrame) => void;
+      follow: (frame: FaunaFrame) => void;
+      bucketsX: number;
+      bucketRows: number;
+      head: Int32Array;
+      next: Int32Array;
+      reachX: number;
+      reachY: number;
+      indexedFrame: FaunaFrame | undefined;
+    };
+    inside.rebuild = (frame: FaunaFrame) => {
+      const n = frame.ids.length;
+      inside.bucketsX = 1;
+      inside.bucketRows = 1;
+      inside.head = Int32Array.of(n > 0 ? 0 : -1);
+      inside.next = Int32Array.from({ length: n }, (_, index) => (index + 1 < n ? index + 1 : -1));
+      inside.reachX = state.size.width;
+      inside.reachY = state.size.height;
+      inside.indexedFrame = frame;
+    };
+    inside.follow = () => undefined;
+    const seen = (list: ObjectList) =>
+      objects(list)
+        .map(
+          (entry) =>
+            `${String(entry.left)},${String(entry.feet)},${entry.form},${entry.animation},${String(entry.frame)}`,
+        )
+        .sort();
+    // Chaque animal est dans la liste du carré de l'étendue de son étape : l'index suit les
+    // étapes appliquées, et non la seule image du mois.
+    const index = layer as unknown as {
+      head: Int32Array;
+      next: Int32Array;
+      bucketsX: number;
+    };
+    const span = new Float64Array(4);
+    const listed = (frame: FaunaFrame) => {
+      const members = new Map<number, number>();
+      for (let bucket = 0; bucket < index.head.length; bucket++) {
+        for (let at = index.head[bucket] ?? -1; at >= 0; at = index.next[at] ?? -1) {
+          members.set(at, bucket);
+        }
+      }
+      let wrong = 0;
+      for (let at = 0; at < frame.ids.length; at++) {
+        timeline.span(at, span);
+        const [x0 = 0, dx = 0, y0 = 0, dy = 0] = span;
+        const west = x0 + Math.min(0, dx);
+        const north = y0 + Math.min(0, dy);
+        const columns = index.bucketsX;
+        const column =
+          ((Math.floor(west / FIXED / FAUNA_BUCKET_CELLS) % columns) + columns) % columns;
+        const bucket = Math.floor(north / FIXED / FAUNA_BUCKET_CELLS) * columns + column;
+        if (members.get(at) !== bucket) wrong++;
+      }
+      return wrong;
+    };
+    let compared = 0;
+    let moved = 0;
+    for (let days = 0; days < 40; days++) {
+      const members = advanceDay(state, [], data);
+      const legs: FaunaLegArrays = journal.take();
+      moved += legs.slots.length;
+      timeline.receive(state, legs, members === undefined ? undefined : faunaFrame(state, data));
+      const now = dayIndex(state);
+      for (const t of [now, now + 0.5]) {
+        timeline.show(t);
+        for (const [x, y] of [
+          [100, 60],
+          [300, 180],
+          [2, 120],
+          [state.size.width - 3, 40],
+        ] as const) {
+          const view = viewAt(x, y, 3, { t });
+          const shown = seen(layer.update(view, slots));
+          expect(shown, `jour ${String(days)}, ${String(x)}, ${String(y)}`).toEqual(
+            seen(brute.update(view, slots)),
+          );
+          compared += shown.length;
+        }
+        const frame = timeline.frame;
+        if (frame !== undefined) expect(listed(frame), `jour ${String(days)}`).toBe(0);
+      }
+    }
+    expect(moved).toBeGreaterThan(1000);
+    expect(compared).toBeGreaterThan(500);
   });
 
   it('montre en course une fuite en forêt pluviale, que sa vitesse apparente ferait croire au pas', () => {

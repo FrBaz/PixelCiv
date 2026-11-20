@@ -1,11 +1,20 @@
 import { describe, expect, it } from 'vitest';
 import { Rng } from '../core/rng';
-import { NO_CARRIER, type GroupsFrame, type LegArrays } from '../core/protocol';
 import {
+  NO_CARRIER,
+  type FaunaFrame,
+  type FaunaLegArrays,
+  type GroupsFrame,
+  type LegArrays,
+} from '../core/protocol';
+import {
+  ANIMAL_BYTES,
   DAY_WINDOW,
   DebugSampler,
   displayOverrides,
   DrawCallCounter,
+  FAUNA_LEG_BYTES,
+  faunaBytes,
   LEG_BYTES,
   MEMBER_BYTES,
   positionBytes,
@@ -203,6 +212,20 @@ describe('DebugSampler', () => {
     };
     expect(positionBytes(legs(10), undefined)).toBe(260);
     expect(positionBytes(undefined, frame)).toBe(4 * 26 + 30 * 23 + 2 * 5 * 4);
+    // Le gibier (relecture 2b.6, problème 20) : une étape pèse 27 octets, allure comprise, un
+    // animal de l'image 17, et ses étapes en cours 26.
+    expect([FAUNA_LEG_BYTES, ANIMAL_BYTES]).toEqual([27, 17]);
+    const faunaLegs: FaunaLegArrays = { ...legs(6), gaits: new Uint8Array(6) };
+    const fauna: FaunaFrame = {
+      slots: new Uint32Array(12),
+      ids: new Uint32Array(12),
+      kinds: new Uint8Array(12),
+      positions: new Int32Array(24),
+      legs: legs(3),
+    };
+    expect(faunaBytes(faunaLegs, undefined)).toBe(6 * 27);
+    expect(faunaBytes(undefined, fauna)).toBe(12 * 17 + 3 * 26);
+    expect(faunaBytes(undefined, undefined)).toBe(0);
     // Dix deltas par seconde, de 100 étapes : 1 000 étapes par seconde ; ceux d'il y a plus
     // d'une seconde ne comptent plus.
     for (let at = 0; at < 3000; at += 100) sampler.receive(at, 100, 2600);
@@ -223,14 +246,17 @@ describe('DebugSampler', () => {
         cached: 400,
         pages: 2,
         drawCalls: 12,
-        objects: 3000 + frameIndex,
-        objectsMs: slow ? 4 : 0.5,
+        decorObjects: 3000 + frameIndex,
+        decorMs: slow ? 4 : 0.5,
+        faunaLayerMs: slow ? 1 : 0.25,
       });
     }
     const sample = sampler.sample();
-    // Le décor (ADR 0017) : les objets de la dernière image, la moyenne de leur mise à jour.
-    expect(sample.objects).toBe(3089);
-    expect(sample.objectsMs).toBeCloseTo(0.5, 9);
+    // Le décor (ADR 0017) : ses objets de la dernière image, la moyenne de sa mise à jour ; à
+    // part, celle du gibier (relecture 2b.6, problème 20).
+    expect(sample.decorObjects).toBe(3089);
+    expect(sample.decorMs).toBeCloseTo(0.5, 9);
+    expect(sample.faunaLayerMs).toBeCloseTo(0.25, 9);
     expect(sample.crowd.positions).toBeCloseTo(1, 9);
     expect(sample.crowd.sort).toBeCloseTo(0.5, 9);
     // Sans mesure de la mise à jour, du rendu ni de la chronologie, rien n'en est compté.

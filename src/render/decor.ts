@@ -24,10 +24,10 @@ import {
   compileDecor,
   DECOR_STATE,
   decorKey,
-  decorSeason,
+  decorSeasonCode,
   entryOf,
-  foliageClimate,
-  fruiting,
+  fruitingMask,
+  monthMask,
   seasonMoment,
   variantOf,
   type DecorLook,
@@ -39,6 +39,7 @@ import {
 import { DECOR_LEGEND, legendRole } from '../gen/legend';
 import { parseColor } from './bake';
 import { TILE_PX } from './camera';
+import { LEVEL_ROWS } from './humans';
 import {
   OBJECT_FLAG,
   ObjectList,
@@ -50,7 +51,7 @@ import {
   type ObjectView,
   type PaletteSlots,
 } from './objects';
-import { biomeCodes, cellSeasonCodes, snowShare } from './seasons';
+import { biomeCodes, cellSeasonCodes, snowShare, snowThreshold } from './seasons';
 
 /** Rôles de l'atlas du décor, un octet par pixel, décodés une fois. */
 function decodeRoles(base64: string): Uint8Array {
@@ -70,6 +71,22 @@ export const DECOR_ATLAS: ObjectAtlas = {
 };
 export const DECOR_FORMS = decorAtlas.forms;
 export const DECOR_LEVELS = decorAtlas.levels;
+
+/**
+ * Par niveau de motifs, la hauteur moyenne des motifs du décor au-dessus de leurs pieds, rapportée
+ * à celle de la planche (niveau 0) : de quoi choisir le niveau du décor (DecorSource.levelFor).
+ */
+export function decorLevelHeights(): Float64Array {
+  const sums = new Float64Array(DECOR_LEVELS);
+  for (let source = 0; source < decorAtlas.names.length; source++) {
+    for (let level = 0; level < DECOR_LEVELS; level++) {
+      sums[level] =
+        (sums.at(level) ?? 0) + (DECOR_ATLAS.motifs[(source * DECOR_LEVELS + level) * 6 + 5] ?? 0);
+    }
+  }
+  const base = sums.at(0) ?? 1;
+  return sums.map((sum) => sum / base);
+}
 
 /** Blocs de pose gardés au plus : de quoi couvrir un grand écran au zoom 3, ses abords compris. */
 export const MAX_CHUNKS = 64;
@@ -221,6 +238,18 @@ export class DecorSource implements ObjectSource {
   private variants = new Uint8Array(0);
   private codes = new Uint8Array(0);
   private climate = new Float64Array(0);
+  /** L'objet est-il au sud ? Lu de sa case une fois par collecte. */
+  private souths = new Uint8Array(0);
+  /**
+   * L'intervalle de g (facteur de saison signé par l'hémisphère) où la composition de l'objet ne
+   * change pas, cooling et mois du fruit mis à part : ses seuils les plus proches, resserrés de
+   * INTERVAL_MARGIN. Hors de lui, l'objet se réévalue ; dedans, rien ne change.
+   */
+  private lows = new Float64Array(0);
+  private highs = new Float64Array(0);
+  /** Ce qu'ont vu les derniers états : refroidissement au nord et au sud, mois du nord. */
+  private lastCooling = -1;
+  private lastMonth = -1;
   private readonly seasonCodes: ReturnType<typeof biomeCodes>;
   private choices = new Int32Array(0);
   /** Clé de la dernière collecte, et jour de ses états. */
@@ -229,6 +258,14 @@ export class DecorSource implements ObjectSource {
   /** Identifiants des palettes, denses, par composition (palette clé). */
   private readonly paletteIds = new Map<number, number>();
   private readonly placed: Placed[] = [0, 1, 2].map(() => ({ look: 0, variant: 0, fx: 0, fy: 0 }));
+  /** Par apparence : les mois de son fruit en masque (monthMask), 0 sans fruit. */
+  private readonly fruitMasks: Int32Array;
+  /**
+   * Par niveau de motifs : la hauteur moyenne des motifs du décor rapportée à celle de la planche
+   * (levelFor), et le niveau de la dernière mise à jour.
+   */
+  private readonly levelHeights: Float64Array;
+  private level = 0;
   private stats_: DecorStats = {
     collected: 0,
     updateMs: 0,
@@ -258,6 +295,33 @@ export class DecorSource implements ObjectSource {
       ? data.decor.landUse.none
       : { trees: 1, shrubs: 1, rocks: 1 };
     this.seasonCodes = biomeCodes(data.biomes.entries);
+    this.fruitMasks = Int32Array.from(this.world.table.looks, (look) => {
+      const months = entryOf(data.flora.entries, look.flora)?.look.fruit?.months;
+      return months === undefined ? 0 : monthMask(months);
+    });
+    this.levelHeights = decorLevelHeights();
+  }
+
+  /**
+   * Le niveau de motifs du décor dans la vue (relecture 2b.6, problème 7) : à la densité k des
+   * individus, celui dont les motifs approchent le plus la taille que leur donne la planche à la
+   * hauteur que vise l'adulte de référence, à égalité le plus fin. Les arbres gardent ainsi leur
+   * taille par rapport à la case d'un zoom à l'autre, au lieu de suivre les sauts du niveau des
+   * individus (de 0,85 à 1,42 case entre les zooms 20 et 24 sur PC) ; la densité, elle, reste
+   * celle des individus (REN-08).
+   */
+  levelFor(view: Pick<ObjectView, 'k' | 'target'>): number {
+    const ideal = view.target / LEVEL_ROWS[0];
+    let best = 0;
+    let error = Number.POSITIVE_INFINITY;
+    this.levelHeights.forEach((height, level) => {
+      const gap = Math.abs(height * view.k - ideal);
+      if (gap < error - 1e-9) {
+        best = level;
+        error = gap;
+      }
+    });
+    return best;
   }
 
   /** Méthode de l'ombre portée ; une autre refait la collecte. */
@@ -363,7 +427,9 @@ export class DecorSource implements ObjectSource {
   update(view: ObjectView, palettes: PaletteSlots): ObjectList {
     const started = performance.now();
     const { height } = this.world.size;
-    const { scale, level, k } = view;
+    const { scale, k } = view;
+    const level = this.levelFor(view);
+    this.level = level;
     const cellPx = TILE_PX * scale;
     const reach = this.reach(level);
     // Ce qui dépasse d'un objet : vers le haut sa hauteur, de chaque côté sa largeur (ombre
@@ -473,6 +539,9 @@ export class DecorSource implements ObjectSource {
     }
     this.day = Number.NaN;
     this.choices.fill(-1, 0, count);
+    // Tout objet collecté se réévalue : un intervalle vide.
+    this.lows.fill(Number.POSITIVE_INFINITY, 0, count);
+    this.highs.fill(Number.NEGATIVE_INFINITY, 0, count);
     this.refreshStates(view, palettes);
     list.sort();
   }
@@ -496,13 +565,18 @@ export class DecorSource implements ObjectSource {
     this.variants = grow(this.variants);
     this.codes = grow(this.codes, 3);
     this.climate = grow(this.climate, 3);
+    this.souths = grow(this.souths);
+    this.lows = grow(this.lows);
+    this.highs = grow(this.highs);
     this.choices = grow(this.choices);
   }
 
   /** Ce que l'état d'un objet lit de sa case, une fois par collecte. */
   private prepare(at: number, cell: number, row: number): void {
     const { layers, size } = this.world;
-    const codes = cellSeasonCodes(layers, this.seasonCodes, cell, southern(row, size.height));
+    const south = southern(row, size.height);
+    const codes = cellSeasonCodes(layers, this.seasonCodes, cell, south);
+    this.souths[at] = south ? 1 : 0;
     this.codes[at * 3] = codes.temperature;
     this.codes[at * 3 + 1] = codes.amplitude;
     this.codes[at * 3 + 2] = codes.flags;
@@ -511,38 +585,91 @@ export class DecorSource implements ObjectSource {
     this.climate[at * 3 + 2] = rainSeasonality(latitude(row, size.height));
   }
 
-  /** Les états de saison des objets collectés au mois de la vue, et ce qui en dépend. */
+  /**
+   * Les états de saison des objets collectés au mois de la vue, et ce qui en dépend. Un objet ne se
+   * réévalue que lorsque le facteur de saison sort de l'intervalle où sa composition ne change
+   * pas, ou que change ce qui vaut pour tous (le refroidissement, le mois des fruits) ; rien ne
+   * s'y alloue, et seuls les objets dont la composition change reprennent motif et palette
+   * (relecture 2b.6, problème 17 : chaque jour, tous les objets collectés se réévaluaient).
+   */
   private refreshStates(view: ObjectView, palettes: PaletteSlots): void {
     const list = this.list;
     const moment = seasonMoment(view.month);
     const { table } = this.world;
-    const { level, k } = view;
-    const height = this.world.size.height;
+    const { k } = view;
+    const level = this.level;
+    const rules = this.data.decor;
     const { motifs } = DECOR_ATLAS;
     const flags = this.method === 'ground' ? OBJECT_FLAG.ground : 0;
+    const { factor } = moment;
+    const cooling = (moment.coolingNorth ? 1 : 0) + (moment.coolingSouth ? 2 : 0);
+    const month = Math.floor(moment.month) % 12;
+    const coolingChanged = cooling !== this.lastCooling;
+    const monthChanged = month !== this.lastMonth;
+    this.lastCooling = cooling;
+    this.lastMonth = month;
     for (let at = 0; at < list.count; at++) {
       const lookIndex = this.looks[at] ?? 0;
+      const mask = this.fruitMasks[lookIndex] ?? 0;
+      const south = this.souths[at] === 1;
+      const g = south ? -factor : factor;
+      if (
+        !coolingChanged &&
+        (!monthChanged || mask === 0) &&
+        g > (this.lows[at] ?? 0) &&
+        g < (this.highs[at] ?? 0)
+      ) {
+        continue;
+      }
       const look = table.looks.at(lookIndex);
       if (look === undefined) continue;
       const cell = this.cells[at] ?? 0;
-      const row = Math.floor(cell / this.world.size.width);
-      const south = southern(row, height);
-      const snow = snowShare(
-        this.codes[at * 3] ?? 0,
-        this.codes[at * 3 + 1] ?? 0,
-        this.codes[at * 3 + 2] ?? 0,
-        moment.factor,
+      const temperatureCode = this.codes[at * 3] ?? 0;
+      const amplitudeCode = this.codes[at * 3 + 1] ?? 0;
+      const flagCode = this.codes[at * 3 + 2] ?? 0;
+      const snow = snowShare(temperatureCode, amplitudeCode, flagCode, factor);
+      // Le climat du feuillage (foliageClimate), sans objet.
+      const annual = this.climate[at * 3] ?? 0;
+      const amplitude = this.climate[at * 3 + 1] ?? 0;
+      const rain = this.climate[at * 3 + 2] ?? 0;
+      const code = decorSeasonCode(
+        snow,
+        look.phenology,
+        annual + amplitude * g,
+        annual - amplitude,
+        annual + amplitude,
+        south ? moment.coolingSouth : moment.coolingNorth,
+        1 + rain * g,
+        rules,
       );
-      const climate = foliageClimate(
-        this.climate[at * 3] ?? 0,
-        this.climate[at * 3 + 1] ?? 0,
-        south,
-        this.climate[at * 3 + 2] ?? 0,
-        moment,
-      );
-      const { state, snowy } = decorSeason(snow, look.phenology, climate, this.data.decor);
-      const months = entryOf(this.data.flora.entries, look.flora)?.look.fruit?.months;
-      const fruit = months !== undefined && fruiting(months, moment.month, south);
+      const state = (code & 3) as DecorState;
+      const snowy = code >= 4;
+      const fruit = mask !== 0 && fruitingMask(mask, moment.month, south);
+      // Les seuils de g les plus proches, de part et d'autre : la neige de la case, puis, selon
+      // les saisons de l'espèce, le feuillage nu, l'automne, la saison sèche.
+      // Un seuil à moins de INTERVAL_MARGIN de g laisse l'état incertain : l'intervalle est vide,
+      // et l'objet se réévalue jusqu'à s'en écarter.
+      let low = Number.NEGATIVE_INFINITY;
+      let high = Number.POSITIVE_INFINITY;
+      const bound = (threshold: number) => {
+        if (Number.isNaN(threshold)) return;
+        if (threshold < g - INTERVAL_MARGIN) low = Math.max(low, threshold);
+        else if (threshold > g + INTERVAL_MARGIN) high = Math.min(high, threshold);
+        else {
+          low = Number.POSITIVE_INFINITY;
+          high = Number.NEGATIVE_INFINITY;
+        }
+      };
+      bound(snowThreshold(temperatureCode, amplitudeCode, flagCode, rules.snow.share));
+      if (amplitude > 0 && look.phenology === 'deciduous') {
+        const { bareBelow, autumnBelow, autumnDrop } = rules.foliage;
+        bound((bareBelow - annual) / amplitude);
+        bound((autumnBelow - annual) / amplitude);
+        bound(1 - autumnDrop / amplitude);
+      }
+      if (rain !== 0 && look.phenology === 'dry') bound((rules.foliage.dryShare - 1) / rain);
+      this.lows[at] = low + INTERVAL_MARGIN;
+      this.highs[at] = high - INTERVAL_MARGIN;
       const biome = snowy ? (this.world.layers.biome[cell] ?? 0) : 0;
       // Composition de la palette : apparence, état, neige, fruit, biome de la neige, méthode.
       const choice =
@@ -591,6 +718,13 @@ export class DecorSource implements ObjectSource {
     return key;
   }
 }
+
+/**
+ * Marge des intervalles de g où la composition d'un objet ne change pas (refreshStates) : près
+ * d'un seuil, l'objet se réévalue, si bien que l'arrondi des seuils ne peut rien changer. Un jour
+ * déplace g de 2π / 360 au plus, quelque 0,017.
+ */
+const INTERVAL_MARGIN = 1e-6;
 
 /** Code de chaque méthode d'ombre, dans la composition des palettes. */
 const SHADOW_CODE: Readonly<Record<ShadowMethod, number>> = {

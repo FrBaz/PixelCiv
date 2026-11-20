@@ -53,6 +53,11 @@ export interface ObjectView {
   readonly level: number;
   readonly k: number;
   /**
+   * Hauteur que vise l'adulte de référence, en pixels physiques (viewDensity) : le décor y règle
+   * son propre niveau de motifs, à la même densité k (DecorSource.levelFor).
+   */
+  readonly target: number;
+  /**
    * Rectangle de la carte visible, en pixels de carte : x sans repli (une copie du monde par
    * largeur), y entre les pôles. Une source y ajoute ce qui dépasse de ses motifs.
    */

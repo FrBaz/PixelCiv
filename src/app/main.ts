@@ -89,6 +89,7 @@ import {
   DebugSampler,
   displayOverrides,
   DrawCallCounter,
+  faunaBytes,
   positionBytes,
   usedMemoryMb,
 } from './debug';
@@ -483,9 +484,15 @@ async function main(): Promise<void> {
     const calls = drawCalls.take();
     if (returning) returning = false;
     else {
+      // Le décor et le gibier, chacun pour soi (relecture 2b.6, problème 20).
+      const decorCost = decor === undefined ? undefined : people.objectCost(decor);
+      const faunaCost = game === undefined ? undefined : people.objectCost(game);
       sampler.frame(ticker.elapsedMS, {
         ...people.stats,
         ...frameCost,
+        decorObjects: decorCost?.shown,
+        decorMs: decorCost?.ms,
+        faunaLayerMs: faunaCost?.ms,
         drawCalls: calls,
         rendered: frames.drawn,
       });
@@ -606,7 +613,11 @@ async function main(): Promise<void> {
         people.clear();
         crowd.reset(message.frame, message.time, message.world.size.width);
         fauna.reset(message.fauna, message.time, message.world.size.width);
-        sampler.receive(performance.now(), 0, positionBytes(undefined, message.frame));
+        sampler.receive(
+          performance.now(),
+          0,
+          positionBytes(undefined, message.frame) + faunaBytes(undefined, message.fauna),
+        );
         occupied.reset();
         chronicleRequest++;
         chronicleLoading.value = false;
@@ -645,8 +656,8 @@ async function main(): Promise<void> {
         // à partir de l'instant du delta (ADR 0014).
         sampler.receive(
           performance.now(),
-          message.legs?.slots.length ?? 0,
-          positionBytes(message.legs, message.frame),
+          (message.legs?.slots.length ?? 0) + (message.faunaLegs?.slots.length ?? 0),
+          positionBytes(message.legs, message.frame) + faunaBytes(message.faunaLegs, message.fauna),
         );
         const receiving = performance.now();
         crowd.receive(message.time, message.legs, message.frame);

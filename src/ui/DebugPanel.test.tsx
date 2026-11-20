@@ -47,8 +47,9 @@ describe('panneau de débogage (ADR 0013, ADR 0014, ADR 0015)', () => {
       level: 1,
       k: 2,
       textureBytes: 2100 * 1024,
-      objects: 5123,
-      objectsMs: 0.4172,
+      decorObjects: 5123,
+      decorMs: 0.4172,
+      faunaLayerMs: 0.0712,
       decorChunks: 12,
       decorBuildMs: 6.31,
       animals: 652,
@@ -84,9 +85,10 @@ describe('panneau de débogage (ADR 0013, ADR 0014, ADR 0015)', () => {
     expect(shown.get('Décor : objets, mise à jour, blocs posés')).toBe(
       '5\u202f123 objets · 0,42 ms · 12 blocs en 6,3 ms',
     );
-    // Le gibier (ADR 0018) : ses animaux, ceux de la vue, et son jour, à trois décimales.
-    expect(shown.get('Gibier : animaux, dessinés, jour')).toBe(
-      '652 animaux · 37 dessinés · 0,318 ms par jour',
+    // Le gibier (ADR 0018) : ses animaux, ceux de la vue, sa mise à jour dans le calque commun,
+    // à part de celle du décor (relecture 2b.6, problème 20), et son jour, à trois décimales.
+    expect(shown.get('Gibier : animaux, dessinés, mise à jour, jour')).toBe(
+      '652 animaux · 37 dessinés · 0,07 ms · 0,318 ms par jour',
     );
     // Le rendu à la demande ne dessine que les images qui changent (ADR 0015) : les tics de
     // l'animation, et parmi eux les images dessinées.
@@ -102,7 +104,7 @@ describe('panneau de débogage (ADR 0013, ADR 0014, ADR 0015)', () => {
       legsPerSecond: undefined,
       drawCalls: undefined,
       level: -1,
-      objects: undefined,
+      decorObjects: undefined,
       animals: undefined,
     };
     expect(rows().get('Individus : niveau, densité')).toBe('bannières');
@@ -110,7 +112,7 @@ describe('panneau de débogage (ADR 0013, ADR 0014, ADR 0015)', () => {
     expect(rows().get('Positions reçues')).toBe('indisponible');
     expect(rows().get('Appels de dessin')).toBe('indisponible');
     expect(rows().get('Décor : objets, mise à jour, blocs posés')).toBe('indisponible');
-    expect(rows().get('Gibier : animaux, dessinés, jour')).toBe('indisponible');
+    expect(rows().get('Gibier : animaux, dessinés, mise à jour, jour')).toBe('indisponible');
   });
 });
 

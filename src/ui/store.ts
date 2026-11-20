@@ -82,15 +82,20 @@ export interface DebugInfo {
   readonly k: number | undefined;
   readonly textureBytes: number | undefined;
   /**
-   * Décor (ADR 0017) : objets dessinés à la dernière image, durée moyenne de leur mise à jour
-   * par image, blocs posés depuis le début de la partie et leur durée totale.
+   * Décor (ADR 0017) : ses objets posés à l'écran à la dernière image, durée moyenne de sa mise à
+   * jour par image, blocs posés depuis le début de la partie et leur durée totale.
    */
-  readonly objects: number | undefined;
-  readonly objectsMs: number;
+  readonly decorObjects: number | undefined;
+  readonly decorMs: number;
   readonly decorChunks?: number;
   readonly decorBuildMs?: number;
-  /** Gibier (ADR 0018) : animaux dessinés à la dernière image. */
+  /**
+   * Gibier (ADR 0018) : animaux dont un pixel au moins tombait dans la vue à la dernière image,
+   * et durée moyenne de sa mise à jour dans le calque commun, par image (relecture 2b.6,
+   * problème 20 : elle se comptait avec celle du décor).
+   */
   readonly faunaDrawn?: number;
+  readonly faunaLayerMs: number;
   readonly memoryMb: number | undefined;
   /** Moteur de rendu (webgl, webgpu) et densité de pixels de l'écran. */
   readonly renderer: { readonly name: string; readonly resolution: number };

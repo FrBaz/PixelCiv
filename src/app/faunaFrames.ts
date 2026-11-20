@@ -30,7 +30,26 @@ export interface FaunaSource {
   gait(index: number, t: number): number;
   /** Sens de sa dernière étape connue : −1 vers l'ouest, 1 vers l'est, 0 sans étape. */
   facing(index: number): number;
+  /**
+   * Ce que couvre l'étape du i-ième animal, à tout instant (FaunaSpan) : là où il peut se tenir
+   * tant qu'elle vaut, et rien de plus.
+   */
+  span(index: number, out: Float64Array): void;
+  /**
+   * Rangs de l'image dont l'étape a changé depuis qu'elle vaut, dans l'ordre où elles se sont
+   * appliquées, répétitions comprises : le rendu, qui range les animaux par carrés de cases, ne
+   * reclasse qu'eux. Vide à chaque image nouvelle.
+   */
+  readonly moved: readonly number[];
 }
+
+/**
+ * L'étendue d'une étape, dans `out` : x du départ, ramené dans le monde, et l'écart horizontal
+ * signé jusqu'à l'arrivée, puis y du départ et l'écart vertical, en unités ; sans étape, la
+ * position de l'image et des écarts nuls. legAt borne l'instant à l'étape : avant comme après, et
+ * entre deux, l'animal se tient sur ce segment.
+ */
+export type FaunaSpan = Float64Array;
 
 /** Des animaux morts entre deux images, à montrer tombant. */
 export interface FallenAnimals {
@@ -62,6 +81,7 @@ export class FaunaTimeline implements FaunaSource {
   /** Instant de l'image en cours, en jours. */
   at = 0;
   version = 0;
+  readonly moved: number[] = [];
   fallen: FallenAnimals = emptyFallen();
   private width = 1;
   private pending: { at: number; frame: FaunaFrame }[] = [];
@@ -153,6 +173,7 @@ export class FaunaTimeline implements FaunaSource {
     }
     if (previous !== undefined) this.dropFrame(previous);
     this.frame = frame;
+    this.moved.length = 0;
     this.at = at;
     this.facingOf = facing;
     this.indexOf = indexOf;
@@ -230,6 +251,7 @@ export class FaunaTimeline implements FaunaSource {
     const at = slot < this.indexOf.length ? (this.indexOf[slot] ?? -1) : -1;
     if (at < 0) return;
     this.set(at, day, x, y, sx, sy, count, legs.gaits[index] ?? FAUNA_GAIT.walk);
+    this.moved.push(at);
     this.version++;
   }
 
@@ -281,5 +303,23 @@ export class FaunaTimeline implements FaunaSource {
 
   facing(index: number): number {
     return this.facingOf[index] ?? 0;
+  }
+
+  span(index: number, out: Float64Array): void {
+    const frame = this.frame;
+    if (frame === undefined) return;
+    const day = this.legDay[index] ?? Number.NaN;
+    if (Number.isNaN(day)) {
+      out[0] = frame.positions[2 * index] ?? 0;
+      out[1] = 0;
+      out[2] = frame.positions[2 * index + 1] ?? 0;
+      out[3] = 0;
+      return;
+    }
+    const count = this.legCount[index] ?? 0;
+    out[0] = wrapFixedX(this.legX[index] ?? 0, this.width);
+    out[1] = (this.stepX[index] ?? 0) * count;
+    out[2] = this.legY[index] ?? 0;
+    out[3] = (this.stepY[index] ?? 0) * count;
   }
 }

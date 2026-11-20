@@ -82,6 +82,7 @@ function viewAt(x: number, y: number, scale: number, month: number, resolution =
     resolution,
     level: density.level,
     k: density.k,
+    target: density.target,
     left: cx - halfWidth,
     right: cx + halfWidth,
     top: cy - halfHeight,
@@ -472,31 +473,41 @@ describe('collecte du décor (ADR 0017, § 6 à 8)', () => {
     const count = first.count;
     const feet = Array.from(first.feet.subarray(0, count));
     expect(collect).toHaveBeenCalledTimes(1);
-    // La même vue, puis la vue décalée de moins d'un carré de collecte : rien ne se refait, et
-    // les objets gardent leur place depuis l'origine de la carte.
+    // La même vue, puis la vue décalée de moins d'un carré de collecte, à un autre instant du
+    // même jour : rien ne se refait, ni la collecte ni les états (relecture 2b.6, problème 19 :
+    // la garde du jour ôtée, les états se refaisaient à chaque image), et les objets gardent leur
+    // place depuis l'origine de la carte.
+    refresh.mockClear();
     source.update(view, slots);
     const nudge = (COLLECT_CELLS * TILE_PX) / 8;
-    source.update({ ...view, left: view.left + nudge, right: view.right + nudge }, slots);
+    source.update(
+      { ...view, left: view.left + nudge, right: view.right + nudge, month: july + 0.01 },
+      slots,
+    );
     expect(collect).toHaveBeenCalledTimes(1);
+    expect(refresh).not.toHaveBeenCalled();
     expect(Array.from(first.feet.subarray(0, first.count))).toEqual(feet);
     // Un autre jour : les états se refont, la collecte non.
-    refresh.mockClear();
     source.update({ ...view, month: july + 0.2 }, slots);
     expect(collect).toHaveBeenCalledTimes(1);
     expect(refresh).toHaveBeenCalledTimes(1);
-    // Au-delà d'un carré, à un autre niveau, après le pinceau, ou avec une texture des
+    // Au-delà d'un carré, à un autre niveau du décor, après le pinceau, ou avec une texture des
     // palettes neuve : elle se refait.
     const far = COLLECT_CELLS * TILE_PX * 2;
     source.update({ ...view, left: view.left + far, right: view.right + far }, slots);
     expect(collect).toHaveBeenCalledTimes(2);
-    source.update({ ...view, level: view.level + 1 }, slots);
+    source.update(view, slots);
     expect(collect).toHaveBeenCalledTimes(3);
-    source.invalidate([{ column: 0, row: 0 }]);
-    source.update({ ...view, level: view.level + 1 }, slots);
+    const finer = { ...view, target: view.target * 2 };
+    expect(source.levelFor(finer)).not.toBe(source.levelFor(view));
+    source.update(finer, slots);
     expect(collect).toHaveBeenCalledTimes(4);
-    slots.generation++;
-    source.update({ ...view, level: view.level + 1 }, slots);
+    source.invalidate([{ column: 0, row: 0 }]);
+    source.update(finer, slots);
     expect(collect).toHaveBeenCalledTimes(5);
+    slots.generation++;
+    source.update(finer, slots);
+    expect(collect).toHaveBeenCalledTimes(6);
     collect.mockRestore();
     refresh.mockRestore();
   });
@@ -517,6 +528,113 @@ describe('collecte du décor (ADR 0017, § 6 à 8)', () => {
       expect(key).toBeLessThan(2 ** 21);
     }
     expect(slots.palettes.every((palette) => palette.length === PALETTE_ROLES)).toBe(true);
+  });
+
+  it('suit les saisons jour après jour, sans recollecte, comme une source neuve', () => {
+    // Relecture 2b.6, problème 19 : les essais des saisons prenaient une source neuve à chaque
+    // mois ; des états figés après la première collecte passaient. Une forêt du nord aux hivers
+    // froids, vue de juillet à janvier, un jour après l'autre, sans bouger : tous les cinq jours,
+    // ce qu'elle montre est ce que montre une source neuve (une source ne réévalue un objet que
+    // lorsque la saison franchit l'un de ses seuils : problème 17).
+    const world = layers();
+    const cold = findCell(
+      world,
+      Array.from({ length: 80 }, (_, row) => 20 + row),
+      (cell) =>
+        (world.trees[cell] ?? 0) > 150 &&
+        (world.temperature[cell] ?? 0) - (world.amplitude[cell] ?? 0) < -50 &&
+        (world.temperature[cell] ?? 0) > 0 &&
+        !southern(Math.floor(cell / size.width), size.height),
+    );
+    const kept = new DecorSource(data, world, size, 'pixelciv');
+    const inside = kept as unknown as { collect(): void };
+    const collect = vi.spyOn(inside, 'collect');
+    const slots = new Slots();
+    const shown = (list: ObjectList, from: Slots) =>
+      Array.from({ length: list.count }, (_, at) => [
+        list.left[at],
+        list.top[at],
+        list.feet[at],
+        list.width[at],
+        list.height[at],
+        list.motif[at],
+        (from.palettes.at(list.slot[at] ?? -1) ?? []).map((color) => color?.join(',')).join(' '),
+      ]);
+    let bare = 0;
+    let snowy = 0;
+    for (let day = 0; day <= 210; day++) {
+      // Au milieu de chaque jour : le jour de la vue ne dépend pas de l'arrondi du mois.
+      const month = ((july * 30 + day + 0.5) / 30) % 12;
+      const list = kept.update(viewAt(cold.x, cold.y, 4, month), slots);
+      if (day % 5 !== 0) continue;
+      const fresh = new DecorSource(data, world, size, 'pixelciv');
+      const freshSlots = new Slots();
+      const reference = fresh.update(viewAt(cold.x, cold.y, 4, month), freshSlots);
+      expect(shown(list, slots), `mois ${String(month)}`).toEqual(shown(reference, freshSlots));
+      for (let at = 0; at < list.count; at++) {
+        const palette = slots.palettes.at(list.slot[at] ?? -1) ?? [];
+        const cap = rgb(palette[legendRole(DECOR_LEGEND, 'cap', 0)]);
+        if (cap !== hexRgb(data.decor.outline)) snowy++;
+      }
+      const motifs = new Set(Array.from(list.motif.subarray(0, list.count)));
+      for (const form of ['broadleaf-bare', 'birch-bare', 'larch-bare']) {
+        for (const source of Object.hasOwn(DECOR_FORMS, form) ? DECOR_FORMS[form] : []) {
+          for (let level = 0; level < DECOR_LEVELS; level++) {
+            if (motifs.has(source * DECOR_LEVELS + level)) bare++;
+          }
+        }
+      }
+    }
+    expect(collect).toHaveBeenCalledTimes(1);
+    // De juillet à janvier : des caducs nus et de la neige.
+    expect(bare).toBeGreaterThan(0);
+    expect(snowy).toBeGreaterThan(0);
+    collect.mockRestore();
+  });
+
+  it('réévalue ses objets quand la saison change de tendance, sans franchir de seuil', () => {
+    // L'automne tient au refroidissement : avec un automne qui commence dès le mois le plus chaud
+    // (autumnDrop nul, sous 40 °C), les caducs virent quand la saison tourne, mi-juillet, sans
+    // que le facteur de saison franchisse aucun seuil. La source gardée suit la source neuve.
+    const world = layers();
+    const cold = findCell(
+      world,
+      Array.from({ length: 80 }, (_, row) => 20 + row),
+      (cell) =>
+        (world.trees[cell] ?? 0) > 150 &&
+        (world.temperature[cell] ?? 0) - (world.amplitude[cell] ?? 0) < -50 &&
+        (world.temperature[cell] ?? 0) > 0 &&
+        !southern(Math.floor(cell / size.width), size.height),
+    );
+    const early = {
+      ...data,
+      decor: {
+        ...data.decor,
+        foliage: { ...data.decor.foliage, autumnDrop: 0, autumnBelow: 40 },
+      },
+    };
+    const kept = new DecorSource(early, world, size, 'pixelciv');
+    const slots = new Slots();
+    const motifs = (list: ObjectList) => Array.from(list.motif.subarray(0, list.count));
+    const palettes = (list: ObjectList, from: Slots) =>
+      Array.from({ length: list.count }, (_, at) =>
+        (from.palettes.at(list.slot[at] ?? -1) ?? []).map((color) => color?.join(',')).join(' '),
+      );
+    const seen = new Set<string>();
+    for (let day = -4; day <= 4; day++) {
+      const month = (july * 30 + day + 0.5) / 30;
+      const list = kept.update(viewAt(cold.x, cold.y, 4, month), slots);
+      const fresh = new DecorSource(early, world, size, 'pixelciv');
+      const freshSlots = new Slots();
+      const reference = fresh.update(viewAt(cold.x, cold.y, 4, month), freshSlots);
+      expect(motifs(list), `mois ${String(month)}`).toEqual(motifs(reference));
+      expect(palettes(list, slots), `mois ${String(month)}`).toEqual(
+        palettes(reference, freshSlots),
+      );
+      seen.add(palettes(list, slots).join('|'));
+    }
+    // Les palettes ont changé en chemin : le feuillage a viré.
+    expect(seen.size).toBeGreaterThan(1);
   });
 
   it('dénude en janvier les caducs d’un hiver froid du nord, les enneige sur la neige de la carte', () => {

@@ -149,9 +149,22 @@ export interface PeopleStats {
   readonly k: number;
   /** Octets des textures du calque : atlas des rôles, palettes, pages des bannières. */
   readonly textureBytes: number;
-  /** Objets du calque commun dessinés, et durée de la mise à jour de leurs sources (ms). */
+  /**
+   * Objets du calque commun dessinés, toutes sources confondues, et durée de la mise à jour de
+   * leurs sources (ms), nulle quand l'image n'a pas été refaite ; source par source : objectCost.
+   */
   readonly objects: number;
   readonly objectsMs: number;
+}
+
+/**
+ * Ce qu'une source d'objets a coûté et montré à la dernière image : ses objets posés à l'écran,
+ * et la durée de sa mise à jour, nulle quand l'image n'a pas été refaite (relecture 2b.6,
+ * problème 20).
+ */
+export interface ObjectCost {
+  readonly shown: number;
+  readonly ms: number;
 }
 
 /** Ce que la carte montre de près ou de loin, à l'instant affiché. */
@@ -216,6 +229,9 @@ export class PeopleLayer {
   private drawOrder = new Int32Array(0);
   private drawCount = 0;
   private objectsMs = 0;
+  /** La mise à jour de chaque source de la scène, dans son ordre, et leurs coûts (objectCost). */
+  private readonly sourceMs: number[] = [];
+  private readonly objectCosts = new Map<ObjectSource, ObjectCost>();
   /** Le shader des humains, créé au premier dessin d'un rendu WebGL (ensureShader). */
   private shader: Shader | undefined;
   /** Sprites et particules de la dernière image dessinée, et pic récent de leur nombre. */
@@ -437,7 +453,18 @@ export class PeopleLayer {
       // dessinée, se fait une fois.
       const textures = this.texturesStale ? this.countTextures() : this.stats.textures;
       this.texturesStale = false;
-      this.stats = { ...this.stats, positionsMs: 0, sortMs: 0, spritesMs: 0, textures };
+      // Rien ne s'est mis à jour : ni les sources d'objets, ni leurs durées (problème 20).
+      this.stats = {
+        ...this.stats,
+        positionsMs: 0,
+        sortMs: 0,
+        spritesMs: 0,
+        textures,
+        objectsMs: 0,
+      };
+      for (const [source, cost] of this.objectCosts) {
+        this.objectCosts.set(source, { shown: cost.shown, ms: 0 });
+      }
       return;
     }
     this.drawnWith = signature;
@@ -515,6 +542,7 @@ export class PeopleLayer {
     const heads = lists.map((_, source) => nextVisible(source));
     let human = 0;
     let shownObjects = 0;
+    const shownBySource = lists.map(() => 0);
     let order = 0;
     this.reserveOrder(total);
     for (;;) {
@@ -561,6 +589,7 @@ export class PeopleLayer {
           this.objectFlip[shownObjects] = flip ? 1 : 0;
           this.drawOrder[order++] = -1 - shownObjects;
           shownObjects++;
+          shownBySource[source] = (shownBySource[source] ?? 0) + 1;
         }
         cursors[source] = (cursors[source] ?? 0) + 1;
         heads[source] = nextVisible(source);
@@ -606,6 +635,13 @@ export class PeopleLayer {
       flags++;
     }
     this.shownObjects = shownObjects;
+    this.objectCosts.clear();
+    (scene.objects ?? []).forEach((objects, index) => {
+      this.objectCosts.set(objects, {
+        shown: shownBySource[index] ?? 0,
+        ms: this.sourceMs[index] ?? 0,
+      });
+    });
     this.drawCount = order;
     children.length = people;
     this.humans.update();
@@ -665,6 +701,7 @@ export class PeopleLayer {
   ): ObjectList[] {
     const sources = scene.objects ?? [];
     this.objectsMs = 0;
+    this.sourceMs.length = 0;
     if (sources.length === 0 || world === undefined) return [];
     const scale = displayScale(camera.zoom);
     const density = viewDensity(scale, resolution, this.data.reference, LEVEL_ROWS);
@@ -677,6 +714,7 @@ export class PeopleLayer {
       resolution,
       level: density.level,
       k: density.k,
+      target: density.target,
       left: camera.x - halfWidth,
       right: camera.x + halfWidth,
       top: camera.y - halfHeight,
@@ -690,7 +728,10 @@ export class PeopleLayer {
       if (!this.objectBase.has(source.atlas)) {
         throw new Error('source d’objets dont l’atlas n’est pas celui du calque');
       }
-      return source.update(view, this.slots);
+      const begun = performance.now();
+      const list = source.update(view, this.slots);
+      this.sourceMs.push(performance.now() - begun);
+      return list;
     });
     this.objectsMs = performance.now() - started;
     return lists;
@@ -797,6 +838,14 @@ export class PeopleLayer {
     this.version++;
   }
 
+  /**
+   * Ce que la source `source` a coûté et montré à la dernière image (ObjectCost), si la scène de
+   * cette image la portait.
+   */
+  objectCost(source: ObjectSource): ObjectCost | undefined {
+    return this.objectCosts.get(source);
+  }
+
   /** Version de ce que le calque dessine (rendu à la demande). */
   get drawVersion(): number {
     return this.drawn;
@@ -862,6 +911,7 @@ export class PeopleLayer {
     this.shownIds.fill(Number.NaN);
     this.shownKeys.fill(Number.NaN);
     this.shownObjects = 0;
+    this.objectCosts.clear();
     this.drawCount = 0;
     this.drawnWith = [];
     this.drawn++;

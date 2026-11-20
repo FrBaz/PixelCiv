@@ -144,13 +144,27 @@ export interface FaunaMotion {
   position(index: number, t: number, out: Float64Array): void;
   gait(index: number, t: number): number;
   facing(index: number): number;
+  /** L'étendue de l'étape du i-ième animal (app/faunaFrames.ts, FaunaSpan). */
+  span(index: number, out: Float64Array): void;
+  /** Rangs de l'image dont l'étape a changé depuis qu'elle vaut, dans l'ordre (app/faunaFrames.ts). */
+  readonly moved: readonly number[];
 }
 
 /** Ce que coûte et ce que montre le gibier, pour le panneau de débogage. */
 export interface FaunaStats {
+  /** Animaux dont un pixel au moins tombe dans la vue, et ceux que le calque a regardés. */
   readonly drawn: number;
+  readonly examined: number;
+  /** Particules posées : copies de part et d'autre de la couture et marges des motifs comprises. */
+  readonly particles: number;
   readonly updateMs: number;
 }
+
+/**
+ * Côté des carrés de cases où se rangent les animaux : le calque ne regarde que ceux des carrés
+ * que la vue touche (relecture 2b.6, problèmes 11 et 18 : il les regardait tous, à chaque image).
+ */
+export const FAUNA_BUCKET_CELLS = 16;
 
 /** Le contenu du gibier dont le rendu se sert. */
 export interface FaunaLook {
@@ -159,6 +173,7 @@ export interface FaunaLook {
 }
 
 const point = new Float64Array(2);
+const span = new Float64Array(4);
 
 /** Le gibier d'une partie, source d'objets du calque commun. */
 export class FaunaLayer implements ObjectSource {
@@ -184,7 +199,24 @@ export class FaunaLayer implements ObjectSource {
   /** Phase de chaque animal de l'image `phasesOf`, tirée une fois par image. */
   private phases = new Float64Array(0);
   private phasesOf: FaunaFrame | undefined;
-  private stats_: FaunaStats = { drawn: 0, updateMs: 0 };
+  /**
+   * Les animaux de l'image rangés par carrés de FAUNA_BUCKET_CELLS cases, d'après le coin
+   * nord-ouest de l'étendue de leur étape (FaunaSpan) : une liste par carré (`head`, puis `next` et
+   * `prev` de chaque rang), refaite à chaque image, puis tenue à jour, rang par rang, à chaque
+   * étape appliquée (`moved` de la chronologie, lu jusqu'à `consumed`). `reachX`, `reachY` : le
+   * plus grand écart d'une étape, en cases, dont la recherche s'élargit vers l'ouest et le nord.
+   */
+  private indexedFrame: FaunaFrame | undefined;
+  private consumed = 0;
+  private bucketsX = 1;
+  private bucketRows = 1;
+  private head = new Int32Array(1).fill(-1);
+  private next = new Int32Array(0);
+  private prev = new Int32Array(0);
+  private bucketOf = new Int32Array(0);
+  private reachX = 0;
+  private reachY = 0;
+  private stats_: FaunaStats = { drawn: 0, examined: 0, particles: 0, updateMs: 0 };
 
   constructor(content: FaunaLook, motion: FaunaMotion, columns: number) {
     this.content = content;
@@ -262,11 +294,106 @@ export class FaunaLayer implements ObjectSource {
     const started = performance.now();
     const list = this.list;
     list.clear();
+    this.drawn = 0;
+    this.examined = 0;
     const frame = this.motion.frame;
     if (frame !== undefined) this.collect(frame, view, palettes);
     list.sort();
-    this.stats_ = { drawn: list.count, updateMs: performance.now() - started };
+    this.stats_ = {
+      drawn: this.drawn,
+      examined: this.examined,
+      particles: list.count,
+      updateMs: performance.now() - started,
+    };
     return list;
+  }
+
+  /** Animaux montrés et regardés à la mise à jour en cours (stats). */
+  private drawn = 0;
+  private examined = 0;
+
+  /** Le carré du rang `index`, d'après l'étendue de son étape ; la portée de la recherche suit. */
+  private bucketFor(index: number): number {
+    const side = FAUNA_BUCKET_CELLS;
+    this.motion.span(index, span);
+    const [x0 = 0, dx = 0, y0 = 0, dy = 0] = span;
+    this.reachX = Math.max(this.reachX, Math.abs(dx) / FIXED);
+    this.reachY = Math.max(this.reachY, Math.abs(dy) / FIXED);
+    const west = x0 + Math.min(0, dx);
+    const north = y0 + Math.min(0, dy);
+    const column =
+      ((Math.floor(west / FIXED / side) % this.bucketsX) + this.bucketsX) % this.bucketsX;
+    const row = Math.max(0, Math.floor(north / FIXED / side));
+    return row < this.bucketRows ? row * this.bucketsX + column : -1;
+  }
+
+  private link(index: number, bucket: number): void {
+    const first = this.head[bucket] ?? -1;
+    this.next[index] = first;
+    this.prev[index] = -1;
+    if (first >= 0) this.prev[first] = index;
+    this.head[bucket] = index;
+    this.bucketOf[index] = bucket;
+  }
+
+  private unlink(index: number): void {
+    const bucket = this.bucketOf[index] ?? 0;
+    const before = this.prev[index] ?? -1;
+    const after = this.next[index] ?? -1;
+    if (before >= 0) this.next[before] = after;
+    else this.head[bucket] = after;
+    if (after >= 0) this.prev[after] = before;
+  }
+
+  /** Range de nouveau chaque animal de l'image : à chaque image, ou quand un carré manque. */
+  private rebuild(frame: FaunaFrame): void {
+    const n = frame.ids.length;
+    const side = FAUNA_BUCKET_CELLS;
+    this.bucketsX = Math.max(1, Math.ceil(this.columns / side));
+    this.reachX = 0;
+    this.reachY = 0;
+    // Les rangées de carrés que touchent les étapes de l'image, et une de plus.
+    let rows = 1;
+    for (let index = 0; index < n; index++) {
+      this.motion.span(index, span);
+      const [, , y0 = 0, dy = 0] = span;
+      rows = Math.max(rows, Math.floor((y0 + Math.min(0, dy)) / FIXED / side) + 1);
+    }
+    this.bucketRows = rows + 1;
+    const buckets = this.bucketsX * this.bucketRows;
+    if (this.head.length < buckets) this.head = new Int32Array(buckets);
+    this.head.fill(-1);
+    if (this.next.length < n) {
+      const size = Math.max(n, 2 * this.next.length);
+      this.next = new Int32Array(size);
+      this.prev = new Int32Array(size);
+      this.bucketOf = new Int32Array(size);
+    }
+    // Du dernier rang au premier : chaque liste va par rangs croissants.
+    for (let index = n - 1; index >= 0; index--) {
+      this.link(index, Math.max(0, this.bucketFor(index)));
+    }
+    this.indexedFrame = frame;
+    this.consumed = this.motion.moved.length;
+  }
+
+  /** Les rangs dont l'étape a changé depuis la dernière mise à jour changent de carré. */
+  private follow(frame: FaunaFrame): void {
+    const moved = this.motion.moved;
+    for (let at = this.consumed; at < moved.length; at++) {
+      const index = moved[at] ?? -1;
+      if (index < 0 || index >= frame.ids.length) continue;
+      const bucket = this.bucketFor(index);
+      if (bucket < 0) {
+        // Plus bas que les carrés de l'image : on range tout de nouveau.
+        this.rebuild(frame);
+        return;
+      }
+      if (bucket === this.bucketOf[index]) continue;
+      this.unlink(index);
+      this.link(index, bucket);
+    }
+    this.consumed = moved.length;
   }
 
   private collect(frame: FaunaFrame, view: ObjectView, palettes: PaletteSlots): void {
@@ -285,6 +412,17 @@ export class FaunaLayer implements ObjectSource {
       this.phasesOf = frame;
       this.phases = Float64Array.from(frame.ids, (id) => phaseOf(id));
     }
+    if (frame !== this.indexedFrame || this.consumed > this.motion.moved.length) {
+      this.rebuild(frame);
+    } else {
+      this.follow(frame);
+    }
+    // Le rectangle de la vue, en pixels physiques depuis l'origine, pour compter les animaux qui
+    // y montrent un pixel.
+    const viewLeft = view.left * scale;
+    const viewRight = view.right * scale;
+    const viewTop = view.top * scale;
+    const viewBottom = view.bottom * scale;
     const place = (
       kind: number,
       phase: number,
@@ -311,9 +449,15 @@ export class FaunaLayer implements ObjectSource {
       // Sans étape connue, chacun garde le sens que lui donne sa phase.
       const east = sense > 0 || (sense === 0 && phase >= 0.5);
       const slot = this.slot(kind & FAUNA_SPECIES, palettes);
+      let shown = false;
       for (let copy = first; copy <= last; copy++) {
         const footX = Math.round(base + copy * worldPx);
         const rect = footX - (east ? width - feetX : feetX) * k;
+        shown ||=
+          rect < viewRight &&
+          rect + width * k > viewLeft &&
+          footY - height * k < viewBottom &&
+          footY > viewTop;
         this.list.push(
           rect,
           footY - height * k,
@@ -326,8 +470,10 @@ export class FaunaLayer implements ObjectSource {
           east ? OBJECT_FLAG.flip : 0,
         );
       }
+      if (shown) this.drawn++;
     };
-    for (let index = 0; index < frame.ids.length; index++) {
+    const visit = (index: number) => {
+      this.examined++;
       this.motion.position(index, t, point);
       const animation = animationOf(this.motion.gait(index, t));
       const phase = this.phases[index] ?? 0;
@@ -344,6 +490,24 @@ export class FaunaLayer implements ObjectSource {
             );
       const kind = frame.kinds[index] ?? 0;
       place(kind, phase, animation, image, point[0], point[1], this.motion.facing(index));
+    };
+    // Les seuls carrés que la vue touche, élargie vers l'ouest et le nord du plus grand écart
+    // d'une étape : un animal se tient entre le coin nord-ouest de son étape et cet écart.
+    const cellPx = TILE_PX * scale;
+    const side = FAUNA_BUCKET_CELLS;
+    const fromColumn = Math.floor((left / cellPx - this.reachX) / side);
+    const toColumn = Math.floor(right / cellPx / side);
+    const fromRow = Math.max(0, Math.floor((top / cellPx - this.reachY) / side));
+    const toRow = Math.min(this.bucketRows - 1, Math.floor(bottom / cellPx / side));
+    const columns = Math.min(this.bucketsX, toColumn - fromColumn + 1);
+    for (let row = fromRow; row <= toRow; row++) {
+      for (let step = 0; step < columns; step++) {
+        const column = (((fromColumn + step) % this.bucketsX) + this.bucketsX) % this.bucketsX;
+        const bucket = row * this.bucketsX + column;
+        for (let index = this.head[bucket] ?? -1; index >= 0; index = this.next[index] ?? -1) {
+          visit(index);
+        }
+      }
     }
     // Les morts de la dernière image tombent, là où ils étaient, puis disparaissent.
     const fallen = this.motion.fallen;

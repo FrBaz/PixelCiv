@@ -11,7 +11,14 @@
  * mesures ne dépendent pas du GPU : dans un navigateur qui rend en logiciel, les images par
  * seconde ne disent rien de lui.
  */
-import { GROUP_STRIDE, type GroupsFrame, type LegArrays, type StepStats } from '../core/protocol';
+import {
+  GROUP_STRIDE,
+  type FaunaFrame,
+  type FaunaLegArrays,
+  type GroupsFrame,
+  type LegArrays,
+  type StepStats,
+} from '../core/protocol';
 
 export interface DebugSample {
   /**
@@ -41,7 +48,10 @@ export interface DebugSample {
    */
   readonly animals: number | undefined;
   readonly faunaDayMs: number | undefined;
-  /** Étapes et octets de positions (étapes et images des groupes) reçus par seconde. */
+  /**
+   * Étapes et octets de positions reçus par seconde : étapes et images des groupes, et celles du
+   * gibier (faunaBytes).
+   */
   readonly legsPerSecond: number | undefined;
   readonly positionBytesPerSecond: number | undefined;
   /**
@@ -77,11 +87,14 @@ export interface DebugSample {
   readonly k: number | undefined;
   readonly textureBytes: number | undefined;
   /**
-   * Objets du décor dessinés à la dernière image, et durée moyenne, par image, de la mise à jour
-   * de leurs sources, comprise dans la mise à jour (ADR 0017).
+   * Objets du décor posés à l'écran à la dernière image, et durées moyennes, par image, de la
+   * mise à jour du décor et de celle du gibier dans le calque commun, comprises dans la mise à
+   * jour (ADR 0017 et 0018 ; relecture 2b.6, problème 20 : la ligne du décor comptait aussi le
+   * gibier, et gardait en pause la durée de la dernière image refaite).
    */
-  readonly objects: number | undefined;
-  readonly objectsMs: number;
+  readonly decorObjects: number | undefined;
+  readonly decorMs: number;
+  readonly faunaLayerMs: number;
 }
 
 /**
@@ -104,9 +117,13 @@ export interface FrameCost {
   readonly textureBytes?: number;
   /** Appels de dessin de l'image, s'ils se comptent (DrawCallCounter). */
   readonly drawCalls?: number;
-  /** Objets du calque commun dessinés, et la mise à jour de leurs sources (ms). */
-  readonly objects?: number;
-  readonly objectsMs?: number;
+  /**
+   * Objets du décor posés à l'écran, et la mise à jour, dans le calque commun, du décor et du
+   * gibier (ms), nulle quand l'image n'a pas été refaite (PeopleLayer.objectCost).
+   */
+  readonly decorObjects?: number;
+  readonly decorMs?: number;
+  readonly faunaLayerMs?: number;
   /** Le rappel de l'image, et le rendu de la scène par PixiJS qui le suit. */
   readonly updateMs?: number;
   readonly renderMs?: number;
@@ -121,6 +138,26 @@ export interface FrameCost {
 export const LEG_BYTES = 4 + 4 + 8 + 8 + 2;
 /** Octets d'un membre dans l'image des groupes : emplacement, identifiant, apparence, stature, position, porteur. */
 export const MEMBER_BYTES = 4 + 4 + 2 + 1 + 8 + 4;
+
+/** Octets d'une étape du gibier : celles des individus, et son allure (FaunaLegArrays). */
+export const FAUNA_LEG_BYTES = LEG_BYTES + 1;
+/** Octets d'un animal dans l'image du gibier : emplacement, identifiant, sorte, position. */
+export const ANIMAL_BYTES = 4 + 4 + 1 + 8;
+
+/**
+ * Octets du gibier d'un delta ou d'un instantané : ses étapes, et son image s'il en porte une,
+ * étapes en cours comprises (relecture 2b.6, problème 20 : elles n'étaient pas comptées).
+ */
+export function faunaBytes(
+  legs: FaunaLegArrays | undefined,
+  frame: FaunaFrame | undefined,
+): number {
+  const animals = frame?.slots.length ?? 0;
+  const frameLegs = frame?.legs.slots.length ?? 0;
+  return (
+    (legs?.slots.length ?? 0) * FAUNA_LEG_BYTES + animals * ANIMAL_BYTES + frameLegs * LEG_BYTES
+  );
+}
 
 /** Octets de positions d'un delta ou d'un instantané : ses étapes, et son image s'il en porte une. */
 export function positionBytes(legs: LegArrays | undefined, frame: GroupsFrame | undefined): number {
@@ -260,8 +297,9 @@ export class DebugSampler {
       level: last?.level,
       k: last?.k,
       textureBytes: last?.textureBytes,
-      objects: last?.objects,
-      objectsMs: average((cost) => cost.objectsMs ?? 0),
+      decorObjects: last?.decorObjects,
+      decorMs: average((cost) => cost.decorMs ?? 0),
+      faunaLayerMs: average((cost) => cost.faunaLayerMs ?? 0),
     };
   }
 }

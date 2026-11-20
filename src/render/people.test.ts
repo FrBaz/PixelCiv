@@ -892,6 +892,40 @@ describe('calque commun : décor et humains (ADR 0017, § 7)', () => {
     }
   });
 
+  it('compte à part les objets et la mise à jour de chaque source, sans durée quand l’image ne se refait pas', () => {
+    // Relecture 2b.6, problème 20 : la ligne du décor comptait aussi le gibier, et gardait, en
+    // pause, la durée de la dernière image refaite.
+    const { people } = setupWithObjects(1);
+    const near = new FakeObjects([
+      [100.5, 50.5],
+      [100.6, 50.7],
+    ]);
+    // Le second objet de cette source tombe hors de la vue.
+    const far = new FakeObjects([
+      [100.4, 50.4],
+      [400.5, 50.5],
+    ]);
+    let clock = 0;
+    const now = vi.spyOn(performance, 'now').mockImplementation(() => (clock += 1));
+    const shown = { ...scene(frame(1, [1, 100, 50, 1])), objects: [near, far], month: 6.5 };
+    people.draw(shown, aimedAt(100, 50, 8), viewport, world);
+    expect(people.objectCost(near)?.shown).toBe(2);
+    expect(people.objectCost(far)?.shown).toBe(1);
+    expect(people.stats.objects).toBe(3);
+    expect(people.objectCost(near)?.ms).toBeGreaterThan(0);
+    expect(people.objectCost(far)?.ms).toBeGreaterThan(0);
+    expect(people.stats.objectsMs).toBeGreaterThan(0);
+    // La même image : aucune source ne se met à jour, et aucune durée ne se compte.
+    people.draw(shown, aimedAt(100, 50, 8), viewport, world);
+    expect(near.updates).toBe(1);
+    expect(people.stats.objectsMs).toBe(0);
+    expect(people.objectCost(near)).toEqual({ shown: 2, ms: 0 });
+    expect(people.objectCost(far)).toEqual({ shown: 1, ms: 0 });
+    // Une source que la scène ne porte pas n'a rien coûté.
+    expect(people.objectCost(new FakeObjects([]))).toBeUndefined();
+    now.mockRestore();
+  });
+
   it('montre les objets de près seulement, sur un monde sans foule aussi, et ne les met à jour qu’aux images refaites', () => {
     const { people, layer } = setupWithObjects(1);
     const objects = new FakeObjects([[300.5, 120.5]]);
@@ -1030,6 +1064,7 @@ function oneAnimal(x: number, y: number, kind: number, facing: number): FaunaMot
       legs: noLegs(),
     },
     version: 1,
+    moved: [],
     fallen: {
       count: 0,
       at: 0,
@@ -1038,6 +1073,12 @@ function oneAnimal(x: number, y: number, kind: number, facing: number): FaunaMot
       ids: new Uint32Array(0),
       positions: new Int32Array(0),
       facing: new Int8Array(0),
+    },
+    span(_index, out) {
+      out[0] = Math.round(x * FIXED);
+      out[1] = 0;
+      out[2] = Math.round(y * FIXED);
+      out[3] = 0;
     },
     position(_index, _t, out) {
       out[0] = Math.round(x * FIXED);

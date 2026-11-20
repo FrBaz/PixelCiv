@@ -136,11 +136,11 @@ export function DebugPanel() {
     ['debug.drawCalls', number(info?.drawCalls, 0)],
     [
       'debug.decor',
-      info?.objects === undefined
+      info?.decorObjects === undefined
         ? t('debug.unavailable')
         : t('debug.decorValue', {
-            objects: info.objects,
-            ms: round(info.objectsMs, 2),
+            objects: info.decorObjects,
+            ms: round(info.decorMs, 2),
             chunks: info.decorChunks ?? 0,
             build: round(info.decorBuildMs ?? 0, 1),
           }),
@@ -152,6 +152,7 @@ export function DebugPanel() {
         : t('debug.faunaValue', {
             animals: info.animals,
             drawn: info.faunaDrawn ?? 0,
+            update: round(info.faunaLayerMs, 2),
             ms: round(info.faunaDayMs ?? 0, 3),
           }),
     ],

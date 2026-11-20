@@ -115,6 +115,30 @@ export function snowShare(
 }
 
 /**
+ * Le seuil de neige d'une case pour le décor : la valeur de g (le facteur de saison, signé par
+ * l'hémisphère : seasonFactor du mois au nord, son opposé au sud) sous laquelle la part de
+ * neige de snowShare atteint `share` (decorSeason : enneigé), ou NaN si elle ne change pas avec la
+ * saison (une case d'eau, sans neige, sans amplitude, ou qui ne l'atteint jamais). Le décor ne
+ * réévalue un objet que lorsque g franchit l'un de ses seuils (DecorSource.refreshStates).
+ */
+export function snowThreshold(
+  temperature: number,
+  amplitude: number,
+  flags: number,
+  share: number,
+): number {
+  if (((flags >> 6) & 1) === 1 || ((flags >> 4) & 3) !== SNOW_COVER) return Number.NaN;
+  const swing = amplitude / 8;
+  if (swing <= 0) return Number.NaN;
+  const { onset, span, full } = COVER_RAMPS.snow;
+  const most = full * (flags >> 7 === 1 ? FOREST_SNOW_SHARE : 1);
+  if (most <= 0 || share > most) return Number.NaN;
+  // Enneigé quand la part, non nulle, atteint `share` : sous onset − span × share / most degrés.
+  const below = onset - (span * Math.max(0, share)) / most;
+  return (below - (temperature / 2 - 64)) / swing;
+}
+
+/**
  * Tons d'ombre de chaque biome, pour l'ombre portée « ground » des objets (ADR 0017, § 4) : une
  * ligne par biome, deux texels, le ton d'ombre de sa palette, puis celui de la palette de sa
  * couverture (le premier, faute de couverture).
