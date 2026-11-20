@@ -214,6 +214,13 @@ export class FaunaLayer implements ObjectSource {
   private next = new Int32Array(0);
   private prev = new Int32Array(0);
   private bucketOf = new Int32Array(0);
+  /**
+   * Le numéro de la dernière mise à jour qui a reclassé chaque animal (follow) : un animal dont
+   * plusieurs étapes se sont appliquées depuis l'image d'avant ne se reclasse qu'une fois, à son
+   * étape en cours.
+   */
+  private followedAt = new Uint32Array(0);
+  private follows = 0;
   private reachX = 0;
   private reachY = 0;
   private stats_: FaunaStats = { drawn: 0, examined: 0, particles: 0, updateMs: 0 };
@@ -316,7 +323,10 @@ export class FaunaLayer implements ObjectSource {
   private bucketFor(index: number): number {
     const side = FAUNA_BUCKET_CELLS;
     this.motion.span(index, span);
-    const [x0 = 0, dx = 0, y0 = 0, dy = 0] = span;
+    const x0 = span[0];
+    const dx = span[1];
+    const y0 = span[2];
+    const dy = span[3];
     this.reachX = Math.max(this.reachX, Math.abs(dx) / FIXED);
     this.reachY = Math.max(this.reachY, Math.abs(dy) / FIXED);
     const west = x0 + Math.min(0, dx);
@@ -356,7 +366,8 @@ export class FaunaLayer implements ObjectSource {
     let rows = 1;
     for (let index = 0; index < n; index++) {
       this.motion.span(index, span);
-      const [, , y0 = 0, dy = 0] = span;
+      const y0 = span[2];
+      const dy = span[3];
       rows = Math.max(rows, Math.floor((y0 + Math.min(0, dy)) / FIXED / side) + 1);
     }
     this.bucketRows = rows + 1;
@@ -368,6 +379,8 @@ export class FaunaLayer implements ObjectSource {
       this.next = new Int32Array(size);
       this.prev = new Int32Array(size);
       this.bucketOf = new Int32Array(size);
+      this.followedAt = new Uint32Array(size);
+      this.follows = 0;
     }
     // Du dernier rang au premier : chaque liste va par rangs croissants.
     for (let index = n - 1; index >= 0; index--) {
@@ -380,9 +393,18 @@ export class FaunaLayer implements ObjectSource {
   /** Les rangs dont l'étape a changé depuis la dernière mise à jour changent de carré. */
   private follow(frame: FaunaFrame): void {
     const moved = this.motion.moved;
+    if (this.consumed >= moved.length) return;
+    this.follows = (this.follows + 1) >>> 0;
+    if (this.follows === 0) {
+      this.followedAt.fill(0);
+      this.follows = 1;
+    }
     for (let at = this.consumed; at < moved.length; at++) {
       const index = moved[at] ?? -1;
       if (index < 0 || index >= frame.ids.length) continue;
+      // Une étape plus récente du même animal ne change rien : le carré suit l'étape en cours.
+      if (this.followedAt[index] === this.follows) continue;
+      this.followedAt[index] = this.follows;
       const bucket = this.bucketFor(index);
       if (bucket < 0) {
         // Plus bas que les carrés de l'image : on range tout de nouveau.
