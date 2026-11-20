@@ -240,16 +240,18 @@ export interface FaunaLegArrays extends LegArrays {
 
 /**
  * Gibier (protocole 7, ADR 0018) : chaque animal vivant, par emplacements croissants, son
- * emplacement, son identifiant, sa sorte (FAUNA_SPECIES, FAUNA_YOUNG, FAUNA_MALE, FAUNA_RUN),
- * l'identifiant de sa harde, sa position (x, y, en unités de core/position.ts), et l'étape en cours
- * de qui marche, repartie de l'instant de l'image, à l'allure que dit FAUNA_RUN. Les deltas
- * apportent ensuite les étapes qui commencent (FaunaLegArrays).
+ * emplacement, son identifiant, sa sorte (FAUNA_SPECIES, FAUNA_YOUNG, FAUNA_MALE, FAUNA_RUN), sa
+ * position (x, y, en unités de core/position.ts), et l'étape en cours de qui marche, repartie de
+ * l'instant de l'image, à l'allure que dit FAUNA_RUN. Les deltas apportent ensuite les étapes qui
+ * commencent (FaunaLegArrays). Rien de plus : l'identifiant de la harde, que le fil principal ne
+ * lit pas, ne voyage pas (relecture 2b.6, problème 16 ; 2b.8 l'ajoutera s'il lui sert). Les étapes
+ * de l'image gardent le format de celles des humains, jour compris (celui de l'image), que la
+ * chronologie lit comme les autres (LegQueue, legAt) : quatre octets par animal en route.
  */
 export interface FaunaFrame {
   readonly slots: Uint32Array<ArrayBuffer>;
   readonly ids: Uint32Array<ArrayBuffer>;
   readonly kinds: Uint8Array<ArrayBuffer>;
-  readonly herds: Uint32Array<ArrayBuffer>;
   readonly positions: Int32Array<ArrayBuffer>;
   readonly legs: LegArrays;
 }
@@ -282,7 +284,6 @@ export function faunaBuffers(frame: FaunaFrame): ArrayBuffer[] {
     frame.slots.buffer,
     frame.ids.buffer,
     frame.kinds.buffer,
-    frame.herds.buffer,
     frame.positions.buffer,
     ...legBuffers(frame.legs),
   ];

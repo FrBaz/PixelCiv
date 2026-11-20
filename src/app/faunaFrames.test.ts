@@ -75,7 +75,6 @@ describe('chronologie du gibier (protocole 7, ADR 0018, § 4)', () => {
       slots: Uint32Array.of(0, 4),
       ids: Uint32Array.of(10, 14),
       kinds: Uint8Array.of(0, FAUNA_RUN),
-      herds: Uint32Array.of(1, 2),
       positions: Int32Array.of(65_536, 65_536, 131_072, 65_536),
       legs: {
         slots: Uint32Array.of(4),
@@ -145,7 +144,6 @@ describe('chronologie du gibier (protocole 7, ADR 0018, § 4)', () => {
       slots: Uint32Array.from(slots),
       ids: Uint32Array.from(ids),
       kinds: new Uint8Array(ids.length),
-      herds: new Uint32Array(ids.length),
       positions: Int32Array.from(ids.flatMap((id) => [id * 65_536, 3 * 65_536])),
       legs: {
         slots: new Uint32Array(0),
@@ -199,7 +197,6 @@ describe('chronologie du gibier (protocole 7, ADR 0018, § 4)', () => {
       slots: new Uint32Array(0),
       ids: new Uint32Array(0),
       kinds: new Uint8Array(0),
-      herds: new Uint32Array(0),
       positions: new Int32Array(0),
       legs: {
         slots: new Uint32Array(0),

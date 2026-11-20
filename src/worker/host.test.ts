@@ -176,9 +176,9 @@ describe('partie', () => {
     expect(snapshot?.layers.biome).toEqual(testWorld().biome);
     const entry = env.sent.find((sent) => sent.message.type === 'snapshot');
     // Les couches du monde, plus les sept tableaux de l'image des groupes et les cinq des
-    // étapes en cours (ADR 0014), puis les cinq de l'image du gibier et les cinq de ses étapes
+    // étapes en cours (ADR 0014), puis les quatre de l'image du gibier et les cinq de ses étapes
     // en cours (protocole 7, ADR 0018).
-    expect(entry?.transfer).toHaveLength(LAYER_NAMES.length + 22);
+    expect(entry?.transfer).toHaveLength(LAYER_NAMES.length + 21);
     expect(snapshot?.fauna.ids.length).toBeGreaterThan(400);
     expect(snapshot?.time).toEqual({ tick: 0, day: 0, paused: false, speed: 'normal' });
     expect(entry?.transfer.every((buffer) => buffer instanceof ArrayBuffer)).toBe(true);
@@ -1262,9 +1262,26 @@ describe('deux horloges (ADR 0013)', () => {
     expect(frame.legs.slots.length).toBeLessThanOrEqual(frame.ids.length);
     expect([...frame.kinds].every((kind) => (kind & ~0x7f) === 0)).toBe(true);
     expect([...frame.kinds].some((kind) => (kind & FAUNA_RUN) === 0)).toBe(true);
-    // Les tampons voyagent sans copie.
+    // Les tampons voyagent sans copie : ceux de l'image, et ceux des étapes de chaque lot,
+    // allures comprises (relecture 2b.6, problème 15).
     const entry = env.sent.findLast((sent) => sent.message.type === 'delta');
     expect(entry?.transfer).toEqual(expect.arrayContaining(faunaBuffers(frame)));
+    // Le message posté par l'hôte garde ses tableaux : transférés, ils sont détachés (un tableau
+    // copié garderait sa longueur), et chacun de leurs tampons est dans la liste du transfert.
+    let transferred = 0;
+    for (const sent of env.sent) {
+      const posted = sent.original;
+      const received = sent.message;
+      if (posted.type !== 'delta' || posted.faunaLegs === undefined) continue;
+      if (received.type !== 'delta' || (received.faunaLegs?.slots.length ?? 0) === 0) continue;
+      for (const buffer of faunaLegBuffers(posted.faunaLegs)) {
+        expect(sent.transfer).toContain(buffer);
+        expect(buffer.byteLength).toBe(0);
+      }
+      expect(posted.faunaLegs.gaits.buffer.byteLength).toBe(0);
+      transferred++;
+    }
+    expect(transferred).toBeGreaterThan(DAYS_PER_MONTH);
     // Les statistiques comptent les animaux, leurs étapes et le jour du gibier.
     const stats = env.messages('stats');
     expect(stats.every((message) => message.stats.animals > 400)).toBe(true);

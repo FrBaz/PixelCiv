@@ -1026,7 +1026,6 @@ function oneAnimal(x: number, y: number, kind: number, facing: number): FaunaMot
       slots: Uint32Array.of(0),
       ids: Uint32Array.of(7),
       kinds: Uint8Array.of(kind),
-      herds: Uint32Array.of(1),
       positions: Int32Array.of(Math.round(x * FIXED), Math.round(y * FIXED)),
       legs: noLegs(),
     },

@@ -99,7 +99,6 @@ class FakeMotion implements FaunaMotion {
       slots: Uint32Array.from(animals, (_, index) => index),
       ids: Uint32Array.from(animals, (animal, index) => animal.id ?? index + 1),
       kinds: Uint8Array.from(animals, (animal) => animal.kind ?? 0),
-      herds: new Uint32Array(animals.length),
       positions: Int32Array.from(
         animals.flatMap((animal) => [Math.round(animal.x * FIXED), Math.round(animal.y * FIXED)]),
       ),

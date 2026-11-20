@@ -204,6 +204,7 @@ export class Fauna {
     deaths: 0,
     aged: 0,
     colonized: 0,
+    rehomed: 0,
   };
 
   ensure(size: number): void {
@@ -865,7 +866,8 @@ function restUntil(species: FaunaSpecies, today: number, random: RandomStream): 
  * l'ancien but, ne se font que dans l'ordre des notes, jusqu'au premier qui passe. Hors de son
  * domaine (après une fuite, ou pour une harde qui recolonise un territoire), elle y revient : ses
  * tirages vont vers le centre, au plus loin de `roam`, et chacun doit l'en rapprocher, même par une
- * case sans habitat.
+ * case sans habitat. Si aucun n'y parvient et que l'eau barre la vue de son but vers son centre,
+ * elle ne le rejoindrait jamais : elle prend la case de son but pour centre.
  */
 function roam(
   state: SimState,
@@ -954,6 +956,18 @@ function roam(
     fauna.goalY[herd] = cy;
     scatter(state, content, herd, today, FAUNA_GAIT.walk, random);
     return;
+  }
+  // Hors de son domaine, sans tirage qui l'en rapproche, la vue de son but vers son centre barrée
+  // (une mer, un lac, une rivière entre eux) : elle n'y reviendrait jamais, et resterait sans but
+  // jusqu'à la mort de ses membres (relecture 2b.6, problème 9). Son domaine se pose là où elle
+  // est ; son prochain but s'y tire.
+  if (
+    homing &&
+    !trace(state.cost, width, height, gx, gy, gx + deltaFixedX(gx, hx, width), hy).clear
+  ) {
+    fauna.homeX[herd] = Math.floor(wrapFixedX(gx, width) / FIXED);
+    fauna.homeY[herd] = Math.min(height - 1, Math.max(0, Math.floor(gy / FIXED)));
+    fauna.counts.rehomed++;
   }
 }
 
@@ -1261,6 +1275,53 @@ function stochastic(value: number, random: RandomStream): number {
   return whole + (random.nextFloat() < value - whole ? 1 : 0);
 }
 
+/** Cases tirées d'un territoire, et leurs notes (habitatCells), reprises d'un appel à l'autre. */
+const drawnCells: number[] = [];
+const drawnNotes: number[] = [];
+
+/**
+ * Les cases d'habitat du territoire `tile` que donnent quelques tirages (`rules.draws.cell`), de la
+ * mieux notée à la moins bien notée, à égalité dans l'ordre des tirages : seules celles où l'espèce
+ * vit (note positive) et qu'un animal peut fouler.
+ */
+function habitatCells(
+  state: SimState,
+  content: FaunaContent,
+  s: number,
+  tile: number,
+  random: RandomStream,
+): readonly number[] {
+  const rules = content.faunaRules;
+  const side = rules.territory;
+  const { columns } = territoriesOf(state, rules);
+  const { width, height } = state.size;
+  const tx = (tile % columns) * side;
+  const ty = Math.floor(tile / columns) * side;
+  const factor = seasonAt(monthOfDay(state));
+  drawnCells.length = 0;
+  drawnNotes.length = 0;
+  for (let attempt = 0; attempt < rules.draws.cell; attempt++) {
+    const column = tx + Math.floor(random.nextFloat() * side);
+    const row = ty + Math.floor(random.nextFloat() * side);
+    if (column >= width || row >= height) continue;
+    const cell = row * width + column;
+    if (!Number.isFinite(state.cost[cell] ?? Number.POSITIVE_INFINITY)) continue;
+    const note = score(state, content, s, cell, factor);
+    if (note <= 0) continue;
+    let at = drawnCells.length;
+    drawnCells.push(cell);
+    drawnNotes.push(note);
+    while (at > 0 && (drawnNotes[at - 1] ?? 0) < note) {
+      drawnCells[at] = drawnCells[at - 1] ?? 0;
+      drawnNotes[at] = drawnNotes[at - 1] ?? 0;
+      at--;
+    }
+    drawnCells[at] = cell;
+    drawnNotes[at] = note;
+  }
+  return drawnCells;
+}
+
 /** Une case d'habitat du territoire `tile`, la meilleure de quelques tirages, ou −1. */
 function habitatCell(
   state: SimState,
@@ -1269,28 +1330,7 @@ function habitatCell(
   tile: number,
   random: RandomStream,
 ): number {
-  const rules = content.faunaRules;
-  const side = rules.territory;
-  const { columns } = territoriesOf(state, rules);
-  const { width, height } = state.size;
-  const tx = (tile % columns) * side;
-  const ty = Math.floor(tile / columns) * side;
-  const factor = seasonAt(monthOfDay(state));
-  let best = -1;
-  let value = 0;
-  for (let attempt = 0; attempt < rules.draws.cell; attempt++) {
-    const column = tx + Math.floor(random.nextFloat() * side);
-    const row = ty + Math.floor(random.nextFloat() * side);
-    if (column >= width || row >= height) continue;
-    const cell = row * width + column;
-    if (!Number.isFinite(state.cost[cell] ?? Number.POSITIVE_INFINITY)) continue;
-    const note = score(state, content, s, cell, factor);
-    if (note > value) {
-      value = note;
-      best = cell;
-    }
-  }
-  return best;
+  return habitatCells(state, content, s, tile, random)[0] ?? NO;
 }
 
 /**
@@ -1478,8 +1518,11 @@ export function faunaMonth(state: SimState, content: FaunaContent): void {
       const birthMonth = entry.birth.months.includes(south ? (month + 6) % 12 : month);
       if (!birthMonth || fauna.count >= limit) continue;
       if (count === 0) {
-        if (goal >= entry.herd[0] && random.nextFloat() < entry.colonize) {
-          colonize(state, content, s, tile, counts, today, random);
+        // Un territoire vide se repeuple dès que sa cible admet un animal, même sous la taille
+        // d'une harde : sans cela, les territoires minces (bords d'habitat, côtes, biomes mêlés)
+        // se vidaient pour toujours (relecture 2b.6, problème 10).
+        if (goal >= 0.5 && random.nextFloat() < entry.colonize) {
+          colonize(state, content, s, tile, goal, counts, today, random);
         }
         continue;
       }
@@ -1494,10 +1537,12 @@ export function faunaMonth(state: SimState, content: FaunaContent): void {
           if (mother < 0) continue;
           const mx = fauna.x[mother] ?? 0;
           const my = fauna.y[mother] ?? 0;
+          // Son domaine : la case où il naît, et non celui de sa mère, qu'elle a pu quitter (une
+          // fuite, une harde sans retour) : il n'en hérite pas (relecture 2b.6, problème 9).
           const herd = fauna.addHerd(
             s,
-            fauna.homeX[from] ?? 0,
-            fauna.homeY[from] ?? 0,
+            Math.floor(mx / FIXED),
+            Math.min(state.size.height - 1, Math.max(0, Math.floor(my / FIXED))),
             mx,
             my,
             today + 1 + Math.floor(random.nextFloat() * entry.rest[1]),
@@ -1558,17 +1603,20 @@ export function faunaMonth(state: SimState, content: FaunaContent): void {
 }
 
 /**
- * Recolonisation du territoire vide `tile` par l'espèce `s` : une harde d'un territoire voisin, à
- * `rules.neighbors` territoires au plus, couture comprise, qui compte au moins deux hardes
- * minimales, en détache la moitié, dont le domaine passe dans le territoire vide, sur la meilleure
- * de quelques cases ; elle y marche de but en but (roam), sans apparaître d'un coup. Pour une
- * espèce solitaire, c'est un animal d'un territoire qui en a plusieurs. Rien sans voisin peuplé.
+ * Recolonisation du territoire vide `tile` par l'espèce `s`, de cible `goal` : une harde d'un
+ * territoire voisin, à `rules.neighbors` territoires au plus, couture comprise, qui compte au moins
+ * deux hardes minimales, en détache la moitié, et au plus ce que la cible admet (un animal au
+ * moins), dont le domaine passe dans le territoire vide, sur la meilleure de quelques cases que la
+ * harde peut gagner, en vue directe de son but ; elle y marche de but en but (roam), sans
+ * apparaître d'un coup. Pour une espèce solitaire, c'est un animal d'un territoire qui en a
+ * plusieurs. Rien sans voisin peuplé, ni sans case joignable.
  */
 function colonize(
   state: SimState,
   content: FaunaContent,
   s: number,
   tile: number,
+  goal: number,
   counts: Float64Array,
   today: number,
   random: RandomStream,
@@ -1595,15 +1643,38 @@ function colonize(
       const key = (r * columns + c) * S + s;
       if ((counts[key] ?? 0) < enough) continue;
       for (const herd of herdsOf(fauna, key)) {
-        if (solitary || (fauna.size[herd] ?? 0) >= enough) donors.push(herd);
+        // Une harde que l'excès a vidée ce mois-ci reste dans la liste de son territoire : elle ne
+        // donne rien (relecture 2b.6, problème 12).
+        const size = fauna.size[herd] ?? 0;
+        if (size > 0 && (solitary || size >= enough)) donors.push(herd);
       }
     }
   }
   if (donors.length === 0) return;
-  const cell = habitatCell(state, content, s, tile, random);
+  // Le centre : la mieux notée des cases tirées qu'au moins une donneuse peut gagner, en vue
+  // directe de son but, sans eau ni coin entre eux (relecture 2b.6, problème 9 : une harde envoyée
+  // au-delà d'un bras de mer n'y arrivait jamais) ; puis l'une de ces donneuses, au hasard. Sans
+  // case joignable, rien ce mois-ci.
+  const { width, height } = state.size;
+  let cell = NO;
+  const able: number[] = [];
+  for (const candidate of habitatCells(state, content, s, tile, random)) {
+    const cx = ((candidate % width) + 0.5) * FIXED;
+    const cy = (Math.floor(candidate / width) + 0.5) * FIXED;
+    for (const herd of donors) {
+      const gx = fauna.goalX[herd] ?? 0;
+      const gy = fauna.goalY[herd] ?? 0;
+      if (trace(state.cost, width, height, gx, gy, gx + deltaFixedX(gx, cx, width), cy).clear) {
+        able.push(herd);
+      }
+    }
+    if (able.length > 0) {
+      cell = candidate;
+      break;
+    }
+  }
   if (cell < 0) return;
-  const from = donors[Math.floor(random.nextFloat() * donors.length)] ?? 0;
-  const { width } = state.size;
+  const from = able[Math.floor(random.nextFloat() * able.length)] ?? 0;
   const homeX = cell % width;
   const homeY = Math.floor(cell / width);
   if (solitary) {
@@ -1619,9 +1690,12 @@ function colonize(
       fauna.goalY[from] ?? 0,
       today,
     );
+    // La moitié de la harde, et au plus ce que la cible admet : un animal au moins.
     const members = fauna.members(from, []);
-    for (let index = 0; index < members.length; index += 2) {
+    const leaving = Math.min(Math.ceil(members.length / 2), Math.max(1, Math.round(goal)));
+    for (let index = 0, moved = 0; index < members.length && moved < leaving; index += 2) {
       fauna.moveTo(members[index] ?? 0, herd);
+      moved++;
     }
   }
   fauna.counts.colonized++;
@@ -1692,7 +1766,6 @@ export function faunaFrame(
   const slots = arrays.uint32(n);
   const ids = arrays.uint32(n);
   const kinds = arrays.uint8(n);
-  const herds = arrays.uint32(n);
   const positions = arrays.int32(2 * n);
   let walking = 0;
   for (let slot = 0; slot < fauna.end; slot++) {
@@ -1724,8 +1797,6 @@ export function faunaFrame(
     ids[index] = fauna.id[slot] ?? 0;
     kinds[index] =
       s | (young ? FAUNA_YOUNG : 0) | (male ? FAUNA_MALE : 0) | (running ? FAUNA_RUN : 0);
-    const herd = fauna.herd[slot] ?? NO;
-    herds[index] = herd >= 0 ? (fauna.herdId[herd] ?? 0) : 0;
     positions[2 * index] = fauna.x[slot] ?? 0;
     positions[2 * index + 1] = fauna.y[slot] ?? 0;
     if (left > 0) {
@@ -1740,5 +1811,5 @@ export function faunaFrame(
     }
     index++;
   }
-  return { slots, ids, kinds, herds, positions, legs };
+  return { slots, ids, kinds, positions, legs };
 }

@@ -60,7 +60,11 @@ const biome = (id: string): number => testData.biomes.indexOf(id) ?? 0;
  * Un monde plat, tout du biome `id`, à 15 °C toute l'année, sans gibier semé : chaque essai pose
  * ses hardes. `land` retouche le monde : ce qu'il rend faux devient de l'océan.
  */
-function blank(id = 'temperate-forest', land?: (x: number, y: number) => boolean): SimState {
+function blank(
+  id = 'temperate-forest',
+  land?: (x: number, y: number) => boolean,
+  seed = 'gibier',
+): SimState {
   const world: WorldLayers = emptyLayers(WORLD_SIZES.small);
   const { width } = WORLD_SIZES.small;
   world.biome.fill(biome(id));
@@ -71,7 +75,22 @@ function blank(id = 'temperate-forest', land?: (x: number, y: number) => boolean
       if (!land(cell % width, Math.floor(cell / width))) world.biome[cell] = biome('ocean');
     });
   }
-  return createState(testParams('gibier'), world, HUMANS);
+  return createState(testParams(seed), world, HUMANS);
+}
+
+/**
+ * Un monde où la terre n'est que deux bandes de forêt tempérée, sur les rangées 100 à 127 : à l'ouest
+ * (x de 0 à 29) et à l'est (x de 37 à 63), séparées par un bras de mer de sept cases.
+ */
+const STRAIT = (x: number, y: number): boolean =>
+  y >= 100 && y < 128 && x < 64 && (x < 30 || x > 36);
+
+/** Les hardes vivantes dont le centre du domaine répond à `test`. */
+function herdsWhere(state: SimState, test: (x: number, y: number) => boolean): number[] {
+  const fauna = state.fauna;
+  return [...Array(fauna.herdEnd).keys()].filter(
+    (herd) => fauna.herdAlive[herd] === 1 && test(fauna.homeX[herd] ?? 0, fauna.homeY[herd] ?? 0),
+  );
 }
 
 /**
@@ -379,6 +398,135 @@ describe('effectifs du gibier (ADR 0018, § 1 et 3)', () => {
     }
   });
 
+  it('ne recolonise pas un territoire que l’eau sépare de la donneuse', () => {
+    // Relecture 2b.6, problème 9 : la harde détachée vers l'autre rive marchait jusqu'à l'eau,
+    // puis restait sans but jusqu'à la mort de ses membres.
+    const state = blank('temperate-forest', STRAIT);
+    const content = withSpecies(DEER, (entry) => ({ ...entry, colonize: 1 }));
+    herdAt(state, DEER, 15, 112, 12);
+    // Mai : un mois de mise bas du cerf ; la cible de l'ouest, près de douze, sans excès.
+    state.tick = 4;
+    state.day = 29;
+    faunaMonth(state, content);
+    expect(state.fauna.counts.colonized).toBe(0);
+    expect(herdsWhere(state, (x) => x >= 32)).toEqual([]);
+    // Un pont de terre sur le bras de mer, et la recolonisation passe.
+    const bridged = blank(
+      'temperate-forest',
+      (x, y) => STRAIT(x, y) || (y >= 110 && y < 114 && x < 64),
+    );
+    herdAt(bridged, DEER, 15, 112, 12);
+    bridged.tick = 4;
+    bridged.day = 29;
+    faunaMonth(bridged, content);
+    expect(bridged.fauna.counts.colonized).toBe(1);
+    expect(herdsWhere(bridged, (x) => x >= 32)).toHaveLength(1);
+  });
+
+  it('repeuple un territoire mince, dont la cible est sous la taille d’une harde, sur trente ans', () => {
+    // Relecture 2b.6, problème 10 : un territoire dont la cible n'admet pas une harde entière ne
+    // se repeuplait jamais. Ici, le territoire de l'est n'a que cent cases de forêt (cible 1,4
+    // cerf), et commence vide ; à l'ouest, un territoire entier.
+    const thin = (x: number, y: number): boolean =>
+      y < 32 && (x < 32 || (x >= 32 && x < 42 && y < 10));
+    const state = blank('temperate-forest', thin);
+    const content: SimContent = {
+      ...testData,
+      fauna: catalogOf(
+        SPECIES.map((entry, at) =>
+          at === DEER ? { ...entry, colonize: 1 } : { ...entry, density: 0 },
+        ),
+      ),
+    };
+    const east = territoryOf(state, RULES, 36, 4);
+    const goal = faunaTargets(state, content)[east * S + DEER] ?? 0;
+    expect(goal).toBeGreaterThanOrEqual(0.5);
+    expect(goal).toBeLessThan(species(DEER).herd[0]);
+    // Deux hardes de sept cerfs à l'ouest, d'âges étalés, mâles et femelles.
+    for (const x of [10, 20]) {
+      const herd = herdAt(state, DEER, x, 16, 7);
+      membersOf(state, herd).forEach((slot, rank) => {
+        state.fauna.born[slot] = state.tick - 12 * (1 + ((rank * 5 + x) % 12));
+        state.fauna.sex[slot] = rank % 2;
+      });
+    }
+    let peopled = 0;
+    let months = 0;
+    state.tick = 0;
+    for (let month = 0; month < 30 * 12; month++) {
+      faunaMonth(state, content);
+      state.tick++;
+      months++;
+      if ((counts(state)[east * S + DEER] ?? 0) > 0) peopled++;
+    }
+    // Repeuplé, puis peuplé presque tous les mois, chaque fois qu'un cerf y meurt de vieillesse ;
+    // l'ouest garde les siens.
+    expect(state.fauna.counts.colonized).toBeGreaterThan(1);
+    expect(peopled / months).toBeGreaterThan(0.75);
+    expect(counts(state)[territoryOf(state, RULES, 10, 16) * S + DEER]).toBeGreaterThan(10);
+  });
+
+  it('ne compte pas de recolonisation par une harde que l’excès a vidée le même mois', () => {
+    // Relecture 2b.6, problème 12 : dix lièvres dans une forêt où leur cible est près de quatre,
+    // le territoire voisin en prairie vide. La harde vidée par l'excès restait donneuse.
+    const content: SimContent = {
+      ...testData,
+      fauna: catalogOf(
+        SPECIES.map((entry, at) =>
+          at === HARE ? { ...entry, colonize: 1 } : { ...entry, density: 0 },
+        ),
+      ),
+    };
+    let colonized = 0;
+    for (let trial = 0; trial < 12; trial++) {
+      const world: WorldLayers = emptyLayers(WORLD_SIZES.small);
+      const { width } = WORLD_SIZES.small;
+      world.biome.fill(biome('ocean'));
+      world.elevation.fill(120);
+      world.temperature.fill(FLAT_TEMPERATURE);
+      for (let y = 96; y < 128; y++) {
+        for (let x = 0; x < 64; x++) {
+          world.biome[y * width + x] = biome(x < 32 ? 'temperate-forest' : 'grassland');
+        }
+      }
+      const state = createState(testParams(`lievre-${String(trial)}`), world, HUMANS);
+      // Mai : un mois de mise bas du lièvre au nord.
+      state.tick = 4;
+      state.day = 29;
+      for (let hare = 0; hare < 10; hare++) herdAt(state, HARE, 4 + 2.5 * hare, 110, 1);
+      faunaMonth(state, content);
+      const settled = herdsWhere(state, (x) => x >= 32).length;
+      // Chaque recolonisation comptée a posé un lièvre dans la prairie.
+      expect(settled, `essai ${String(trial)}`).toBe(state.fauna.counts.colonized);
+      colonized += state.fauna.counts.colonized;
+    }
+    expect(colonized).toBe(12);
+  });
+
+  it('donne au levraut la case où il naît pour domaine, et non celui de sa mère', () => {
+    // Relecture 2b.6, problème 9 : un jeune solitaire héritait du domaine de sa mère, qu'elle
+    // pouvait avoir quitté pour toujours.
+    const state = blank('grassland');
+    const content = withSpecies(HARE, (entry) => ({
+      ...entry,
+      birth: { ...entry.birth, months: [4], growth: 1 },
+    }));
+    const mother = herdAt(state, HARE, 100.5, 50.5, 1);
+    // Le domaine de sa harde, ailleurs dans le même territoire.
+    state.fauna.homeX[mother] = 70;
+    state.fauna.homeY[mother] = 40;
+    state.tick = 4;
+    const before = state.fauna.herdEnd;
+    faunaMonth(state, content);
+    const born = [...Array(state.fauna.herdEnd).keys()].filter(
+      (herd) => herd >= before && state.fauna.herdAlive[herd] === 1,
+    );
+    expect(born.length).toBeGreaterThan(0);
+    for (const herd of born) {
+      expect([state.fauna.homeX[herd], state.fauna.homeY[herd]]).toEqual([100, 50]);
+    }
+  });
+
   it('refait les cibles d’un territoire repeint au pinceau', () => {
     const state = blank('temperate-forest', (x, y) => x < 64 && y < 64);
     const before = faunaTargets(state, testData).slice();
@@ -461,6 +609,66 @@ describe('mouvements du gibier (ADR 0018, § 2)', () => {
     expect(west).toBeGreaterThan(0);
   });
 
+  // La couture dans les autres règles (relecture 2b.6, problème 13) : sans repli des colonnes ni
+  // écart au plus court, chacun de ces essais échoue ; les tests d'avant ne gardaient que la marche.
+  it('s’alarme d’un marcheur de l’autre côté de la couture', () => {
+    const state = blank('temperate-forest');
+    // Un cerf sur x = 511,6 ; un marcheur sur x = 0,4, à 0,8 case par la couture.
+    const herd = herdAt(state, DEER, 511.6, 100, 1);
+    expect(species(DEER).flee.distance).toBeGreaterThan(0.8);
+    walker(state, 0.4, 100);
+    faunaDay(state, testData);
+    expect(state.fauna.counts.flights).toBe(1);
+    expect(state.fauna.calm[herd]).toBeGreaterThan(0);
+  });
+
+  it('voit la zone d’un camp de l’autre côté de la couture', () => {
+    const state = blank('temperate-forest');
+    herdAt(state, DEER, 511.5, 100, 1);
+    walker(state, 1.5, 100);
+    const humans = state.fauna.humans;
+    humans.build(state);
+    // La zone des camps (deux distances d'alarme, par tuiles de 8 × 8 cases) touche la tuile du
+    // marcheur, à l'est de la couture ; et pas plus loin.
+    const reach = RULES.camps * species(DEER).flee.distance;
+    expect(humans.any(511.5 * FIXED, 100 * FIXED, reach, false)).toBe(true);
+    expect(humans.any(490 * FIXED, 100 * FIXED, reach, false)).toBe(false);
+  });
+
+  it('fuit à l’opposé du marcheur, depuis le centre d’une harde à cheval sur la couture', () => {
+    const state = blank('temperate-forest');
+    // Trois cerfs de x = 511,3 à x = 0,7 (centre 0) ; le marcheur au nord-ouest, à 1,2 case.
+    const herd = herdAt(state, DEER, 0, 100, 3);
+    walker(state, 511.3, 99.2);
+    faunaDay(state, testData);
+    expect(state.fauna.counts.flights).toBe(1);
+    // Le but de la fuite est au sud-est du centre, et non à la moitié du monde.
+    const dx = deltaFixedX(0, state.fauna.goalX[herd] ?? 0, state.size.width) / FIXED;
+    expect(dx).toBeGreaterThan(0);
+    expect(dx).toBeLessThan(species(DEER).flee.length + 1);
+    expect((state.fauna.goalY[herd] ?? 0) / FIXED).toBeGreaterThan(100);
+  });
+
+  it('recolonise un territoire vide depuis son voisin, par la couture', () => {
+    // Deux territoires de forêt de part et d'autre de x = 0 (colonnes 0 et 15, rangée 3), le reste
+    // de l'océan ; douze cerfs dans celui de l'est du monde (x de 480 à 511).
+    const state = blank('temperate-forest', (x, y) => y >= 96 && y < 128 && (x < 32 || x >= 480));
+    const content: SimContent = {
+      ...testData,
+      fauna: catalogOf(
+        SPECIES.map((entry, at) =>
+          at === DEER ? { ...entry, colonize: 1 } : { ...entry, density: 0 },
+        ),
+      ),
+    };
+    state.tick = 4;
+    state.day = 29;
+    herdAt(state, DEER, 495, 110, 12);
+    faunaMonth(state, content);
+    expect(state.fauna.counts.colonized).toBe(1);
+    expect(herdsWhere(state, (x) => x < 32)).toHaveLength(1);
+  });
+
   it('choisit chaque but dans l’habitat de son espèce et dans son domaine', () => {
     const state = testState('graine');
     const fauna = state.fauna;
@@ -507,40 +715,84 @@ describe('mouvements du gibier (ADR 0018, § 2)', () => {
   });
 
   it('va en harde : places à gap au moins, dans spread du but, départs étalés sur lag jours', () => {
-    const state = blank('temperate-forest');
-    const herd = herdAt(state, DEER, 100, 100, 9, 0);
-    const today = dayIndex(state);
-    faunaDay(state, testData);
-    const fauna = state.fauna;
-    expect(fauna.counts.roams).toBe(1);
+    // Sur douze graines (relecture 2b.6, problème 14 : sur la seule graine d'avant, les places
+    // étaient les mêmes avec et sans la règle de l'écart). Sans elle, la part médiane des paires à
+    // gap au moins tombe sous 0,9, et le plus petit écart sous gap / 2.
     const deer = species(DEER);
-    const members = membersOf(state, herd);
-    const departs = new Set<number>();
-    let pairs = 0;
-    let spaced = 0;
-    for (const slot of members) {
-      const px = fauna.placeX[slot] ?? 0;
-      const py = fauna.placeY[slot] ?? 0;
-      expect(
-        distance(state, px, py, fauna.goalX[herd] ?? 0, fauna.goalY[herd] ?? 0),
-      ).toBeLessThanOrEqual(deer.spread + 1e-6);
-      for (const other of members) {
-        if (other === slot) continue;
-        const apart = distance(state, px, py, fauna.placeX[other] ?? 0, fauna.placeY[other] ?? 0);
-        pairs++;
-        if (apart >= deer.gap - 1e-6) spaced++;
-        expect(apart).toBeGreaterThan(deer.gap / 4);
+    const shares: number[] = [];
+    let closest = Number.POSITIVE_INFINITY;
+    for (let trial = 0; trial < 12; trial++) {
+      const state = blank('temperate-forest', undefined, `harde-${String(trial)}`);
+      const herd = herdAt(state, DEER, 100, 100, 9, 0);
+      const today = dayIndex(state);
+      faunaDay(state, testData);
+      const fauna = state.fauna;
+      expect(fauna.counts.roams).toBe(1);
+      const members = membersOf(state, herd);
+      const departs = new Set<number>();
+      let pairs = 0;
+      let spaced = 0;
+      for (const slot of members) {
+        const px = fauna.placeX[slot] ?? 0;
+        const py = fauna.placeY[slot] ?? 0;
+        expect(
+          distance(state, px, py, fauna.goalX[herd] ?? 0, fauna.goalY[herd] ?? 0),
+        ).toBeLessThanOrEqual(deer.spread + 1e-6);
+        for (const other of members) {
+          if (other === slot) continue;
+          const apart = distance(state, px, py, fauna.placeX[other] ?? 0, fauna.placeY[other] ?? 0);
+          pairs++;
+          if (apart >= deer.gap - 1e-6) spaced++;
+          closest = Math.min(closest, apart);
+        }
+        // Parti le jour même, ou à son jour, jusqu'à `lag` jours plus tard.
+        const depart = (fauna.stepDays[slot] ?? 0) > 0 ? today : (fauna.depart[slot] ?? -1);
+        expect(depart).toBeGreaterThanOrEqual(today);
+        expect(depart).toBeLessThanOrEqual(today + deer.lag);
+        departs.add(depart);
       }
-      // Parti le jour même, ou à son jour, jusqu'à `lag` jours plus tard.
-      const depart = (fauna.stepDays[slot] ?? 0) > 0 ? today : (fauna.depart[slot] ?? -1);
-      expect(depart).toBeGreaterThanOrEqual(today);
-      expect(depart).toBeLessThanOrEqual(today + deer.lag);
-      departs.add(depart);
+      expect(departs.size).toBeGreaterThan(1);
+      shares.push(spaced / pairs);
     }
-    expect(departs.size).toBeGreaterThan(1);
     // Neuf cerfs tiennent sans peine à `gap` les uns des autres dans un disque de `spread` : à
     // défaut d'une place libre en quelques tirages, chacun prend la moins serrée.
-    expect(spaced / pairs).toBeGreaterThan(0.9);
+    shares.sort((a, b) => a - b);
+    expect(shares[Math.floor(shares.length / 2)]).toBeGreaterThanOrEqual(0.95);
+    expect(shares[0]).toBeGreaterThan(0.85);
+    expect(closest).toBeGreaterThan(deer.gap / 2);
+  });
+
+  it('prend pour centre la case de son but, hors de son domaine, quand l’eau la sépare de lui', () => {
+    // Relecture 2b.6, problème 9 : une harde hors de son domaine, la mer entre elle et son
+    // centre, n'avait plus aucun but jusqu'à la mort de ses membres.
+    // Sur la rive ouest, à deux cases de l'eau : tout tirage vers l'est tombe dans le bras de mer.
+    const state = blank('temperate-forest', STRAIT);
+    const herd = herdAt(state, DEER, 28, 112, 4, 0);
+    const fauna = state.fauna;
+    fauna.homeX[herd] = 50;
+    fauna.homeY[herd] = 112;
+    day(state);
+    expect(fauna.counts.rehomed).toBe(1);
+    expect([fauna.homeX[herd], fauna.homeY[herd]]).toEqual([28, 112]);
+    // Puis elle va de but en but, sur sa rive.
+    const goals = new Set<string>();
+    for (let days = 0; days < 120; days++) {
+      day(state);
+      goals.add(`${String(fauna.goalX[herd])},${String(fauna.goalY[herd])}`);
+      for (const slot of membersOf(state, herd))
+        expect((fauna.x[slot] ?? 0) / FIXED).toBeLessThan(30);
+    }
+    expect(goals.size).toBeGreaterThan(4);
+    // Une harde que rien ne sépare de son centre y revient, sans en changer.
+    const open = blank('temperate-forest');
+    const back = herdAt(open, DEER, 25, 112, 4, 0);
+    open.fauna.homeX[back] = 50;
+    open.fauna.homeY[back] = 112;
+    for (let days = 0; days < 60; days++) day(open);
+    expect(open.fauna.counts.rehomed).toBe(0);
+    expect(open.fauna.homeX[back]).toBe(50);
+    const away = Math.abs(deltaFixedX(50.5 * FIXED, open.fauna.goalX[back] ?? 0, open.size.width));
+    expect(away / FIXED).toBeLessThan(species(DEER).range + 1);
   });
 
   it('marche chacun à son allure, tirée de son identifiant, la même d’une étape à l’autre', () => {
@@ -885,7 +1137,7 @@ describe('mouvements du gibier (ADR 0018, § 2)', () => {
 });
 
 describe('image du gibier (protocole 7, ADR 0018, § 4)', () => {
-  it('donne chaque vivant, sa sorte, sa harde, sa position et son étape à l’allure de l’état', () => {
+  it('donne chaque vivant, sa sorte, sa position et son étape à l’allure de l’état', () => {
     const state = testState('graine');
     step(state, scatteredGroups(state, 40), testData);
     for (let days = 0; days < 12; days++) advanceDay(state, [], testData);
@@ -900,7 +1152,6 @@ describe('image du gibier (protocole 7, ADR 0018, § 4)', () => {
       expect(frame.ids[at]).toBe(fauna.id[slot]);
       const kind = frame.kinds[at] ?? 0;
       expect(kind & FAUNA_SPECIES).toBe(fauna.species[slot]);
-      expect(frame.herds[at]).toBe(fauna.herdId[fauna.herd[slot] ?? 0]);
       expect(frame.positions[2 * at]).toBe(fauna.x[slot]);
       if ((kind & FAUNA_YOUNG) !== 0) young++;
       if ((kind & FAUNA_MALE) !== 0) {
