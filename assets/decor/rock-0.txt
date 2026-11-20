@@ -1,0 +1,20 @@
+# légende decor
+# pieds 11
+# rock, variante 0 : 22 × 16 pixels, à la densité de la planche des humains (adulte de 43 rangées).
+# Dessin original du jeu ; tracé par un script à la conception de 2b.6, mis au format à sa réalisation, retouchable à la main.
+.......ooo............
+.....oosssoo..........
+...oosssssSSoo........
+...ossssssSSSSoo......
+...ossssssSSSSSSo.....
+..orrrrrrrRRRRRRRoo...
+..orrrrrKKRRRRRRRRRo..
+..orrrrrrKKRRRRRRRRRoo
+..okkkkkkKKrrrrrrrrrro
+.okkkkkkkKKrrrrrrrrrro
+.okkkkkkkkKrrrrrrrrrro
+.okkkkkkkkrrrrrrrrrrro
+.okkkkkkkkrrrrrrrrrrro
+okkkkkkkkkrrrrrrrrrrro
+oKKKKKKKKKKKKKKKKKKKKo
+.ooooooooooooooooooooo

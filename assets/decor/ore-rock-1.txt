@@ -1,0 +1,19 @@
+# légende decor
+# pieds 10
+# ore-rock, variante 1 : 20 × 15 pixels, à la densité de la planche des humains (adulte de 43 rangées).
+# Dessin original du jeu ; tracé par un script à la conception de 2b.6, mis au format à sa réalisation, retouchable à la main.
+.........oo.........
+........osSoo.......
+......oossSSSoo.....
+.....ossssSSSSSo....
+....osssssSSSSSSo...
+....orrrurRRRRRRRo..
+...orrrrrrKRKRRRRRo.
+..okkkkkkkrKrKrrrrro
+..okkkkkkkrrKKrrUuro
+.okkkkkkkkrrrKrrrrro
+.okUnkkkkkrrrunrrrro
+okkkkkkkkUrrrrrrrrro
+okkkkkkkkkrrrurrrrro
+oKKKKKKKKKKKKKUKKKKo
+.ooooooooooooooooooo

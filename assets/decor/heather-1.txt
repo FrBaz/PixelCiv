@@ -1,0 +1,14 @@
+# légende decor
+# pieds 10
+# heather, variante 1 : 21 × 10 pixels, à la densité de la planche des humains (adulte de 43 rangées).
+# Dessin original du jeu ; tracé par un script à la conception de 2b.6, mis au format à sa réalisation, retouchable à la main.
+.......oP..pp........
+.....Ppfo.pFo.p......
+.....opffofFFpfo.....
+....pffffffffpFFPop..
+..ooggffgffffFfFfFo..
+..opfgffffffffffFffo.
+.pffffgffffgfffffffo.
+.offgggGgfgggfggfffo.
+.oggGggGggggGggGgggo.
+ooooooooooooooooooooP

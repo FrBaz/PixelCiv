@@ -1,0 +1,35 @@
+# légende decor
+# pieds 8
+# cactus, variante 0 : 11 × 31 pixels, à la densité de la planche des humains (adulte de 43 rangées).
+# Dessin original du jeu ; tracé par un script à la conception de 2b.6, mis au format à sa réalisation, retouchable à la main.
+......oooo.
+.....oggffo
+.....oggffo
+.....oggffo
+.oo..oggffo
+oGfo.oggffo
+oGfo.oggffo
+oGfo.oggffo
+oGfo.oggffo
+oGfo.oggffo
+oGfo.oggffo
+oGfo.oggffo
+oGggogggffo
+oGggggggffo
+ooooogggffo
+.....oggffo
+.....oggffo
+.....oggffo
+.....oggffo
+.....oggffo
+.....oggffo
+.....oggffo
+.....oggffo
+.....oggffo
+.....oggffo
+.....oggffo
+.....oggffo
+.....oggffo
+.....oggffo
+.....oggffo
+.....oooooo
