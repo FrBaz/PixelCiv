@@ -1098,8 +1098,12 @@ describe('décor : data/flora.json et data/decor.json (ADR 0017)', () => {
     // Un contour à peine plus clair que l'ombre de la pierre la plus sombre suffit à le refuser.
     const [deep] = checkContent(withSettings({ outline: decor.stone[2] }));
     expect(deep).toMatch(/^data\/decor\.json \(contour\) : pas plus sombre que les tons de stone/);
-    // L'ombre portée par défaut existe, et se projette.
+    // L'ombre portée par défaut existe, se projette, et ne peut qu'assombrir le sol que montre
+    // la carte : un noir translucide, ou la trame du contour (problème 2 : « ground » peignait
+    // le ton brut de la palette, plus clair que le sol sur 10 à 52 % de ses pixels).
     expect(decor.shadow.method).not.toBe('none');
+    expect(['multiply', 'dither']).toContain(decor.shadow.method);
+    if (decor.shadow.method === 'multiply') expect(decor.shadow.alpha).toBeGreaterThan(0);
     expect(decor.shadow.sx).toBeGreaterThan(0);
     expect(decor.shadow.sy).toBeGreaterThan(0);
   });

@@ -122,10 +122,12 @@ export const FloraLookSchema = z
 export type FloraLook = z.infer<typeof FloraLookSchema>;
 
 /**
- * Méthodes de l'ombre portée (ADR 0017, § 4) : `ground`, le ton d'ombre de la palette de la case
- * sous chaque pixel d'ombre, lu par le shader (fidèle aux palettes, C1 D10) ; `multiply`, un
- * noir translucide qui assombrit le sol ; `dither`, une trame du ton du contour, un pixel sur
- * deux ; `none`, pas d'ombre.
+ * Méthodes de l'ombre portée (ADR 0017, § 4) : `multiply`, un noir translucide qui assombrit le
+ * pixel que montre la carte, quel qu'il soit, comme l'ombrage du relief assombrit ses tons (la
+ * méthode par défaut : c'est la seule qui ne puisse jamais éclaircir le sol) ; `ground`, le ton
+ * d'ombre de la palette de la case sous chaque pixel d'ombre, lu par le shader, plus clair que la
+ * carte sur les pentes à l'ombre et les houppiers cuits ; `dither`, une trame du ton du contour,
+ * un pixel sur deux ; `none`, pas d'ombre.
  */
 export const SHADOW_METHODS = ['ground', 'multiply', 'dither', 'none'] as const;
 export type ShadowMethod = (typeof SHADOW_METHODS)[number];

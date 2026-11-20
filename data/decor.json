@@ -1,6 +1,6 @@
 {
   "outline": "#13131c",
-  "shadow": { "method": "ground", "alpha": 0.38, "sx": 0.42, "sy": 0.16 },
+  "shadow": { "method": "multiply", "alpha": 0.38, "sx": 0.42, "sy": 0.16 },
   "snow": { "share": 0.35, "deep": "#7f939c" },
   "foliage": { "bareBelow": 5, "autumnBelow": 12, "autumnDrop": 3, "dryShare": 0.65 },
   "place": {
