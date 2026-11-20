@@ -821,24 +821,3 @@ describe('image du gibier (protocole 7, ADR 0018, § 4)', () => {
     expect([...frame.legs.days].every((leg) => leg === dayIndex(state))).toBe(true);
   });
 });
-
-describe('le gibier ne change rien aux humains (ADR 0018, § 6)', () => {
-  it('laisse les colonnes des humains identiques, avec ou sans gibier, sur cent groupes', () => {
-    const run = (content: SimContent) => {
-      const state = testState('graine', content);
-      step(state, scatteredGroups(state, 100), content);
-      return state;
-    };
-    const wild = run(testData);
-    const tame = run(HUMANS);
-    expect(wild.fauna.count).toBeGreaterThan(400);
-    expect(tame.fauna.count).toBe(0);
-    for (let month = 0; month < 6; month++) {
-      step(wild, [], testData);
-      step(tame, [], HUMANS);
-      expect(fingerprint(wild, { fauna: false }), `mois ${String(month)}`).toBe(
-        fingerprint(tame, { fauna: false }),
-      );
-    }
-  });
-});

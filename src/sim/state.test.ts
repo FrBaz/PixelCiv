@@ -12,6 +12,7 @@ import {
   testHuman,
   testParams,
   testState,
+  withoutFauna,
 } from './testing';
 
 const land = (family: string) => family !== 'water';
@@ -193,8 +194,12 @@ describe('pas', () => {
     // groupes quittent l'empreinte, les colonnes de position et de mouvement des vivants et le
     // camp de chaque groupe y entrent, vides ici ; rien d'autre ne change (de 107b7392 à
     // f363d517). Tâche 2b.6 : le gibier entre dans l'état (ADR 0018) ; sans sa partie ni son
-    // flux, l'empreinte reste celle d'avant : la suite des humains ne change pas.
+    // flux, l'empreinte reste celle d'avant : la suite des humains ne change pas. Avec eux, elle
+    // couvre ses colonnes, ses hardes, ses piles libres et le flux `sim.fauna` : ici, 1 020
+    // lièvres, cerfs et sangliers semés sur la steppe et réduits au plafond du monde, qui vivent
+    // un an (de f363d517 à 710d1a9b).
     expect(fingerprint(state, { fauna: false })).toBe('f363d517');
+    expect(fingerprint(state)).toBe('710d1a9b');
   });
 
   it("redonnent l'empreinte de référence de vingt ans d'une population (ADR 0003)", () => {
@@ -230,8 +235,11 @@ describe('pas', () => {
     // porté se pose là où on le dessinait, contre sa mère, et non sur elle : rien ne saute à
     // l'image (de 8c0c534a à 0baafb76). Relecture de 2b.3 : le nourrisson sevré part avec sa
     // mère, le même jour qu'elle, ou le jour 0 si elle marche (de 0baafb76 à 567d06a4).
-    // Tâche 2b.6 : sans la partie du gibier ni son flux, l'empreinte reste celle d'avant.
+    // Tâche 2b.6 : sans la partie du gibier ni son flux, l'empreinte reste celle d'avant ; avec
+    // eux, le gibier de la steppe vit vingt ans, et fuit les trois groupes (de 567d06a4 à
+    // 54a97017).
     expect(fingerprint(state, { fauna: false })).toBe('567d06a4');
+    expect(fingerprint(state)).toBe('54a97017');
   });
 
   it("redonnent l'empreinte de référence de trente mois de trois mille individus (ADR 0011)", () => {
@@ -259,7 +267,31 @@ describe('pas', () => {
     expect(state.society.groups.size).toBeGreaterThan(100);
     expect(state.people.count).toBeGreaterThan(2000);
     expect(state.people.archive.rows).toBeGreaterThan(500);
-    // Tâche 2b.6 : sans la partie du gibier ni son flux, l'empreinte reste celle d'avant.
+    // Tâche 2b.6 : sans la partie du gibier ni son flux, l'empreinte reste celle d'avant ; avec
+    // eux, le gibier d'un vrai monde, que la chasse des cent groupes éclaircit : 508 animaux en
+    // 351 hardes au bout de trente mois (de cd841d8f à 81ec46ff).
     expect(fingerprint(state, { fauna: false })).toBe('cd841d8f');
+    expect(fingerprint(state)).toBe('81ec46ff');
+  });
+});
+
+describe('le gibier ne change rien aux humains (ADR 0018, § 6)', () => {
+  it('laisse les colonnes des humains identiques, avec ou sans gibier, sur cent groupes', () => {
+    const run = (content: SimContent) => {
+      const state = testState('graine', content);
+      step(state, scatteredGroups(state, 100), content);
+      return state;
+    };
+    const wild = run(testData);
+    const tame = run(withoutFauna(testData));
+    expect(wild.fauna.count).toBeGreaterThan(400);
+    expect(tame.fauna.count).toBe(0);
+    for (let month = 0; month < 6; month++) {
+      step(wild, [], testData);
+      step(tame, [], withoutFauna(testData));
+      expect(fingerprint(wild, { fauna: false }), `mois ${String(month)}`).toBe(
+        fingerprint(tame, { fauna: false }),
+      );
+    }
   });
 });
