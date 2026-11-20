@@ -197,9 +197,11 @@ describe('pas', () => {
     // flux, l'empreinte reste celle d'avant : la suite des humains ne change pas. Avec eux, elle
     // couvre ses colonnes, ses hardes, ses piles libres et le flux `sim.fauna` : ici, 1 020
     // lièvres, cerfs et sangliers semés sur la steppe et réduits au plafond du monde, qui vivent
-    // un an (de f363d517 à 710d1a9b).
+    // un an (de f363d517 à 710d1a9b). Relecture de 2b.6 : le levraut prend pour domaine la case
+    // où il naît, et un territoire vide se repeuple dès que sa cible admet un animal ; 44
+    // naissances au lieu de 43 (de 710d1a9b à 30a730e1).
     expect(fingerprint(state, { fauna: false })).toBe('f363d517');
-    expect(fingerprint(state)).toBe('710d1a9b');
+    expect(fingerprint(state)).toBe('30a730e1');
   });
 
   it("redonnent l'empreinte de référence de vingt ans d'une population (ADR 0003)", () => {
@@ -239,9 +241,10 @@ describe('pas', () => {
     // eux, le gibier de la steppe vit vingt ans, et fuit les trois groupes (de 567d06a4 à
     // 54a97017). Reprise de 2b.6 : une harde dont le but est dans la zone d'un camp y choisit
     // encore un but, sans approcher l'humain le plus proche, au lieu d'y rester figée ; les
-    // humains ne changent pas (de 54a97017 à 814e6718).
+    // humains ne changent pas (de 54a97017 à 814e6718). Relecture de 2b.6 : levrauts et
+    // territoires minces, comme ci-dessus ; 875 animaux au lieu de 872 (de 814e6718 à e064350c).
     expect(fingerprint(state, { fauna: false })).toBe('567d06a4');
-    expect(fingerprint(state)).toBe('814e6718');
+    expect(fingerprint(state)).toBe('e064350c');
   });
 
   it("redonnent l'empreinte de référence de trente mois de trois mille individus (ADR 0011)", () => {
@@ -273,9 +276,12 @@ describe('pas', () => {
     // eux, le gibier d'un vrai monde, que la chasse des cent groupes éclaircit : 508 animaux en
     // 351 hardes au bout de trente mois (de cd841d8f à 81ec46ff). Reprise de 2b.6 : les hardes
     // ne restent plus figées dans la zone des camps ; 511 animaux en 350 hardes, qui ont choisi
-    // 34 385 buts au lieu de 19 286 (de 81ec46ff à 913d522c).
+    // 34 385 buts au lieu de 19 286 (de 81ec46ff à 913d522c). Relecture de 2b.6 : 23 hardes
+    // que l'eau séparait de leur domaine en prennent un sur leur rive, 9 recolonisations au lieu
+    // de 4, toutes joignables, levrauts chez eux ; 489 animaux en 346 hardes (de 913d522c à
+    // 76a3c458).
     expect(fingerprint(state, { fauna: false })).toBe('cd841d8f');
-    expect(fingerprint(state)).toBe('913d522c');
+    expect(fingerprint(state)).toBe('76a3c458');
   });
 });
 
