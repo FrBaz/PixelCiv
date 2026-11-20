@@ -13,10 +13,11 @@ Chaque décision d'architecture fait l'objet d'un ADR court (CLAUDE.md, section 
 | [0007](0007-sauvegardes.md) | Sauvegardes | accepté |
 | [0008](0008-credits-et-licences.md) | Crédits et avis de licence | accepté |
 | [0009](0009-generation-du-monde.md) | Génération du monde | accepté |
-| [0010](0010-rendu-de-la-carte.md) | Rendu de la carte | accepté, révisé aux tâches 2b.4 (second programme des blocs, image à la demande) et 2b.5 (humains peints par un shader de palettes) |
+| [0010](0010-rendu-de-la-carte.md) | Rendu de la carte | accepté, révisé aux tâches 2b.4 (second programme des blocs, image à la demande), 2b.5 (humains peints par un shader de palettes) et 2b.6 (décor sur le calque des individus) |
 | [0011](0011-individus-et-demographie.md) | Individus et démographie | accepté, révisé à la tâche 2b.5 (mini-sprites remplacés par les humains des planches, ADR 0016) |
 | [0012](0012-camera-et-zoom.md) | Caméra et zoom | accepté ; unité du zoom soumise à l'auteur |
 | [0013](0013-deux-horloges.md) | Deux horloges | accepté, révisé aux tâches 2b.3 (marche des groupes remplacée par l'ADR 0014) et 2b.4 (mer animée au temps réel) ; interprétations soumises à l'auteur |
-| [0014](0014-individus-hors-de-la-grille.md) | Individus hors de la grille | accepté, révisé aux tâches 2b.4 (rendu à la demande fait) et 2b.5 (niveaux de motifs et règle du niveau, ADR 0016) ; écarts et interprétations soumis à l'auteur |
+| [0014](0014-individus-hors-de-la-grille.md) | Individus hors de la grille | accepté, révisé aux tâches 2b.4 (rendu à la demande fait), 2b.5 (niveaux de motifs et règle du niveau, ADR 0016) et 2b.6 (décor à la densité des individus, appui) ; écarts et interprétations soumis à l'auteur |
 | [0015](0015-mer-animee.md) | Mer animée | accepté sous réserve de l'avis de l'auteur sur le motif et de l'essai sur son téléphone, révisé à la relecture (empreintes indépendantes des données, contrôle des pixels versé, mer jugée sur la partie visible des blocs) ; interprétations et écarts soumis à l'auteur |
-| [0016](0016-humains-des-planches.md) | Humains tirés des planches | accepté ; style des tenues, interprétations et écarts soumis à l'auteur |
+| [0016](0016-humains-des-planches.md) | Humains tirés des planches | accepté, révisé à la tâche 2b.6 (calque commun, alpha du shader) ; style des tenues, interprétations et écarts soumis à l'auteur |
+| [0017](0017-decor-en-objets.md) | Décor en objets | accepté ; ombre, gisements, tailles et interprétations soumis à l'auteur |
