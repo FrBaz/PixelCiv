@@ -14,6 +14,15 @@ import {
 import { HumansSchema, LEVEL_STEP, MAX_OUTFITS, MAX_SKIN_PALETTES } from './humans';
 import { DecorSchema, FloraLookSchema } from './decor';
 import {
+  FaunaFileSchema,
+  FaunaListSchema,
+  FaunaRulesSchema,
+  FaunaSpeciesSchema,
+  MAX_DENSITY,
+  MAX_FAUNA_SPECIES,
+  MAX_HERD,
+} from './fauna';
+import {
   AppearanceSchema,
   FACE_BOUNDS,
   GeneticsSchema,
@@ -1052,5 +1061,177 @@ describe('décor : data/flora.json et data/decor.json (ADR 0017)', () => {
     expect(
       checkContent(withSettings({ deposits: { ...decor.deposits, fish: { form: 'rock' } } })),
     ).toEqual(['data/decor.json (gisements) : minerais inconnus : fish']);
+  });
+});
+
+describe('gibier : data/fauna.json et les habitats des biomes (ADR 0018)', () => {
+  const data = loadGameData();
+  interface SafeResult {
+    success: boolean;
+    error?: { issues: { path: PropertyKey[]; message: string }[] };
+  }
+  const issues = (schema: { safeParse: (value: unknown) => SafeResult }, value: unknown) => {
+    const parsed = schema.safeParse(value);
+    return parsed.success
+      ? []
+      : (parsed.error?.issues ?? []).map((issue) => `${issue.path.join('.')} : ${issue.message}`);
+  };
+  const species = (id: string) => {
+    const entry = data.fauna.entries.at(data.fauna.indexOf(id) ?? -1);
+    if (entry === undefined) throw new Error(`espèce ${id} absente`);
+    return entry;
+  };
+  const ramp = ['#111111', '#222222', '#333333', '#444444'];
+
+  it('décrit le cerf, le sanglier et le lièvre, nommés au masculin et au féminin', () => {
+    expect(data.fauna.entries.map((entry) => entry.id)).toEqual(['deer', 'boar', 'hare']);
+    const catalog = fr as Record<string, unknown>;
+    for (const entry of data.fauna.entries) {
+      expect(FaunaSpeciesSchema.parse(entry)).toEqual(entry);
+      const name = catalog[entry.name] as { masculine?: unknown; feminine?: unknown } | undefined;
+      expect(typeof name?.masculine, entry.id).toBe('string');
+      expect(typeof name?.feminine, entry.id).toBe('string');
+    }
+    // Le lièvre vit seul ; cerf et sanglier vont en hardes.
+    expect(species('hare').herd).toEqual([1, 1]);
+    expect(species('deer').herd[1]).toBeGreaterThan(1);
+    expect(FaunaRulesSchema.parse(data.faunaRules)).toEqual(data.faunaRules);
+    // Chaque biome de terre qui rend du gibier abrite au moins une espèce, hors des glaces et des
+    // sommets ; l'eau n'en abrite aucune.
+    for (const biome of data.biomes.entries) {
+      const qualities = Object.values(biome.fauna);
+      if (biome.family === 'water') expect(qualities, biome.id).toEqual([]);
+      else if (!['glacier', 'high-mountain'].includes(biome.id) && biome.forage.game > 0)
+        expect(
+          qualities.some((quality) => quality > 0),
+          biome.id,
+        ).toBe(true);
+    }
+  });
+
+  it('refuse chaque valeur d’une espèce hors de ses bornes', () => {
+    const deer = species('deer');
+    const hare = species('hare');
+    expect(issues(FaunaSpeciesSchema, deer)).toEqual([]);
+    const refused: [object, RegExp][] = [
+      [{ density: MAX_DENSITY + 0.001 }, /^density/],
+      [{ density: -0.001 }, /^density/],
+      [{ herd: [0, 4] }, /^herd\.0/],
+      [{ herd: [5, 4] }, /^herd : bas ≤ haut/],
+      [{ herd: [2, MAX_HERD + 1] }, /^herd\.1/],
+      [{ herd: [2, 4.5] }, /^herd\.1/],
+      [{ spread: 4.1 }, /^spread/],
+      [{ gap: 1.1 }, /^gap/],
+      [{ lag: 11 }, /^lag/],
+      [{ lag: 1.5 }, /^lag/],
+      [{ roam: [0.1, 2] }, /^roam\.0/],
+      [{ roam: [3, 2] }, /^roam : bas ≤ haut/],
+      [{ range: 0.5 }, /^range/],
+      [{ rest: [0, 3] }, /^rest\.0/],
+      [{ rest: [2, 61] }, /^rest\.1/],
+      [{ pace: { walk: 0.01, run: 1 } }, /^pace\.walk/],
+      [{ pace: { walk: 2, run: 1 } }, /^pace\.run : la fuite va au moins au pas/],
+      [{ pace: { walk: 1, run: 4.5 } }, /^pace\.run/],
+      [{ flee: { ...deer.flee, distance: 6.5 } }, /^flee\.distance/],
+      [{ flee: { ...deer.flee, length: 0.2 } }, /^flee\.length/],
+      [{ flee: { ...deer.flee, calm: 0 } }, /^flee\.calm/],
+      [{ birth: { ...deer.birth, months: [12] } }, /^birth\.months\.0/],
+      [{ birth: { ...deer.birth, months: [-1] } }, /^birth\.months\.0/],
+      [{ birth: { ...deer.birth, months: [4, 4] } }, /^birth\.months : chaque mois une fois/],
+      [{ birth: { ...deer.birth, months: [] } }, /^birth\.months/],
+      [{ birth: { ...deer.birth, growth: 2.5 } }, /^birth\.growth/],
+      [{ birth: { ...deer.birth, young: 0 } }, /^birth\.young/],
+      [{ cull: 1.2 }, /^cull/],
+      [{ colonize: -0.1 }, /^colonize/],
+      [{ lifespan: 0.5 }, /^lifespan/],
+      [{ males: 1.1 }, /^males/],
+      [{ look: { ...deer.look, coat: ramp.slice(0, 3) } }, /^look\.coat/],
+      [{ look: { ...deer.look, pale: ['#fff', ...ramp.slice(1)] } }, /^look\.pale\.0 : couleur/],
+      [{ look: { ...deer.look, young: 0.5 } }, /^look\.young/],
+      [{ look: { ...deer.look, maleFrom: undefined } }, /^look\.maleFrom : une forme du mâle/],
+      [{ look: { ...hare.look, maleFrom: 2 } }, /^look\.maleFrom : une forme du mâle/],
+      [{ look: { ...deer.look, form: 'Deer' } }, /^look\.form/],
+      [{ id: 'Deer' }, /^id/],
+      [{ name: 'cerf' }, /^name : clé de traduction/],
+      [{ speed: 2 }, /speed/],
+    ];
+    for (const [change, expected] of refused) {
+      const found = issues(FaunaSpeciesSchema, { ...deer, ...change });
+      expect(found.join(' | '), JSON.stringify(change)).toMatch(expected);
+    }
+    // Une espèce solitaire se tient sur son but.
+    expect(issues(FaunaSpeciesSchema, { ...hare, spread: 0.5 })).toContain(
+      'spread : une espèce solitaire se tient sur son but',
+    );
+  });
+
+  it('refuse chaque règle commune hors de ses bornes', () => {
+    const rules = data.faunaRules;
+    expect(issues(FaunaRulesSchema, rules)).toEqual([]);
+    const refused: [object, RegExp][] = [
+      [{ territory: 24 }, /^territory : un diviseur de 128/],
+      [{ territory: 4 }, /^territory/],
+      [{ territory: 256 }, /^territory/],
+      [{ draws: { ...rules.draws, goal: 0 } }, /^draws\.goal/],
+      [{ draws: { ...rules.draws, goal: 9 } }, /^draws\.goal/],
+      [{ draws: { ...rules.draws, place: 17 } }, /^draws\.place/],
+      [{ draws: { ...rules.draws, cell: 0 } }, /^draws\.cell/],
+      [{ camps: 6.5 }, /^camps/],
+      [{ jitter: 0.6 }, /^jitter/],
+      [{ turns: [200] }, /^turns\.0/],
+      [{ turns: [10, 20, 30, 40, 50, 60, 70, 80, 90] }, /^turns/],
+      [{ neighbors: 0 }, /^neighbors/],
+      [{ idle: { ...rules.idle, period: 500 } }, /^idle\.period/],
+      [{ idle: { ...rules.idle, flick: rules.idle.graze + 1 } }, /^idle : flick ≤ graze/],
+      [{ idle: { ...rules.idle, rise: rules.idle.period + 1 } }, /^idle : flick ≤ graze/],
+      [{ idle: { ...rules.idle, chew: 50 } }, /^idle\.chew/],
+      [{ cadence: { ...rules.cadence, walk: 0.2 } }, /^cadence\.walk/],
+      [{ cadence: { ...rules.cadence, run: 17 } }, /^cadence\.run/],
+      [{ herds: 3 }, /herds/],
+    ];
+    for (const [change, expected] of refused) {
+      const found = issues(FaunaRulesSchema, { ...rules, ...change });
+      expect(found.join(' | '), JSON.stringify(change)).toMatch(expected);
+    }
+  });
+
+  it(`refuse deux espèces du même identifiant, plus de ${String(MAX_FAUNA_SPECIES)} espèces, et un fichier incomplet`, () => {
+    const deer = species('deer');
+    expect(issues(FaunaListSchema, [deer, deer])).toContain('1.id : identifiant en double : deer');
+    const many = Array.from({ length: MAX_FAUNA_SPECIES + 1 }, (_, index) => ({
+      ...deer,
+      id: `deer-${'abcdefghijklmnopq'.charAt(index)}`,
+    }));
+    expect(issues(FaunaListSchema, many).join()).toMatch(/16/);
+    expect(issues(FaunaListSchema, many.slice(0, MAX_FAUNA_SPECIES))).toEqual([]);
+    expect(issues(FaunaFileSchema, { species: data.fauna.entries }).join()).toMatch(/^rules/);
+    expect(issues(FaunaFileSchema, { rules: data.faunaRules }).join()).toMatch(/^species/);
+  });
+
+  it('borne la qualité des habitats, et la demande à chaque biome', () => {
+    const steppe = data.biomes.entries.at(data.biomes.indexOf('steppe') ?? -1);
+    if (steppe === undefined) throw new Error('steppe absente');
+    expect(issues(BiomeSchema, steppe)).toEqual([]);
+    expect(issues(BiomeSchema, { ...steppe, fauna: { hare: 1.2 } }).join()).toMatch(/^fauna\.hare/);
+    expect(issues(BiomeSchema, { ...steppe, fauna: { Hare: 0.5 } }).join()).toMatch(/^fauna/);
+    const { fauna: _fauna, ...withoutFauna } = steppe;
+    expect(issues(BiomeSchema, withoutFauna).join()).toMatch(/^fauna/);
+  });
+
+  it('relève une espèce inconnue dans un biome, et du gibier là où le biome n’en rend pas', () => {
+    const withBiome = (id: string, fauna: Record<string, number>): GameData => {
+      const entries = data.biomes.entries.map((biome) =>
+        biome.id === id ? { ...biome, fauna } : biome,
+      );
+      return { ...data, biomes: { entries, indexOf: (key) => data.biomes.indexOf(key) } };
+    };
+    expect(checkContent(withBiome('steppe', { hare: 1, bison: 0.5 }))).toEqual([
+      'data/biomes.json (faune) : inconnus : bison',
+    ]);
+    expect(checkContent(withBiome('salar', { hare: 0.2 }))).toEqual([
+      'data/biomes.json (faune) : salar abrite du gibier sans en rendre',
+    ]);
+    // Une qualité nulle n'abrite rien : elle passe, même sans gibier.
+    expect(checkContent(withBiome('salar', { hare: 0 }))).toEqual([]);
   });
 });

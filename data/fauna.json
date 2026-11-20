@@ -1,0 +1,142 @@
+{
+  "rules": {
+    "territory": 32,
+    "draws": {
+      "goal": 4,
+      "place": 6,
+      "cell": 12
+    },
+    "camps": 2,
+    "jitter": 0.1,
+    "turns": [45, -45, 90, -90],
+    "neighbors": 1,
+    "idle": {
+      "period": 9000,
+      "flick": 3600,
+      "graze": 3900,
+      "rise": 7200,
+      "chew": 700
+    },
+    "cadence": {
+      "walk": 2,
+      "run": 4
+    }
+  },
+  "species": [
+    {
+      "id": "deer",
+      "name": "fauna.deer",
+      "density": 0.014,
+      "herd": [3, 9],
+      "spread": 0.9,
+      "gap": 0.35,
+      "lag": 3,
+      "roam": [1.5, 4],
+      "range": 9,
+      "rest": [4, 10],
+      "pace": {
+        "walk": 0.9,
+        "run": 3.5
+      },
+      "flee": {
+        "distance": 1.6,
+        "length": 4,
+        "calm": 4
+      },
+      "birth": {
+        "months": [4, 5],
+        "growth": 0.3,
+        "young": 12
+      },
+      "cull": 0.25,
+      "colonize": 0.15,
+      "lifespan": 14,
+      "males": 0.45,
+      "look": {
+        "form": "deer",
+        "male": "stag",
+        "maleFrom": 2,
+        "young": 1.6,
+        "coat": ["#c48a55", "#a2683b", "#7a4a29", "#4f2f1b"],
+        "pale": ["#f3e4c3", "#d8c39b", "#b09c78", "#857659"],
+        "dark": ["#4a3a30", "#33271f", "#241b16", "#16110e"],
+        "horn": ["#ece0c4", "#c9b690", "#9d8a66", "#6c5d45"]
+      }
+    },
+    {
+      "id": "boar",
+      "name": "fauna.boar",
+      "density": 0.012,
+      "herd": [2, 8],
+      "spread": 0.7,
+      "gap": 0.3,
+      "lag": 2,
+      "roam": [1, 3],
+      "range": 7,
+      "rest": [3, 8],
+      "pace": {
+        "walk": 0.7,
+        "run": 3
+      },
+      "flee": {
+        "distance": 1.3,
+        "length": 3,
+        "calm": 4
+      },
+      "birth": {
+        "months": [2, 3],
+        "growth": 0.5,
+        "young": 8
+      },
+      "cull": 0.3,
+      "colonize": 0.15,
+      "lifespan": 10,
+      "males": 0.5,
+      "look": {
+        "form": "boar",
+        "young": 1.7,
+        "coat": ["#857163", "#634f43", "#47382f", "#2d231d"],
+        "pale": ["#cdb7a6", "#a99382", "#836f60", "#5c4c41"],
+        "dark": ["#3a2e27", "#29201b", "#1d1713", "#13110f"],
+        "horn": ["#f6f1e4", "#ddd3bd", "#b5aa93", "#857c69"]
+      }
+    },
+    {
+      "id": "hare",
+      "name": "fauna.hare",
+      "density": 0.02,
+      "herd": [1, 1],
+      "spread": 0,
+      "gap": 0,
+      "lag": 0,
+      "roam": [0.6, 2],
+      "range": 3,
+      "rest": [5, 14],
+      "pace": {
+        "walk": 0.8,
+        "run": 4
+      },
+      "flee": {
+        "distance": 1.1,
+        "length": 3,
+        "calm": 3
+      },
+      "birth": {
+        "months": [3, 4, 5, 6],
+        "growth": 0.4,
+        "young": 3
+      },
+      "cull": 0.35,
+      "colonize": 0.3,
+      "lifespan": 5,
+      "males": 0.5,
+      "look": {
+        "form": "hare",
+        "young": 1.4,
+        "coat": ["#c8a679", "#a6845a", "#7c5f3e", "#544029"],
+        "pale": ["#f6efdf", "#ddd2ba", "#b8ac93", "#8e836c"],
+        "dark": ["#3d3027", "#2b221c", "#1e1814", "#14110e"]
+      }
+    }
+  ]
+}

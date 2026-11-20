@@ -29,7 +29,11 @@ export function loadCatalog<T extends { readonly id: string }>(
     );
     throw new DataError(`${file} invalide\n${problems.join('\n')}`);
   }
-  const entries = result.data;
+  return catalogOf(result.data);
+}
+
+/** Catalogue d'entrées déjà validées (une liste d'un fichier de réglages, data/fauna.json). */
+export function catalogOf<T extends { readonly id: string }>(entries: readonly T[]): Catalog<T> {
   const indices = new Map(entries.map((entry, index) => [entry.id, index]));
   return { entries, indexOf: (id) => indices.get(id) };
 }

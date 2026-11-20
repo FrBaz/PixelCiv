@@ -123,6 +123,11 @@ export const BiomeSchema = z
         (flora) => Object.keys(flora.weights ?? {}).every((id) => flora.species.includes(id)),
         { message: 'un poids pour une espèce du biome', path: ['weights'] },
       ),
+    /**
+     * Faune (MON-10, FAU-01 ; ADR 0018) : qualité de l'habitat, de 0 à 1, pour chaque espèce de
+     * gibier qu'il abrite (data/fauna.json) ; vide là où rien ne vit.
+     */
+    fauna: z.record(IdSchema, ShareSchema),
     /** Palette par rôles (REN-09) : ombre, base, lumière. */
     palette: z.object({ shadow: ColorSchema, base: ColorSchema, light: ColorSchema }).strict(),
     /** Motif des tuiles de 4 px (REN-01), que la cuisson tire de la palette. */

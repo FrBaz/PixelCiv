@@ -17,6 +17,7 @@
       "shrubs": 0,
       "species": []
     },
+    "fauna": {},
     "palette": {
       "shadow": "#162c64",
       "base": "#1e3a7a",
@@ -57,6 +58,7 @@
       "shrubs": 0,
       "species": []
     },
+    "fauna": {},
     "palette": {
       "shadow": "#1e427e",
       "base": "#265292",
@@ -97,6 +99,7 @@
       "shrubs": 0,
       "species": []
     },
+    "fauna": {},
     "palette": {
       "shadow": "#376e9d",
       "base": "#468ab6",
@@ -142,6 +145,7 @@
       "shrubs": 0,
       "species": []
     },
+    "fauna": {},
     "palette": {
       "shadow": "#2f6699",
       "base": "#3b79ae",
@@ -176,6 +180,7 @@
       "shrubs": 0,
       "species": []
     },
+    "fauna": {},
     "palette": {
       "shadow": "#2868a8",
       "base": "#397eba",
@@ -210,6 +215,7 @@
       "shrubs": 0,
       "species": []
     },
+    "fauna": {},
     "palette": {
       "shadow": "#4e989e",
       "base": "#64beb8",
@@ -245,6 +251,7 @@
       "shrubs": 0.05,
       "species": ["scrub"]
     },
+    "fauna": { "hare": 0.1 },
     "palette": {
       "shadow": "#b7af6d",
       "base": "#ebdb7f",
@@ -280,6 +287,7 @@
       "shrubs": 0.1,
       "species": ["heather", "conifer"]
     },
+    "fauna": { "deer": 0.1, "hare": 0.2 },
     "palette": {
       "shadow": "#6d6b67",
       "base": "#8c8678",
@@ -315,6 +323,7 @@
       "shrubs": 0.05,
       "species": ["heather"]
     },
+    "fauna": { "hare": 0.1 },
     "palette": {
       "shadow": "#5a5553",
       "base": "#746a60",
@@ -350,6 +359,7 @@
       "shrubs": 0.3,
       "species": ["mangrove-tree", "reed"]
     },
+    "fauna": { "deer": 0.1, "boar": 0.5 },
     "palette": {
       "shadow": "#1c5643",
       "base": "#246c4e",
@@ -385,6 +395,7 @@
       "shrubs": 0.3,
       "species": ["reed"]
     },
+    "fauna": { "deer": 0.2, "boar": 0.4, "hare": 0.2 },
     "palette": {
       "shadow": "#5a754f",
       "base": "#74925c",
@@ -419,6 +430,7 @@
       "shrubs": 0.4,
       "species": ["reed", "birch"]
     },
+    "fauna": { "deer": 0.3, "boar": 0.6, "hare": 0.2 },
     "palette": {
       "shadow": "#43663e",
       "base": "#568048",
@@ -453,6 +465,7 @@
       "shrubs": 0.3,
       "species": ["heather", "birch", "dwarf-willow"]
     },
+    "fauna": { "deer": 0.3, "boar": 0.3, "hare": 0.2 },
     "palette": {
       "shadow": "#575645",
       "base": "#706c50",
@@ -487,6 +500,7 @@
       "shrubs": 0.4,
       "species": ["tropical-hardwood", "reed"]
     },
+    "fauna": { "deer": 0.3, "boar": 0.9 },
     "palette": {
       "shadow": "#174a34",
       "base": "#1e5c3c",
@@ -521,6 +535,7 @@
       "shrubs": 0,
       "species": []
     },
+    "fauna": {},
     "palette": {
       "shadow": "#b8c2d4",
       "base": "#ecf3f6",
@@ -550,6 +565,7 @@
       "shrubs": 0.2,
       "species": ["dwarf-willow", "heather"]
     },
+    "fauna": { "deer": 0.2, "hare": 0.6 },
     "palette": {
       "shadow": "#7a8572",
       "base": "#9ca684",
@@ -585,6 +601,7 @@
       "species": ["conifer", "larch", "berry-bush"],
       "weights": { "conifer": 3, "larch": 1 }
     },
+    "fauna": { "deer": 0.5, "boar": 0.3, "hare": 0.3 },
     "palette": {
       "shadow": "#22534f",
       "base": "#2c685c",
@@ -620,6 +637,7 @@
       "species": ["larch", "birch", "conifer", "berry-bush"],
       "weights": { "conifer": 2, "larch": 1, "birch": 1 }
     },
+    "fauna": { "deer": 0.9, "boar": 0.7, "hare": 0.2 },
     "palette": {
       "shadow": "#2a5b43",
       "base": "#36724e",
@@ -654,6 +672,7 @@
       "shrubs": 0.15,
       "species": ["scrub"]
     },
+    "fauna": { "deer": 0.3, "hare": 0.8 },
     "palette": {
       "shadow": "#818060",
       "base": "#a6a070",
@@ -688,6 +707,7 @@
       "shrubs": 0.2,
       "species": ["dwarf-willow", "heather"]
     },
+    "fauna": { "deer": 0.4, "hare": 0.5 },
     "palette": {
       "shadow": "#64765d",
       "base": "#80946c",
@@ -722,6 +742,7 @@
       "shrubs": 0.1,
       "species": ["conifer", "heather"]
     },
+    "fauna": { "deer": 0.4, "boar": 0.2, "hare": 0.3 },
     "palette": {
       "shadow": "#5f5d59",
       "base": "#7a7468",
@@ -756,6 +777,7 @@
       "shrubs": 0,
       "species": []
     },
+    "fauna": {},
     "palette": {
       "shadow": "#7e7e83",
       "base": "#a29e98",
@@ -790,6 +812,7 @@
       "shrubs": 0.15,
       "species": ["broadleaf", "berry-bush"]
     },
+    "fauna": { "deer": 0.5, "boar": 0.3, "hare": 1 },
     "palette": {
       "shadow": "#3b7834",
       "base": "#4c963c",
@@ -824,6 +847,7 @@
       "shrubs": 0.1,
       "species": ["scrub"]
     },
+    "fauna": { "deer": 0.2, "boar": 0.1, "hare": 1 },
     "palette": {
       "shadow": "#898853",
       "base": "#b0aa60",
@@ -859,6 +883,7 @@
       "species": ["broadleaf", "birch", "berry-bush"],
       "weights": { "broadleaf": 3, "birch": 1 }
     },
+    "fauna": { "deer": 1, "boar": 1, "hare": 0.2 },
     "palette": {
       "shadow": "#24602b",
       "base": "#2e7832",
@@ -894,6 +919,7 @@
       "species": ["conifer", "broadleaf", "berry-bush"],
       "weights": { "conifer": 2, "broadleaf": 1 }
     },
+    "fauna": { "deer": 0.8, "boar": 0.9 },
     "palette": {
       "shadow": "#1b5030",
       "base": "#226438",
@@ -928,6 +954,7 @@
       "shrubs": 0.02,
       "species": ["cactus", "scrub"]
     },
+    "fauna": { "hare": 0.3 },
     "palette": {
       "shadow": "#b0a569",
       "base": "#e2ce7a",
@@ -962,6 +989,7 @@
       "shrubs": 0,
       "species": []
     },
+    "fauna": {},
     "palette": {
       "shadow": "#afb1b5",
       "base": "#e0ddd2",
@@ -996,6 +1024,7 @@
       "shrubs": 0.25,
       "species": ["acacia", "scrub"]
     },
+    "fauna": { "deer": 0.5, "boar": 0.3, "hare": 0.7 },
     "palette": {
       "shadow": "#9c9047",
       "base": "#c8b452",
@@ -1031,6 +1060,7 @@
       "species": ["acacia", "palm", "scrub"],
       "weights": { "acacia": 3, "palm": 1 }
     },
+    "fauna": { "deer": 0.5, "boar": 0.3, "hare": 0.8 },
     "palette": {
       "shadow": "#6d883e",
       "base": "#8caa48",
@@ -1066,6 +1096,7 @@
       "species": ["tropical-hardwood", "palm", "scrub"],
       "weights": { "tropical-hardwood": 4, "palm": 1 }
     },
+    "fauna": { "deer": 0.3, "boar": 0.9 },
     "palette": {
       "shadow": "#1f6330",
       "base": "#287c38",
@@ -1101,6 +1132,7 @@
       "species": ["tropical-hardwood", "palm", "berry-bush"],
       "weights": { "tropical-hardwood": 5, "palm": 1 }
     },
+    "fauna": { "deer": 0.2, "boar": 0.8 },
     "palette": {
       "shadow": "#17532b",
       "base": "#1e6832",

@@ -4,6 +4,7 @@ import appearance from '../../../data/appearance.json';
 import biomes from '../../../data/biomes.json';
 import cultures from '../../../data/cultures.json';
 import decor from '../../../data/decor.json';
+import fauna from '../../../data/fauna.json';
 import flora from '../../../data/flora.json';
 import genetics from '../../../data/genetics.json';
 import humans from '../../../data/humans.json';
@@ -11,8 +12,9 @@ import nomads from '../../../data/nomads.json';
 import resources from '../../../data/resources.json';
 import species from '../../../data/species.json';
 import worldgen from '../../../data/worldgen.json';
-import { DataError, loadCatalog, loadSettings, type Catalog } from './catalog';
+import { catalogOf, DataError, loadCatalog, loadSettings, type Catalog } from './catalog';
 import { DecorSchema } from './decor';
+import { FaunaFileSchema } from './fauna';
 import { BODY_KINDS, HumansSchema, LOOK_BITS } from './humans';
 import {
   AppearanceSchema,
@@ -45,17 +47,22 @@ export type {
 } from './people';
 export type { AltitudeLevel, Biome, Flora, Resource } from './schemas';
 export type { Decor, DecorRamp, FloraLook, LandUse, Phenology, ShadowMethod } from './decor';
+export type { FaunaRules, FaunaSpecies } from './fauna';
 export type { Parameter, ParameterName, Worldgen } from './worldgen';
 export type { BodyKind, Humans, Outfit, Piece, Ramp3, Ramp4, Region } from './humans';
 
 /** Charge tout le contenu ; lève une DataError s'il est invalide. */
 export function loadGameData() {
+  const faunaFile = loadSettings('data/fauna.json', FaunaFileSchema, fauna);
   const data = {
     biomes: loadCatalog('data/biomes.json', BiomesSchema, biomes),
     altitudeLevels: loadCatalog('data/altitude-levels.json', AltitudeLevelsSchema, altitudeLevels),
     resources: loadCatalog('data/resources.json', ResourcesSchema, resources),
     flora: loadCatalog('data/flora.json', FlorasSchema, flora),
     decor: loadSettings('data/decor.json', DecorSchema, decor),
+    /** Le gibier (ADR 0018) : ses espèces, puis ses règles communes. */
+    fauna: catalogOf(faunaFile.species),
+    faunaRules: faunaFile.rules,
     worldgen: loadSettings('data/worldgen.json', WorldgenSchema, worldgen),
     species: loadCatalog('data/species.json', SpeciesListSchema, species),
     genetics: loadSettings('data/genetics.json', GeneticsSchema, genetics),
@@ -117,6 +124,7 @@ export function checkContent(data: GameData): string[] {
     }
   }
   problems.push(...checkDecor(data));
+  problems.push(...checkFauna(data));
   // Espèces : leurs biomes existent, et leur apparence décrit chaque locus et chaque
   // trait de data/genetics.json, avec des allèles connus et au moins un de fréquence
   // non nulle.
@@ -193,6 +201,29 @@ export function checkDecor(data: GameData): string[] {
   );
   if (extra.length > 0) {
     problems.push(`data/decor.json (gisements) : minerais inconnus : ${extra.join(', ')}`);
+  }
+  return problems;
+}
+
+/**
+ * Cohérence du gibier (ADR 0018) : les habitats des biomes ne nomment que des espèces de
+ * data/fauna.json, et aucun gibier ne vit là où le biome n'en rend pas (`forage.game` nul : l'eau,
+ * le salar), puisque ses effectifs se tiennent au stock de gibier de ses cases. Les formes que
+ * nomment les espèces ont leurs grilles, ce que vérifie le build de l'atlas (tools/fauna-atlas.ts).
+ */
+export function checkFauna(data: GameData): string[] {
+  const problems: string[] = [];
+  const unknown = new Set<string>();
+  for (const biome of data.biomes.entries) {
+    for (const [id, quality] of Object.entries(biome.fauna)) {
+      if (data.fauna.indexOf(id) === undefined) unknown.add(id);
+      if (quality > 0 && biome.forage.game === 0) {
+        problems.push(`data/biomes.json (faune) : ${biome.id} abrite du gibier sans en rendre`);
+      }
+    }
+  }
+  if (unknown.size > 0) {
+    problems.push(`data/biomes.json (faune) : inconnus : ${[...unknown].join(', ')}`);
   }
   return problems;
 }
