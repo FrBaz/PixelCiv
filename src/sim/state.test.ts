@@ -237,8 +237,11 @@ describe('pas', () => {
     // mère, le même jour qu'elle, ou le jour 0 si elle marche (de 0baafb76 à 567d06a4).
     // Tâche 2b.6 : sans la partie du gibier ni son flux, l'empreinte reste celle d'avant ; avec
     // eux, le gibier de la steppe vit vingt ans, et fuit les trois groupes (de 567d06a4 à
-    // 54a97017).
+    // 54a97017). Reprise de 2b.6 : une harde dont le but est dans la zone d'un camp y choisit
+    // encore un but, sans approcher l'humain le plus proche, au lieu d'y rester figée ; les
+    // humains ne changent pas (de 54a97017 à 814e6718).
     expect(fingerprint(state, { fauna: false })).toBe('567d06a4');
+    expect(fingerprint(state)).toBe('814e6718');
   });
 
   it("redonnent l'empreinte de référence de trente mois de trois mille individus (ADR 0011)", () => {
@@ -268,8 +271,11 @@ describe('pas', () => {
     expect(state.people.archive.rows).toBeGreaterThan(500);
     // Tâche 2b.6 : sans la partie du gibier ni son flux, l'empreinte reste celle d'avant ; avec
     // eux, le gibier d'un vrai monde, que la chasse des cent groupes éclaircit : 508 animaux en
-    // 351 hardes au bout de trente mois (de cd841d8f à 81ec46ff).
+    // 351 hardes au bout de trente mois (de cd841d8f à 81ec46ff). Reprise de 2b.6 : les hardes
+    // ne restent plus figées dans la zone des camps ; 511 animaux en 350 hardes, qui ont choisi
+    // 34 385 buts au lieu de 19 286 (de 81ec46ff à 913d522c).
     expect(fingerprint(state, { fauna: false })).toBe('cd841d8f');
+    expect(fingerprint(state)).toBe('913d522c');
   });
 });
 
