@@ -33,26 +33,22 @@
         {
           "id": "black",
           "name": "gene.hair.black",
-          "dominance": 3,
-          "color": "#1f1b19"
+          "dominance": 3
         },
         {
           "id": "brown",
           "name": "gene.hair.brown",
-          "dominance": 2,
-          "color": "#5c3b22"
+          "dominance": 2
         },
         {
           "id": "blond",
           "name": "gene.hair.blond",
-          "dominance": 1,
-          "color": "#d6b46a"
+          "dominance": 1
         },
         {
           "id": "red",
           "name": "gene.hair.red",
-          "dominance": 0,
-          "color": "#a8492b"
+          "dominance": 0
         }
       ]
     },

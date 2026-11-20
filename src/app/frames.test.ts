@@ -159,6 +159,85 @@ describe('images des groupes datées (ADR 0013, ADR 0014)', () => {
   });
 });
 
+/** Sens de tous les membres d'un miroir à l'instant `t`, par rang (CrowdSource.positions). */
+function facingOf(mirror: PositionMirror, t: number): number[] {
+  const count = mirror.frame?.ids.length ?? 0;
+  const xs = new Float64Array(count);
+  const ys = new Float64Array(count);
+  const moving = new Uint8Array(count);
+  const facing = new Int8Array(count);
+  for (let rank = 0; rank < mirror.groupCount; rank++) {
+    mirror.positions(rank, t, xs, ys, moving, facing);
+  }
+  return Array.from(facing);
+}
+
+describe('sens de chacun, d’une image des groupes à l’autre (ADR 0016, § 6)', () => {
+  it('donne à chacun le sens de son pas, et le lui garde à l’arrêt, au pas mensuel comme d’une étape à l’autre', () => {
+    const mirror = new PositionMirror({ carry: 0.2, passable: anywhere });
+    const x = 10 * FIXED;
+    // Trois membres : l'un marche vers l'est, l'autre vers l'ouest, le dernier ne bouge pas.
+    const members: [number, number, number, number][] = [
+      [1, x, FIXED, NO_CARRIER],
+      [2, x, 2 * FIXED, NO_CARRIER],
+      [3, x, 3 * FIXED, NO_CARRIER],
+    ];
+    const walking = legs([1, 0, x, FIXED, FIXED / 4, 0, 4], [2, 0, x, 2 * FIXED, -FIXED / 4, 0, 4]);
+    mirror.reset({ at: 0, tick: 0, frame: group(members, walking) }, 64);
+    expect(facingOf(mirror, 1)).toEqual([1, -1, 0]);
+    // Arrivés, ils gardent leur sens.
+    expect(facingOf(mirror, 10)).toEqual([1, -1, 0]);
+    // Une étape verticale ne retourne personne.
+    mirror.apply(1, 10, x + FIXED, FIXED, 0, FIXED / 4, 2);
+    expect(facingOf(mirror, 11)).toEqual([1, -1, 0]);
+    // Le pas mensuel : une nouvelle image, sans étape en cours ; chacun, reconnu à son
+    // emplacement et à son identifiant, garde son sens.
+    const later: [number, number, number, number][] = [
+      [3, x, 3 * FIXED, NO_CARRIER],
+      [1, x + FIXED, 1.5 * FIXED, NO_CARRIER],
+      [2, x - FIXED, 2 * FIXED, NO_CARRIER],
+    ];
+    mirror.reset({ at: 30, tick: 1, frame: group(later) }, 64);
+    expect(facingOf(mirror, 30)).toEqual([0, 1, -1]);
+    // Un emplacement repris par un autre individu ne lui lègue pas son sens.
+    const reborn = group(later);
+    reborn.ids[1] = 999;
+    mirror.reset({ at: 60, tick: 2, frame: reborn }, 64);
+    expect(facingOf(mirror, 60)).toEqual([0, 0, -1]);
+    // La même image remise ne perd rien.
+    mirror.reset({ at: 60, tick: 2, frame: reborn }, 64);
+    expect(facingOf(mirror, 60)).toEqual([0, 0, -1]);
+  });
+
+  it('ne retourne aucun immobile au fil des pas mensuels', () => {
+    const mirror = new PositionMirror({ carry: 0.2, passable: anywhere });
+    const members: [number, number, number, number][] = Array.from({ length: 20 }, (_, slot) => [
+      slot,
+      (slot + 0.5) * FIXED,
+      5 * FIXED,
+      NO_CARRIER,
+    ]);
+    // Un premier mois où chacun fait un pas, d'un côté ou de l'autre.
+    const steps = members.map(
+      (member, index): [number, number, number, number, number, number, number] => [
+        member[0],
+        0,
+        member[1],
+        member[2],
+        index % 2 === 0 ? FIXED / 8 : -FIXED / 8,
+        0,
+        1,
+      ],
+    );
+    mirror.reset({ at: 0, tick: 0, frame: group(members, legs(...steps)) }, 64);
+    const first = facingOf(mirror, 5);
+    for (let month = 1; month <= 12; month++) {
+      mirror.reset({ at: 30 * month, tick: month, frame: group(members) }, 64);
+      expect(facingOf(mirror, 30 * month + 10), `mois ${String(month)}`).toEqual(first);
+    }
+  });
+});
+
 describe('étapes datées et positions de l’instant affiché (ADR 0014)', () => {
   it('suit chaque étape à partir de son jour, la dernière reçue d’un même jour l’emportant', () => {
     const mirror = new PositionMirror({ carry: 0.2, passable: anywhere });

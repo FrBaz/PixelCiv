@@ -1,7 +1,0 @@
-# Mini-sprite d'un nourrisson, au pas, image 1 sur 2 : la tête grosse, le corps court.
-.hh.
-hssh
-.ss.
-sccs
-.cc.
-.oo.

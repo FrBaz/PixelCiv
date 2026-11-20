@@ -34,6 +34,15 @@ export interface Visual {
 /** Nuances de teint d'un code. */
 export const SKIN_TONES = 16;
 
+/**
+ * Code de teint (0 à SKIN_TONES − 1) d'un teint de 0 (clair) à 1 (foncé) : celui que le worker
+ * range dans le code d'apparence, et que le portrait reprend pour prendre la palette de peau de
+ * la carte (ADR 0016).
+ */
+export function skinCode(value: number): number {
+  return Math.min(SKIN_TONES - 1, Math.max(0, Math.floor(value * SKIN_TONES)));
+}
+
 export function encodeVisual(visual: Visual): number {
   return visualCode(visual.sex, visual.age, visual.skin, visual.hair, visual.grey);
 }

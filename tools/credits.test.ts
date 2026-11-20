@@ -67,3 +67,22 @@ describe('crédits des algorithmes', () => {
     }
   });
 });
+
+describe('crédits du pack de sprites (AST-02, ADR 0016)', () => {
+  it('nomment le pack intégré, son auteur, son lien, et sa licence telle que l’auteur du jeu l’a vérifiée', () => {
+    const credits = readFileSync(path.join(root, 'CREDITS.md'), 'utf8');
+    const section = credits.split('\n## Pack de sprites\n')[1]?.split('\n## ')[0] ?? '';
+    const humans = JSON.parse(readFileSync(path.join(root, 'data/humans.json'), 'utf8')) as {
+      credit: { title: string; author: string; url: string };
+    };
+    expect(section.startsWith('\nIntégré')).toBe(true);
+    for (const value of Object.values(humans.credit)) expect(section).toContain(value);
+    // La ligne du tableau : titre, auteur, lien, licence vérifiée, emplacement des planches.
+    const row = section.split('\n').find((line) => line.startsWith(`| ${humans.credit.title}`));
+    expect(row).toBeDefined();
+    expect(row).toContain(humans.credit.author);
+    expect(row).toContain(humans.credit.url);
+    expect(row).toContain('vérifiée par l’auteur du jeu le 15 novembre 2026'.replace('’', "'"));
+    expect(row).toContain('`sprites/humans/skin/`');
+  });
+});

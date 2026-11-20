@@ -26,7 +26,7 @@ import { freshArrays, type Allocator } from '../core/buffers';
 import { dayIndex } from '../core/time';
 import { geneRoles } from '../core/data/people';
 import { ageClass, greyLevel, lifeTable, type LifeAges } from '../core/life';
-import { AGE_CODE, SKIN_TONES, visualCode, type AgeClass } from '../core/visual';
+import { AGE_CODE, skinCode, visualCode, type AgeClass } from '../core/visual';
 import { expressed, trait } from './genetics';
 import { groupMembers } from './groups';
 import { centralMember, curveAt } from './movement';
@@ -377,10 +377,7 @@ export function groupsFrame(
       if (cache.ids[slot] !== id) {
         const offset = slot * GENOME_WORDS;
         cache.ids[slot] = id;
-        cache.skin[slot] = Math.min(
-          SKIN_TONES - 1,
-          Math.floor(trait(genome, offset, skinTrait) * SKIN_TONES),
-        );
+        cache.skin[slot] = skinCode(trait(genome, offset, skinTrait));
         cache.hair[slot] = expressed(genetics, genome, offset, hairLocus);
       }
       const life = lives.at(kinds[slot] ?? 0);

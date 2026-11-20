@@ -1,9 +1,0 @@
-# Mini-sprite d'un enfant, au pas, image 1 sur 2.
-# variantes 6 à 8, rangée 5
-.hh.
-.ss.
-xccs
-.cc.
-.cc.
-.ss.
-.oo.

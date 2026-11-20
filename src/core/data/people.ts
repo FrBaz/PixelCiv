@@ -13,6 +13,8 @@
  * sa couleur ou sa forme.
  */
 import { z } from 'zod';
+import { MAX_OUTFITS, MAX_SKIN_PALETTES, OutfitSchema, Ramp3Schema, Ramp4Schema } from './humans';
+import { GREY_LEVELS } from '../visual';
 import { DataError } from './catalog';
 import { IdSchema, MessageKeySchema, ShareSchema, uniqueIds } from './schemas';
 
@@ -108,7 +110,11 @@ const AlleleSchema = z
     name: MessageKeySchema,
     /** Rang de dominance : à rang égal, l'allèle qui vient d'abord dans la liste l'emporte. */
     dominance: z.number().int().min(0),
-    /** Couleur, pour les rôles « eyes » et « hair ». */
+    /**
+     * Couleur, pour le rôle « eyes ». Celle des cheveux n'est pas ici : leurs tons, carte et
+     * portrait, viennent de la rampe de l'allèle dans data/appearance.json (hair), une seule
+     * source par allèle (ADR 0016).
+     */
     color: ColorSchema.optional(),
     /** Forme du visage, pour le rôle « face ». */
     face: FaceShapeSchema.optional(),
@@ -117,13 +123,16 @@ const AlleleSchema = z
   })
   .strict();
 
-/** Ce que chaque rôle demande à chacun de ses allèles. */
+/**
+ * Ce que chaque rôle demande à chacun de ses allèles ; rien pour les cheveux, dont les tons
+ * sont dans data/appearance.json (checkContent vérifie qu'ils y sont tous).
+ */
 const ROLE_PARAMETER = {
   eyes: 'color',
-  hair: 'color',
+  hair: undefined,
   face: 'face',
   nose: 'nose',
-} as const satisfies Record<LocusRole, 'color' | 'face' | 'nose'>;
+} as const satisfies Record<LocusRole, 'color' | 'face' | 'nose' | undefined>;
 
 const ALLELE_PARAMETERS = ['color', 'face', 'nose'] as const;
 
@@ -697,23 +706,117 @@ export const NomadsSchema = z
 
 export type Nomads = z.infer<typeof NomadsSchema>;
 
+/** Crans du grisonnement après le premier (aucun gris) : un par cran (core/visual.ts). */
+const GREYING_STEPS = GREY_LEVELS - 1;
+
+/** Rangs d'une rampe de quatre tons : lumière, base, ombre, ombre profonde. */
+const RankSchema = z.number().int().min(0).max(3);
+
 /**
- * Couleurs des portraits et des mini-sprites (REN-07, REN-04, REN-09) : rampe des teints,
- * du plus clair au plus foncé, que parcourt le trait du rôle « skin » ; cheveux gris ;
- * contour ; fond des portraits, qui doit se détacher du contour et des cheveux les plus
- * sombres ; blanc des yeux, bouche ; habits des cultures embryonnaires, un par culture, à
- * tour de rôle.
+ * Couleurs des individus (REN-04, REN-07, REN-09 ; ADR 0016) : celles du portrait (contour,
+ * fond, qui doit se détacher du contour et des cheveux les plus sombres, blanc des yeux,
+ * bouche), puis celles des humains des planches, que le portrait reprend : les palettes de
+ * peau, de la plus claire à la plus foncée, chacune jusqu'au code de teint `upTo` ; les tons
+ * des cheveux, par allèle du locus du rôle « hair », et des cheveux gris ; le grisonnement, cran
+ * par cran ; les tissus, avec leur tissu de rechange sur une peau dont ils ne se détachent pas ;
+ * les tenues ; et celle de chaque culture embryonnaire, à tour de rôle. Toutes ces rampes sont
+ * des palettes de l'auteur (sprites/sprite_converter.ipynb, et Portrait64), que vérifie
+ * tools/author-palettes.test.ts ; aucune couleur n'en est calculée.
  */
 export const AppearanceSchema = z
   .object({
-    skin: z.array(ColorSchema).min(2),
-    grey: ColorSchema,
     outline: ColorSchema,
     backdrop: ColorSchema,
     white: ColorSchema,
     mouth: ColorSchema,
-    clothing: z.array(ColorSchema).min(1),
+    skinPalettes: uniqueIds(
+      z
+        .object({
+          id: IdSchema,
+          tones: Ramp4Schema,
+          /** Dernier code de teint (0 à 15, core/visual.ts) que prend cette palette. */
+          upTo: z.number().int().min(0).max(15),
+        })
+        .strict(),
+    )
+      .min(1)
+      .max(MAX_SKIN_PALETTES)
+      .refine((p) => p.every((e, i) => i === 0 || e.upTo > (p[i - 1]?.upTo ?? -1)), {
+        message: 'des teints croissants',
+      })
+      .refine((p) => p.at(-1)?.upTo === 15, { message: 'la dernière palette va au teint 15' }),
+    /** Trois tons par allèle : lumière, base, ombre ; l'ombre profonde prend le dernier. */
+    hair: z.record(IdSchema, Ramp3Schema),
+    greyRamps: z.record(IdSchema, Ramp3Schema),
+    /**
+     * Grisonnement, un cran après l'autre : les rangs des cheveux que prend une rampe de gris ;
+     * les autres gardent la couleur de l'allèle.
+     */
+    greying: z
+      .array(
+        z
+          .object({
+            ramp: IdSchema,
+            ranks: z.array(RankSchema).min(1).max(4),
+          })
+          .strict(),
+      )
+      .length(GREYING_STEPS),
+    fabrics: uniqueIds(
+      z
+        .object({
+          id: IdSchema,
+          tones: Ramp4Schema,
+          /**
+           * Tissu de rechange, par palette de peau : celui que prend une pièce de ce tissu sur
+           * une peau dont il ne se détache pas (tools/author-palettes.test.ts, contraste).
+           */
+          onSkin: z.record(IdSchema, IdSchema).optional(),
+        })
+        .strict(),
+    ).min(1),
+    outfits: uniqueIds(OutfitSchema).min(1).max(MAX_OUTFITS),
+    cultureOutfits: z.array(IdSchema).min(1),
   })
-  .strict();
+  .strict()
+  .superRefine((a, context) => {
+    const issue = (message: string, path: (string | number)[]) => {
+      context.addIssue({ code: 'custom', message, path });
+    };
+    const outfits = new Set(a.outfits.map((outfit) => outfit.id));
+    a.cultureOutfits.forEach((id, index) => {
+      if (!outfits.has(id)) issue(`tenue inconnue : ${id}`, ['cultureOutfits', index]);
+    });
+    a.greying.forEach((step, index) => {
+      if (!Object.hasOwn(a.greyRamps, step.ramp)) {
+        issue(`rampe de gris inconnue : ${step.ramp}`, ['greying', index, 'ramp']);
+      }
+      if (new Set(step.ranks).size !== step.ranks.length) {
+        issue('des rangs distincts', ['greying', index, 'ranks']);
+      }
+    });
+    const fabrics = new Map(a.fabrics.map((fabric) => [fabric.id, fabric]));
+    const skins = new Set(a.skinPalettes.map((palette) => palette.id));
+    a.fabrics.forEach((fabric, index) => {
+      for (const [skin, spare] of Object.entries(fabric.onSkin ?? {})) {
+        const path = ['fabrics', index, 'onSkin', skin];
+        if (!skins.has(skin)) issue(`palette de peau inconnue : ${skin}`, path);
+        const replacement = fabrics.get(spare);
+        if (replacement === undefined) issue(`tissu inconnu : ${spare}`, path);
+        else if (replacement.onSkin !== undefined && Object.hasOwn(replacement.onSkin, skin)) {
+          issue(`${spare} se remplace lui-même sur ${skin}`, path);
+        }
+      }
+    });
+    a.outfits.forEach((outfit, index) => {
+      for (const body of ['female', 'male', 'child', 'baby'] as const) {
+        outfit[body].forEach((piece, at) => {
+          if (!fabrics.has(piece.fabric)) {
+            issue(`tissu inconnu : ${piece.fabric}`, ['outfits', index, body, at, 'fabric']);
+          }
+        });
+      }
+    });
+  });
 
 export type Appearance = z.infer<typeof AppearanceSchema>;

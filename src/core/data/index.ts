@@ -5,15 +5,18 @@ import biomes from '../../../data/biomes.json';
 import cultures from '../../../data/cultures.json';
 import flora from '../../../data/flora.json';
 import genetics from '../../../data/genetics.json';
+import humans from '../../../data/humans.json';
 import nomads from '../../../data/nomads.json';
 import resources from '../../../data/resources.json';
 import species from '../../../data/species.json';
 import worldgen from '../../../data/worldgen.json';
 import { DataError, loadCatalog, loadSettings, type Catalog } from './catalog';
+import { BODY_KINDS, HumansSchema, LOOK_BITS } from './humans';
 import {
   AppearanceSchema,
   CulturesSchema,
   GeneticsSchema,
+  geneRoles,
   NomadsSchema,
   SpeciesListSchema,
 } from './people';
@@ -40,6 +43,7 @@ export type {
 } from './people';
 export type { AltitudeLevel, Biome, Flora, Resource } from './schemas';
 export type { Parameter, ParameterName, Worldgen } from './worldgen';
+export type { BodyKind, Humans, Outfit, Piece, Ramp3, Ramp4, Region } from './humans';
 
 /** Charge tout le contenu ; lève une DataError s'il est invalide. */
 export function loadGameData() {
@@ -54,6 +58,7 @@ export function loadGameData() {
     cultures: loadSettings('data/cultures.json', CulturesSchema, cultures),
     nomads: loadSettings('data/nomads.json', NomadsSchema, nomads),
     appearance: loadSettings('data/appearance.json', AppearanceSchema, appearance),
+    humans: loadSettings('data/humans.json', HumansSchema, humans),
   };
   const problems = checkContent(data);
   if (problems.length > 0) throw new DataError(`contenu incohérent\n${problems.join('\n')}`);
@@ -145,6 +150,7 @@ export function checkContent(data: GameData): string[] {
         problems.push(`${where} : traits inconnus : ${unknownTraits.join(', ')}`);
     }
   }
+  problems.push(...checkAppearance(data));
   // Les couches du monde rangent le biome et le gisement (indice + 1) sur un octet.
   if (data.biomes.entries.length > 256)
     problems.push('data/biomes.json : 256 biomes au plus (couche biome sur un octet)');
@@ -152,5 +158,63 @@ export function checkContent(data: GameData): string[] {
     problems.push(
       'data/resources.json : 255 ressources au plus (couche des gisements sur un octet)',
     );
+  return problems;
+}
+
+/**
+ * Apparences possibles d'un humain au plus (render/people.ts) : la texture des palettes en range
+ * huit par ligne, sur 2 048 lignes, ce que garantit WebGL 2.
+ */
+export const MAX_LOOKS = 8 * 2048;
+
+/**
+ * Cohérence des humains des planches (ADR 0016) : les tenues ne couvrent que des régions de
+ * data/humans.json ; chaque allèle des cheveux a ses tons, et rien d'autre n'en a ; les allèles
+ * tiennent dans les bits de l'apparence (LOOK_BITS) ; et toutes les apparences possibles dans
+ * la texture des palettes (MAX_LOOKS).
+ */
+export function checkAppearance(data: GameData): string[] {
+  const problems: string[] = [];
+  const { appearance, humans, genetics } = data;
+  const regions = new Set(humans.regions.map((region) => region.id));
+  for (const outfit of appearance.outfits) {
+    for (const body of BODY_KINDS) {
+      for (const piece of outfit[body]) {
+        const unknown = piece.regions.filter((region) => !regions.has(region));
+        if (unknown.length > 0) {
+          problems.push(
+            `data/appearance.json (${outfit.id}, ${body}) : régions inconnues : ${unknown.join(', ')}`,
+          );
+        }
+      }
+    }
+  }
+  const hair = genetics.loci.at(geneRoles(genetics).loci.hair)?.alleles ?? [];
+  const missing = hair.filter((allele) => !Object.hasOwn(appearance.hair, allele.id));
+  if (missing.length > 0) {
+    problems.push(
+      `data/appearance.json (hair) : allèles sans tons : ${missing.map((a) => a.id).join(', ')}`,
+    );
+  }
+  const extra = Object.keys(appearance.hair).filter((id) => !hair.some((a) => a.id === id));
+  if (extra.length > 0) {
+    problems.push(`data/appearance.json (hair) : allèles inconnus : ${extra.join(', ')}`);
+  }
+  if (hair.length > 1 << LOOK_BITS.hair) {
+    problems.push(
+      `data/genetics.json : ${String(1 << LOOK_BITS.hair)} allèles des cheveux au plus`,
+    );
+  }
+  const looks =
+    appearance.skinPalettes.length *
+    Math.max(1, hair.length) *
+    (appearance.greying.length + 1) *
+    appearance.outfits.length *
+    BODY_KINDS.length;
+  if (looks > MAX_LOOKS) {
+    problems.push(
+      `data/appearance.json : ${String(looks)} apparences possibles, ${String(MAX_LOOKS)} au plus`,
+    );
+  }
   return problems;
 }

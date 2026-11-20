@@ -119,6 +119,20 @@ export function DebugPanel() {
         : t('debug.texturesValue', { used: info.textures, cached: info.cachedTextures }),
     ],
     ['debug.pages', number(info?.pages, 0)],
+    [
+      'debug.level',
+      info?.level === undefined || info.k === undefined
+        ? t('debug.unavailable')
+        : info.level < 0
+          ? t('debug.levelFar')
+          : t('debug.levelValue', { level: info.level, k: info.k }),
+    ],
+    [
+      'debug.textureMemory',
+      info?.textureBytes === undefined
+        ? t('debug.unavailable')
+        : t('unit.kib', { value: round(info.textureBytes / 1024) }),
+    ],
     ['debug.drawCalls', number(info?.drawCalls, 0)],
     [
       'debug.memory',

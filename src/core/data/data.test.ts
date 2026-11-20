@@ -3,8 +3,17 @@ import altitudeLevelsJson from '../../../data/altitude-levels.json';
 import biomesJson from '../../../data/biomes.json';
 import fr from '../../i18n/fr.json';
 import { DataError, loadCatalog } from './catalog';
-import { checkContent, loadGameData, type GameData, type Genetics, type Species } from './index';
 import {
+  checkContent,
+  loadGameData,
+  MAX_LOOKS,
+  type GameData,
+  type Genetics,
+  type Species,
+} from './index';
+import { HumansSchema, LEVEL_STEP, MAX_OUTFITS, MAX_SKIN_PALETTES } from './humans';
+import {
+  AppearanceSchema,
   FACE_BOUNDS,
   GeneticsSchema,
   geneRoles,
@@ -429,7 +438,7 @@ describe('rôles des gènes et formes des allèles (D-6, A-10, W-12)', () => {
     expect(problems(unknown).at(0)).toMatch(/^loci\.0\.role : /);
   });
 
-  it('refuse un allèle de visage ou de nez sans forme, et des cheveux sans couleur', () => {
+  it('refuse un allèle de visage ou de nez sans forme, et des cheveux colorés hors de leurs rampes', () => {
     const faceless = withLocus('face', (locus) => ({
       ...locus,
       alleles: [...locus.alleles, { id: 'heart', name: 'gene.face.oval', dominance: 0 }],
@@ -442,11 +451,13 @@ describe('rôles des gènes et formes des allèles (D-6, A-10, W-12)', () => {
       ),
     }));
     expect(problems(noseless)).toEqual(['loci.3.alleles.1.nose : demandé par le rôle nose']);
-    const colorless = withLocus('hair', (locus) => ({
+    // Les tons des cheveux sont dans data/appearance.json, une seule source par allèle.
+    const colored = withLocus('hair', (locus) => ({
       ...locus,
-      alleles: locus.alleles.map(({ color: _color, ...allele }) => allele),
+      alleles: locus.alleles.map((allele) => ({ ...allele, color: '#1f1b19' })),
     }));
-    expect(problems(colorless)).toHaveLength(4);
+    expect(problems(colored)).toHaveLength(4);
+    expect(problems(colored).at(0)).toBe('loci.1.alleles.0.color : sans emploi pour le rôle hair');
     // Une forme hors de son rôle, ou hors des bornes du portrait.
     const misplaced = withLocus('eyes', (locus) => ({
       ...locus,
@@ -668,5 +679,211 @@ describe('réglages du mouvement, dans data/nomads.json (ADR 0014)', () => {
     expect(camp({ gap: 1 })).toBe(false);
     expect(camp({ gap: 0.2 })).toBe(false);
     expect(valid({ ...nomads, camp: { ...nomads.camp, gap: 0.9 } })).toBe(true);
+  });
+});
+
+describe('humains des planches et leurs tenues (ADR 0016)', () => {
+  const data = loadGameData();
+  const { appearance, humans } = data;
+  /** Les problèmes d'une apparence ou de données des humains, chacun « chemin : message ». */
+  const issues = (schema: typeof AppearanceSchema | typeof HumansSchema, value: unknown) => {
+    const parsed = schema.safeParse(value);
+    return parsed.success
+      ? []
+      : parsed.error.issues.map((issue) => `${issue.path.join('.')} : ${issue.message}`);
+  };
+  const withAppearance = (change: Partial<typeof appearance>) => ({ ...appearance, ...change });
+  const withHumans = (change: Partial<typeof humans>) => ({ ...humans, ...change });
+
+  it('accepte les données livrées', () => {
+    expect(issues(AppearanceSchema, appearance)).toEqual([]);
+    expect(issues(HumansSchema, humans)).toEqual([]);
+  });
+
+  it(`borne les palettes de peau à ${String(MAX_SKIN_PALETTES)} et les tenues à ${String(MAX_OUTFITS)}, les bits de l’apparence`, () => {
+    const palette = appearance.skinPalettes.at(0);
+    if (palette === undefined) throw new Error('pas de palette');
+    const palettes = Array.from({ length: MAX_SKIN_PALETTES + 1 }, (_, index) => ({
+      ...palette,
+      id: `skin-${'abcdefghi'[index] ?? 'z'}`,
+      upTo: Math.min(15, index),
+    }));
+    expect(issues(AppearanceSchema, withAppearance({ skinPalettes: palettes })).join()).toMatch(
+      /skinPalettes : Too big/,
+    );
+    const outfit = appearance.outfits.at(0);
+    if (outfit === undefined) throw new Error('pas de tenue');
+    const outfits = Array.from({ length: MAX_OUTFITS + 1 }, (_, index) => ({
+      ...outfit,
+      id: `outfit-${'abcdefghijklmnopq'[index] ?? 'z'}`,
+    }));
+    expect(issues(AppearanceSchema, withAppearance({ outfits })).join()).toMatch(
+      /outfits : Too big/,
+    );
+    // Toutes les apparences possibles tiennent dans la texture des palettes.
+    const looks =
+      appearance.skinPalettes.length *
+      4 *
+      (appearance.greying.length + 1) *
+      appearance.outfits.length *
+      4;
+    expect(looks).toBeLessThanOrEqual(MAX_LOOKS);
+  });
+
+  it('refuse des teints qui ne croissent pas, ou qui s’arrêtent avant 15', () => {
+    const [first, second, ...rest] = appearance.skinPalettes;
+    expect(
+      issues(AppearanceSchema, withAppearance({ skinPalettes: [second, first, ...rest] })),
+    ).toContain('skinPalettes : des teints croissants');
+    const short = appearance.skinPalettes.slice(0, -1);
+    expect(issues(AppearanceSchema, withAppearance({ skinPalettes: short }))).toContain(
+      'skinPalettes : la dernière palette va au teint 15',
+    );
+  });
+
+  it('refuse un tissu, une tenue, une rampe de gris ou une peau inconnus, et un tissu de rechange qui se remplace', () => {
+    const outfit = appearance.outfits.at(0);
+    if (outfit === undefined) throw new Error('pas de tenue');
+    const silk = { ...outfit, female: [{ fabric: 'silk', regions: ['chest', 'hips'] }] };
+    expect(
+      issues(AppearanceSchema, withAppearance({ outfits: [silk, ...appearance.outfits.slice(1)] })),
+    ).toContain('outfits.0.female.0.fabric : tissu inconnu : silk');
+    expect(issues(AppearanceSchema, withAppearance({ cultureOutfits: ['toga'] }))).toContain(
+      'cultureOutfits.0 : tenue inconnue : toga',
+    );
+    const greying = appearance.greying.map((step, index) =>
+      index === 0 ? { ...step, ramp: 'silver' } : step,
+    );
+    expect(issues(AppearanceSchema, withAppearance({ greying }))).toContain(
+      'greying.0.ramp : rampe de gris inconnue : silver',
+    );
+    expect(
+      issues(AppearanceSchema, withAppearance({ greying: appearance.greying.slice(1) })).join(),
+    ).toMatch(/greying : Too small/);
+    const fabrics = appearance.fabrics.map((fabric) =>
+      fabric.id === 'linen'
+        ? { ...fabric, onSkin: { ...fabric.onSkin, purple: 'leather', medium: 'leather' } }
+        : fabric,
+    );
+    const found = issues(AppearanceSchema, withAppearance({ fabrics }));
+    expect(found).toContain('fabrics.5.onSkin.purple : palette de peau inconnue : purple');
+    // Le cuir se remplace lui-même par du lin sur la peau medium : pas de chaîne.
+    expect(found).toContain('fabrics.5.onSkin.medium : leather se remplace lui-même sur medium');
+  });
+
+  it('relève une tenue sur une région inconnue, des cheveux sans tons, ou trop d’apparences possibles', () => {
+    const outfits = appearance.outfits.map((outfit, index) =>
+      index === 0 ? { ...outfit, male: [{ fabric: 'linen', regions: ['hips', 'tail'] }] } : outfit,
+    );
+    expect(checkContent({ ...data, appearance: { ...appearance, outfits } })).toContain(
+      'data/appearance.json (tunic, male) : régions inconnues : tail',
+    );
+    const { red: _red, ...hair } = appearance.hair;
+    expect(checkContent({ ...data, appearance: { ...appearance, hair } })).toContain(
+      'data/appearance.json (hair) : allèles sans tons : red',
+    );
+    expect(
+      checkContent({
+        ...data,
+        appearance: {
+          ...appearance,
+          hair: { ...appearance.hair, green: ['#00ff00', '#00cc00', '#009900'] },
+        },
+      }),
+    ).toContain('data/appearance.json (hair) : allèles inconnus : green');
+    // Seize tenues, huit peaux, seize allèles de cheveux : 32 768 apparences possibles.
+    const letters = 'abcdefghijklmnop';
+    const template = appearance.outfits.at(0);
+    const skin = appearance.skinPalettes.at(0);
+    if (template === undefined || skin === undefined) throw new Error('données');
+    const many = Array.from(letters, (letter) => ({ ...template, id: `outfit-${letter}` }));
+    const palettes = Array.from(letters.slice(0, 8), (letter, index) => ({
+      ...skin,
+      id: `skin-${letter}`,
+      upTo: index === 7 ? 15 : index,
+    }));
+    const hairLocus = data.genetics.loci.findIndex((locus) => locus.role === 'hair');
+    const alleles = Array.from(letters, (letter, index) => ({
+      id: `hair-${letter}`,
+      name: 'gene.hair.black',
+      dominance: index,
+    }));
+    const genetics = {
+      ...data.genetics,
+      loci: data.genetics.loci.map((locus, index) =>
+        index === hairLocus ? { ...locus, alleles } : locus,
+      ),
+    };
+    const black = appearance.hair.black;
+    const ramps = Object.fromEntries(alleles.map((allele) => [allele.id, black]));
+    const crowded = {
+      ...appearance,
+      outfits: many,
+      skinPalettes: palettes,
+      hair: ramps,
+      cultureOutfits: [many[0]?.id ?? ''],
+    };
+    expect(checkContent({ ...data, genetics, appearance: crowded })).toContain(
+      'data/appearance.json : 32768 apparences possibles, 16384 au plus',
+    );
+  });
+
+  it('refuse des régions en double, sans cheveux, des tons gardés en trop, et des niveaux mal rangés', () => {
+    const [scalp, face, ...others] = humans.regions;
+    expect(
+      issues(
+        HumansSchema,
+        withHumans({ regions: [scalp, { ...face, letter: scalp.letter }, ...others] }),
+      ),
+    ).toContain('regions : une lettre par région');
+    expect(
+      issues(HumansSchema, withHumans({ regions: [{ ...scalp, hair: false }, face, ...others] })),
+    ).toContain('regions : une seule région porte les cheveux');
+    expect(
+      issues(
+        HumansSchema,
+        withHumans({ regions: [{ ...scalp, letter: 'o' }, face, ...others] }),
+      ).join(),
+    ).toMatch(/regions\.0\.letter : une majuscule/);
+    const kept = Array.from(
+      { length: 13 },
+      (_, index) => `#0000${index.toString(16).padStart(2, '0')}`,
+    );
+    expect(issues(HumansSchema, withHumans({ tones: { ...humans.tones, kept } }))).toContain(
+      'tones : 15 tons gardés au plus',
+    );
+    expect(
+      issues(HumansSchema, withHumans({ tones: { ...humans.tones, kept: ['#13131c'] } })),
+    ).toContain('tones : chaque ton une seule fois');
+    const [first, second, ...rest] = humans.levels;
+    expect(issues(HumansSchema, withHumans({ levels: [second, first, ...rest] }))).toContain(
+      'levels.0 : le premier niveau est la planche à sa taille, sans variante',
+    );
+    expect(
+      issues(
+        HumansSchema,
+        withHumans({ levels: [first, { ...second, variants: [-1, 0, 1, 2] }, ...rest] }),
+      ).join(),
+    ).toMatch(/levels\.1\.variants : Too big/);
+    // Deux niveaux qui se suivent espacés de plus de LEVEL_STEP : la règle du niveau ne tiendrait
+    // plus la taille à 25 % de la cible (src/render/crowd.ts, viewDensity).
+    const spaced = [first, ...[2, 4].map((factor) => ({ ...second, factor }))];
+    expect(issues(HumansSchema, withHumans({ levels: spaced }))).toContain(
+      `levels.2.factor : deux niveaux qui se suivent sont espacés d'un facteur ${String(LEVEL_STEP)} au plus`,
+    );
+    expect(
+      issues(HumansSchema, withHumans({ levels: [first, { ...second, factor: 1.6 }] })),
+    ).toContain(
+      `levels.1.factor : deux niveaux qui se suivent sont espacés d'un facteur ${String(LEVEL_STEP)} au plus`,
+    );
+    expect(
+      issues(HumansSchema, withHumans({ levels: [first, { ...second, factor: LEVEL_STEP }] })),
+    ).toEqual([]);
+    const animations = humans.animations.map((animation) =>
+      animation.id === 'walk' ? { ...animation, shown: false } : animation,
+    );
+    expect(issues(HumansSchema, withHumans({ animations }))).toContain(
+      "animations : l'animation walk est montrée",
+    );
   });
 });

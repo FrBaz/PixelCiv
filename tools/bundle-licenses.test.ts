@@ -431,3 +431,12 @@ describe('bundleLicenses', () => {
     await expect(buildProject(project({ credits: null }))).rejects.toThrow(/crédits introuvable/);
   });
 });
+
+describe('assets tiers dans l’avis de licence (AST-02, ADR 0016)', () => {
+  it('nomme chaque asset distribué, son auteur et son lien, après les bibliothèques', () => {
+    const asset = { title: 'Planches', author: 'Une autrice', url: 'https://example.org/pack' };
+    const notice = licenseNotice([], () => undefined, [asset]);
+    expect(notice).toContain('« Planches », de Une autrice : https://example.org/pack.');
+    expect(licenseNotice([], () => undefined)).not.toContain('Assets');
+  });
+});

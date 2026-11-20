@@ -44,6 +44,9 @@ describe('panneau de débogage (ADR 0013, ADR 0014, ADR 0015)', () => {
       cachedTextures: 412,
       pages: 1,
       drawCalls: 37,
+      level: 1,
+      k: 2,
+      textureBytes: 2100 * 1024,
       memoryMb: 140,
       renderer: { name: 'webgl', resolution: 1 },
       chunks: 0,
@@ -64,8 +67,11 @@ describe('panneau de débogage (ADR 0013, ADR 0014, ADR 0015)', () => {
     expect(shown.get('Positions reçues')).toBe('1\u202f234 étapes/s · 64 Kio/s');
     expect(shown.get('Positions, tri, sprites')).toBe('1,23 + 0,5 + 2,25 ms');
     expect(shown.get('Sprites dessinés')).toBe('1\u202f987');
-    expect(shown.get('Textures')).toBe("140 dans l'image, 412 gardées");
-    expect(shown.get("Pages de l'atlas")).toBe('1');
+    expect(shown.get('Apparences')).toBe("140 dans l'image, 412 gardées");
+    expect(shown.get('Pages des bannières')).toBe('1');
+    // Le niveau de motifs des humains et leur densité, et ce que pèsent leurs textures.
+    expect(shown.get('Individus : niveau, densité')).toBe('niveau 1, k = 2');
+    expect(shown.get('Textures des individus')).toBe('2\u202f100 Kio');
     expect(shown.get('Appels de dessin')).toBe('37');
     // Le rendu à la demande ne dessine que les images qui changent (ADR 0015) : les tics de
     // l'animation, et parmi eux les images dessinées.
@@ -80,7 +86,9 @@ describe('panneau de débogage (ADR 0013, ADR 0014, ADR 0015)', () => {
       walkers: undefined,
       legsPerSecond: undefined,
       drawCalls: undefined,
+      level: -1,
     };
+    expect(rows().get('Individus : niveau, densité')).toBe('bannières');
     expect(rows().get('Marcheurs')).toBe('indisponible');
     expect(rows().get('Positions reçues')).toBe('indisponible');
     expect(rows().get('Appels de dessin')).toBe('indisponible');

@@ -2,8 +2,11 @@
  * Portrait d'un individu dans sa fiche (tâche 2.8 ; REN-07) : les rôles de teinte du
  * générateur (src/gen/portrait.ts), recolorés selon son teint, ses yeux, ses cheveux,
  * grisonnants avec l'âge, et l'habit de sa culture, sur le fond des portraits
- * (data/appearance.json). Les gènes se lisent par leur rôle (data/genetics.json), et les
- * cheveux grisonnent au cran de son mini-sprite (core/life.ts).
+ * (data/appearance.json). Les gènes se lisent par leur rôle (data/genetics.json). Depuis 2b.5
+ * (ADR 0016), le portrait prend ses tons là où la carte prend les siens (src/render/looks.ts) :
+ * la palette de peau de son code de teint, les tons des cheveux de son allèle au cran de gris
+ * de la carte, et le premier tissu de la tenue de sa culture, rang pour rang ; 2b.9 le
+ * remplacera par Portrait64, recoloré des mêmes palettes.
  *
  * Pixel art net : le portrait s'affiche à un nombre entier de pixels physiques par pixel
  * (portraitScale), dans un canevas dont chaque pixel est un pixel physique de l'écran,
@@ -16,8 +19,16 @@ import type { Allele, LocusRole } from '../core/data';
 import { geneRoles } from '../core/data/people';
 import type { PersonView } from '../core/protocol';
 import { PORTRAIT_SIZE, portraitRoles } from '../gen/portrait';
-import { cultureCloth, greyed, personPalette, recolorRoles, skinColor } from '../render/atlas';
+import { personPalette, recolorRoles } from '../render/atlas';
 import { parseColor } from '../render/bake';
+import {
+  cultureOutfit,
+  hairTones,
+  outfitColor,
+  skinCode,
+  skinPaletteOf,
+  skinTones,
+} from '../render/looks';
 import { enlarge, portraitScale } from './portraitCanvas';
 import type { SheetContent } from './Sheet';
 
@@ -50,10 +61,24 @@ export function portraitPixels(
   const species = content.species.find((entry) => entry.id === person.species);
   const face = expressed('face')?.face;
   const nose = expressed('nose')?.nose;
-  const hair = expressed('hair')?.color;
+  const hairAllele = expressed('hair')?.id;
   const eye = expressed('eyes')?.color;
   if (species === undefined || face === undefined || nose === undefined) return undefined;
-  if (hair === undefined || eye === undefined || skin === undefined) return undefined;
+  if (hairAllele === undefined || eye === undefined || skin === undefined) return undefined;
+  // Les tons de la carte : palette de peau, cheveux au même cran, tissu de la tenue.
+  const palette = skinPaletteOf(appearance, skinCode(skin));
+  const skinRamp = skinTones(appearance, palette);
+  const hair = hairTones(appearance, hairAllele, person.grey);
+  const body =
+    person.stage === 'baby'
+      ? 'baby'
+      : person.stage === 'child'
+        ? 'child'
+        : person.sex === 0
+          ? 'female'
+          : 'male';
+  const cloth = outfitColor(appearance, cultureOutfit(appearance, person.culture), body, palette);
+  if (skinRamp === undefined || hair === undefined || cloth === undefined) return undefined;
   const portrait = portraitRoles({
     sex: person.sex,
     age: person.age,
@@ -63,14 +88,10 @@ export function portraitPixels(
     nose,
     variant: variantOf(person.genome),
   });
-  const grey = parseColor(appearance.grey);
-  const palette = personPalette(appearance, {
-    skin: skinColor(appearance, skin),
-    hair: greyed(parseColor(hair), grey, person.grey),
-    cloth: parseColor(cultureCloth(appearance.clothing, person.culture) ?? appearance.grey),
-    eye: parseColor(eye),
-  });
-  return recolorRoles(portrait, palette);
+  return recolorRoles(
+    portrait,
+    personPalette(appearance, { skin: skinRamp, hair, cloth, eye: parseColor(eye) }),
+  );
 }
 
 /** Un portrait sans pixel : le fond seul, pour un individu que les données ne décrivent pas. */

@@ -1,0 +1,69 @@
+{
+  "sheets": {
+    "female": "sprites/humans/skin/Female Skin1.png",
+    "male": "sprites/humans/skin/Male Skin1.png"
+  },
+  "credit": {
+    "title": "2D Pixel Art Male and Female Character",
+    "author": "GandalfHardcore",
+    "url": "https://gandalfhardcore.itch.io/2d-pixel-art-male-and-female-character"
+  },
+  "cell": {
+    "width": 80,
+    "height": 64,
+    "anchor": [40, 64]
+  },
+  "regions": [
+    { "id": "scalp", "letter": "C", "hair": true, "head": true },
+    { "id": "face", "letter": "V", "head": true },
+    { "id": "neck", "letter": "N" },
+    { "id": "shoulders", "letter": "E" },
+    { "id": "chest", "letter": "P" },
+    { "id": "belly", "letter": "T" },
+    { "id": "upper-arm", "letter": "B" },
+    { "id": "forearm", "letter": "A" },
+    { "id": "hand", "letter": "M" },
+    { "id": "hips", "letter": "H" },
+    { "id": "thigh", "letter": "U" },
+    { "id": "shin", "letter": "J" },
+    { "id": "foot", "letter": "S" }
+  ],
+  "tones": {
+    "outline": ["#13131c", "#140b0f"],
+    "eye": ["#27130f"],
+    "kept": ["#ffffff", "#f1868e", "#ba756a"],
+    "skin": ["#fef0e4", "#f3d0c4", "#dea99f", "#b86a6a"],
+    "under": ["#94afc0", "#6985a0", "#4a6082", "#293757"],
+    "skinAlso": {
+      "#e65656": 3
+    },
+    "underAlso": {
+      "#664d46": 3
+    }
+  },
+  "animations": [
+    { "id": "idle", "row": 0, "frames": 5, "frameMs": 260, "shown": true },
+    { "id": "walk", "row": 1, "frames": 8, "steps": 2, "shown": true },
+    { "id": "run", "row": 2, "frames": 8, "steps": 2 },
+    { "id": "jump", "row": 3, "frames": 4, "frameMs": 130 },
+    { "id": "fall", "row": 4, "frames": 4, "frameMs": 130 },
+    { "id": "throw", "row": 5, "frames": 6, "frameMs": 150 },
+    { "id": "death", "row": 6, "frames": 10, "frameMs": 120, "loop": false }
+  ],
+  "levels": [
+    { "factor": 1, "outline": "keep", "variants": [0] },
+    { "factor": 1.5, "outline": "thick", "variants": [-1, 0, 1], "head": "eyes" },
+    { "factor": 2, "outline": "thick", "variants": [-1, 0, 1], "head": "eyes" },
+    { "factor": 3, "outline": "none", "variants": [-1, 0, 1], "head": "eyes" },
+    { "factor": 4, "outline": "none", "variants": [-1, 0, 1], "head": "eyes" }
+  ],
+  "young": {
+    "body": "male",
+    "child": [
+      { "rows": 26, "head": 10 },
+      { "rows": 31, "head": 10 },
+      { "rows": 36, "head": 10 }
+    ],
+    "baby": [{ "rows": 19, "head": 8 }]
+  }
+}

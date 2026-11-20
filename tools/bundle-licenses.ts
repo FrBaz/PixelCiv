@@ -159,10 +159,22 @@ export function licenseText(directory: string): string | undefined {
 
 const RULE = '-'.repeat(72);
 
-/** Avis de licence joint au jeu : chaque paquet distribué, avec son texte de licence. */
+/** Un asset tiers distribué avec le jeu : son titre, son auteur et son lien (AST-02). */
+export interface AssetCredit {
+  readonly title: string;
+  readonly author: string;
+  readonly url: string;
+}
+
+/**
+ * Avis de licence joint au jeu : chaque paquet distribué, avec son texte de licence, puis les
+ * assets tiers dont le jeu distribue des pixels, avec leur auteur et leur lien, jusqu'à ce que
+ * l'écran des crédits les montre (IHM-08).
+ */
 export function licenseNotice(
   packages: Iterable<BundledPackage>,
   text: (directory: string) => string | undefined = licenseText,
+  assets: readonly AssetCredit[] = [],
 ): string {
   const sorted = [...packages].sort((a, b) => {
     const [first, second] = [packageKey(a), packageKey(b)];
@@ -179,11 +191,26 @@ export function licenseNotice(
       '',
     ].join('\n'),
   );
+  const art =
+    assets.length === 0
+      ? []
+      : [
+          RULE,
+          'Assets',
+          RULE,
+          '',
+          ...assets.map(
+            (asset) =>
+              `« ${asset.title} », de ${asset.author} : ${asset.url}. Le jeu en distribue les pixels, recodés en rôles de teinte, réduits et recolorés.`,
+          ),
+          '',
+        ];
   return [
     'PixelCiv distribue les bibliothèques suivantes, chacune sous sa propre licence.',
     'Leurs auteurs sont crédités dans CREDITS.md.',
     '',
     ...sections,
+    ...art,
   ].join('\n');
 }
 
@@ -194,6 +221,8 @@ export interface BundleLicensesOptions {
   readonly credits?: string;
   /** Avis de licence émis avec le jeu, relatif au dossier de sortie. */
   readonly notice?: string;
+  /** Assets tiers distribués avec le jeu, que l'avis crédite (AST-02). */
+  readonly assets?: readonly AssetCredit[];
 }
 
 /** Feuilles de style que le contrôle suit : des CSS, sans préprocesseur. */
@@ -327,6 +356,7 @@ export function bundleLicenses(options: BundleLicensesOptions = {}): {
     read = readPackage,
     credits = 'CREDITS.md',
     notice = 'licenses.txt',
+    assets = [],
   } = options;
   /** Paquets distribués, tous bundles confondus. */
   const distributed = new Map<string, BundledPackage>();
@@ -393,7 +423,7 @@ export function bundleLicenses(options: BundleLicensesOptions = {}): {
         fileName: notice,
         // Marque d'ordre des octets : le navigateur lit le fichier en UTF-8, même si le
         // serveur n'en déclare pas l'encodage.
-        source: `\uFEFF${licenseNotice(distributed.values())}`,
+        source: `\uFEFF${licenseNotice(distributed.values(), licenseText, assets)}`,
       });
     },
   };

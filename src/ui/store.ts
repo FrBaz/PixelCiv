@@ -74,6 +74,10 @@ export interface DebugInfo {
   readonly cachedTextures: number | undefined;
   readonly pages: number | undefined;
   readonly drawCalls: number | undefined;
+  /** Niveau de motifs et densité des individus (−1 de loin), octets de leurs textures. */
+  readonly level: number | undefined;
+  readonly k: number | undefined;
+  readonly textureBytes: number | undefined;
   readonly memoryMb: number | undefined;
   /** Moteur de rendu (webgl, webgpu) et densité de pixels de l'écran. */
   readonly renderer: { readonly name: string; readonly resolution: number };
