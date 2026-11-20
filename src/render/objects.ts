@@ -1,6 +1,6 @@
 /**
- * Objets du calque commun (tâche 2b.6 ; REN-03, REN-08, REN-09 ; ADR 0017, § 7) : le décor, et le
- * gibier qui viendra, sont des particules du conteneur des humains (src/render/people.ts),
+ * Objets du calque commun (tâche 2b.6 ; REN-03, REN-08, REN-09 ; ADR 0017, § 7 ; ADR 0018, § 4) :
+ * le décor et le gibier sont des particules du conteneur des humains (src/render/people.ts),
  * triées avec eux par leurs pieds, à leur niveau de motifs et à leur densité k. Chaque sorte
  * d'objets est une source : elle a son atlas de rôles, que le calque range sous celui des
  * humains dans la même texture, et ses palettes, qu'elle range dans la même texture des
@@ -60,10 +60,14 @@ export interface ObjectView {
   readonly top: number;
   readonly right: number;
   readonly bottom: number;
-  /** Instant affiché (jours), mois continu de la carte, horloge de la marche du rendu. */
+  /**
+   * Instant affiché (jours), mois continu de la carte, horloge de la marche du rendu et durée d'un
+   * pas du rendu à la vitesse de la partie (la cadence des images du gibier).
+   */
   readonly t: number;
   readonly month: number;
   readonly walkMs: number;
+  readonly stepMs: number;
 }
 
 /** Drapeaux d'un objet. */
@@ -170,7 +174,8 @@ export interface PaletteSlots {
 }
 
 /**
- * Une source d'objets du calque commun : le décor (src/render/decor.ts), le gibier ensuite.
+ * Une source d'objets du calque commun : le décor (src/render/decor.ts), le gibier
+ * (src/render/fauna.ts).
  * Le calque l'appelle à chaque image qu'il refait ; elle rend la même liste tant que ce qu'elle
  * montre ne change pas.
  */

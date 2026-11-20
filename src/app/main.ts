@@ -32,6 +32,7 @@ import {
 import { FINGER_SLOP, POINTER_SLOP } from '../render/crowd';
 import { PeopleLayer, stepDuration } from '../render/people';
 import { DECOR_ATLAS, DecorSource } from '../render/decor';
+import { FAUNA_ATLAS, FaunaLayer } from '../render/fauna';
 import { previewPixels } from '../render/preview';
 import { SPAWN_COUNT } from '../sim/commands';
 import { walkCost } from '../sim/terrain';
@@ -143,7 +144,7 @@ async function main(): Promise<void> {
     genetics: data.genetics,
     appearance: data.appearance,
     reference: species.display.stature,
-    objects: [DECOR_ATLAS],
+    objects: [DECOR_ATLAS, FAUNA_ATLAS],
   });
   // Couches du monde affiché, pour l'inspection, les légendes et la franchissabilité.
   let worldLayers: WorldLayers | undefined;
@@ -151,6 +152,9 @@ async function main(): Promise<void> {
   // ?shadow=ground|multiply|dither|none change la méthode de l'ombre portée.
   let decor: DecorSource | undefined;
   const decorOff = query.get('decor') === 'off';
+  // Le gibier du monde (ADR 0018), en mode naturel, comme le décor ; ?fauna=off le cache.
+  let game: FaunaLayer | undefined;
+  const faunaOff = query.get('fauna') === 'off';
   const shadowQuery = query.get('shadow');
   const shadowMethod = SHADOW_METHODS.find(
     (method): method is ShadowMethod => method === shadowQuery,
@@ -516,7 +520,8 @@ async function main(): Promise<void> {
         walkMs,
         stepMs: stepDuration(SPEED_FACTORS[speed]),
         passable,
-        objects: mapMode.value === 'natural' && decor !== undefined ? [decor] : [],
+        objects:
+          mapMode.value === 'natural' ? [decor, game].filter((source) => source !== undefined) : [],
         month,
       },
       camera,
@@ -547,6 +552,7 @@ async function main(): Promise<void> {
       chunks: map.pendingChunks,
       decorChunks: decor?.stats.chunksBuilt,
       decorBuildMs: decor?.stats.buildMs,
+      faunaDrawn: game?.stats.drawn,
     };
     refreshInspected();
     // La fiche ouverte suit la vie de l'individu ou du groupe, chaque seconde, sauf si une
@@ -591,6 +597,7 @@ async function main(): Promise<void> {
           ? undefined
           : new DecorSource(data, layers, message.world.size, message.world.params.seed);
         if (decor !== undefined && shadowMethod !== undefined) decor.shadow = shadowMethod;
+        game = faunaOff ? undefined : new FaunaLayer(data, fauna, message.world.size.width);
         passability = new Uint8Array(layers.biome.length);
         inspected.value = undefined;
         // Une autre partie : les réponses attendues portent sur l'ancienne, et sont ignorées.

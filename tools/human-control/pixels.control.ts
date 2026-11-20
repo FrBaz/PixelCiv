@@ -21,6 +21,8 @@
  * se comparent de même, dans l'ordre du dessin, au rôle lu dans l'atlas du décor du build
  * (src/render/decor.ts) ; seuls les pixels de leur ombre portée, que l'ombre « ground » peint
  * du ton du sol et non de la palette, ne se comparent pas : ils cachent ce qui est dessous.
+ * Le gibier (ADR 0018) se range sous le décor, dans la même texture : ses pixels se comparent
+ * tous, au rôle lu dans son atlas (src/render/fauna.ts), puisqu'il n'a pas d'ombre portée.
  */
 import { existsSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
@@ -34,12 +36,18 @@ import {
 } from '../../src/render/humanShader';
 import { ATLAS_ROLES, humanAtlas } from '../../src/render/humans';
 import { DECOR_ATLAS, SHADOW_ROLES } from '../../src/render/decor';
+import { FAUNA_ATLAS } from '../../src/render/fauna';
 
-/** Le rôle du pixel (x, y) de la texture des rôles commune : les humains, puis le décor. */
+/** Première rangée du gibier, dans la texture des rôles commune. */
+const FAUNA_TOP = humanAtlas.height + DECOR_ATLAS.height;
+
+/** Le rôle du pixel (x, y) de la texture des rôles commune : les humains, le décor, le gibier. */
 function roleAt(x: number, y: number): number {
   if (y < humanAtlas.height) return ATLAS_ROLES[y * humanAtlas.width + x] ?? 0;
-  return DECOR_ATLAS.roles[(y - humanAtlas.height) * DECOR_ATLAS.width + x] ?? 0;
+  if (y < FAUNA_TOP) return DECOR_ATLAS.roles[(y - humanAtlas.height) * DECOR_ATLAS.width + x] ?? 0;
+  return FAUNA_ATLAS.roles[(y - FAUNA_TOP) * FAUNA_ATLAS.width + x] ?? 0;
 }
+/** Les rôles de l'ombre portée du décor ; le gibier n'en a pas : tous ses pixels se comparent. */
 const SHADOWS: ReadonlySet<number> = new Set(SHADOW_ROLES);
 /** Un pixel qu'une ombre portée recouvre : rien ne s'y compare. */
 const UNKNOWN = -2;
@@ -120,7 +128,7 @@ function compare(meta: Meta, frame: Uint8Array, palettes: Uint8Array): Result {
         if (role === 0) continue;
         const { column, row } = paletteTexel(slot, role);
         const at = (row * PALETTE_WIDTH + column) * 4;
-        const shadow = object && SHADOWS.has(role);
+        const shadow = object && fy < FAUNA_TOP && SHADOWS.has(role);
         if (!shadow && (palettes[at + 3] ?? 0) !== 255) undeclared++;
         const rgb = shadow
           ? UNKNOWN
@@ -188,10 +196,10 @@ describe('pixels des humains dans Chromium (ADR 0016, § 9)', () => {
       const palettes = readFileSync(path.join(folder, 'palettes.rgba'));
       expect(meta.errors).toEqual([]);
       expect(meta.shader).toMatch(/^pixelciv-humans-fragment/);
-      // La texture des rôles commune : les humains, puis le décor (ADR 0017, § 7).
+      // La texture des rôles commune : les humains, le décor, puis le gibier (ADR 0017, § 7).
       expect([meta.atlasWidth, meta.atlasHeight]).toEqual([
         humanAtlas.width,
-        humanAtlas.height + DECOR_ATLAS.height,
+        FAUNA_TOP + FAUNA_ATLAS.height,
       ]);
       expect([meta.paletteWidth, meta.paletteHeight]).toEqual([PALETTE_WIDTH, meta.rows]);
       expect(frame.length).toBe(meta.width * meta.height * 4);

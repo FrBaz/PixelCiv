@@ -88,6 +88,7 @@ function viewAt(x: number, y: number, scale: number, month: number, resolution =
     t: 0,
     month,
     walkMs: 0,
+    stepMs: 420,
   };
 }
 

@@ -684,6 +684,7 @@ export class PeopleLayer {
       t: scene.t,
       month: scene.month ?? 0,
       walkMs: scene.walkMs,
+      stepMs: scene.stepMs,
     };
     const lists = sources.map((source) => {
       if (!this.objectBase.has(source.atlas)) {
