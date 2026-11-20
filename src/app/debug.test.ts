@@ -143,9 +143,14 @@ describe('DebugSampler', () => {
         cached: 400,
         pages: 2,
         drawCalls: 12,
+        objects: 3000 + frameIndex,
+        objectsMs: slow ? 4 : 0.5,
       });
     }
     const sample = sampler.sample();
+    // Le décor (ADR 0017) : les objets de la dernière image, la moyenne de leur mise à jour.
+    expect(sample.objects).toBe(3089);
+    expect(sample.objectsMs).toBeCloseTo(0.5, 9);
     expect(sample.crowd.positions).toBeCloseTo(1, 9);
     expect(sample.crowd.sort).toBeCloseTo(0.5, 9);
     // Sans mesure de la mise à jour, du rendu ni de la chronologie, rien n'en est compté.
