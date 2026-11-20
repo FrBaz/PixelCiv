@@ -8,11 +8,12 @@ import {
   type ParticleContainer,
   type Shader,
   type Sprite,
+  type Texture,
 } from 'pixi.js';
 import { describe, expect, it, vi } from 'vitest';
 import { PositionMirror } from '../app/frames';
 import { loadGameData, type Appearance } from '../core/data';
-import { NO_CARRIER, type GroupsFrame, type LegArrays } from '../core/protocol';
+import { FAUNA_GAIT, NO_CARRIER, type GroupsFrame, type LegArrays } from '../core/protocol';
 import { FIXED } from '../core/position';
 import { RandomStream, streamSeed } from '../core/rng';
 import { visualCode } from '../core/visual';
@@ -27,6 +28,8 @@ import {
   SHADOW_ROLE_RANGE,
   type PaletteTexture,
 } from './humanShader';
+import { DECOR_ATLAS } from './decor';
+import { FAUNA_ATLAS, FaunaLayer, type FaunaMotion } from './fauna';
 import { humanAtlas, LEVEL_ROWS } from './humans';
 import {
   ObjectList,
@@ -785,8 +788,8 @@ class FakeObjects implements ObjectSource {
   }
 }
 
-/** Le calque, l'atlas factice rangé sous celui des humains. */
-function setupWithObjects(resolution: number, gl = false, atlas = FAKE_ATLAS) {
+/** Le calque, l'atlas factice (ou les atlas `atlases`) rangé sous celui des humains. */
+function setupWithObjects(resolution: number, gl = false, ...atlases: ObjectAtlas[]) {
   const stage = new Container();
   const renderer: { resolution: number; gl?: object } = { resolution };
   if (gl) renderer.gl = {};
@@ -795,7 +798,7 @@ function setupWithObjects(resolution: number, gl = false, atlas = FAKE_ATLAS) {
     genetics: data.genetics,
     appearance: data.appearance,
     reference,
-    objects: [atlas],
+    objects: atlases.length === 0 ? [FAKE_ATLAS] : atlases,
   });
   const layer = stage.children.at(0);
   if (!(layer instanceof Container)) throw new Error('calque introuvable');
@@ -1011,6 +1014,87 @@ describe('calque commun : décor et humains (ADR 0017, § 7)', () => {
       }
     } finally {
       DOMAdapter.set(adapter);
+    }
+  });
+});
+
+// Le gibier (ADR 0018, § 7) : une vraie source, FaunaLayer, sur l'atlas du build rangé sous ceux
+// des humains et du décor, que mène une chronologie factice : un animal immobile, au repos.
+function oneAnimal(x: number, y: number, kind: number, facing: number): FaunaMotion {
+  return {
+    frame: {
+      slots: Uint32Array.of(0),
+      ids: Uint32Array.of(7),
+      kinds: Uint8Array.of(kind),
+      herds: Uint32Array.of(1),
+      positions: Int32Array.of(Math.round(x * FIXED), Math.round(y * FIXED)),
+      legs: noLegs(),
+    },
+    version: 1,
+    fallen: {
+      count: 0,
+      at: 0,
+      generation: 0,
+      kinds: new Uint8Array(0),
+      ids: new Uint32Array(0),
+      positions: new Int32Array(0),
+      facing: new Int8Array(0),
+    },
+    position(_index, _t, out) {
+      out[0] = Math.round(x * FIXED);
+      out[1] = Math.round(y * FIXED);
+    },
+    gait: () => FAUNA_GAIT.rest,
+    facing: () => facing,
+  };
+}
+
+describe('calque commun : le gibier (ADR 0018, § 7)', () => {
+  it('trie l’animal avec l’humain par ses pieds ; sans ombre, ses pixels peints le cachent à l’appui, et il ne se choisit pas', () => {
+    for (const resolution of [1, 2.75]) {
+      const { people, layer } = setupWithObjects(resolution, false, DECOR_ATLAS, FAUNA_ATLAS);
+      // Un sanglier qui va vers l'est, ses pieds devant ceux de l'humain de la case (100, 50).
+      const game = new FaunaLayer(data, oneAnimal(100.6, 50.7, 1, 1), 512);
+      const shown = { ...scene(frame(1, [1, 100, 50, 1])), objects: [game], month: 6.5 };
+      people.draw(shown, aimedAt(100, 50, 8), viewport, world);
+      const drawn = rendered(people, layer, resolution);
+      const person = drawn.find((entry) => entry.entity === 1);
+      const boar = drawn.find((entry) => entry.entity === 0);
+      if (person === undefined || boar === undefined) throw new Error('dessins absents');
+      expect(drawn.indexOf(boar)).toBeGreaterThan(drawn.indexOf(person));
+      expect(people.stats.objects).toBe(1);
+      // Retourné vers l'est : son échelle est négative.
+      expect(boar.unit).toBeLessThan(0);
+      const unit = Math.abs(boar.unit);
+      const { frame: motif } = boar.texture as Texture;
+      const top = humanAtlas.height + DECOR_ATLAS.height;
+      expect(motif.y).toBeGreaterThanOrEqual(top);
+      const counts = { painted: 0, hole: 0 };
+      for (let y = boar.box.top; y < boar.box.top + boar.box.height; y++) {
+        for (let x = boar.box.left; x < boar.box.left + boar.box.width; x++) {
+          if (!contains(person.box, x + 0.5, y + 0.5)) continue;
+          const u = Math.floor((x - boar.box.left) / unit);
+          const v = Math.floor((y - boar.box.top) / unit);
+          const column = motif.x + motif.width - 1 - u;
+          const role = FAUNA_ATLAS.roles[(motif.y - top + v) * FAUNA_ATLAS.width + column] ?? 0;
+          const picked = people.pick(x + 0.5, y + 0.5, 0);
+          if (role !== 0) {
+            counts.painted++;
+            expect(picked, `(${String(x)}, ${String(y)}) peint`).toBeUndefined();
+          } else {
+            counts.hole++;
+            expect(picked?.kind === 'person' ? picked.id : undefined).toBe(1);
+          }
+        }
+      }
+      expect(counts.painted).toBeGreaterThan(0);
+      expect(counts.hole).toBeGreaterThan(0);
+      // Au-dessus de lui, l'humain se touche.
+      const above = people.pick(person.box.left + 1, person.box.top + 1, 0);
+      expect(above?.kind === 'person' ? above.id : undefined).toBe(1);
+      // De loin, rien : le gibier ne se montre que dans la vue rapprochée.
+      people.draw(shown, aimedAt(100, 50, 2), viewport, world);
+      expect(people.stats.objects).toBe(0);
     }
   });
 });
