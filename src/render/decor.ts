@@ -247,6 +247,11 @@ export class DecorSource implements ObjectSource {
    */
   private lows = new Float64Array(0);
   private highs = new Float64Array(0);
+  /**
+   * Les seuils de g où la composition de chaque objet peut changer, THRESHOLDS par objet (NaN :
+   * pas de seuil), lus de sa case et de son espèce une fois par collecte (prepare).
+   */
+  private thresholds = new Float64Array(0);
   /** Ce qu'ont vu les derniers états : refroidissement au nord et au sud, mois du nord. */
   private lastCooling = -1;
   private lastMonth = -1;
@@ -568,6 +573,7 @@ export class DecorSource implements ObjectSource {
     this.souths = grow(this.souths);
     this.lows = grow(this.lows);
     this.highs = grow(this.highs);
+    this.thresholds = grow(this.thresholds, THRESHOLDS);
     this.choices = grow(this.choices);
   }
 
@@ -580,9 +586,29 @@ export class DecorSource implements ObjectSource {
     this.codes[at * 3] = codes.temperature;
     this.codes[at * 3 + 1] = codes.amplitude;
     this.codes[at * 3 + 2] = codes.flags;
-    this.climate[at * 3] = layers.temperature[cell] / 10;
-    this.climate[at * 3 + 1] = layers.amplitude[cell] / 10;
-    this.climate[at * 3 + 2] = rainSeasonality(latitude(row, size.height));
+    const annual = layers.temperature[cell] / 10;
+    const amplitude = layers.amplitude[cell] / 10;
+    const rain = rainSeasonality(latitude(row, size.height));
+    this.climate[at * 3] = annual;
+    this.climate[at * 3 + 1] = amplitude;
+    this.climate[at * 3 + 2] = rain;
+    // Les seuils de g (refreshStates) : la neige de la case, puis, selon la saison de l'espèce, le
+    // feuillage nu, l'automne et sa baisse depuis le mois le plus chaud, la saison sèche.
+    const { snow, foliage } = this.data.decor;
+    const phenology = this.world.table.looks.at(this.looks[at] ?? 0)?.phenology;
+    const deciduous = amplitude > 0 && phenology === 'deciduous';
+    const base = at * THRESHOLDS;
+    this.thresholds[base] = snowThreshold(
+      codes.temperature,
+      codes.amplitude,
+      codes.flags,
+      snow.share,
+    );
+    this.thresholds[base + 1] = deciduous ? (foliage.bareBelow - annual) / amplitude : Number.NaN;
+    this.thresholds[base + 2] = deciduous ? (foliage.autumnBelow - annual) / amplitude : Number.NaN;
+    this.thresholds[base + 3] = deciduous ? 1 - foliage.autumnDrop / amplitude : Number.NaN;
+    this.thresholds[base + 4] =
+      rain !== 0 && phenology === 'dry' ? (foliage.dryShare - 1) / rain : Number.NaN;
   }
 
   /**
@@ -669,20 +695,14 @@ export class DecorSource implements ObjectSource {
       const state = (code & 3) as DecorState;
       const snowy = code >= 4;
       const fruit = mask !== 0 && fruitingMask(mask, moment.month, south);
-      // Les seuils de g les plus proches, de part et d'autre : la neige de la case, puis, selon
-      // les saisons de l'espèce, le feuillage nu, l'automne, la saison sèche.
+      // Les seuils de g les plus proches, de part et d'autre, parmi ceux de l'objet (prepare).
       // Un seuil à moins de INTERVAL_MARGIN de g laisse l'état incertain : l'intervalle est vide,
       // et l'objet se réévalue jusqu'à s'en écarter.
       low = Number.NEGATIVE_INFINITY;
       high = Number.POSITIVE_INFINITY;
-      bound(snowThreshold(temperatureCode, amplitudeCode, flagCode, rules.snow.share));
-      if (amplitude > 0 && look.phenology === 'deciduous') {
-        const { bareBelow, autumnBelow, autumnDrop } = rules.foliage;
-        bound((bareBelow - annual) / amplitude);
-        bound((autumnBelow - annual) / amplitude);
-        bound(1 - autumnDrop / amplitude);
+      for (let t = at * THRESHOLDS; t < (at + 1) * THRESHOLDS; t++) {
+        bound(this.thresholds[t] ?? Number.NaN);
       }
-      if (rain !== 0 && look.phenology === 'dry') bound((rules.foliage.dryShare - 1) / rain);
       this.lows[at] = low + INTERVAL_MARGIN;
       this.highs[at] = high - INTERVAL_MARGIN;
       const biome = snowy ? (this.world.layers.biome[cell] ?? 0) : 0;
@@ -740,6 +760,9 @@ export class DecorSource implements ObjectSource {
  * déplace g de 2π / 360 au plus, quelque 0,017.
  */
 const INTERVAL_MARGIN = 1e-6;
+
+/** Seuils de g par objet : neige, feuillage nu, automne, baisse de l'automne, saison sèche. */
+const THRESHOLDS = 5;
 
 /** Code de chaque méthode d'ombre, dans la composition des palettes. */
 const SHADOW_CODE: Readonly<Record<ShadowMethod, number>> = {
