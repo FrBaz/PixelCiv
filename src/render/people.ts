@@ -53,7 +53,6 @@ import {
   humanShader,
   PaletteTexture,
   roleSource,
-  SHADOW_ROLE_RANGE,
   slotColor,
   type GroundTextures,
 } from './humanShader';
@@ -195,6 +194,8 @@ export class PeopleLayer {
   private readonly motifTextures: Texture[];
   /** Motifs des objets, de chaque atlas à la suite, et le premier motif de chaque atlas. */
   private readonly objectTextures: Texture[] = [];
+  /** Rôles de l'ombre portée de l'atlas de chaque motif d'objet, s'il en a. */
+  private readonly objectShadows: (ReadonlySet<number> | undefined)[] = [];
   private readonly objectBase = new Map<ObjectAtlas, number>();
   /** Rôles de la texture commune, un octet par pixel : les humains, puis chaque atlas d'objets. */
   private readonly allRoles: Uint8Array;
@@ -306,6 +307,7 @@ export class PeopleLayer {
     });
     atlases.forEach((atlas, index) => {
       this.objectBase.set(atlas, this.objectTextures.length);
+      const shadows = atlas.shadowRoles === undefined ? undefined : new Set(atlas.shadowRoles);
       const top = starts[index] ?? 0;
       for (let at = 0; at + 5 < atlas.motifs.length; at += 6) {
         const frame = new Rectangle(
@@ -315,6 +317,7 @@ export class PeopleLayer {
           atlas.motifs[at + 3] ?? 1,
         );
         this.objectTextures.push(new Texture({ source: this.roles, frame }));
+        this.objectShadows.push(shadows);
       }
     });
     this.humans = new ParticleContainer<Particle>({
@@ -712,7 +715,6 @@ export class PeopleLayer {
    */
   private frontAt(x: number, y: number): number | undefined {
     const width = humanAtlas.width;
-    const [shadowFrom, shadowTo] = SHADOW_ROLE_RANGE;
     for (let index = this.drawCount - 1; index >= 0; index--) {
       const drawn = this.drawOrder[index] ?? 0;
       if (drawn >= 0) {
@@ -732,7 +734,10 @@ export class PeopleLayer {
       if (u < 0 || v < 0 || u >= frame.width || v >= frame.height) continue;
       const column = frame.x + (this.objectFlip[object] === 1 ? frame.width - 1 - u : u);
       const role = this.allRoles[(frame.y + v) * width + column] ?? 0;
-      if (role === 0 || (role >= shadowFrom && role <= shadowTo)) continue;
+      // Son ombre portée, au sol, ne cache rien ; seul son atlas dit quels rôles en sont.
+      if (role === 0 || this.objectShadows[this.objectMotif[object] ?? 0]?.has(role) === true) {
+        continue;
+      }
       return drawn;
     }
     return undefined;

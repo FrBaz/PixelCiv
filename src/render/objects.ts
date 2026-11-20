@@ -35,6 +35,12 @@ export interface ObjectAtlas {
   readonly roles: Uint8Array;
   /** Six nombres par motif : x, y, largeur, hauteur, et le point des pieds dans le motif. */
   readonly motifs: readonly number[];
+  /**
+   * Rôles de l'ombre portée de ses motifs, s'il en a (le décor ; pas le gibier) : peints au sol,
+   * ils ne cachent rien à l'appui. Chaque atlas a sa légende : un même rôle peut, ailleurs, être
+   * peint sur l'objet.
+   */
+  readonly shadowRoles?: readonly number[];
 }
 
 /** Ce que la vue montre de la carte, pour une source d'objets. */

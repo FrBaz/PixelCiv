@@ -745,12 +745,14 @@ const FAKE_ATLAS: ObjectAtlas = (() => {
   }
   // Un trou au milieu du motif : là, on voit au travers.
   roles[width + 2] = 0;
-  return { width, height: 12, roles, motifs: [0, 0, 6, 10, 3, 8] };
+  return { width, height: 12, roles, motifs: [0, 0, 6, 10, 3, 8], shadowRoles: [OBJECT_SHADOW] };
 })();
+/** Le même atlas, sans ombre déclarée : ses deux rangées du bas sont peintes sur l'objet. */
+const UNSHADED_ATLAS: ObjectAtlas = { ...FAKE_ATLAS, shadowRoles: undefined };
 
 /** Une source d'objets factice : des objets aux pieds donnés, en cases, une seule palette. */
 class FakeObjects implements ObjectSource {
-  readonly atlas = FAKE_ATLAS;
+  atlas = FAKE_ATLAS;
   version = 0;
   updates = 0;
   views: ObjectView[] = [];
@@ -784,7 +786,7 @@ class FakeObjects implements ObjectSource {
 }
 
 /** Le calque, l'atlas factice rangé sous celui des humains. */
-function setupWithObjects(resolution: number, gl = false) {
+function setupWithObjects(resolution: number, gl = false, atlas = FAKE_ATLAS) {
   const stage = new Container();
   const renderer: { resolution: number; gl?: object } = { resolution };
   if (gl) renderer.gl = {};
@@ -793,7 +795,7 @@ function setupWithObjects(resolution: number, gl = false) {
     genetics: data.genetics,
     appearance: data.appearance,
     reference,
-    objects: [FAKE_ATLAS],
+    objects: [atlas],
   });
   const layer = stage.children.at(0);
   if (!(layer instanceof Container)) throw new Error('calque introuvable');
@@ -875,6 +877,12 @@ describe('calque commun : décor et humains (ADR 0017, § 7)', () => {
       expect(onShadow?.kind === 'person' ? onShadow.id : undefined, 'ombre').toBe(1);
       const onPaint = people.pick(left + 0.5, object.box.top + 7 * unit + 0.5, slop);
       expect(onPaint, 'pixel peint').toBeUndefined();
+      // Un atlas sans ombre déclarée (le gibier) : le même rôle y est peint sur l'objet, et cache.
+      const plain = setupWithObjects(resolution, false, UNSHADED_ATLAS);
+      const unshaded = new FakeObjects([[100.52, 50.62]]);
+      unshaded.atlas = UNSHADED_ATLAS;
+      plain.people.draw({ ...shown, objects: [unshaded] }, aimedAt(100, 50, 8), viewport, world);
+      expect(plain.people.pick(left + 0.5, shadowRow + 0.5, slop), 'rôle peint').toBeUndefined();
       // Au-dessus de l'objet, l'humain se touche.
       const above = people.pick(human.box.left + 1, human.box.top + 1, 0);
       expect(above?.kind === 'person' ? above.id : undefined).toBe(1);

@@ -65,6 +65,7 @@ export const DECOR_ATLAS: ObjectAtlas = {
   height: decorAtlas.height,
   roles: decodeRoles(decorAtlas.roles),
   motifs: decorAtlas.motifs,
+  shadowRoles: [legendRole(DECOR_LEGEND, 'shadow', 0), legendRole(DECOR_LEGEND, 'shadow', 1)],
 };
 export const DECOR_FORMS = decorAtlas.forms;
 export const DECOR_LEVELS = decorAtlas.levels;
