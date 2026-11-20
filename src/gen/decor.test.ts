@@ -89,11 +89,22 @@ const biomeAt = (layers: WorldLayers, cell: number) => data.biomes.entries.at(la
 describe('pose du décor (ADR 0017, § 1)', () => {
   it('compile une apparence par espèce, la roche nue et le rocher de chaque minerai', () => {
     const minerals = data.resources.entries.filter((resource) => resource.deposit !== undefined);
-    expect(table.looks).toHaveLength(data.flora.entries.length + 1 + minerals.length);
-    expect(lookOf(table.looseRock)).toMatchObject({
-      kind: DECOR_KIND.rock,
-      form: 'rock',
-      mineral: -1,
+    const looseForms = new Set(Object.values(data.decor.rocks).map((rock) => rock.form));
+    expect(table.looks).toHaveLength(data.flora.entries.length + looseForms.size + minerals.length);
+    // Les rochers épars de chaque biome, à la forme que leur donnent les données.
+    data.biomes.entries.forEach((biome, index) => {
+      const rock = Object.hasOwn(data.decor.rocks, biome.id)
+        ? data.decor.rocks[biome.id]
+        : undefined;
+      expect(table.rockChance[index], biome.id).toBe(rock?.chance ?? 0);
+      if (rock === undefined) expect(table.rockLook[index], biome.id).toBe(-1);
+      else
+        expect(lookOf(table.rockLook[index] ?? -1), biome.id).toMatchObject({
+          kind: DECOR_KIND.rock,
+          form: rock.form,
+          flora: -1,
+          mineral: -1,
+        });
     });
     data.resources.entries.forEach((resource, index) => {
       const look = lookOf(table.depositLook[index] ?? -1);
@@ -191,10 +202,9 @@ describe('pose du décor (ADR 0017, § 1)', () => {
             counted.deposits++;
             expect(rocks.map((placed) => lookOf(placed.look)?.mineral)).toEqual([deposit - 1]);
           } else if (rocks.length > 0) {
-            expect(rocks[0]?.look).toBe(table.looseRock);
-            expect(
-              Object.entries(data.decor.rocks).find(([id]) => id === biome?.id)?.[1],
-            ).toBeGreaterThan(0);
+            const loose = Object.entries(data.decor.rocks).find(([id]) => id === biome?.id)?.[1];
+            expect(loose?.chance).toBeGreaterThan(0);
+            expect(lookOf(rocks[0]?.look ?? -1)).toMatchObject({ form: loose?.form, mineral: -1 });
           }
           counted.rocks += rocks.length;
           // Le buisson à côté de l'arbre et devant lui ; le rocher du côté opposé à l'arbre.
@@ -254,6 +264,36 @@ describe('pose du décor (ADR 0017, § 1)', () => {
     // Une autre clé, une autre pose, sur les mêmes couches.
     expect(poseFingerprint({ ...world, key: decorKey('autre') }, chunks)).not.toBe(forward);
     expect(decorKey('pixelciv')).toBe(decorKey('pixelciv'));
+  });
+
+  it('donne aux rochers épars la forme et la chance que les données donnent à leur biome', () => {
+    // Relecture 2b.6, problèmes 8 et 22 : aucune forme de rocher n'est nommée par le code.
+    const tundra = data.biomes.indexOf('tundra');
+    const mountain = data.biomes.indexOf('mountain');
+    if (tundra === undefined || mountain === undefined) throw new Error('biomes inconnus');
+    const rocks = {
+      ...data.decor.rocks,
+      tundra: { chance: 1, form: 'pebble' },
+      mountain: { chance: 1, form: 'basalt' },
+    };
+    const custom = compileDecor({ ...data, decor: { ...data.decor, rocks } });
+    const pebble = custom.rockLook[tundra] ?? -1;
+    const basalt = custom.rockLook[mountain] ?? -1;
+    expect(custom.looks.at(pebble)).toMatchObject({ kind: DECOR_KIND.rock, form: 'pebble' });
+    expect(custom.looks.at(basalt)).toMatchObject({ kind: DECOR_KIND.rock, form: 'basalt' });
+    // Une apparence par forme : les autres biomes rocheux gardent ensemble la leur.
+    expect(custom.rockLook[data.biomes.indexOf('cliff') ?? -1]).toBe(
+      custom.rockLook[data.biomes.indexOf('high-mountain') ?? -1],
+    );
+    const layers = emptyLayers(size);
+    const world: DecorWorld = { size, layers, biomes: data.biomes.entries, table: custom, key: 7 };
+    layers.biome.fill(tundra);
+    for (let x = 0; x < 40; x++) {
+      const found = objectsAt(world, x, 10).filter(
+        (placed) => custom.looks.at(placed.look)?.kind === DECOR_KIND.rock,
+      );
+      expect(found.map((placed) => placed.look)).toEqual([pebble]);
+    }
   });
 
   it('ne garde que la part du décor que laisse l’occupation du sol (C1 D7)', () => {
@@ -362,6 +402,73 @@ describe('saisons du décor (ADR 0017, § 5)', () => {
     expect(state('deciduous', 8, 12, 6.5, true).state).toBe(DECOR_STATE.bare);
     expect(state('deciduous', 8, 12, 3.8, true).state).toBe(DECOR_STATE.autumn);
     expect(bareBelow).toBeLessThan(autumnBelow);
+  });
+
+  it('ne jaunit pas un caduc au pic de l’été, même là où l’été reste frais', () => {
+    // Relecture 2b.6, problème 3 : là où l'été culmine sous autumnBelow, les caducs passaient
+    // à l'automne d'un coup, à la mi-juillet au nord, à la mi-janvier au sud.
+    const { autumnDrop } = rules.foliage;
+    // Un été à 10 °C : feuillé au pic et juste après ; l'automne attend que le mois ait perdu
+    // autumnDrop degrés.
+    expect(state('deciduous', 0, 10, 6.5).state).toBe(DECOR_STATE.summer);
+    expect(state('deciduous', 0, 10, 6.6).state).toBe(DECOR_STATE.summer);
+    expect(state('deciduous', 0, 10, 0.5, true).state).toBe(DECOR_STATE.summer);
+    expect(state('deciduous', 0, 10, 0.6, true).state).toBe(DECOR_STATE.summer);
+    expect(state('deciduous', 0, 10, 8.2).state).toBe(DECOR_STATE.autumn);
+    expect(state('deciduous', 0, 10, 2.2, true).state).toBe(DECOR_STATE.autumn);
+    const after = (month: number) => foliageClimate(0, 10, false, 0, seasonMoment(month));
+    expect(after(8.2).monthly).toBeLessThanOrEqual(10 - autumnDrop);
+    expect(autumnDrop).toBeGreaterThan(0);
+  });
+
+  it('change l’état des caducs peu à peu, jour après jour, sans automne en juillet au nord', () => {
+    // Sur la vraie pose des trois mondes : au nord, aucun caduc en automne du mois 6,0 au mois
+    // 7,5 là où le mois le plus chaud passe bareBelow ; et, d'un jour au suivant, au plus 3 % des
+    // caducs changent d'état (la bascule de la mi-juillet en changeait 11 à 13 % d'un coup).
+    for (const seed of SEEDS) {
+      const layers = layersOf(seed);
+      const world = worldOf(seed, layers);
+      const deciduous: { cell: number; south: boolean }[] = [];
+      for (let y = 0; y < size.height; y++) {
+        for (let x = 0; x < size.width; x++) {
+          for (const placed of objectsAt(world, x, y)) {
+            if (lookOf(placed.look)?.phenology !== 'deciduous') continue;
+            deciduous.push({ cell: y * size.width + x, south: southern(y, size.height) });
+          }
+        }
+      }
+      expect(deciduous.length, seed).toBeGreaterThan(5000);
+      const at = (object: { cell: number; south: boolean }, month: number) =>
+        decorSeason(
+          0,
+          'deciduous',
+          foliageClimate(
+            (layers.temperature[object.cell] ?? 0) / 10,
+            (layers.amplitude[object.cell] ?? 0) / 10,
+            object.south,
+            0,
+            seasonMoment(month),
+          ),
+          rules,
+        ).state;
+      for (let day = 180; day <= 225; day++) {
+        for (const object of deciduous) {
+          const warmest =
+            ((layers.temperature[object.cell] ?? 0) + (layers.amplitude[object.cell] ?? 0)) / 10;
+          if (object.south || warmest <= bareBelow) continue;
+          expect(at(object, day / 30), `${seed}, jour ${String(day)}`).not.toBe(DECOR_STATE.autumn);
+        }
+      }
+      let previous = deciduous.map((object) => at(object, 0));
+      let worst = 0;
+      for (let day = 1; day <= 360; day++) {
+        const states = deciduous.map((object) => at(object, day / 30));
+        const changed = states.filter((value, index) => value !== previous[index]).length;
+        worst = Math.max(worst, changed / deciduous.length);
+        previous = states;
+      }
+      expect(worst, seed).toBeLessThanOrEqual(0.03);
+    }
   });
 
   it('garde ses feuilles au caduc d’un hiver doux, toute l’année', () => {

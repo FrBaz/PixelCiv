@@ -12,6 +12,7 @@ import {
   DECOR_KIND,
   DECOR_STATE,
   decorKey,
+  entryOf,
   type DecorState,
   type Placed,
 } from '../gen/decor';
@@ -161,7 +162,7 @@ describe('palettes du décor (ADR 0017, § 2 et 5 ; REN-09)', () => {
   it('donne à chaque rôle de chaque motif un ton des données, dans chaque état, enneigé ou non', () => {
     let checked = 0;
     table.looks.forEach((look, index) => {
-      const flora = data.flora.entries.at(look.flora);
+      const flora = entryOf(data.flora.entries, look.flora);
       const states: DecorState[] = [DECOR_STATE.summer];
       if (look.phenology === 'deciduous') states.push(DECOR_STATE.autumn, DECOR_STATE.bare);
       if (look.phenology === 'dry') states.push(DECOR_STATE.dry);
@@ -186,7 +187,7 @@ describe('palettes du décor (ADR 0017, § 2 et 5 ; REN-09)', () => {
                         : foliage.summer;
               const current = (stateRamp ?? []).map(hexRgb);
               const wood = (flora?.look.wood ?? data.decor.stone).map(hexRgb);
-              const mineral = data.resources.entries.at(look.mineral);
+              const mineral = entryOf(data.resources.entries, look.mineral);
               const deposit =
                 mineral !== undefined && Object.hasOwn(data.decor.deposits, mineral.id)
                   ? data.decor.deposits[mineral.id]
@@ -247,6 +248,36 @@ describe('palettes du décor (ADR 0017, § 2 et 5 ; REN-09)', () => {
     expect(checked).toBeGreaterThan(1000);
   });
 
+  it('peint hors neige le dessus des rochers de la pierre, et non d’une flore', () => {
+    // Un rocher n'a pas d'espèce (flora −1) : la dernière de data/flora.json ne doit pas
+    // y prendre sa place (relecture 2b.6, problème 1).
+    const rocks = table.looks
+      .map((look, index) => ({ look, index }))
+      .filter(({ look }) => look.kind === DECOR_KIND.rock);
+    expect(rocks.length).toBe(1 + Object.keys(data.decor.deposits).length);
+    const stone = data.decor.stone.map(hexRgb);
+    const withSnow = new Set<string>();
+    for (const { look, index } of rocks) {
+      expect(look.flora).toBe(-1);
+      for (const method of SHADOW_METHODS) {
+        const palette = decorPalette(
+          data,
+          table,
+          { look: index, state: DECOR_STATE.summer, snowy: false, fruit: false, biome: 0 },
+          method,
+        );
+        expect(ramp(palette, 'snow'), `${look.form}, ${method}`).toEqual(stone);
+        expect(ramp(palette, 'wood'), `${look.form}, ${method}`).toEqual(stone);
+      }
+      // La neige du dessus est bien peinte sur les rochers épars (la croûte de sel n'en a pas).
+      const snowRoles = [0, 1, 2, 3].map((rank) => role('snow', rank));
+      if ([...formRoles(look.form)].some((used) => snowRoles.includes(used))) {
+        withSnow.add(look.form);
+      }
+    }
+    for (const rock of Object.values(data.decor.rocks)) expect(withSnow).toContain(rock.form);
+  });
+
   it('ne laisse aux caducs sans grilles nues ni le vert de l’été, ni le fruit, à l’état nu', () => {
     const naked = table.looks
       .map((look, index) => ({ look, index }))
@@ -254,7 +285,7 @@ describe('palettes du décor (ADR 0017, § 2 et 5 ; REN-09)', () => {
     // Le buisson à baies, les roseaux, le saule nain (critique de la conception, point 5).
     expect(naked.length).toBeGreaterThanOrEqual(3);
     for (const { look, index } of naked) {
-      const flora = data.flora.entries.at(look.flora);
+      const flora = entryOf(data.flora.entries, look.flora);
       const summer = new Set(flora?.look.foliage.summer.map(hexRgb));
       const fruitTones = new Set(flora?.look.fruit?.tones.map(hexRgb) ?? []);
       const palette = decorPalette(
@@ -285,10 +316,74 @@ describe('palettes du décor (ADR 0017, § 2 et 5 ; REN-09)', () => {
     let decor = 0;
     for (const look of table.looks) {
       const states = look.phenology === 'deciduous' ? 3 : look.phenology === 'dry' ? 2 : 1;
-      const fruit = data.flora.entries.at(look.flora)?.look.fruit === undefined ? 1 : 2;
+      const fruit = entryOf(data.flora.entries, look.flora)?.look.fruit === undefined ? 1 : 2;
       decor += states * fruit * (1 + snowy);
     }
     expect(humans + decor).toBeLessThanOrEqual(MAX_LOOKS);
+  });
+
+  it('donne de quoi blanchir à toute forme posée là où il neige : région neige ou chaperon', () => {
+    // Relecture 2b.6, problème 6 : la bruyère et les roseaux restaient verts et beiges sur un
+    // sol blanc. Chaque variante d'une forme posée sur une case enneigée (mi-janvier au nord,
+    // mi-juillet au sud), et la forme nue de son espèce s'il y en a, doit avoir dans sa grille
+    // des pixels de la neige ou du chaperon, qui blanchissent sous la neige.
+    const world = layers();
+    const decorWorld = {
+      size,
+      layers: world,
+      biomes: data.biomes.entries,
+      table,
+      key: decorKey('pixelciv'),
+    };
+    const codes = biomeCodes(data.biomes.entries);
+    const placed: Placed[] = [0, 1, 2].map(() => ({ look: 0, variant: 0, fx: 0, fy: 0 }));
+    const whitening = new Set(
+      [0, 1, 2, 3].flatMap((rank) => [role('snow', rank), role('cap', rank)]),
+    );
+    const natural = { trees: 1, shrubs: 1, rocks: 1 };
+    const shown = new Map<string, number>();
+    for (let y = 0; y < size.height; y++) {
+      const south = southern(y, size.height);
+      const factor = seasonFactor(MONTH_CENTERS[south ? 6 : 0] ?? 0);
+      for (let x = 0; x < size.width; x++) {
+        const count = cellObjects(decorWorld, x, y, natural, placed);
+        if (count === 0) continue;
+        const cell = y * size.width + x;
+        const cellCodes = cellSeasonCodes(world, codes, cell, south);
+        const share = snowShare(
+          cellCodes.temperature,
+          cellCodes.amplitude,
+          cellCodes.flags,
+          factor,
+        );
+        if (!(share > 0 && share >= data.decor.snow.share)) continue;
+        for (const object of placed.slice(0, count)) {
+          const look = table.looks.at(object.look);
+          if (look === undefined) continue;
+          for (const form of look.bare === undefined ? [look.form] : [look.form, look.bare]) {
+            shown.set(form, (shown.get(form) ?? 0) + 1);
+          }
+        }
+      }
+    }
+    // Les formes des toundras, des taïgas et des montagnes, la bruyère et les roseaux compris.
+    expect([...shown.keys()]).toEqual(expect.arrayContaining(['heather', 'reed', 'conifer']));
+    for (const form of shown.keys()) {
+      const sources = Object.hasOwn(DECOR_FORMS, form) ? DECOR_FORMS[form] : [];
+      expect(sources.length, form).toBeGreaterThan(0);
+      for (const source of sources) {
+        // La grille elle-même, au premier niveau.
+        const at = source * DECOR_LEVELS * 6;
+        const [x = 0, y = 0, w = 0, h = 0] = DECOR_ATLAS.motifs.slice(at, at + 4);
+        let white = 0;
+        for (let v = y; v < y + h; v++) {
+          for (let u = x; u < x + w; u++) {
+            if (whitening.has(DECOR_ATLAS.roles[v * DECOR_ATLAS.width + u] ?? 0)) white++;
+          }
+        }
+        expect(white, `${form}, source ${String(source)}`).toBeGreaterThan(0);
+      }
+    }
   });
 });
 
@@ -451,7 +546,7 @@ describe('collecte du décor (ADR 0017, § 6 à 8)', () => {
       let snowy = 0;
       for (const object of objects) {
         const look = table.looks.at(object.look);
-        const flora = data.flora.entries.at(look?.flora ?? -1);
+        const flora = entryOf(data.flora.entries, look?.flora ?? -1);
         const palette = slots.palettes.at(object.slot);
         if (look === undefined || palette === undefined) throw new Error('objet sans palette');
         // Enneigé, exactement quand la part de neige de sa case atteint le seuil.

@@ -13,7 +13,7 @@ import resources from '../../../data/resources.json';
 import species from '../../../data/species.json';
 import worldgen from '../../../data/worldgen.json';
 import { catalogOf, DataError, loadCatalog, loadSettings, type Catalog } from './catalog';
-import { DecorSchema } from './decor';
+import { DecorSchema, outlineBelow } from './decor';
 import { FaunaFileSchema } from './fauna';
 import { BODY_KINDS, HumansSchema, LOOK_BITS } from './humans';
 import {
@@ -201,6 +201,30 @@ export function checkDecor(data: GameData): string[] {
   );
   if (extra.length > 0) {
     problems.push(`data/decor.json (gisements) : minerais inconnus : ${extra.join(', ')}`);
+  }
+  // Le contour, plus sombre que chaque ton que prend un objet (consigne : un contour sombre) :
+  // flore, pierre, minerais et neige.
+  const ramps: [string, readonly string[]][] = [['stone', decor.stone]];
+  for (const entry of data.flora.entries) {
+    const { foliage, wood, fruit } = entry.look;
+    for (const [state, ramp] of Object.entries(foliage)) ramps.push([`${entry.id}.${state}`, ramp]);
+    ramps.push([`${entry.id}.wood`, wood]);
+    if (fruit !== undefined) ramps.push([`${entry.id}.fruit`, fruit.tones]);
+  }
+  for (const [id, deposit] of Object.entries(decor.deposits)) {
+    if (deposit.ore !== undefined) ramps.push([`${id}.ore`, deposit.ore]);
+  }
+  for (const biome of data.biomes.entries) {
+    const cover = biome.seasons.palette;
+    if (cover !== undefined) {
+      ramps.push([`${biome.id}.snow`, [cover.light, cover.base, cover.shadow, decor.snow.deep]]);
+    }
+  }
+  const lighter = ramps.filter(([, ramp]) => !outlineBelow(decor.outline, ramp));
+  if (lighter.length > 0) {
+    problems.push(
+      `data/decor.json (contour) : pas plus sombre que les tons de ${lighter.map(([id]) => id).join(', ')}`,
+    );
   }
   return problems;
 }

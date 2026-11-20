@@ -19,7 +19,12 @@ import { readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { normalizePath, type Plugin } from 'vite';
 import { z } from 'zod';
-import { DecorSchema, FloraLookSchema } from '../src/core/data/decor.ts';
+import {
+  DecorSchema,
+  FloraLookSchema,
+  type Decor,
+  type FloraLook,
+} from '../src/core/data/decor.ts';
 import { HumansSchema } from '../src/core/data/humans.ts';
 import { reduceRoles, type RoleImage } from '../src/gen/humans.ts';
 import { DECOR_LEGEND, legendRole } from '../src/gen/legend.ts';
@@ -51,19 +56,31 @@ export interface DecorAtlas {
 /** Le nom d'une grille : sa forme, puis le numéro de sa variante. */
 const GRID_NAME = /^([a-z]+(?:-[a-z]+)*)-(\d+)\.txt$/u;
 
-/** Les formes que nomment la flore et le décor : il leur faut des grilles. */
+/**
+ * Les formes que nomment la flore (`look.form`, `look.bare`) et le décor (les rochers épars et
+ * ceux des gisements), triées : il leur faut des grilles. Aucune n'est nommée par le code.
+ */
+export function formsOf(
+  flora: readonly { readonly look: FloraLook }[],
+  decor: Pick<Decor, 'rocks' | 'deposits'>,
+): string[] {
+  const forms = new Set<string>();
+  for (const { look } of flora) {
+    forms.add(look.form);
+    if (look.bare !== undefined) forms.add(look.bare);
+  }
+  for (const rock of Object.values(decor.rocks)) forms.add(rock.form);
+  for (const deposit of Object.values(decor.deposits)) forms.add(deposit.form);
+  return [...forms].sort();
+}
+
+/** Les formes que nomment data/flora.json et data/decor.json (formsOf). */
 export function namedForms(root: string): string[] {
   const flora = z
     .array(z.object({ look: FloraLookSchema }).loose())
     .parse(JSON.parse(readFileSync(join(root, 'data/flora.json'), 'utf8')));
   const decor = DecorSchema.parse(JSON.parse(readFileSync(join(root, 'data/decor.json'), 'utf8')));
-  const forms = new Set<string>(['rock']);
-  for (const { look } of flora) {
-    forms.add(look.form);
-    if (look.bare !== undefined) forms.add(look.bare);
-  }
-  for (const deposit of Object.values(decor.deposits)) forms.add(deposit.form);
-  return [...forms].sort();
+  return formsOf(flora, decor);
 }
 
 /** Les grilles du décor : leurs noms et leur texte, dans l'ordre des noms. */

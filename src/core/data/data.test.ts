@@ -918,7 +918,8 @@ describe('décor : data/flora.json et data/decor.json (ADR 0017)', () => {
     if (entry === undefined) throw new Error(`espèce ${id} absente`);
     return entry.look;
   };
-  const ramp = ['#111111', '#222222', '#333333', '#444444'];
+  // Une rampe valide : de la lumière à l'ombre profonde, de plus en plus sombre.
+  const ramp = ['#444444', '#333333', '#222222', '#111111'];
 
   it('donne une apparence à chaque espèce, des saisons aux buissons, des fruits à leurs mois', () => {
     for (const entry of data.flora.entries) expect(FloraSchema.parse(entry)).toEqual(entry);
@@ -942,6 +943,21 @@ describe('décor : data/flora.json et data/decor.json (ADR 0017)', () => {
     expect(issues(FloraLookSchema, { ...broadleaf, wood: ramp.slice(0, 3) }).join()).toMatch(
       /^wood/,
     );
+    // Une rampe dans le désordre : l'ombre profonde à la place de la lumière (relecture 2b.6,
+    // problème 5), ou deux tons égaux.
+    const summer = broadleaf.foliage.summer;
+    const reversed = [...summer].reverse();
+    expect(
+      issues(FloraLookSchema, {
+        ...broadleaf,
+        foliage: { ...broadleaf.foliage, summer: reversed },
+      }),
+    ).toContain(
+      "foliage.summer : des tons de plus en plus sombres, de la lumière à l'ombre profonde",
+    );
+    expect(
+      issues(FloraLookSchema, { ...broadleaf, wood: [ramp[0], ramp[0], ramp[2], ramp[3]] }),
+    ).toContain("wood : des tons de plus en plus sombres, de la lumière à l'ombre profonde");
     expect(
       issues(FloraLookSchema, { ...broadleaf, wood: ['#11111', ...ramp.slice(1)] }).join(),
     ).toMatch(/wood\.0 : couleur #rrggbb/);
@@ -995,6 +1011,8 @@ describe('décor : data/flora.json et data/decor.json (ADR 0017)', () => {
       [{ snow: { ...decor.snow, deep: 'blanc' } }, /^snow\.deep/],
       [{ foliage: { ...decor.foliage, bareBelow: -31 } }, /^foliage\.bareBelow/],
       [{ foliage: { ...decor.foliage, autumnBelow: 41 } }, /^foliage\.autumnBelow/],
+      [{ foliage: { ...decor.foliage, autumnDrop: -1 } }, /^foliage\.autumnDrop/],
+      [{ foliage: { ...decor.foliage, autumnDrop: 21 } }, /^foliage\.autumnDrop/],
       [{ foliage: { ...decor.foliage, bareBelow: 13 } }, /^foliage : l'automne commence/],
       [{ foliage: { ...decor.foliage, dryShare: 1.2 } }, /^foliage\.dryShare/],
       [{ place: { ...decor.place, jitter: 0.46 } }, /^place\.jitter/],
@@ -1012,8 +1030,12 @@ describe('décor : data/flora.json et data/decor.json (ADR 0017)', () => {
         /^place\.rock\.side/,
       ],
       [{ stone: ramp.slice(0, 3) }, /^stone/],
-      [{ rocks: { mountain: 1.5 } }, /^rocks\.mountain/],
-      [{ rocks: { Mountain: 0.5 } }, /^rocks/],
+      [{ stone: [...ramp].reverse() }, /^stone : des tons de plus en plus sombres/],
+      [{ rocks: { mountain: { chance: 1.5, form: 'rock' } } }, /^rocks\.mountain\.chance/],
+      [{ rocks: { mountain: { chance: 0.5 } } }, /^rocks\.mountain\.form/],
+      [{ rocks: { mountain: { chance: 0.5, form: 'Rock' } } }, /^rocks\.mountain\.form/],
+      [{ rocks: { mountain: 0.5 } }, /^rocks\.mountain/],
+      [{ rocks: { Mountain: { chance: 0.5, form: 'rock' } } }, /^rocks/],
       [{ deposits: { iron: { form: 'ore-rock', ore: ramp.slice(0, 3) } } }, /^deposits\.iron\.ore/],
       [{ deposits: { iron: { form: 'ore-rock', colour: 'red' } } }, /^deposits\.iron/],
       [
@@ -1051,7 +1073,8 @@ describe('décor : data/flora.json et data/decor.json (ADR 0017)', () => {
 
   it('relève un biome ou un minerai inconnu du décor, et un minerai sans rocher', () => {
     const withSettings = (change: object): GameData => ({ ...data, decor: withDecor(change) });
-    expect(checkContent(withSettings({ rocks: { ...decor.rocks, volcano: 0.5 } }))).toEqual([
+    const volcano = { chance: 0.5, form: 'rock' };
+    expect(checkContent(withSettings({ rocks: { ...decor.rocks, volcano } }))).toEqual([
       'data/decor.json (rochers) : biomes inconnus : volcano',
     ]);
     const { gold: _gold, ...withoutGold } = decor.deposits;
@@ -1061,6 +1084,24 @@ describe('décor : data/flora.json et data/decor.json (ADR 0017)', () => {
     expect(
       checkContent(withSettings({ deposits: { ...decor.deposits, fish: { form: 'rock' } } })),
     ).toEqual(['data/decor.json (gisements) : minerais inconnus : fish']);
+  });
+
+  it('borde chaque objet d’un contour plus sombre que ses tons, et lui donne une ombre portée', () => {
+    // Relecture 2b.6, problème 5 : la consigne veut un contour sombre et une ombre portée.
+    expect(checkContent(data)).toEqual([]);
+    const withSettings = (change: object): GameData => ({ ...data, decor: withDecor(change) });
+    const [problem] = checkContent(withSettings({ outline: '#ffffff' }));
+    expect(problem).toMatch(
+      /^data\/decor\.json \(contour\) : pas plus sombre que les tons de stone, /,
+    );
+    expect(problem).toMatch(/broadleaf\.summer/);
+    // Un contour à peine plus clair que l'ombre de la pierre la plus sombre suffit à le refuser.
+    const [deep] = checkContent(withSettings({ outline: decor.stone[2] }));
+    expect(deep).toMatch(/^data\/decor\.json \(contour\) : pas plus sombre que les tons de stone/);
+    // L'ombre portée par défaut existe, et se projette.
+    expect(decor.shadow.method).not.toBe('none');
+    expect(decor.shadow.sx).toBeGreaterThan(0);
+    expect(decor.shadow.sy).toBeGreaterThan(0);
   });
 });
 
@@ -1081,7 +1122,8 @@ describe('gibier : data/fauna.json et les habitats des biomes (ADR 0018)', () =>
     if (entry === undefined) throw new Error(`espèce ${id} absente`);
     return entry;
   };
-  const ramp = ['#111111', '#222222', '#333333', '#444444'];
+  // Une rampe valide : de la lumière à l'ombre profonde, de plus en plus sombre.
+  const ramp = ['#444444', '#333333', '#222222', '#111111'];
 
   it('décrit le cerf, le sanglier et le lièvre, nommés au masculin et au féminin', () => {
     expect(data.fauna.entries.map((entry) => entry.id)).toEqual(['deer', 'boar', 'hare']);
@@ -1146,6 +1188,10 @@ describe('gibier : data/fauna.json et les habitats des biomes (ADR 0018)', () =>
       [{ lifespan: 0.5 }, /^lifespan/],
       [{ males: 1.1 }, /^males/],
       [{ look: { ...deer.look, coat: ramp.slice(0, 3) } }, /^look\.coat/],
+      [
+        { look: { ...deer.look, coat: [...deer.look.coat].reverse() } },
+        /^look\.coat : des tons de plus en plus sombres/,
+      ],
       [{ look: { ...deer.look, pale: ['#fff', ...ramp.slice(1)] } }, /^look\.pale\.0 : couleur/],
       [{ look: { ...deer.look, young: 0.5 } }, /^look\.young/],
       [{ look: { ...deer.look, maleFrom: undefined } }, /^look\.maleFrom : une forme du mâle/],
@@ -1208,6 +1254,20 @@ describe('gibier : data/fauna.json et les habitats des biomes (ADR 0018)', () =>
     expect(issues(FaunaListSchema, many).join()).toMatch(/16/);
     expect(issues(FaunaListSchema, many.slice(0, MAX_FAUNA_SPECIES))).toEqual([]);
     expect(issues(FaunaFileSchema, { species: data.fauna.entries }).join()).toMatch(/^rules/);
+    // Le contour borde le gibier d'un ton plus sombre que la lumière, la base et l'ombre de
+    // chaque rampe (relecture 2b.6, problème 5 : un contour blanc passait).
+    const file = { rules: data.faunaRules, species: data.fauna.entries };
+    expect(issues(FaunaFileSchema, file)).toEqual([]);
+    const white = issues(FaunaFileSchema, {
+      ...file,
+      rules: { ...data.faunaRules, outline: '#ffffff' },
+    });
+    expect(white).toContain(
+      'species.0.look.coat : le contour (rules.outline) plus sombre que la lumière, la base et l’ombre',
+    );
+    expect(white).toHaveLength(
+      data.fauna.entries.reduce((sum, entry) => sum + (entry.look.horn === undefined ? 3 : 4), 0),
+    );
     expect(issues(FaunaFileSchema, { rules: data.faunaRules }).join()).toMatch(/^species/);
   });
 

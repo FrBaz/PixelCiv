@@ -12,8 +12,24 @@ import { z } from 'zod';
 const IdSchema = z.string().regex(/^[a-z]+(-[a-z]+)*$/u, 'identifiant en minuscules et tirets');
 const KeySchema = z.string().regex(/^[a-z]+(\.[a-z0-9-]+)+$/u, 'clé de traduction');
 const ColorSchema = z.string().regex(/^#[0-9a-f]{6}$/u, 'couleur #rrggbb');
-/** Rampe de quatre tons : lumière, base, ombre, ombre profonde. */
-const RampSchema = z.tuple([ColorSchema, ColorSchema, ColorSchema, ColorSchema]);
+/**
+ * Clarté perçue d'un ton #rrggbb, de 0 à 255 : sa luma (Rec. 601, sur les valeurs codées), comme
+ * celle du décor (src/core/data/decor.ts, que ce module n'importe pas : il ne charge que zod).
+ */
+function luma(hex: string): number {
+  const value = Number.parseInt(hex.slice(1), 16);
+  return 0.299 * ((value >> 16) & 255) + 0.587 * ((value >> 8) & 255) + 0.114 * (value & 255);
+}
+/**
+ * Rampe de quatre tons, de la lumière à l'ombre profonde, chacun plus sombre que le précédent
+ * (REN-09).
+ */
+const RampSchema = z
+  .tuple([ColorSchema, ColorSchema, ColorSchema, ColorSchema])
+  .refine(
+    (ramp) => ramp.every((tone, rank) => rank === 0 || luma(tone) < luma(ramp[rank - 1] ?? tone)),
+    { message: "des tons de plus en plus sombres, de la lumière à l'ombre profonde" },
+  );
 
 /**
  * Un animal pour 128 cases du monde, au plus, toutes espèces comprises : le coût du jour du
@@ -221,11 +237,36 @@ export const FaunaRulesSchema = z
       .refine((fall) => fall.stumble <= fall.lie, { message: 'stumble ≤ lie' }),
     /** Le contour des motifs, celui des planches de sprites/ et du décor. */
     outline: ColorSchema,
+    /**
+     * Le contour des motifs réduits (adulte et jeune, à chaque niveau au-delà du premier) : retracé
+     * sur tout le bord de la silhouette (« silhouette »), ou là seulement où la forme a trois pixels
+     * d'épaisseur (« thick », comme les humains des niveaux moyens). La consigne veut au gibier un
+     * contour sombre : il en garde un même aux niveaux où les humains n'en ont plus.
+     */
+    retrace: z.enum(['silhouette', 'thick']),
   })
   .strict();
 export type FaunaRules = z.infer<typeof FaunaRulesSchema>;
 
-/** Le fichier data/fauna.json : les règles communes, puis les espèces. */
+/**
+ * Le fichier data/fauna.json : les règles communes, puis les espèces. Le contour borde chaque
+ * rampe d'un ton plus sombre que sa lumière, sa base et son ombre (consigne : un contour sombre) ;
+ * l'ombre profonde, celle de l'œil, peut l'égaler.
+ */
 export const FaunaFileSchema = z
   .object({ rules: FaunaRulesSchema, species: FaunaListSchema })
-  .strict();
+  .strict()
+  .superRefine((file, context) => {
+    const outline = luma(file.rules.outline);
+    file.species.forEach((entry, index) => {
+      for (const region of ['coat', 'pale', 'dark', 'horn'] as const) {
+        const ramp = entry.look[region];
+        if (ramp === undefined || ramp.slice(0, 3).every((tone) => outline < luma(tone))) continue;
+        context.addIssue({
+          code: 'custom',
+          message: 'le contour (rules.outline) plus sombre que la lumière, la base et l’ombre',
+          path: ['species', index, 'look', region],
+        });
+      }
+    });
+  });

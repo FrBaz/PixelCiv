@@ -20,8 +20,37 @@ const SpanSchema = z
   .tuple([ShareSchema, ShareSchema])
   .refine(([low, high]) => low <= high, { message: 'une étendue [plus petit, plus grand]' });
 
-/** Rampe de quatre tons : lumière, base, ombre, ombre profonde. */
-export const DecorRampSchema = z.tuple([ColorSchema, ColorSchema, ColorSchema, ColorSchema]);
+/**
+ * Clarté perçue d'un ton #rrggbb, de 0 à 255 : sa luma (Rec. 601, sur les valeurs codées), qui
+ * range les tons d'une rampe et place le contour sous eux.
+ */
+export function luma(hex: string): number {
+  const value = Number.parseInt(hex.slice(1), 16);
+  return 0.299 * ((value >> 16) & 255) + 0.587 * ((value >> 8) & 255) + 0.114 * (value & 255);
+}
+
+/** Les tons vont-ils de la lumière à l'ombre profonde, chacun plus sombre que le précédent ? */
+export function descending(ramp: readonly string[]): boolean {
+  return ramp.every((tone, rank) => rank === 0 || luma(tone) < luma(ramp[rank - 1] ?? tone));
+}
+
+/**
+ * Le contour borde-t-il la rampe d'un ton plus sombre que sa lumière, sa base et son ombre ?
+ * L'ombre profonde peut l'égaler, voire le passer (le charbon, l'œil du gibier).
+ */
+export function outlineBelow(outline: string, ramp: readonly string[]): boolean {
+  return ramp.slice(0, 3).every((tone) => luma(outline) < luma(tone));
+}
+
+/**
+ * Rampe de quatre tons, de la lumière à l'ombre profonde (REN-09), chacun plus sombre que le
+ * précédent : les rôles des grilles en dépendent (assets/decor/README.md).
+ */
+export const DecorRampSchema = z
+  .tuple([ColorSchema, ColorSchema, ColorSchema, ColorSchema])
+  .refine(descending, {
+    message: "des tons de plus en plus sombres, de la lumière à l'ombre profonde",
+  });
 export type DecorRamp = z.infer<typeof DecorRampSchema>;
 
 /**
@@ -131,14 +160,16 @@ export const DecorSchema = z
      */
     snow: z.object({ share: ShareSchema, deep: ColorSchema }).strict(),
     /**
-     * Feuillage : nu sous `bareBelow` °C (là où le mois le plus froid y descend), en automne sous
-     * `autumnBelow` °C quand le mois refroidit, sec quand la pluie du mois tombe sous `dryShare`
-     * de la moyenne.
+     * Feuillage : nu sous `bareBelow` °C (là où le mois le plus froid y descend) ; en automne
+     * quand le mois refroidit, sous `autumnBelow` °C et à `autumnDrop` °C au moins sous le mois le
+     * plus chaud (pas au pic de l'été) ; sec quand la pluie du mois tombe sous `dryShare` de la
+     * moyenne.
      */
     foliage: z
       .object({
         bareBelow: z.number().min(-30).max(40),
         autumnBelow: z.number().min(-30).max(40),
+        autumnDrop: z.number().min(0).max(20),
         dryShare: ShareSchema,
       })
       .strict()
@@ -159,8 +190,11 @@ export const DecorSchema = z
       .strict(),
     /** Tons de la pierre des rochers. */
     stone: DecorRampSchema,
-    /** Rochers épars : la chance d'un rocher par case, par biome. */
-    rocks: z.record(IdSchema, ShareSchema),
+    /**
+     * Rochers épars : par biome, la chance d'un rocher par case et sa forme (le nom de ses grilles,
+     * assets/decor/<forme>-<variante>.txt), comme celle d'un gisement.
+     */
+    rocks: z.record(IdSchema, z.object({ chance: ShareSchema, form: IdSchema }).strict()),
     /**
      * Aspect du rocher de chaque gisement (data/resources.json) : sa forme, et les tons de son
      * minerai ; sans eux, une roche nue, qui dit où est le gisement mais pas ce qu'il est.

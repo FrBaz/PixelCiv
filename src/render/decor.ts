@@ -25,6 +25,7 @@ import {
   DECOR_STATE,
   decorKey,
   decorSeason,
+  entryOf,
   foliageClimate,
   fruiting,
   seasonMoment,
@@ -137,7 +138,7 @@ export function decorPalette(
     });
   };
   const look: DecorLook | undefined = table.looks.at(choice.look);
-  const flora = look === undefined ? undefined : data.flora.entries.at(look.flora);
+  const flora = look === undefined ? undefined : entryOf(data.flora.entries, look.flora);
   const stone = rampColors(decor.stone);
   const foliage = flora?.look.foliage;
   const current =
@@ -153,7 +154,7 @@ export function decorPalette(
                 : foliage.summer,
         );
   const wood = flora === undefined ? stone : rampColors(flora.look.wood);
-  const mineral = look === undefined ? undefined : data.resources.entries.at(look.mineral);
+  const mineral = look === undefined ? undefined : entryOf(data.resources.entries, look.mineral);
   const deposit =
     mineral !== undefined && Object.hasOwn(decor.deposits, mineral.id)
       ? decor.deposits[mineral.id]
@@ -540,7 +541,7 @@ export class DecorSource implements ObjectSource {
         moment,
       );
       const { state, snowy } = decorSeason(snow, look.phenology, climate, this.data.decor);
-      const months = this.data.flora.entries.at(look.flora)?.look.fruit?.months;
+      const months = entryOf(this.data.flora.entries, look.flora)?.look.fruit?.months;
       const fruit = months !== undefined && fruiting(months, moment.month, south);
       const biome = snowy ? (this.world.layers.biome[cell] ?? 0) : 0;
       // Composition de la palette : apparence, état, neige, fruit, biome de la neige, méthode.

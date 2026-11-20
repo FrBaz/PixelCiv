@@ -4,7 +4,8 @@
  * Au build, et au lancement du serveur de développement, ce module lit les grilles de
  * assets/fauna/ (une par forme et par animation, ses images en blocs « # image k », dans la
  * légende du gibier, src/gen/legend.ts), en tire les niveaux de motifs des humains (facteurs et
- * contours de data/humans.json, réduction par vote de src/gen/humans.ts, qui garde l'œil), et,
+ * de data/humans.json, réduction par vote de src/gen/humans.ts, qui garde l'œil ; le contour,
+ * celui de rules.retrace de data/fauna.json, à tous les niveaux réduits), et,
  * pour le jeune de chaque espèce, les mêmes niveaux d'une réduction de plus (look.young de
  * data/fauna.json). Le jeune de la forme du mâle adulte (le cerf) n'est jamais montré : il n'est
  * pas rangé. Le tout se range en ligne d'horizon dans un atlas de rôles de la largeur de celui des
@@ -65,10 +66,13 @@ export function faunaGrids(root: string): { name: string; text: string }[] {
     .map((file) => ({ name: file, text: readFileSync(join(dir, file), 'utf8') }));
 }
 
-/** Contour d'une réduction du jeune, d'un facteur `factor` : celui du niveau de même finesse. */
-function youngOutline(factor: number): OutlineMode {
-  if (factor === 1) return 'keep';
-  return factor <= 2 ? 'thick' : 'none';
+/**
+ * Contour d'un motif du gibier réduit d'un facteur `factor`, adulte ou jeune : celui de la planche
+ * au facteur 1, sinon celui que retrace la règle des données (rules.retrace), à tous les niveaux,
+ * même ceux où les humains n'en ont plus : la consigne veut au gibier un contour sombre.
+ */
+export function faunaOutline(factor: number, retrace: OutlineMode): OutlineMode {
+  return factor === 1 ? 'keep' : retrace;
 }
 
 /** Les régions qu'une image dessine. */
@@ -91,7 +95,7 @@ export function buildFaunaAtlas(
   const humans = HumansSchema.parse(
     JSON.parse(readFileSync(join(root, 'data/humans.json'), 'utf8')),
   );
-  const { species } = FaunaFileSchema.parse(
+  const { species, rules } = FaunaFileSchema.parse(
     JSON.parse(readFileSync(join(root, 'data/fauna.json'), 'utf8')),
   );
   const parsed = new Map<string, RoleImage[]>();
@@ -147,7 +151,7 @@ export function buildFaunaAtlas(
           index.push(images.length);
           for (const base of grid) {
             const factor = level.factor * (young ? entry.look.young : 1);
-            const outline = young ? youngOutline(factor) : level.outline;
+            const outline = faunaOutline(factor, rules.retrace);
             images.push(reduceRoles(base, factor, outline, [FAUNA_EYE]));
           }
         }

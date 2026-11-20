@@ -42,6 +42,15 @@ export interface DecorLook {
   readonly phenology: Phenology;
 }
 
+/**
+ * L'entrée de `entries` au rang `index`, ou rien pour un rang négatif : le −1 d'un rocher sans
+ * espèce, ou d'une roche nue sans minerai, ne désigne aucune entrée (Array.at(−1) rendrait la
+ * dernière).
+ */
+export function entryOf<T>(entries: readonly T[], index: number): T | undefined {
+  return index < 0 ? undefined : entries[index];
+}
+
 /** Les apparences d'une sorte qu'un biome admet, et leurs poids cumulés. */
 export interface WeightedLooks {
   readonly looks: readonly number[];
@@ -52,15 +61,17 @@ export interface WeightedLooks {
 /** Ce que la pose lit des données, compilé une fois (compileDecor). */
 export interface DecorTable {
   readonly looks: readonly DecorLook[];
-  /** Par biome : ses arbres et ses buissons pondérés, sa chance de rocher épars, s'il est d'eau. */
+  /**
+   * Par biome : ses arbres et ses buissons pondérés, sa chance de rocher épars et l'apparence de
+   * ce rocher (−1 sans rocher épars), s'il est d'eau.
+   */
   readonly trees: readonly WeightedLooks[];
   readonly shrubs: readonly WeightedLooks[];
   readonly rockChance: readonly number[];
+  readonly rockLook: readonly number[];
   readonly water: readonly boolean[];
   /** Apparence du rocher de chaque minerai (indice de la couche deposit − 1), −1 sans rocher. */
   readonly depositLook: readonly number[];
-  /** Apparence de la roche nue des rochers épars. */
-  readonly looseRock: number;
   readonly place: Decor['place'];
 }
 
@@ -93,7 +104,21 @@ export function compileDecor(data: DecorData): DecorTable {
     });
     return looks.length - 1;
   };
-  const looseRock = rock('rock', -1);
+  // Les rochers épars, une apparence par forme (data/decor.json, rocks), dans l'ordre des
+  // biomes : une roche nue, sans minerai.
+  const looseRocks = new Map<string, number>();
+  const rockLook = data.biomes.entries.map((biome) => {
+    const entry = Object.hasOwn(data.decor.rocks, biome.id)
+      ? data.decor.rocks[biome.id]
+      : undefined;
+    if (entry === undefined) return -1;
+    let look = looseRocks.get(entry.form);
+    if (look === undefined) {
+      look = rock(entry.form, -1);
+      looseRocks.set(entry.form, look);
+    }
+    return look;
+  });
   const depositLook = data.resources.entries.map((resource, index) => {
     const look = Object.hasOwn(data.decor.deposits, resource.id)
       ? data.decor.deposits[resource.id]
@@ -117,10 +142,12 @@ export function compileDecor(data: DecorData): DecorTable {
     looks,
     trees: data.biomes.entries.map((biome) => weighted(biome, 'tree')),
     shrubs: data.biomes.entries.map((biome) => weighted(biome, 'shrub')),
-    rockChance: data.biomes.entries.map((biome) => data.decor.rocks[biome.id] ?? 0),
+    rockChance: data.biomes.entries.map((biome) =>
+      Object.hasOwn(data.decor.rocks, biome.id) ? data.decor.rocks[biome.id].chance : 0,
+    ),
+    rockLook,
     water: data.biomes.entries.map((biome) => biome.family === 'water'),
     depositLook,
-    looseRock,
     place: data.decor.place,
   };
 }
@@ -242,7 +269,7 @@ export function cellObjects(
   let rockLook = deposit > 0 ? (table.depositLook.at(deposit - 1) ?? -1) : -1;
   if (rockLook >= 0 && t[10] >= landUse.rocks) rockLook = -1;
   else if (rockLook < 0 && t[10] < (table.rockChance.at(biomeIndex) ?? 0) * landUse.rocks) {
-    rockLook = table.looseRock;
+    rockLook = table.rockLook.at(biomeIndex) ?? -1;
   }
   if (rockLook >= 0) {
     const placed = slot(count++);
@@ -284,9 +311,10 @@ export function seasonMoment(month: number): SeasonMoment {
 
 /** Ce que le feuillage d'une case connaît de son climat, à un moment de la saison. */
 export interface FoliageClimate {
-  /** Température du mois, et celle du mois le plus froid, en °C. */
+  /** Température du mois, et celles du mois le plus froid et du mois le plus chaud, en °C. */
   readonly monthly: number;
   readonly coldest: number;
+  readonly warmest: number;
   /** Le mois refroidit-il dans l'hémisphère de la case ? */
   readonly cooling: boolean;
   /** Pluie du mois, en part de la moyenne annuelle. */
@@ -309,6 +337,7 @@ export function foliageClimate(
   return {
     monthly: annual + amplitude * moment.factor * sign,
     coldest: annual - amplitude,
+    warmest: annual + amplitude,
     cooling: south ? moment.coolingSouth : moment.coolingNorth,
     rain: 1 + rain * moment.factor * sign,
   };
@@ -326,9 +355,10 @@ export interface DecorSeason {
  * carte : src/render/seasons.ts, snowShare) et de climat `climate`, selon les seuils de
  * data/decor.json.
  * - Enneigé quand la part de neige atteint `snow.share`.
- * - Caduc : nu sous `bareBelow`, en automne sous `autumnBelow` quand le mois refroidit, feuillé
- *   sinon ; il garde ses feuilles toute l'année là où le mois le plus froid reste au-dessus de
- *   `bareBelow`.
+ * - Caduc : nu sous `bareBelow` ; en automne quand le mois refroidit, sous `autumnBelow`, et
+ *   déjà `autumnDrop` au moins sous le mois le plus chaud (la feuille ne jaunit pas au pic de
+ *   l'été, même là où l'été reste frais) ; feuillé sinon. Il garde ses feuilles toute l'année là
+ *   où le mois le plus froid reste au-dessus de `bareBelow`.
  * - Sec : ses tons secs quand la pluie du mois tombe sous `dryShare` de la moyenne.
  * - Persistant : toujours feuillé.
  */
@@ -339,11 +369,17 @@ export function decorSeason(
   rules: Pick<Decor, 'snow' | 'foliage'>,
 ): DecorSeason {
   const snowy = snow > 0 && snow >= rules.snow.share;
-  const { bareBelow, autumnBelow, dryShare } = rules.foliage;
+  const { bareBelow, autumnBelow, autumnDrop, dryShare } = rules.foliage;
   let state: DecorState = DECOR_STATE.summer;
   if (phenology === 'deciduous' && climate.coldest < bareBelow) {
     if (climate.monthly < bareBelow) state = DECOR_STATE.bare;
-    else if (climate.cooling && climate.monthly < autumnBelow) state = DECOR_STATE.autumn;
+    else if (
+      climate.cooling &&
+      climate.monthly < autumnBelow &&
+      climate.monthly <= climate.warmest - autumnDrop
+    ) {
+      state = DECOR_STATE.autumn;
+    }
   } else if (phenology === 'dry' && climate.rain < dryShare) {
     state = DECOR_STATE.dry;
   }

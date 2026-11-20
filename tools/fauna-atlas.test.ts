@@ -11,6 +11,7 @@ import {
   FAUNA_ANIMATIONS,
   FAUNA_EYE,
   faunaGrids,
+  faunaOutline,
   MAX_FAUNA_ROWS,
 } from './fauna-atlas';
 import { parseRoleFrames, parseRoleGrid, ROLE_ATLAS_WIDTH } from './role-grids';
@@ -299,6 +300,56 @@ describe('atlas du gibier (ADR 0018, § 7)', () => {
         }
       });
     });
+  });
+
+  it('borde chaque motif d’un contour sombre, à chaque niveau, l’adulte comme le jeune', () => {
+    // Relecture 2b.6, problème 4 : aux facteurs 3 et 4, et pour le jeune dès le niveau 1, le
+    // gibier n'avait plus de contour. Un pixel du bord de la silhouette (un de ses quatre
+    // voisins est vide) est au contour, ou à l'œil, aussi sombre, que la réduction garde.
+    let checked = 0;
+    atlas.forms.forEach((form, f) => {
+      for (const young of [0, 1]) {
+        FAUNA_ANIMATIONS.forEach((animation, a) => {
+          for (let level = 0; level < levels; level++) {
+            const start = first(f, young, a, level);
+            if (start < 0) continue;
+            for (let frame = 0; frame < (atlas.frames[a] ?? 0); frame++) {
+              const box = motif(start + frame);
+              const filled = (u: number, v: number) =>
+                u >= 0 && v >= 0 && u < box.width && v < box.height && box.pixels(u, v) !== 0;
+              let border = 0;
+              let dark = 0;
+              for (let v = 0; v < box.height; v++) {
+                for (let u = 0; u < box.width; u++) {
+                  if (!filled(u, v)) continue;
+                  if (filled(u - 1, v) && filled(u + 1, v) && filled(u, v - 1) && filled(u, v + 1))
+                    continue;
+                  border++;
+                  const role = box.pixels(u, v);
+                  if (role === KEPT || role === FAUNA_EYE) dark++;
+                }
+              }
+              const where = `${form} ${young === 1 ? 'jeune' : 'adulte'} ${animation} ${String(frame)} niveau ${String(level)}`;
+              expect(dark / border, where).toBeGreaterThanOrEqual(0.85);
+              checked++;
+            }
+          }
+        });
+      }
+    });
+    expect(checked).toBeGreaterThan(200);
+  });
+
+  it('retrace le contour de la règle des données aux niveaux réduits, et garde celui de la grille au premier', () => {
+    expect(faunaOutline(1, 'silhouette')).toBe('keep');
+    expect(faunaOutline(1.6, 'silhouette')).toBe('silhouette');
+    expect(faunaOutline(4, 'thick')).toBe('thick');
+    // La règle de data/fauna.json est celle que l'atlas applique : avec « thick », les petits
+    // niveaux perdent une part de leur contour, là où la forme n'a pas trois pixels d'épaisseur.
+    const fauna = JSON.parse(readFileSync(join(root, 'data/fauna.json'), 'utf8')) as {
+      rules: { retrace: string };
+    };
+    expect(fauna.rules.retrace).toBe('silhouette');
   });
 
   it('garde l’œil de l’adulte d’un pixel à chaque niveau, là où sa grille le dessine', () => {

@@ -2,7 +2,7 @@
   "outline": "#13131c",
   "shadow": { "method": "ground", "alpha": 0.38, "sx": 0.42, "sy": 0.16 },
   "snow": { "share": 0.35, "deep": "#7f939c" },
-  "foliage": { "bareBelow": 5, "autumnBelow": 12, "dryShare": 0.65 },
+  "foliage": { "bareBelow": 5, "autumnBelow": 12, "autumnDrop": 3, "dryShare": 0.65 },
   "place": {
     "jitter": 0.32,
     "shrub": {
@@ -15,7 +15,12 @@
     }
   },
   "stone": ["#bdb6a6", "#938c7d", "#6c665a", "#47433b"],
-  "rocks": { "rocky-coast": 0.2, "cliff": 0.3, "mountain": 0.22, "high-mountain": 0.3 },
+  "rocks": {
+    "rocky-coast": { "chance": 0.2, "form": "rock" },
+    "cliff": { "chance": 0.3, "form": "rock" },
+    "mountain": { "chance": 0.22, "form": "rock" },
+    "high-mountain": { "chance": 0.3, "form": "rock" }
+  },
   "deposits": {
     "stone": { "form": "rock" },
     "copper": {

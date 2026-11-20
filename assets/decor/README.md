@@ -6,7 +6,7 @@ Au build, et au lancement du serveur de développement, `tools/decor-atlas.ts` l
 
 ## Format
 
-- Le fichier `<forme>-<variante>.txt` donne la variante `variante` (0, 1, 2…, sans trou) de la forme `forme`, que nomment `data/flora.json` (`look.form`, `look.bare`) et `data/decor.json` (`deposits`, et `rock` pour les rochers épars). Le build échoue si une forme nommée n'a pas de grilles.
+- Le fichier `<forme>-<variante>.txt` donne la variante `variante` (0, 1, 2…, sans trou) de la forme `forme`, que nomment `data/flora.json` (`look.form`, `look.bare`) et `data/decor.json` (`rocks`, la forme des rochers épars de chaque biome, et `deposits`, celle du rocher de chaque gisement). Le build échoue si une forme nommée n'a pas de grilles.
 - En tête, `# légende decor` : la légende du décor, que chaque grille déclare. Une grille d'un autre atlas (le gibier a la sienne) est refusée, même si ses caractères ont un sens ici.
 - `# pieds N` : la colonne des pieds, comptée de 0 depuis la gauche. Les pieds se posent sur la **dernière rangée**, qui a au moins un pixel : aucune rangée vide sous eux.
 - Des lignes de même longueur ; une ligne vide, ou qui commence par `#`, est un commentaire. Les erreurs numérotent les lignes comme le fichier.

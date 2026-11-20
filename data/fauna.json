@@ -25,7 +25,8 @@
       "stumble": 400,
       "lie": 1600
     },
-    "outline": "#13131c"
+    "outline": "#13131c",
+    "retrace": "silhouette"
   },
   "species": [
     {

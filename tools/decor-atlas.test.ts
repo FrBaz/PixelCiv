@@ -1,9 +1,12 @@
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
+import { DecorSchema } from '../src/core/data/decor';
 import { Fingerprint } from '../src/core/hash';
 import { DECOR_LEGEND, FAUNA_LEGEND, legendRole, legendRoles } from '../src/gen/legend';
 import { KEPT } from '../src/gen/humans';
 import { humanAtlas } from '../src/render/humans';
-import { buildDecorAtlas, decorGrids, namedForms } from './decor-atlas';
+import { buildDecorAtlas, decorGrids, formsOf, namedForms } from './decor-atlas';
 import { packSkyline, parseRoleGrid, ROLE_ATLAS_WIDTH, withShadow } from './role-grids';
 
 const root = new URL('..', import.meta.url).pathname;
@@ -99,6 +102,20 @@ describe('grilles du décor (ADR 0017, § 3 et 7)', () => {
       /palm-2\.txt : variante 2, la forme palm attend 1/,
     );
     expect(() => buildDecorAtlas(root, [{ name: 'Palm.txt', text: '' }])).toThrow(/forme-variante/);
+  });
+
+  it('demandent les formes que nomment les données, et elles seules, rochers épars compris', () => {
+    // Relecture 2b.6, problèmes 8 et 22 : la forme des rochers épars vient de data/decor.json.
+    const decor = DecorSchema.parse(
+      JSON.parse(readFileSync(join(root, 'data/decor.json'), 'utf8')),
+    );
+    expect(
+      formsOf([], { rocks: { tundra: { chance: 0.1, form: 'pebble' } }, deposits: {} }),
+    ).toEqual(['pebble']);
+    expect(formsOf([], { rocks: {}, deposits: decor.deposits })).not.toContain('pebble');
+    const named = namedForms(root);
+    for (const rock of Object.values(decor.rocks)) expect(named).toContain(rock.form);
+    for (const deposit of Object.values(decor.deposits)) expect(named).toContain(deposit.form);
   });
 });
 
@@ -207,11 +224,46 @@ describe('atlas du décor (ADR 0017, § 3)', () => {
     });
   });
 
+  it('borde ses motifs du contour, ou de son chaperon, au premier niveau', () => {
+    // Relecture 2b.6, problème 5 : un feuillu sans contour ne tombait que par l'empreinte. Part
+    // du bord de la silhouette (hors ombre portée) au contour ou au chaperon : les formes fines
+    // (roseaux, branches nues) en ont moins, les autres presque tout.
+    const cap = [0, 1, 2, 3].map((rank) => legendRole(DECOR_LEGEND, 'cap', rank));
+    const shares = atlas.names.map((name, source) => {
+      const box = motif(source * atlas.levels);
+      const filled = (u: number, v: number) =>
+        u >= 0 &&
+        v >= 0 &&
+        u < box.width &&
+        v < box.height &&
+        box.pixels(u, v) !== 0 &&
+        !isShadow(box.pixels(u, v));
+      let border = 0;
+      let outlined = 0;
+      for (let v = 0; v < box.height; v++) {
+        for (let u = 0; u < box.width; u++) {
+          if (!filled(u, v)) continue;
+          if (filled(u - 1, v) && filled(u + 1, v) && filled(u, v - 1) && filled(u, v + 1))
+            continue;
+          border++;
+          if (box.pixels(u, v) === KEPT || cap.includes(box.pixels(u, v))) outlined++;
+        }
+      }
+      return { name, share: outlined / border };
+    });
+    for (const { name, share } of shares) expect(share, name).toBeGreaterThanOrEqual(0.1);
+    const full = shares.filter(({ share }) => share >= 0.95).length;
+    expect(full / shares.length).toBeGreaterThanOrEqual(0.6);
+    for (const name of ['broadleaf-0', 'conifer-0', 'rock-0', 'berry-bush-0']) {
+      expect(shares.find((entry) => entry.name === name)?.share, name).toBeGreaterThanOrEqual(0.95);
+    }
+  });
+
   it('a une empreinte, que tout changement des grilles, des niveaux ou de l’ombre doit expliquer', () => {
     const print = new Fingerprint().bytes(roles);
     for (const value of atlas.motifs) print.uint32(value);
     for (const name of atlas.names) print.string(name);
     expect([atlas.width, atlas.height, atlas.names.length]).toEqual([1024, 275, 42]);
-    expect(print.hex()).toBe('2b2e5988');
+    expect(print.hex()).toBe('9553d4a3');
   });
 });
