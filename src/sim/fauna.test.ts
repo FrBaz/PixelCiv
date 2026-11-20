@@ -787,6 +787,15 @@ describe('mouvements du gibier (ADR 0018, § 2)', () => {
     day(state);
     humans.build(state);
     expect(at(300.5, 123.5)).toBeCloseTo(2, 9);
+    // `closer` répond comme nearest(…, bound) < bound, même quand un humain de la même tuile se
+    // tient au-delà de la borne.
+    const closer = (x: number, y: number, bound: number) =>
+      humans.closer(state, Math.round(x * FIXED), Math.round(y * FIXED), bound);
+    expect(closer(300.5, 123.5, 1.5)).toBe(false);
+    expect(closer(300.5, 123.5, 2)).toBe(false);
+    expect(closer(300.5, 123.5, 2.5)).toBe(true);
+    expect(closer(1.5, 50.5, 2.5)).toBe(true);
+    expect(closer(1.5, 50.5, 1.5)).toBe(false);
   });
 
   it('ne dépend ni de ses caches ni de l’ordre où ils se refont', () => {

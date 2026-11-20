@@ -58,12 +58,6 @@ const NO = -1;
 export const FAUNA_STREAM = 'sim.fauna';
 /** Côté des tuiles de la présence des humains, en cases : celles de Movement.heldInTile. */
 const HUMAN_TILE_SHIFT = 3;
-/**
- * Portée de la recherche de l'humain le plus proche, au-delà de la distance gardée aux camps, en
- * cases : une tuile tenue touche cette distance, et ses humains se tiennent à moins de 8√2 cases
- * de ses bords ; au-delà, tous les buts se valent.
- */
-const CAMP_ROOM = 12;
 const TWO_POW_32 = 4294967296;
 
 /** Le contenu dont le gibier se sert. */
@@ -666,29 +660,48 @@ export class HumanIndex {
   private link = new Int32Array(0);
 
   /**
-   * Distance, en cases, du point (px, py) au plus proche des humains vivants, à leur position du
-   * jour, au plus court à travers la couture ; `limit` au plus, et `limit` si aucun ne s'en
-   * approche. Les humains se rangent par tuiles de 8 × 8 cases, une fois par jour, à la première
-   * demande : seules les hardes qu'un camp gêne la font.
+   * Les humains vivants rangés par tuiles de 8 × 8 cases, à leur position du jour : une fois par
+   * jour, à la première demande, si bien que seules les hardes qu'un camp gêne les font.
    */
-  nearest(state: SimState, px: number, py: number, limit: number): number {
+  private list(state: SimState): void {
     const today = dayIndex(state);
+    const tiles = this.tilesX * this.tilesY;
+    if (this.listed === today && this.head.length === tiles) return;
+    this.listed = today;
     const { people } = state;
     const { x, y } = people.columns;
-    const tiles = this.tilesX * this.tilesY;
-    if (this.listed !== today || this.head.length !== tiles) {
-      this.listed = today;
-      if (this.head.length !== tiles) this.head = new Int32Array(tiles);
-      this.head.fill(NO);
-      if (this.link.length < people.end) this.link = new Int32Array(people.end * 2);
-      for (let slot = people.end - 1; slot >= 0; slot--) {
-        if (people.alive[slot] !== 1) continue;
-        const tile = this.tileAt(x[slot] ?? 0, y[slot] ?? 0);
-        if (tile < 0) continue;
-        this.link[slot] = this.head[tile] ?? NO;
-        this.head[tile] = slot;
-      }
+    if (this.head.length !== tiles) this.head = new Int32Array(tiles);
+    this.head.fill(NO);
+    if (this.link.length < people.end) this.link = new Int32Array(people.end * 2);
+    for (let slot = people.end - 1; slot >= 0; slot--) {
+      if (people.alive[slot] !== 1) continue;
+      const tile = this.tileAt(x[slot] ?? 0, y[slot] ?? 0);
+      if (tile < 0) continue;
+      this.link[slot] = this.head[tile] ?? NO;
+      this.head[tile] = slot;
     }
+  }
+
+  /**
+   * Distance, en cases, du point (px, py) au plus proche des humains vivants, à leur position du
+   * jour, au plus court à travers la couture ; `limit` au plus, et `limit` si aucun ne s'en
+   * approche à moins de `limit`.
+   */
+  nearest(state: SimState, px: number, py: number, limit: number): number {
+    return this.scan(state, px, py, limit, false);
+  }
+
+  /**
+   * Un humain vivant se tient-il à moins de `bound` cases du point (px, py) ? La même réponse que
+   * nearest(…, bound) < bound, sans chercher plus loin que le premier.
+   */
+  closer(state: SimState, px: number, py: number, bound: number): boolean {
+    return this.scan(state, px, py, bound, true) < bound;
+  }
+
+  private scan(state: SimState, px: number, py: number, limit: number, first: boolean): number {
+    this.list(state);
+    const { x, y } = state.people.columns;
     const { width } = state.size;
     const reach = limit * FIXED;
     const top = Math.max(0, Math.floor((py - reach) / FIXED) >> HUMAN_TILE_SHIFT);
@@ -703,6 +716,7 @@ export class HumanIndex {
           const dx = deltaFixedX(px, x[slot] ?? 0, width) / FIXED;
           const dy = ((y[slot] ?? 0) - py) / FIXED;
           best = Math.min(best, dx * dx + dy * dy);
+          if (first && Math.sqrt(best) < limit) return Math.sqrt(best);
         }
       }
     }
@@ -922,16 +936,15 @@ function roam(
   // but à `camps` distances d'alarme au moins de l'humain vivant le plus proche, ou, si le sien en
   // est déjà plus près, pas plus près que lui : elle va et vient sans approcher le camp, et s'en
   // écarte (ADR 0018, § 2).
-  const room = avoid + CAMP_ROOM;
   const here =
-    humans?.any(gx, gy, avoid, false) === true ? humans.nearest(state, gx, gy, room) : NO;
+    humans?.any(gx, gy, avoid, false) === true ? humans.nearest(state, gx, gy, avoid) : NO;
   for (let index = 0; index < found; index++) {
     const cx = candidateX[index] ?? 0;
     const cy = candidateY[index] ?? 0;
     // Loin des camps : aucune tuile de 8 × 8 cases où se tient un humain à moins de `camps`
     // distances d'alarme (présence du jour, sans chercher l'humain le plus proche).
     if (humans?.any(cx, cy, avoid, false) === true) {
-      if (here === NO || humans.nearest(state, cx, cy, room) < Math.min(here, avoid)) continue;
+      if (here === NO || humans.closer(state, cx, cy, here)) continue;
     }
     if (!trace(state.cost, width, height, gx, gy, gx + deltaFixedX(gx, cx, width), cy).clear) {
       continue;
