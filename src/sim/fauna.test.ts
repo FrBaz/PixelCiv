@@ -27,7 +27,7 @@ import {
 import { deplete, gameCap } from './forage';
 import { trace } from './movement';
 import { createState, type SimState } from './state';
-import { applyCommand, applyCommands, fingerprint, type SimContent } from './step';
+import { applyCommand, applyCommands, type SimContent } from './step';
 import {
   FLAT_TEMPERATURE,
   scatteredGroups,
