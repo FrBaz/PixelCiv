@@ -3,10 +3,21 @@ import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { DecorSchema } from '../src/core/data/decor';
 import { Fingerprint } from '../src/core/hash';
-import { DECOR_LEGEND, FAUNA_LEGEND, legendRole, legendRoles } from '../src/gen/legend';
-import { KEPT } from '../src/gen/humans';
+import { DECOR_LEGEND, FAUNA_LEGEND, legendRole, legendRoles, regionCode } from '../src/gen/legend';
+import { KEPT, reduceRoles, roleParts } from '../src/gen/humans';
+import { HumansSchema } from '../src/core/data/humans';
+import { FloraLookSchema } from '../src/core/data/decor';
 import { humanAtlas } from '../src/render/humans';
-import { buildDecorAtlas, decorGrids, formsOf, namedForms } from './decor-atlas';
+import {
+  buildDecorAtlas,
+  decorGrids,
+  formsOf,
+  keepSnow,
+  MIN_SNOW_SHARE,
+  namedForms,
+  underRegions,
+  whitens,
+} from './decor-atlas';
 import { packSkyline, parseRoleGrid, ROLE_ATLAS_WIDTH, withShadow } from './role-grids';
 
 const root = new URL('..', import.meta.url).pathname;
@@ -194,9 +205,13 @@ describe('atlas du décor (ADR 0017, § 3)', () => {
       // La réduction par vote ne fait que des rôles des régions de sa source, à l'un de leurs
       // quatre rangs (un contour intérieur y devient l'ombre profonde), ou le contour : aucun
       // rôle sans couleur dans les palettes du décor.
-      const regions = new Set(
-        [...base.roles].filter((role) => role >= 16).map((role) => role >> 3),
-      );
+      // La neige et le chaperon, que tout niveau réduit peut prendre (keepSnow), ont un ton dans
+      // toute palette du décor (decorPalette).
+      const regions = new Set([
+        ...[...base.roles].filter((role) => role >= 16).map((role) => role >> 3),
+        legendRole(DECOR_LEGEND, 'snow', 0) >> 3,
+        legendRole(DECOR_LEGEND, 'cap', 0) >> 3,
+      ]);
       const allowed = (role: number) => role === KEPT || regions.has(role >> 3);
       for (let level = 0; level < levels; level++) {
         const box = motif(source * levels + level);
@@ -259,11 +274,118 @@ describe('atlas du décor (ADR 0017, § 3)', () => {
     }
   });
 
+  it('garde à chaque niveau réduit la moitié de la neige et du chaperon de la planche, et deux pixels', () => {
+    // Tâche 2b.7, constat de la publication de 2b.6 : le saule nain enneigé ne gardait au
+    // facteur 2 que 6 pixels blancs sur 78, contre 75 sur 284 à la planche, et se lisait comme un
+    // buisson nu sur la neige. Seules les croûtes de sel des niveaux sans contour (facteurs 3 et
+    // 4), tout de minerai, n'ont aucun pixel qui blanchirait sans changer hors neige.
+    const share = (box: ReturnType<typeof motif>) => {
+      let opaque = 0;
+      let white = 0;
+      for (let v = 0; v < box.height; v++) {
+        for (let u = 0; u < box.width; u++) {
+          const role = box.pixels(u, v);
+          if (role === 0 || isShadow(role)) continue;
+          opaque++;
+          if (whitens(role)) white++;
+        }
+      }
+      return { opaque, white };
+    };
+    const short: string[] = [];
+    atlas.names.forEach((name, source) => {
+      const planche = share(motif(source * levels));
+      if (planche.white === 0) return;
+      for (let level = 1; level < levels; level++) {
+        const reduced = share(motif(source * levels + level));
+        const kept =
+          reduced.white / reduced.opaque >=
+            (MIN_SNOW_SHARE * planche.white) / planche.opaque - 1e-12 &&
+          reduced.white >= Math.min(2, planche.white);
+        if (!kept) short.push(`${name} ${String(level)}`);
+      }
+    });
+    expect(short).toEqual(['salt-crust-0 3', 'salt-crust-0 4', 'salt-crust-1 3', 'salt-crust-1 4']);
+  });
+
+  it('ne change rien hors neige : un contour devient le chaperon, la région recouverte la neige, rang pour rang', () => {
+    // Hors neige, le chaperon a le ton du contour, et la neige ceux de la région qu'elle recouvre
+    // (decorPalette, `under`) : un niveau réduit ne change qu'enneigé. Le vote seul, puis la
+    // neige gardée, pour chaque source et chaque niveau.
+    const humans = HumansSchema.parse(
+      JSON.parse(readFileSync(join(root, 'data/humans.json'), 'utf8')),
+    );
+    const decor = DecorSchema.parse(
+      JSON.parse(readFileSync(join(root, 'data/decor.json'), 'utf8')),
+    );
+    const flora = (
+      JSON.parse(readFileSync(join(root, 'data/flora.json'), 'utf8')) as { look: unknown }[]
+    ).map((entry) => ({ look: FloraLookSchema.parse(entry.look) }));
+    const unders = underRegions(flora, decor);
+    const capOf = (rank: number) => legendRole(DECOR_LEGEND, 'cap', rank) >> 3;
+    let changed = 0;
+    for (const { name, text } of grids) {
+      const form = name.replace(/-\d+\.txt$/u, '');
+      const under = unders.get(form);
+      const base = parseRoleGrid(name, text, DECOR_LEGEND);
+      for (const [index, level] of humans.levels.entries()) {
+        const voted = reduceRoles(base, level.factor, level.outline, []);
+        const kept = keepSnow(base, voted, level.factor, under);
+        expect([kept.width, kept.height, kept.anchorX, kept.anchorY]).toEqual([
+          voted.width,
+          voted.height,
+          voted.anchorX,
+          voted.anchorY,
+        ]);
+        voted.roles.forEach((before, at) => {
+          const after = kept.roles[at] ?? 0;
+          if (after === before) return;
+          changed++;
+          const where = `${name}, niveau ${String(index)}, pixel ${String(at)}`;
+          if (before === KEPT) {
+            expect(after >> 3, where).toBe(capOf(0));
+            return;
+          }
+          // Un pixel de la région recouverte, au même rang, devenu la neige.
+          expect(under, where).toBeDefined();
+          expect(roleParts(before).region, where).toBe(regionCode(DECOR_LEGEND, under ?? ''));
+          expect(after, where).toBe(legendRole(DECOR_LEGEND, 'snow', roleParts(before).rank));
+        });
+      }
+    }
+    expect(changed).toBeGreaterThan(100);
+  });
+
+  it('sait quelle région la neige de chaque forme recouvre : bois des grilles nues, pierre, feuillage', () => {
+    const decor = DecorSchema.parse(
+      JSON.parse(readFileSync(join(root, 'data/decor.json'), 'utf8')),
+    );
+    const flora = (
+      JSON.parse(readFileSync(join(root, 'data/flora.json'), 'utf8')) as { look: unknown }[]
+    ).map((entry) => ({ look: FloraLookSchema.parse(entry.look) }));
+    const unders = underRegions(flora, decor);
+    expect(unders.get('larch-bare')).toBe('wood');
+    expect(unders.get('broadleaf')).toBe('foliage');
+    expect(unders.get('rock')).toBe('stone');
+    expect(unders.get('salt-crust')).toBe('stone');
+    expect([...unders.keys()].sort()).toEqual(namedForms(root));
+    // Une forme nommée de deux façons n'en a pas.
+    const look = flora.at(0)?.look;
+    if (look === undefined) throw new Error('flore vide');
+    const twice = underRegions([{ look: { ...look, form: 'x', bare: 'x' } }], {
+      rocks: {},
+      deposits: {},
+    });
+    expect(twice.get('x')).toBeUndefined();
+    expect(twice.has('x')).toBe(true);
+  });
+
   it('a une empreinte, que tout changement des grilles, des niveaux ou de l’ombre doit expliquer', () => {
     const print = new Fingerprint().bytes(roles);
     for (const value of atlas.motifs) print.uint32(value);
     for (const name of atlas.names) print.string(name);
     expect([atlas.width, atlas.height, atlas.names.length]).toEqual([1024, 275, 42]);
-    expect(print.hex()).toBe('9553d4a3');
+    // Tâche 2b.7 : la neige des niveaux réduits (keepSnow), de 9553d4a3 à f1f1ad1c.
+    expect(print.hex()).toBe('f1f1ad1c');
   });
 });
