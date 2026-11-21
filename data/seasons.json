@@ -1,0 +1,36 @@
+{
+  "step": 3,
+  "minTransition": 12,
+  "summerDays": 30,
+  "calmDays": 12,
+  "snow": {
+    "ramp": { "onset": 0.5, "span": 3, "full": 1 },
+    "forest": 0.7,
+    "rainAbove": 2,
+    "snowBelow": -1,
+    "meltRate": 3,
+    "min": 3,
+    "full": 20,
+    "maxLag": 45
+  },
+  "freshIce": {
+    "ramp": { "onset": -1, "span": 3, "full": 0.9 },
+    "freezeBelow": -1,
+    "growth": 0.6,
+    "thaw": 1.5,
+    "stefan": 15,
+    "min": 1,
+    "full": 8,
+    "maxLag": 30
+  },
+  "seaIce": {
+    "ramp": { "onset": -6, "span": 4, "full": 0.85 },
+    "freezeBelow": -6,
+    "growth": 0.5,
+    "thaw": 1.5,
+    "stefan": 20,
+    "min": 2,
+    "full": 12,
+    "maxLag": 30
+  }
+}

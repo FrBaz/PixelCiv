@@ -413,3 +413,100 @@ export const FloraSchema = z
 
 export type Flora = z.infer<typeof FloraSchema>;
 export const FlorasSchema = uniqueIds(FloraSchema);
+
+/**
+ * Rampe d'une couverture saisonnière (C1, D9) : la part de la case couverte croît de 0 à `full`
+ * quand la température du jour descend de `onset` à `onset − span` (°C). C'est la couverture de
+ * l'instant, celle que la carte montrait avant 2b.7 ; l'inertie la retarde et la prolonge.
+ */
+export const CoverRampSchema = z
+  .object({
+    onset: z.number().min(-40).max(20),
+    span: z.number().min(0.5).max(20),
+    full: z.number().gt(0).max(1),
+  })
+  .strict();
+
+/** Ce que les deux couvertures à réservoir partagent : leur rampe, leurs seuils, leur retard. */
+const reservoir = {
+  ramp: CoverRampSchema,
+  /** Réservoir sous lequel rien ne se voit, et qui couvre toute la case. */
+  min: z.number().min(0).max(1000),
+  full: z.number().gt(0).max(1000),
+  /** Retard de la fonte sur la rampe, au plus, en jours. */
+  maxLag: z.number().int().min(0).max(120),
+} as const;
+
+/** Un réservoir se voit d'un minimum, et couvre tout avant son plein. */
+const fills = (cover: { readonly min: number; readonly full: number }) => cover.min < cover.full;
+const FILLS = { message: 'le minimum du réservoir sous son plein', path: ['min'] };
+
+/**
+ * Neige des terres (ADR 0019, § 1) : le réservoir est l'équivalent en eau de la neige au sol, en
+ * millimètres. Il gagne la pluie du jour tombée en neige (toute sous `snowBelow`, aucune au-dessus
+ * de `rainAbove`, en proportion entre les deux) et perd `meltRate` millimètres par degré au-dessus
+ * de 0 °C et par jour. Une forêt n'en garde que la part `forest` : les arbres dépassent.
+ */
+export const SnowCoverSchema = z
+  .object({
+    ...reservoir,
+    forest: ShareSchema,
+    rainAbove: z.number().min(-20).max(20),
+    snowBelow: z.number().min(-20).max(20),
+    meltRate: z.number().gt(0).max(50),
+  })
+  .strict()
+  .refine(fills, FILLS)
+  .refine((snow) => snow.snowBelow < snow.rainAbove, {
+    message: 'la neige seule tombe plus froid que la pluie seule',
+    path: ['snowBelow'],
+  });
+
+/**
+ * Glace d'une eau (ADR 0019, § 1) : le réservoir est son épaisseur, en centimètres. Elle croît
+ * sous `freezeBelow` de `growth` centimètres par degré et par jour, d'autant moins vite qu'elle est
+ * épaisse (loi de Stefan, approchée : de moitié à `stefan` centimètres), et fond de `thaw`
+ * centimètres par degré au-dessus.
+ */
+export const IceCoverSchema = z
+  .object({
+    ...reservoir,
+    freezeBelow: z.number().min(-30).max(10),
+    growth: z.number().gt(0).max(10),
+    thaw: z.number().gt(0).max(10),
+    stefan: z.number().gt(0).max(1000),
+  })
+  .strict()
+  .refine(fills, FILLS);
+
+/**
+ * Saisons (data/seasons.json ; C1, D9 ; ADR 0019) : la neige des terres, la glace de l'eau douce
+ * et la banquise de la mer côtière, leurs rampes et leur inertie, et les règles de leurs
+ * calendriers (src/core/snow.ts) :
+ * - `step` : pas de l'intégration des réservoirs, en jours, un diviseur de l'année de 360 jours ;
+ * - `minTransition` : durée minimale d'une montée ou d'une descente de la couverture, en jours ;
+ * - `summerDays` : durée, centrée sur le jour le plus chaud, où la couverture est au plus celle de
+ *   la rampe : ni neige qui traîne ni glace qui reste au cœur de l'été (C1, D13) ;
+ * - `calmDays` : jours où la mer animée se calme avant la glace, et après elle (ADR 0015, § 5).
+ */
+export const SeasonsSchema = z
+  .object({
+    step: z
+      .number()
+      .int()
+      .min(1)
+      .max(15)
+      .refine((step) => 360 % step === 0, "un diviseur de l'année de 360 jours"),
+    minTransition: z.number().min(1).max(60),
+    summerDays: z.number().min(0).max(120),
+    calmDays: z.number().min(1).max(60),
+    snow: SnowCoverSchema,
+    freshIce: IceCoverSchema,
+    seaIce: IceCoverSchema,
+  })
+  .strict();
+
+export type CoverRampSettings = z.infer<typeof CoverRampSchema>;
+export type SnowCover = z.infer<typeof SnowCoverSchema>;
+export type IceCover = z.infer<typeof IceCoverSchema>;
+export type Seasons = z.infer<typeof SeasonsSchema>;

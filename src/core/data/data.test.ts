@@ -32,7 +32,14 @@ import {
   SpeciesSchema,
   type Nomads,
 } from './people';
-import { AltitudeLevelsSchema, BiomeSchema, BiomesSchema, FloraSchema } from './schemas';
+import {
+  AltitudeLevelsSchema,
+  BiomeSchema,
+  BiomesSchema,
+  FloraSchema,
+  SeasonsSchema,
+  type Seasons,
+} from './schemas';
 import {
   bakedWaterTone,
   CREST_TONES,
@@ -1300,5 +1307,90 @@ describe('gibier : data/fauna.json et les habitats des biomes (ADR 0018)', () =>
     ]);
     // Une qualité nulle n'abrite rien : elle passe, même sans gibier.
     expect(checkContent(withBiome('salar', { hare: 0 }))).toEqual([]);
+  });
+});
+
+describe('saisons : data/seasons.json (ADR 0019)', () => {
+  const { seasons } = loadGameData();
+  const valid = (variant: unknown) => SeasonsSchema.safeParse(variant).success;
+  const top = (change: Partial<Seasons>) => valid({ ...seasons, ...change });
+  const snow = (change: Partial<Seasons['snow']>) =>
+    valid({ ...seasons, snow: { ...seasons.snow, ...change } });
+  const ice = (change: Partial<Seasons['freshIce']>) =>
+    valid({ ...seasons, freshIce: { ...seasons.freshIce, ...change } });
+  const seaIce = (change: Partial<Seasons['seaIce']>) =>
+    valid({ ...seasons, seaIce: { ...seasons.seaIce, ...change } });
+  const ramp = (change: Partial<Seasons['snow']['ramp']>) =>
+    snow({ ramp: { ...seasons.snow.ramp, ...change } });
+
+  it('donne les rampes de C1 (D9), inchangées depuis la tâche 1.8, et les réglages livrés', () => {
+    expect(valid(seasons)).toBe(true);
+    expect(seasons.snow.ramp).toEqual({ onset: 0.5, span: 3, full: 1 });
+    expect(seasons.freshIce.ramp).toEqual({ onset: -1, span: 3, full: 0.9 });
+    expect(seasons.seaIce.ramp).toEqual({ onset: -6, span: 4, full: 0.85 });
+    expect(seasons.snow.forest).toBe(0.7);
+    expect(seasons).toMatchObject({ step: 3, minTransition: 12, summerDays: 30, calmDays: 12 });
+    expect(seasons.snow).toMatchObject({ rainAbove: 2, snowBelow: -1, meltRate: 3, min: 3 });
+    expect(seasons.freshIce).toMatchObject({ freezeBelow: -1, min: 1, full: 8, maxLag: 30 });
+    expect(seasons.seaIce).toMatchObject({ freezeBelow: -6, min: 2, full: 12, maxLag: 30 });
+  });
+
+  it('veut un pas qui divise l’année, des durées et des fenêtres bornées', () => {
+    expect(top({ step: 1 })).toBe(true);
+    expect(top({ step: 15 })).toBe(true);
+    expect(top({ step: 0 })).toBe(false);
+    expect(top({ step: 7 })).toBe(false);
+    expect(top({ step: 2.5 })).toBe(false);
+    expect(top({ step: 18 })).toBe(false);
+    expect(top({ minTransition: 0.5 })).toBe(false);
+    expect(top({ minTransition: 61 })).toBe(false);
+    expect(top({ summerDays: 0 })).toBe(true);
+    expect(top({ summerDays: -1 })).toBe(false);
+    expect(top({ summerDays: 121 })).toBe(false);
+    expect(top({ calmDays: 0 })).toBe(false);
+    expect(top({ calmDays: 61 })).toBe(false);
+    expect(valid({ ...seasons, extra: 1 })).toBe(false);
+  });
+
+  it('refuse une rampe, une neige ou une glace hors de leurs bornes', () => {
+    expect(ramp({ onset: -41 })).toBe(false);
+    expect(ramp({ onset: 21 })).toBe(false);
+    expect(ramp({ span: 0.4 })).toBe(false);
+    expect(ramp({ span: 21 })).toBe(false);
+    expect(ramp({ full: 0 })).toBe(false);
+    expect(ramp({ full: 1.1 })).toBe(false);
+    expect(snow({ forest: 1.1 })).toBe(false);
+    expect(snow({ forest: -0.1 })).toBe(false);
+    expect(snow({ meltRate: 0 })).toBe(false);
+    expect(snow({ meltRate: 51 })).toBe(false);
+    expect(snow({ rainAbove: 21 })).toBe(false);
+    expect(snow({ snowBelow: -21 })).toBe(false);
+    expect(snow({ maxLag: -1 })).toBe(false);
+    expect(snow({ maxLag: 121 })).toBe(false);
+    expect(snow({ maxLag: 2.5 })).toBe(false);
+    expect(snow({ maxLag: 120 })).toBe(true);
+    expect(snow({ min: -1 })).toBe(false);
+    expect(snow({ full: 1001 })).toBe(false);
+    expect(ice({ freezeBelow: -31 })).toBe(false);
+    expect(ice({ freezeBelow: 11 })).toBe(false);
+    expect(ice({ growth: 0 })).toBe(false);
+    expect(ice({ thaw: 0 })).toBe(false);
+    expect(ice({ thaw: 11 })).toBe(false);
+    expect(ice({ stefan: 0 })).toBe(false);
+    expect(seaIce({ growth: 11 })).toBe(false);
+    expect(seaIce({ stefan: 1001 })).toBe(false);
+    expect(seaIce({ maxLag: 121 })).toBe(false);
+    expect(valid({ ...seasons, snow: { ...seasons.snow, extra: 1 } })).toBe(false);
+    expect(valid({ ...seasons, seaIce: { ...seasons.seaIce, meltRate: 3 } })).toBe(false);
+  });
+
+  it('veut la neige seule plus froide que la pluie seule, et un réservoir qui se remplit', () => {
+    expect(snow({ snowBelow: 2 })).toBe(false);
+    expect(snow({ snowBelow: 1.9 })).toBe(true);
+    expect(snow({ min: 20 })).toBe(false);
+    expect(snow({ min: 19 })).toBe(true);
+    expect(ice({ min: 8 })).toBe(false);
+    expect(seaIce({ full: 2 })).toBe(false);
+    expect(seaIce({ full: 2.5 })).toBe(true);
   });
 });

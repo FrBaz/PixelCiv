@@ -10,6 +10,7 @@ import genetics from '../../../data/genetics.json';
 import humans from '../../../data/humans.json';
 import nomads from '../../../data/nomads.json';
 import resources from '../../../data/resources.json';
+import seasons from '../../../data/seasons.json';
 import species from '../../../data/species.json';
 import worldgen from '../../../data/worldgen.json';
 import { catalogOf, DataError, loadCatalog, loadSettings, type Catalog } from './catalog';
@@ -24,7 +25,13 @@ import {
   NomadsSchema,
   SpeciesListSchema,
 } from './people';
-import { AltitudeLevelsSchema, BiomesSchema, FlorasSchema, ResourcesSchema } from './schemas';
+import {
+  AltitudeLevelsSchema,
+  BiomesSchema,
+  FlorasSchema,
+  ResourcesSchema,
+  SeasonsSchema,
+} from './schemas';
 import { classifiedBiomes, WorldgenSchema } from './worldgen';
 
 export type { Catalog } from './catalog';
@@ -45,7 +52,16 @@ export type {
   Trait,
   TraitRole,
 } from './people';
-export type { AltitudeLevel, Biome, Flora, Resource } from './schemas';
+export type {
+  AltitudeLevel,
+  Biome,
+  CoverRampSettings,
+  Flora,
+  IceCover,
+  Resource,
+  Seasons,
+  SnowCover,
+} from './schemas';
 export type { Decor, DecorRamp, FloraLook, LandUse, Phenology, ShadowMethod } from './decor';
 export type { FaunaRules, FaunaSpecies } from './fauna';
 export type { Parameter, ParameterName, Worldgen } from './worldgen';
@@ -60,6 +76,8 @@ export function loadGameData() {
     resources: loadCatalog('data/resources.json', ResourcesSchema, resources),
     flora: loadCatalog('data/flora.json', FlorasSchema, flora),
     decor: loadSettings('data/decor.json', DecorSchema, decor),
+    /** La neige, la glace et la banquise : leurs rampes et leur inertie (ADR 0019). */
+    seasons: loadSettings('data/seasons.json', SeasonsSchema, seasons),
     /** Le gibier (ADR 0018) : ses espèces, puis ses règles communes. */
     fauna: catalogOf(faunaFile.species),
     faunaRules: faunaFile.rules,
