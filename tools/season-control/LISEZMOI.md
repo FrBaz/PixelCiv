@@ -1,6 +1,6 @@
 # Contrôle des pixels des couleurs de la saison
 
-Vitest ne voit pas le shader de la carte. Les empreintes de `src/render/mapShader.test.ts` figent le code des saisons (`MAP_FRAGMENT_SEASONS`, `MAP_FRAGMENT_WAVES_SEASONS`), celle de `src/render/seasonMirror.test.ts` le motif de son miroir TypeScript sur la cuisson de blocs d'un monde Petit. Ce contrôle vérifie, dans Chromium, que le shader et son miroir décident de la même façon, pixel à pixel, sur la cuisson réelle et sa carte d'identité des tons (ADR 0019, § 8), et que le cran coupé du réglage des effets rend la carte d'avant le second temps de 2b.7 (ADR 0019, § 4 ; ADR 0020).
+Vitest ne voit pas le shader de la carte. Les empreintes de `src/render/mapShader.test.ts` figent le code des saisons (`MAP_FRAGMENT_SEASONS`, `MAP_FRAGMENT_WAVES_SEASONS`), celle de `src/render/seasonMirror.test.ts` le motif de son miroir TypeScript sur la cuisson de blocs d'un monde Petit. Ce contrôle vérifie, dans Chromium, que le shader et son miroir décident de la même façon, pixel à pixel, sur la cuisson réelle et sa carte d'identité des tons (ADR 0019, § 8), et que le cran coupé du réglage des effets rend la carte d'avant 2b.7 hors de la neige et de la glace à inertie (ADR 0019, § 4 ; ADR 0020).
 
 ## Quand le lancer
 
@@ -12,16 +12,16 @@ Les palettes des états (`seasons.states` de `data/biomes.json`), la lumière d'
 
 - Node et les dépendances du projet (`npm ci`).
 - Playwright et son Chromium, qui ne sont pas des dépendances du projet : `capture.cjs` prend Playwright là où Node le trouve.
-- Pour comparer le cran coupé à la carte d'avant, une construction du commit `e5b1f3f`, la fin du premier temps de 2b.7 (la neige et la glace à inertie).
+- Pour comparer le cran coupé à la carte d'avant, une construction du commit `7c893a7`, la tête de 2b.6, d'avant 2b.7.
 
 ## Commandes
 
 Depuis la racine du dépôt, avec un dossier de travail `<d>` hors du dépôt, donné en chemin absolu :
 
 ```sh
-# 1. Construire la copie de travail, puis e5b1f3f dans un sous-dossier (facultatif), et servir.
+# 1. Construire la copie de travail, puis 7c893a7 dans un sous-dossier (facultatif), et servir.
 npx vite build --outDir <d>/dist --emptyOutDir
-git worktree add --detach <d>/avant e5b1f3f
+git worktree add --detach <d>/avant 7c893a7
 ln -s "$PWD/node_modules" <d>/avant/node_modules
 (cd <d>/avant && npx vite build --outDir <d>/dist/before --emptyOutDir)
 npx vite preview --outDir <d>/dist --port 4576 --strictPort &
@@ -57,7 +57,7 @@ Toutes sur un monde Petit, sur PC (1 280 × 720 pixels, densité 1), au zoom 1 :
 
 Le contrôle échoue au moindre écart au-delà d'une unité. Pour chaque vue :
 
-- `offVersusBase.differ` : 0, si la construction d'avant a été capturée. Le cran coupé rend sa carte octet pour octet, neige et glace comprises. **Ce n'est plus vrai depuis la fonte lente de la relecture (f6e1dbb)** : à la fonte de chaque hémisphère, la neige et la glace du cran coupé diffèrent de celles de e5b1f3f (à la publication de 2b.7, 45 215 pixels sur les onze vues, tous des tons de neige ou de glace, et le contrôle échoue sur six vues) ; hors de la neige et de la glace, le cran coupé rend 7c893a7 au pixel près (79 905 pixels de neige ou de glace en diffèrent, aucun autre). Classer ces écarts plutôt qu'attendre 0 est soumis à l'auteur.
+- `offVersusBase.other` : 0, si la construction d'avant a été capturée. Hors de la neige et de la glace, le cran coupé rend sa carte au pixel près : un pixel qui en diffère (`differ`) montre, dans chacune des deux versions, un ton de neige ou de glace des données (la palette de couverture d'un biome, `seasons.palette` de `data/biomes.json`, que le shader pose sur une case couverte) ou le ton cuit de sa case (`snowOrIce`) ; tout autre écart compte dans `other`. C'est la neige et la glace à inertie de 2b.7 : à la publication de 2b.7, 54 795 pixels des neuf vues au zoom 1 diffèrent de 7c893a7, tous de cette sorte. La comparaison à e5b1f3f, la fin du premier temps de 2b.7, ne vaut plus depuis la fonte lente de la relecture (f6e1dbb), qui a refait la neige et la glace de la fonte ; les vues de loin n'ont pas cette comparaison.
 - `far` : 0. Chaque pixel des crans plein et atténué vaut ce que dit le miroir, à une unité près sur un canal : le ton de même rang d'une palette déclarée, sous l'ombrage et la teinte de la cuisson, ou le pixel du cran coupé.
 - `mismatch` : rare (au plus 0,5 % des pixels changés). Ce sont les produits qui tombent sur une demie, que le GPU et le miroir arrondissent chacun de son côté.
 - Vues de loin (`-z0.75`) : `waterChanged` et `blueChanged` à 0 (aucun pixel changé ne vient d'une case sans tons de terre, eau, rivière ou rive, ni n'est bleu au cran coupé), et `matched` égal à `changed` à 1 % près (chaque pixel changé vaut le miroir de loin, `seasonFarPixel`, pour l'un des pixels de carte que la caméra situe à un pixel près).

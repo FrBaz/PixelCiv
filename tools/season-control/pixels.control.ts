@@ -7,8 +7,11 @@
  * captures : une vue par sous-dossier qui a son meta.json. Chaque vue écrit son result.json.
  *
  * Il vérifie, pour chaque vue :
- * - que le cran coupé rend la carte d'avant le second temps de 2b.7 à l'identique
- *   (`offVersusBase.differ`, attendu à 0), si la vue en a une capture ;
+ * - que le cran coupé rend la carte d'avant 2b.7 (7c893a7) hors de la neige et de la glace, si la
+ *   vue en a une capture : un pixel qui en diffère montre, dans chacune des deux versions, un ton
+ *   de neige ou de glace des données (`seasons.palette`, ceux que le shader pose sur une case
+ *   couverte) ou le ton cuit de sa case ; tout autre écart compte (`offVersusBase.other`, attendu
+ *   à 0) ;
  * - que chaque pixel des crans plein et atténué vaut ce que dit le miroir : le ton de l'état ou de
  *   l'hiver, de même rang, sous l'ombrage et la teinte de la cuisson, ou le pixel du cran coupé ;
  *   un pixel que couvrent la neige ou la glace garde sa couverture. Le produit du ton, de
@@ -68,6 +71,10 @@ const folders = views.filter((folder) => existsSync(path.join(folder, 'meta.json
 
 const image = (folder: string, file: string): RgbImage =>
   decodePng(readFileSync(path.join(folder, file)));
+
+/** Trois octets rouge, vert, bleu à partir de l'indice `i`, rangés en un entier 0xrrggbb. */
+const rgbAt = (bytes: Uint8Array, i: number): number =>
+  ((bytes[i] ?? 0) << 16) | ((bytes[i + 1] ?? 0) << 8) | (bytes[i + 2] ?? 0);
 
 describe('contrôle des pixels des couleurs de la saison (ADR 0019)', () => {
   it('a des vues à contrôler', () => {
@@ -228,10 +235,36 @@ describe('contrôle des pixels des couleurs de la saison (ADR 0019)', () => {
     const result: Record<string, unknown> = { seed: meta.seed, month: meta.month, left, top };
     const base = meta.shots.base;
     if (base !== undefined) {
+      // Le cran coupé contre la carte d'avant 2b.7 (ADR 0019, § 4) : la neige et la glace à
+      // inertie en diffèrent, et elles seules. Un pixel qui diffère doit montrer, dans chacune des
+      // deux versions, un ton de neige ou de glace des données (la palette de couverture d'un
+      // biome, la même à 7c893a7) ou le ton cuit de sa case, que la cuisson de 2b.7 n'a pas changé.
       const before = image(folder, base.file);
-      let differ = 0;
-      for (let i = 0; i < vw * vh * 3; i++) if (before.rgb[i] !== shots.off.rgb[i]) differ++;
-      result.offVersusBase = { differ, of: vw * vh * 3 };
+      const tones = new Set<number>();
+      for (const biome of data.biomes.entries) {
+        const palette = biome.seasons.palette;
+        if (palette === undefined) continue;
+        for (const color of [palette.shadow, palette.base, palette.light]) {
+          tones.add(Number.parseInt(color.slice(1), 16));
+        }
+      }
+      const offVersusBase = { of: vw * vh, differ: 0, snowOrIce: 0, other: 0 };
+      for (let sy = 0; sy < vh; sy++) {
+        const y = top + sy;
+        for (let sx = 0; sx < vw; sx++) {
+          const i = (sy * vw + sx) * 3;
+          const was = rgbAt(before.rgb, i);
+          const now = rgbAt(shots.off.rgb, i);
+          if (was === now) continue;
+          offVersusBase.differ++;
+          const inside = y >= 0 && y < H;
+          const baked = inside ? rgbAt(region, ((y - regionTop) * vw + sx) * 4) : -1;
+          const cover = (color: number) => tones.has(color) || color === baked;
+          if (inside && cover(was) && cover(now)) offVersusBase.snowOrIce++;
+          else offVersusBase.other++;
+        }
+      }
+      result.offVersusBase = offVersusBase;
     }
     const examples: unknown[] = [];
     const counts = { compared: 0, changed: 0, mismatch: 0, far: 0, covered: 0, reducedLight: 0 };
@@ -304,6 +337,6 @@ describe('contrôle des pixels des couleurs de la saison (ADR 0019)', () => {
     });
     // Les demies arrondies d'un côté ou de l'autre restent rares.
     expect(counts.mismatch).toBeLessThanOrEqual(Math.max(16, counts.changed * 0.005));
-    if (base !== undefined) expect(result.offVersusBase).toMatchObject({ differ: 0 });
+    if (base !== undefined) expect(result.offVersusBase).toMatchObject({ other: 0 });
   });
 });
