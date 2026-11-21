@@ -4,7 +4,7 @@
  * continue. Les textes affichés sont des clés de traduction.
  */
 import { z } from 'zod';
-import { FloraLookSchema } from './decor';
+import { FloraLookSchema, luma } from './decor';
 import {
   bakedWaterTone,
   CREST_TONES,
@@ -57,6 +57,42 @@ export const VEGETATION_TYPES = [
 
 /** Couvertures saisonnières (C1, D9) : neige, glace d'eau douce, banquise côtière. */
 export const SEASON_COVERS = ['none', 'snow', 'ice', 'sea-ice'] as const;
+
+/**
+ * États de la végétation au fil de l'année (C1, D9 en P1 ; ADR 0019, § 2) : l'automne, le bois nu
+ * ou l'herbe en dormance (le froid), la saison sèche (la pluie). Un biome en porte les palettes
+ * (`seasons.states`), et les prend aux dates du calendrier de la végétation de chaque case
+ * (src/core/foliage.ts).
+ */
+export const SEASON_STATES = ['autumn', 'bare', 'dry'] as const;
+export type SeasonState = (typeof SEASON_STATES)[number];
+
+/**
+ * Les états qu'une végétation peut prendre : le caduc et la toundra virent à l'automne puis se
+ * dénudent, aux seuils du feuillage du décor (data/decor.json), si bien que le sol et les arbres
+ * qui s'y dressent changent ensemble ; l'herbe entre en dormance au froid ; l'herbe tropicale
+ * sèche à la saison sèche ; le persistant et le sol nu n'ont aucun état.
+ */
+export const VEGETATION_STATES: Readonly<
+  Record<(typeof VEGETATION_TYPES)[number], readonly SeasonState[]>
+> = {
+  none: [],
+  evergreen: [],
+  deciduous: ['autumn', 'bare'],
+  grass: ['bare'],
+  'tropical-grass': ['dry'],
+  tundra: ['autumn', 'bare'],
+};
+
+/** Palette par rôles (REN-09) : ombre, base, lumière. */
+const PaletteSchema = z
+  .object({ shadow: ColorSchema, base: ColorSchema, light: ColorSchema })
+  .strict();
+
+/** Une palette va-t-elle de l'ombre à la lumière, chaque ton plus clair que le précédent ? */
+export function ascending(palette: { shadow: string; base: string; light: string }): boolean {
+  return luma(palette.shadow) < luma(palette.base) && luma(palette.base) < luma(palette.light);
+}
 
 /**
  * Mer animée d'un biome d'eau (tâche 2b.4, ADR 0015) : ses crêtes, qui glissent en
@@ -146,6 +182,19 @@ export const BiomeSchema = z
           .object({ shadow: ColorSchema, base: ColorSchema, light: ColorSchema })
           .strict()
           .optional(),
+        /**
+         * Palettes de ses états de végétation (ADR 0019, § 2), rang pour rang : la carte remplace
+         * le ton cuit de chaque pixel par le ton de même rang de la palette de l'état, sous le
+         * même ombrage. Un état sans palette laisse le ton cuit.
+         */
+        states: z
+          .object({
+            autumn: PaletteSchema.optional(),
+            bare: PaletteSchema.optional(),
+            dry: PaletteSchema.optional(),
+          })
+          .strict()
+          .optional(),
       })
       .strict()
       .refine((seasons) => (seasons.cover === 'none') === (seasons.palette === undefined), {
@@ -177,6 +226,28 @@ export const BiomeSchema = z
         message: 'seules les eaux gèlent ; les terres ont de la neige',
         path: ['seasons', 'cover'],
       });
+    }
+    const states = biome.seasons.states ?? {};
+    for (const state of SEASON_STATES) {
+      const palette = states[state];
+      if (palette === undefined) continue;
+      const path = ['seasons', 'states', state];
+      if (biome.family === 'water') {
+        context.addIssue({ code: 'custom', message: "une eau n'a pas d'état de végétation", path });
+      } else if (!VEGETATION_STATES[biome.vegetation].includes(state)) {
+        context.addIssue({
+          code: 'custom',
+          message: `la végétation « ${biome.vegetation} » ne prend pas l'état « ${state} »`,
+          path,
+        });
+      }
+      if (!ascending(palette)) {
+        context.addIssue({
+          code: 'custom',
+          message: "une palette d'état va de l'ombre à la lumière, chaque ton plus clair",
+          path,
+        });
+      }
     }
     if (biome.waves !== undefined && biome.family !== 'water') {
       context.addIssue({
@@ -480,6 +551,29 @@ export const IceCoverSchema = z
   .refine(fills, FILLS);
 
 /**
+ * Lumière d'hiver (ADR 0019, § 3) : aux latitudes moyennes et hautes, dans la moitié froide de
+ * l'année, chaque palette de terre et chaque objet du décor qui n'est dans aucun état de
+ * végétation prend sa version d'hiver, la même règle pour tous : chaque ton s'approche de
+ * `toward` de la part `mix`, puis se multiplie par `scale`. Sa fenêtre est datée par la latitude :
+ * nulle sous `from` (0 à l'équateur, 1 aux pôles), elle s'ouvre jusqu'à `to`, où elle couvre les
+ * jours dont le facteur de saison (seasonFactor, signé par l'hémisphère) passe sous `factor`.
+ */
+export const LightSchema = z
+  .object({
+    from: z.number().min(0).max(0.95),
+    to: z.number().min(0.05).max(1),
+    factor: z.number().min(-0.95).max(0.9),
+    toward: ColorSchema,
+    mix: z.number().min(0).max(1),
+    scale: z.number().min(0.5).max(1.5),
+  })
+  .strict()
+  .refine((light) => light.from < light.to, {
+    message: 'la lumière s’ouvre de sa première latitude à la seconde',
+    path: ['to'],
+  });
+
+/**
  * Saisons (data/seasons.json ; C1, D9 ; ADR 0019) : la neige des terres, la glace de l'eau douce
  * et la banquise de la mer côtière, leurs rampes et leur inertie, et les règles de leurs
  * calendriers (src/core/snow.ts) :
@@ -487,7 +581,11 @@ export const IceCoverSchema = z
  * - `minTransition` : durée minimale d'une montée ou d'une descente de la couverture, en jours ;
  * - `summerDays` : durée, centrée sur le jour le plus chaud, où la couverture est au plus celle de
  *   la rampe : ni neige qui traîne ni glace qui reste au cœur de l'été (C1, D13) ;
- * - `calmDays` : jours où la mer animée se calme avant la glace, et après elle (ADR 0015, § 5).
+ * - `calmDays` : jours où la mer animée se calme avant la glace, et après elle (ADR 0015, § 5) ;
+ * - `minTransition` et `summerDays` règlent aussi le calendrier de la végétation
+ *   (src/core/foliage.ts) : ses états montent et descendent en `minTransition` jours, et rien n'y
+ *   change dans les `summerDays` jours centrés sur le jour le plus chaud ;
+ * - `light` : la lumière d'hiver (LightSchema).
  */
 export const SeasonsSchema = z
   .object({
@@ -503,6 +601,7 @@ export const SeasonsSchema = z
     snow: SnowCoverSchema,
     freshIce: IceCoverSchema,
     seaIce: IceCoverSchema,
+    light: LightSchema,
   })
   .strict();
 
@@ -510,3 +609,4 @@ export type CoverRampSettings = z.infer<typeof CoverRampSchema>;
 export type SnowCover = z.infer<typeof SnowCoverSchema>;
 export type IceCover = z.infer<typeof IceCoverSchema>;
 export type Seasons = z.infer<typeof SeasonsSchema>;
+export type Light = z.infer<typeof LightSchema>;

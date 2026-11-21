@@ -58,8 +58,10 @@ export type {
   CoverRampSettings,
   Flora,
   IceCover,
+  Light,
   Resource,
   Seasons,
+  SeasonState,
   SnowCover,
 } from './schemas';
 export type { Decor, DecorRamp, FloraLook, LandUse, Phenology, ShadowMethod } from './decor';

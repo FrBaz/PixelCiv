@@ -37,7 +37,9 @@ import {
   BiomeSchema,
   BiomesSchema,
   FloraSchema,
+  SEASON_STATES,
   SeasonsSchema,
+  VEGETATION_STATES,
   type Seasons,
 } from './schemas';
 import {
@@ -1384,6 +1386,35 @@ describe('saisons : data/seasons.json (ADR 0019)', () => {
     expect(valid({ ...seasons, seaIce: { ...seasons.seaIce, meltRate: 3 } })).toBe(false);
   });
 
+  it('borne la lumière d’hiver : latitudes ordonnées, facteur, mélange et échelle', () => {
+    const light = (change: Partial<Seasons['light']>) =>
+      valid({ ...seasons, light: { ...seasons.light, ...change } });
+    expect(seasons.light).toEqual({
+      from: 0.25,
+      to: 0.5,
+      factor: -0.3,
+      toward: '#5d6b86',
+      mix: 0.25,
+      scale: 0.94,
+    });
+    expect(light({ from: -0.01 })).toBe(false);
+    expect(light({ from: 0.96 })).toBe(false);
+    expect(light({ to: 1.01 })).toBe(false);
+    expect(light({ to: 0.04 })).toBe(false);
+    expect(light({ from: 0.5 })).toBe(false);
+    expect(light({ from: 0.49 })).toBe(true);
+    expect(light({ factor: -0.96 })).toBe(false);
+    expect(light({ factor: 0.91 })).toBe(false);
+    expect(light({ toward: '#5D6B86' })).toBe(false);
+    expect(light({ mix: -0.01 })).toBe(false);
+    expect(light({ mix: 1.01 })).toBe(false);
+    expect(light({ scale: 0.49 })).toBe(false);
+    expect(light({ scale: 1.51 })).toBe(false);
+    expect(valid({ ...seasons, light: { ...seasons.light, extra: 1 } })).toBe(false);
+    const { light: _omitted, ...withoutLight } = seasons;
+    expect(valid(withoutLight)).toBe(false);
+  });
+
   it('veut la neige seule plus froide que la pluie seule, et un réservoir qui se remplit', () => {
     expect(snow({ snowBelow: 2 })).toBe(false);
     expect(snow({ snowBelow: 1.9 })).toBe(true);
@@ -1392,5 +1423,93 @@ describe('saisons : data/seasons.json (ADR 0019)', () => {
     expect(ice({ min: 8 })).toBe(false);
     expect(seaIce({ full: 2 })).toBe(false);
     expect(seaIce({ full: 2.5 })).toBe(true);
+  });
+});
+
+describe('états de la végétation, dans data/biomes.json (ADR 0019, § 2)', () => {
+  const { biomes } = loadGameData();
+  const byId = (id: string) => {
+    const biome = biomesJson.find((entry) => entry.id === id);
+    if (biome === undefined) throw new Error(id);
+    return biome;
+  };
+  /** Le biome `id`, ses états remplacés par `states`. */
+  const withStates = (id: string, states: unknown) => {
+    const biome = byId(id);
+    return { ...biome, seasons: { ...biome.seasons, states } };
+  };
+  const valid = (biome: unknown) => BiomeSchema.safeParse(biome).success;
+  const palette = { shadow: '#5c3c16', base: '#9a6a20', light: '#cfa13a' };
+
+  it('donne à chaque végétation qui en prend ses états, et à elle seule', () => {
+    const declared = biomes.entries
+      .filter((biome) => biome.seasons.states !== undefined)
+      .map((biome) => [
+        biome.id,
+        Object.keys(biome.seasons.states ?? {})
+          .sort()
+          .join(' '),
+      ]);
+    expect(Object.fromEntries(declared)).toEqual({
+      'coastal-marsh': 'bare',
+      marsh: 'bare',
+      bog: 'autumn bare',
+      tundra: 'autumn bare',
+      'cold-forest': 'autumn bare',
+      'cold-steppe': 'bare',
+      alpine: 'autumn bare',
+      grassland: 'bare',
+      steppe: 'bare',
+      'temperate-forest': 'autumn bare',
+      'temperate-rainforest': 'autumn bare',
+      savanna: 'dry',
+      'tropical-grassland': 'dry',
+    });
+    // Chaque biome d'une végétation à états les porte tous ; aucun autre n'en a.
+    for (const biome of biomes.entries) {
+      expect(Object.keys(biome.seasons.states ?? {}).sort()).toEqual(
+        biome.family === 'water' ? [] : [...VEGETATION_STATES[biome.vegetation]].sort(),
+      );
+    }
+  });
+
+  it('refuse un état d’une eau, ou que la végétation du biome ne prend pas', () => {
+    expect(valid(withStates('temperate-forest', { autumn: palette }))).toBe(true);
+    expect(valid(withStates('lake', { bare: palette }))).toBe(false);
+    // Une eau n'a pas d'état, quelle que soit sa végétation.
+    expect(valid({ ...withStates('lake', { bare: palette }), vegetation: 'deciduous' })).toBe(
+      false,
+    );
+    expect(valid({ ...withStates('lake', undefined), vegetation: 'deciduous' })).toBe(true);
+    expect(valid(withStates('taiga', { autumn: palette }))).toBe(false);
+    expect(valid(withStates('desert', { dry: palette }))).toBe(false);
+    expect(valid(withStates('grassland', { autumn: palette }))).toBe(false);
+    expect(valid(withStates('grassland', { dry: palette }))).toBe(false);
+    expect(valid(withStates('savanna', { bare: palette }))).toBe(false);
+    expect(valid(withStates('tundra', { dry: palette }))).toBe(false);
+    for (const state of SEASON_STATES) {
+      const allowed = Object.entries(VEGETATION_STATES)
+        .filter(([, states]) => states.includes(state))
+        .map(([vegetation]) => vegetation);
+      expect(allowed.length).toBeGreaterThan(0);
+    }
+  });
+
+  it('refuse une palette d’état hors de l’ombre à la lumière, mal écrite ou incomplète', () => {
+    const autumn = (change: Partial<typeof palette>) =>
+      valid(withStates('cold-forest', { autumn: { ...palette, ...change } }));
+    expect(autumn({})).toBe(true);
+    expect(autumn({ shadow: '#9a6a20', base: '#5c3c16' })).toBe(false);
+    expect(autumn({ light: '#9a6a20' })).toBe(false);
+    expect(autumn({ light: '#5c3c16' })).toBe(false);
+    expect(autumn({ base: 'roux' })).toBe(false);
+    expect(autumn({ base: '#9A6A20' })).toBe(false);
+    expect(
+      valid(withStates('cold-forest', { autumn: { shadow: '#5c3c16', base: '#9a6a20' } })),
+    ).toBe(false);
+    expect(valid(withStates('cold-forest', { autumn: { ...palette, deep: '#000000' } }))).toBe(
+      false,
+    );
+    expect(valid(withStates('cold-forest', { winter: palette }))).toBe(false);
   });
 });
