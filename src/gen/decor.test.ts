@@ -2,7 +2,6 @@ import { describe, expect, it } from 'vitest';
 import { loadGameData, type LandUse } from '../core/data';
 import { floraCode, floraDensity } from '../core/flora';
 import { Fingerprint } from '../core/hash';
-import { VEGETATION_STATES } from '../core/data/schemas';
 import {
   cellMedianThreshold,
   coldDates,
@@ -578,7 +577,7 @@ describe('saisons du décor (ADR 0017, § 5 ; ADR 0019, § 2)', () => {
           const cell = y * size.width + x;
           const biome = data.biomes.entries.at(layers.biome[cell] ?? -1);
           if (biome === undefined || biome.family === 'water') continue;
-          const ground = new Set(VEGETATION_STATES[biome.vegetation]);
+          const ground = new Set(data.seasons.vegetation[biome.vegetation]);
           const level = cellMedianThreshold(x, y);
           for (const placed of objectsAt(world, x, y)) {
             const phenology = lookOf(placed.look)?.phenology;

@@ -143,6 +143,17 @@ export function checkContent(data: GameData): string[] {
         problems.push(`data/biomes.json (flore) : ${biome.id} liste des ${kind} sans densité`);
     }
   }
+  // Les palettes d'état d'un biome sont celles des états de sa végétation (`vegetation` de
+  // data/seasons.json ; ADR 0019, § 2) : une prairie ne sèche que si sa végétation sèche.
+  for (const biome of data.biomes.entries) {
+    const allowed = data.seasons.vegetation[biome.vegetation];
+    for (const state of Object.keys(biome.seasons.states ?? {})) {
+      if (biome.family !== 'water' && !allowed.some((entry) => entry === state))
+        problems.push(
+          `data/biomes.json (états) : la végétation « ${biome.vegetation} » de ${biome.id} ne prend pas l'état « ${state} » (data/seasons.json, vegetation)`,
+        );
+    }
+  }
   problems.push(...checkDecor(data));
   problems.push(...checkFauna(data));
   // Espèces : leurs biomes existent, et leur apparence décrit chaque locus et chaque

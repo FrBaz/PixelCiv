@@ -1,8 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import altitudeLevelsJson from '../../../data/altitude-levels.json';
 import biomesJson from '../../../data/biomes.json';
+import seasonsJson from '../../../data/seasons.json';
 import fr from '../../i18n/fr.json';
-import { DataError, loadCatalog } from './catalog';
+import { catalogOf, DataError, loadCatalog } from './catalog';
 import {
   checkContent,
   loadGameData,
@@ -39,8 +40,8 @@ import {
   FloraSchema,
   SEASON_STATES,
   SeasonsSchema,
-  VEGETATION_STATES,
   type Seasons,
+  type SeasonState,
 } from './schemas';
 import {
   bakedWaterTone,
@@ -1431,7 +1432,7 @@ describe('saisons : data/seasons.json (ADR 0019)', () => {
 });
 
 describe('états de la végétation, dans data/biomes.json (ADR 0019, § 2)', () => {
-  const { biomes } = loadGameData();
+  const { biomes, seasons } = loadGameData();
   const byId = (id: string) => {
     const biome = biomesJson.find((entry) => entry.id === id);
     if (biome === undefined) throw new Error(id);
@@ -1472,7 +1473,7 @@ describe('états de la végétation, dans data/biomes.json (ADR 0019, § 2)', ()
     // Chaque biome d'une végétation à états les porte tous ; aucun autre n'en a.
     for (const biome of biomes.entries) {
       expect(Object.keys(biome.seasons.states ?? {}).sort()).toEqual(
-        biome.family === 'water' ? [] : [...VEGETATION_STATES[biome.vegetation]].sort(),
+        biome.family === 'water' ? [] : [...seasons.vegetation[biome.vegetation]].sort(),
       );
     }
   });
@@ -1488,18 +1489,55 @@ describe('états de la végétation, dans data/biomes.json (ADR 0019, § 2)', ()
       false,
     );
     expect(valid({ ...withStates('lake', undefined), vegetation: 'deciduous' })).toBe(true);
-    expect(valid(withStates('taiga', { autumn: palette, bare: palette }))).toBe(false);
-    expect(valid(withStates('desert', { dry: palette }))).toBe(false);
-    expect(valid(withStates('grassland', { autumn: palette, bare: palette }))).toBe(false);
-    expect(valid(withStates('grassland', { dry: palette }))).toBe(false);
-    expect(valid(withStates('savanna', { bare: palette }))).toBe(false);
-    expect(valid(withStates('tundra', { dry: palette }))).toBe(false);
+    // Les états que prend chaque végétation sont des données (data/seasons.json, vegetation) :
+    // checkContent refuse une palette d'un état que la végétation du biome ne prend pas.
+    const content = loadGameData();
+    const refused = (id: string, states: unknown) => {
+      const entries = content.biomes.entries.map((biome) =>
+        biome.id === id ? BiomeSchema.parse(withStates(id, states)) : biome,
+      );
+      return checkContent({ ...content, biomes: catalogOf(entries) });
+    };
+    expect(refused('taiga', { autumn: palette, bare: palette })).toHaveLength(2);
+    expect(refused('desert', { dry: palette })).toEqual([
+      "data/biomes.json (états) : la végétation « none » de desert ne prend pas l'état « dry » (data/seasons.json, vegetation)",
+    ]);
+    expect(refused('grassland', { autumn: palette, bare: palette })).toHaveLength(1);
+    expect(refused('grassland', { dry: palette, bare: palette })).toHaveLength(1);
+    expect(refused('savanna', { bare: palette, dry: palette })).toHaveLength(1);
+    expect(refused('tundra', { dry: palette, autumn: palette, bare: palette })).toHaveLength(1);
+    // La relecture de 2b.7 (problème 18) : une prairie qui sèche est un réglage de données.
+    const drying = {
+      ...content.seasons,
+      vegetation: {
+        ...content.seasons.vegetation,
+        grass: ['bare', 'dry'] satisfies SeasonState[],
+      },
+    };
+    const grassland = content.biomes.entries.map((biome) =>
+      biome.id === 'grassland'
+        ? BiomeSchema.parse(withStates('grassland', { bare: palette, dry: palette }))
+        : biome,
+    );
+    expect(checkContent({ ...content, seasons: drying, biomes: catalogOf(grassland) })).toEqual([]);
     for (const state of SEASON_STATES) {
-      const allowed = Object.entries(VEGETATION_STATES)
-        .filter(([, states]) => states.includes(state))
+      const allowed = Object.entries(seasons.vegetation)
+        .filter(([, states]) => states.some((entry) => entry === state))
         .map(([vegetation]) => vegetation);
       expect(allowed.length).toBeGreaterThan(0);
     }
+  });
+
+  it('veut une table des états de la végétation sans doublon, où l’automne mène au bois nu', () => {
+    const table = (vegetation: unknown) =>
+      SeasonsSchema.safeParse({ ...seasonsJson, vegetation }).success;
+    expect(table(seasonsJson.vegetation)).toBe(true);
+    expect(table({ ...seasonsJson.vegetation, grass: ['bare', 'bare'] })).toBe(false);
+    expect(table({ ...seasonsJson.vegetation, grass: ['autumn'] })).toBe(false);
+    expect(table({ ...seasonsJson.vegetation, grass: ['frost'] })).toBe(false);
+    const { tundra: _tundra, ...missing } = seasonsJson.vegetation;
+    expect(table(missing)).toBe(false);
+    expect(table({ ...seasonsJson.vegetation, moss: [] })).toBe(false);
   });
 
   it('refuse une palette d’état hors de l’ombre à la lumière, mal écrite ou incomplète', () => {

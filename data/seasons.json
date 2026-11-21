@@ -3,6 +3,14 @@
   "minTransition": 12,
   "summerDays": 30,
   "calmDays": 12,
+  "vegetation": {
+    "none": [],
+    "evergreen": [],
+    "deciduous": ["autumn", "bare"],
+    "grass": ["bare"],
+    "tropical-grass": ["dry"],
+    "tundra": ["autumn", "bare"]
+  },
   "snow": {
     "ramp": { "onset": 0.5, "span": 3, "full": 1 },
     "forest": 0.7,

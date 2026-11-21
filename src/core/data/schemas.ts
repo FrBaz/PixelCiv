@@ -68,21 +68,38 @@ export const SEASON_STATES = ['autumn', 'bare', 'dry'] as const;
 export type SeasonState = (typeof SEASON_STATES)[number];
 
 /**
- * Les états qu'une végétation peut prendre : le caduc et la toundra virent à l'automne puis se
- * dénudent, aux seuils du feuillage du décor (data/decor.json), si bien que le sol et les arbres
- * qui s'y dressent changent ensemble ; l'herbe entre en dormance au froid ; l'herbe tropicale
- * sèche à la saison sèche ; le persistant et le sol nu n'ont aucun état.
+ * Les états qu'une végétation peut prendre (`vegetation` de data/seasons.json ; ADR 0019, § 2) :
+ * par défaut, le caduc et la toundra virent à l'automne puis se dénudent, aux seuils du feuillage
+ * du décor (data/decor.json), si bien que le sol et les arbres qui s'y dressent changent ensemble ;
+ * l'herbe entre en dormance au froid ; l'herbe tropicale sèche à la saison sèche ; le persistant et
+ * le sol nu n'ont aucun état. Une végétation qui vire se dénude aussi (l'automne finit avec le bois
+ * nu). Les palettes d'état d'un biome (`seasons.states` de data/biomes.json) ne sont que celles
+ * des états de sa végétation : checkContent le vérifie (src/core/data/index.ts).
  */
-export const VEGETATION_STATES: Readonly<
-  Record<(typeof VEGETATION_TYPES)[number], readonly SeasonState[]>
-> = {
-  none: [],
-  evergreen: [],
-  deciduous: ['autumn', 'bare'],
-  grass: ['bare'],
-  'tropical-grass': ['dry'],
-  tundra: ['autumn', 'bare'],
-};
+export const VegetationStatesSchema = z
+  .object(
+    Object.fromEntries(
+      VEGETATION_TYPES.map((type) => [type, z.array(z.enum(SEASON_STATES))]),
+    ) as Record<
+      (typeof VEGETATION_TYPES)[number],
+      z.ZodArray<z.ZodEnum<{ [K in SeasonState]: K }>>
+    >,
+  )
+  .strict()
+  .superRefine((table, context) => {
+    for (const [type, states] of Object.entries(table)) {
+      if (new Set(states).size !== states.length) {
+        context.addIssue({ code: 'custom', message: 'un état en double', path: [type] });
+      }
+      if (states.includes('autumn') && !states.includes('bare')) {
+        context.addIssue({
+          code: 'custom',
+          message: "une végétation qui vire à l'automne se dénude aussi",
+          path: [type],
+        });
+      }
+    }
+  });
 
 /** Palette par rôles (REN-09) : ombre, base, lumière. */
 const PaletteSchema = z
@@ -242,12 +259,6 @@ export const BiomeSchema = z
       const path = ['seasons', 'states', state];
       if (biome.family === 'water') {
         context.addIssue({ code: 'custom', message: "une eau n'a pas d'état de végétation", path });
-      } else if (!VEGETATION_STATES[biome.vegetation].includes(state)) {
-        context.addIssue({
-          code: 'custom',
-          message: `la végétation « ${biome.vegetation} » ne prend pas l'état « ${state} »`,
-          path,
-        });
       }
       if (!ascending(palette)) {
         context.addIssue({
@@ -605,6 +616,7 @@ export const SeasonsSchema = z
     minTransition: z.number().min(1).max(60),
     summerDays: z.number().min(0).max(120),
     calmDays: z.number().min(1).max(60),
+    vegetation: VegetationStatesSchema,
     snow: SnowCoverSchema,
     freshIce: IceCoverSchema,
     seaIce: IceCoverSchema,
