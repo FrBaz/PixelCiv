@@ -13,7 +13,7 @@ Chaque décision d'architecture fait l'objet d'un ADR court (CLAUDE.md, section 
 | [0007](0007-sauvegardes.md) | Sauvegardes | accepté, révisé à la tâche 2b.6 (sauvegarde 8 : le gibier, migration de la 7) |
 | [0008](0008-credits-et-licences.md) | Crédits et avis de licence | accepté |
 | [0009](0009-generation-du-monde.md) | Génération du monde | accepté |
-| [0010](0010-rendu-de-la-carte.md) | Rendu de la carte | accepté, révisé aux tâches 2b.4 (second programme des blocs, image à la demande), 2b.5 (humains peints par un shader de palettes) 2b.6 (décor et gibier sur le calque des individus) et 2b.7 (texture des calendriers, couvertures à inertie ; puis carte d'identité des tons, couleurs de la saison, quatre programmes par bloc) |
+| [0010](0010-rendu-de-la-carte.md) | Rendu de la carte | accepté, révisé aux tâches 2b.4 (second programme des blocs, image à la demande), 2b.5 (humains peints par un shader de palettes), 2b.6 (décor et gibier sur le calque des individus) et 2b.7 (texture des calendriers, couvertures à inertie ; puis carte d'identité des tons, couleurs de la saison, quatre programmes par bloc) |
 | [0011](0011-individus-et-demographie.md) | Individus et démographie | accepté, révisé aux tâches 2b.5 (mini-sprites remplacés par les humains des planches, ADR 0016) et 2b.7 (pêche sous la neige et la glace à inertie) |
 | [0012](0012-camera-et-zoom.md) | Caméra et zoom | accepté ; unité du zoom soumise à l'auteur |
 | [0013](0013-deux-horloges.md) | Deux horloges | accepté, révisé aux tâches 2b.3 (marche des groupes remplacée par l'ADR 0014), 2b.4 (mer animée au temps réel) et 2b.6 (jour et mois du gibier) ; interprétations soumises à l'auteur |
