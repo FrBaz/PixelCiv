@@ -5,10 +5,10 @@
  * contrôle des pixels de Chromium (tools/season-control/) à l'écran : aucune couleur hors des
  * palettes déclarées, et, hors des saisons, la carte de ses tuiles.
  */
-import { FOLIAGE_UNIT, leafThreshold } from '../core/foliage';
+import { DRY_SCALE, FOLIAGE_UNIT, leafThreshold, type DryRule } from '../core/foliage';
 import { warmestDay, YEAR_DAYS } from '../core/snow';
-import { IDENTITY, TINT, type Rgb } from './bake';
-import { STATE_COLUMNS } from './seasonShader';
+import { CHUNK_PX, IDENTITY, TINT, type Rgb } from './bake';
+import { MEAN_COLUMN, STATE_COLUMNS } from './seasonShader';
 
 const f32 = Math.fround;
 const clamp01 = (value: number) => Math.min(1, Math.max(0, value));
@@ -26,20 +26,29 @@ export interface SeasonTextures {
   readonly states: Uint8Array;
 }
 
-/** Les uniformes des saisons : jour continu (uDay), durée d'une transition, lumière d'hiver. */
+/**
+ * Les uniformes des saisons : jour continu (uDay), facteur de saison du nord à ce jour (uSeason),
+ * durée d'une transition, lumière d'hiver, rampe de la saison sèche (uDryShare, uDrySpan).
+ */
 export interface SeasonUniforms {
   readonly day: number;
+  readonly season: number;
   readonly transition: number;
   readonly light: boolean;
+  readonly dry: DryRule;
 }
 
-/** L'état d'un point (seasonShader.ts, SEASON_EXPR.state) : −1 l'été, 0 automne, 1 nu, 2 sec, 3 hiver. */
+/**
+ * L'état d'un point (seasonShader.ts, SEASON_EXPR.state) : −1 l'été, 0 automne, 1 nu, 2 sec, 3 hiver.
+ * `south` : l'hémisphère du point, dont le signe du facteur de saison dépend.
+ */
 export function mirrorState(
   calendar: ArrayLike<number>,
   at: number,
   phase: number,
   threshold: number,
   uniforms: SeasonUniforms,
+  south: boolean,
 ): number {
   const unit = f32(FOLIAGE_UNIT);
   const days = f32(uniforms.transition);
@@ -59,7 +68,16 @@ export function mirrorState(
     const fall = f32(f32(f32(f32(YEAR_DAYS - f32(bareDate * unit)) - phase) / days) + 0.5);
     autumn = clamp01(Math.min(rise, fall));
   }
-  const dry = share(dryDate);
+  const factor = f32(f32(uniforms.season) * (south ? -1 : 1));
+  const dry =
+    dryDate > 254.5
+      ? 0
+      : clamp01(
+          f32(
+            f32(f32(uniforms.dry.dryShare) - f32(1 + f32(f32(dryDate / DRY_SCALE) * factor))) /
+              f32(uniforms.dry.drySpan),
+          ),
+        );
   const light = uniforms.light ? share(lightDate) : 0;
   if (threshold < bare) return 1;
   if (threshold < autumn) return 0;
@@ -105,7 +123,7 @@ export function seasonPixel(
   const cell = (sourceY * columns + sourceX) * 4;
   const south = ((textures.data[cell + 2] ?? 0) & 1) === 1;
   const phase = mirrorPhase(uniforms.day, south);
-  const state = mirrorState(textures.foliage, cell, phase, leafThreshold(wx, wy), uniforms);
+  const state = mirrorState(textures.foliage, cell, phase, leafThreshold(wx, wy), uniforms, south);
   if (state < 0) return undefined;
   const biome = textures.data[cell + 3] ?? 0;
   const tone = (biome * STATE_COLUMNS + state * 3 + rank) * 4;
@@ -123,6 +141,69 @@ export function seasonPixel(
       f32(f32((textures.states[tone + index] ?? 0) / 255) * shade) * (tint[index] ?? 1),
     );
     return Math.min(255, Math.max(0, Math.round(value * 255)));
+  };
+  return [channel(0), channel(1), channel(2)];
+}
+
+/**
+ * La couleur de saison d'un pixel de terre de loin (une échelle sous 1 : seasonShader.ts, la
+ * branche de loin), ou undefined s'il garde son texel : le pixel (x, y) d'un bloc d'origine
+ * (originX, originY) en cases, de texel `texel` (RGBA, celui du niveau de mipmap que lit le GPU) et
+ * de carte d'identité `identity` (le code du pixel (x, y) du bloc ; un tableau de CHUNK_PX de côté,
+ * ou une fonction). La case du pixel décide à son seuil ; elle ne prend la saison que si ses seize
+ * pixels portent un ton de terre, et son texel prend alors le rapport des tons moyens de l'état
+ * et de l'été de son biome.
+ */
+export function seasonFarPixel(
+  textures: SeasonTextures,
+  uniforms: SeasonUniforms,
+  originX: number,
+  originY: number,
+  x: number,
+  y: number,
+  texel: ArrayLike<number>,
+  identity: ArrayLike<number> | ((x: number, y: number) => number),
+  covered: boolean,
+): Rgb | undefined {
+  const codeAt =
+    typeof identity === 'function'
+      ? identity
+      : (px: number, py: number) => identity[py * CHUNK_PX + px] ?? IDENTITY.none;
+  if (covered) return undefined;
+  const cx = originX + Math.floor(x / 4);
+  const cy = originY + Math.floor(y / 4);
+  const cell = (cy * textures.columns + cx) * 4;
+  const flags = textures.data[cell + 2] ?? 0;
+  // De loin, une case d'eau (bit 64) est de l'eau, quelle que soit sa couleur.
+  if ((flags & 64) !== 0) return undefined;
+  const left = x - (x % 4);
+  const top = y - (y % 4);
+  for (let j = 0; j < 4; j++) {
+    for (let i = 0; i < 4; i++) {
+      if (codeAt(left + i, top + j) === IDENTITY.none) {
+        return undefined;
+      }
+    }
+  }
+  const south = (flags & 1) === 1;
+  const state = mirrorState(
+    textures.foliage,
+    cell,
+    mirrorPhase(uniforms.day, south),
+    leafThreshold(cx, cy),
+    uniforms,
+    south,
+  );
+  if (state < 0) return undefined;
+  const row = (textures.data[cell + 3] ?? 0) * STATE_COLUMNS;
+  const mean = (row + MEAN_COLUMN + 1 + state) * 4;
+  const summer = (row + MEAN_COLUMN) * 4;
+  const channel = (index: number) => {
+    const tone = f32(
+      f32(f32((texel[index] ?? 0) / 255) * f32((textures.states[mean + index] ?? 0) / 255)) /
+        Math.max(f32((textures.states[summer + index] ?? 0) / 255), f32(1 / 255)),
+    );
+    return Math.min(255, Math.max(0, Math.round(tone * 255)));
   };
   return [channel(0), channel(1), channel(2)];
 }

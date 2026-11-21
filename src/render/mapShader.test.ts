@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { BiomesSchema, type Biome } from '../core/data/schemas';
 import { Fingerprint } from '../core/hash';
+import { cos, TAU } from '../core/dmath';
 import { loadGameData } from '../core/data';
 import { coverShare, seasonFactor } from '../core/seasons';
 import { coverRamps } from '../core/snow';
@@ -23,7 +24,7 @@ import {
   WAVE_ANCHORS,
 } from './mapShader';
 import { mirrorPhase, mirrorState } from './seasonMirror';
-import { SEASON_EXPR, SEASON_GLSL } from './seasonShader';
+import { IDENTITY_HEIGHT, IDENTITY_WIDTH, SEASON_EXPR, SEASON_GLSL } from './seasonShader';
 import { evaluateGlsl } from './testing';
 import {
   CALM_GLSL,
@@ -286,6 +287,9 @@ describe('programmes des couleurs de la saison (tâche 2b.7, ADR 0019, § 2, 3 e
       'uniform sampler2D uStates;',
       'uniform float uFoliageDays;',
       'uniform float uLight;',
+      'uniform float uDryShare;',
+      'uniform float uDrySpan;',
+      'uniform float uExact;',
     ]) {
       expect(SEASON_GLSL.header).toContain(uniform);
     }
@@ -300,8 +304,8 @@ describe('programmes des couleurs de la saison (tâche 2b.7, ADR 0019, § 2, 3 e
   it('fige les programmes des saisons, et laisse ceux de la carte et de l’onde tels quels', () => {
     expect(new Fingerprint().string(MAP_FRAGMENT).hex()).toBe('f1e7960c');
     expect(new Fingerprint().string(MAP_FRAGMENT_WAVES).hex()).toBe('0e9941c9');
-    expect(new Fingerprint().string(MAP_FRAGMENT_SEASONS).hex()).toBe('918fbc88');
-    expect(new Fingerprint().string(MAP_FRAGMENT_WAVES_SEASONS).hex()).toBe('e510aea1');
+    expect(new Fingerprint().string(MAP_FRAGMENT_SEASONS).hex()).toBe('b5e30ec1');
+    expect(new Fingerprint().string(MAP_FRAGMENT_WAVES_SEASONS).hex()).toBe('851234cf');
   });
 
   it('calcule hors du GPU les seuils, les parts et les états du calendrier de la végétation', () => {
@@ -326,23 +330,36 @@ describe('programmes des couleurs de la saison (tâche 2b.7, ADR 0019, § 2, 3 e
       [254, 254, 254, 254],
       [255, 255, 160, 255],
     ];
+    const dry = loadGameData().decor.foliage;
     let compared = 0;
     for (const calendar of calendars) {
       for (let phase = 0; phase < 360; phase += 2.37) {
         for (const threshold of [0.01, 0.3, 0.5, 0.77, 0.99]) {
-          for (const light of [false, true]) {
+          for (const [light, south] of [
+            [false, false],
+            [true, false],
+            [false, true],
+          ] as const) {
+            // Le facteur de saison du nord au jour de cette phase : celui de la case, au signe de
+            // son hémisphère près.
+            const factor = Math.fround(cos((TAU * Math.fround(phase)) / 360));
             const variables: Record<string, number> = {
               leafPhase: Math.fround(phase),
+              leafSouth: south ? 1 : 0,
+              uSeason: south ? -factor : factor,
               'cal.x': calendar[0] ?? 255,
               'cal.y': calendar[1] ?? 255,
               'cal.z': calendar[2] ?? 255,
               'cal.w': calendar[3] ?? 255,
               uFoliageDays: transition,
               uLight: light ? 1 : 0,
+              uDryShare: dry.dryShare,
+              uDrySpan: dry.drySpan,
               threshold,
             };
             for (const name of [
               'leafDistance',
+              'leafFactor',
               'bare',
               'autumn',
               'dry',
@@ -351,12 +368,12 @@ describe('programmes des couleurs de la saison (tâche 2b.7, ADR 0019, § 2, 3 e
             ] as const) {
               variables[name] = evaluateGlsl(SEASON_EXPR[name], variables);
             }
-            const uniforms = { day: 0, transition, light };
+            const uniforms = { day: 0, season: south ? -factor : factor, transition, light, dry };
             expect(variables.state).toBe(
-              mirrorState(calendar, 0, Math.fround(phase), threshold, uniforms),
+              mirrorState(calendar, 0, Math.fround(phase), threshold, uniforms, south),
             );
             // Les parts du décor (en flottants de 64 bits), à l'arrondi près.
-            const shares = foliageShares(calendar, 0, Math.fround(phase), transition);
+            const shares = foliageShares(calendar, 0, Math.fround(phase), transition, dry);
             expect(variables.bare).toBeCloseTo(shares.bare, 5);
             expect(variables.autumn).toBeCloseTo(shares.autumn, 5);
             expect(variables.dry).toBeCloseTo(shares.dry, 5);
@@ -367,6 +384,48 @@ describe('programmes des couleurs de la saison (tâche 2b.7, ADR 0019, § 2, 3 e
       }
     }
     expect(compared).toBeGreaterThan(9000);
+  });
+
+  it('de loin, ne teinte que les cases dont les seize pixels portent un ton de terre', () => {
+    // La relecture de 2b.7 (problème 2) : de loin, la branche des mipmaps teintait tout texel
+    // d'une case de terre, rivières et côtes comprises. Les quatre rangées lues sont celles de la
+    // case du pixel, dans la carte d'identité (quatre pixels par texel).
+    for (const [x, y] of [
+      [0, 0],
+      [3, 3],
+      [4, 7],
+      [255, 255],
+      [130, 61],
+    ] as const) {
+      for (let k = 0; k < 4; k++) {
+        const variables = { 'pixel.x': x + 0.5, 'pixel.y': y + 0.5, farK: k };
+        const column = evaluateGlsl(SEASON_EXPR.farColumn, variables) * IDENTITY_WIDTH - 0.5;
+        const row = evaluateGlsl(SEASON_EXPR.farRow, variables) * IDENTITY_HEIGHT - 0.5;
+        expect(column).toBeCloseTo(Math.floor(x / 4), 3);
+        expect(row).toBeCloseTo(Math.floor(y / 4) * 4 + k, 3);
+      }
+    }
+    // Le plus petit code de la case, en 255es : un seul pixel sans ton de terre la garde.
+    expect(evaluateGlsl(SEASON_EXPR.farLand, { landTones: 0 })).toBe(0);
+    expect(evaluateGlsl(SEASON_EXPR.farLand, { landTones: Math.fround(1 / 255) })).toBe(1);
+    // Un canal sous le rapport des tons moyens, comme le miroir (seasonFarPixel).
+    for (const [channel, mean, summer] of [
+      [0.2, 0.6, 0.3],
+      [0.5, 0.1, 0.4],
+      [0.9, 0.9, 0],
+    ] as const) {
+      const tone = evaluateGlsl(SEASON_EXPR.farTone, {
+        channel: Math.fround(channel),
+        meanTone: Math.fround(mean),
+        summerTone: Math.fround(summer),
+      });
+      const want = (channel * mean) / Math.max(summer, 1 / 255);
+      expect(Math.abs(tone - want)).toBeLessThanOrEqual(1e-6 * Math.max(1, want));
+    }
+    // Dans le code, la teinte de loin ne vient qu'après ce contrôle.
+    const far = SEASON_GLSL.main.slice(SEASON_GLSL.main.indexOf('} else {'));
+    expect(far).toContain(`if (state > -0.5 && ${SEASON_EXPR.farLand}) {`);
+    expect(far.indexOf('landTones = min(')).toBeLessThan(far.indexOf(SEASON_EXPR.farTone));
   });
 
   it('retrouve hors du GPU la case qui prête le ton, sa phase et sa teinte', () => {

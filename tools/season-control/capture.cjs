@@ -2,7 +2,8 @@
 //
 // node tools/season-control/capture.cjs <adresse> <dossier> [adresse d'avant]
 //
-// Pour chaque vue de VIEWS : un monde Petit, sur PC (1 280 × 720, densité 1), au zoom 1, au
+// Pour chaque vue de VIEWS : un monde Petit, sur PC (1 280 × 720, densité 1), au zoom 1 (0,75
+// pour les vues de loin), au
 // mois forcé par ?month=, la mer immobile (?waves=off), la partie en pause dès sa création, la
 // carte visée par ?at=, l'interface masquée. Trois captures, une par cran du réglage des effets
 // (?effects=full, reduced, off), et, avec l'adresse d'une construction d'avant le second temps de
@@ -35,6 +36,10 @@ const VIEWS = [
   { seed: 'graine', x: 303, y: 150, month: 1.5 },
   { seed: 'autre', x: 235, y: 33, month: 10.5 },
   { seed: 'autre', x: 53, y: 190, month: 4.2 },
+  // De loin (une échelle sous 1, la branche des mipmaps) : les rivières et les côtes de l'automne
+  // gardent leurs tons cuits (relecture de 2b.7, problème 2).
+  { seed: 'graine', x: 308, y: 47, month: 9.8, zoom: 0.75 },
+  { seed: 'pixelciv', x: 412, y: 62, month: 9.8, zoom: 0.75 },
 ];
 const LEVELS = ['full', 'reduced', 'off'];
 const SPAN = 2048;
@@ -144,7 +149,7 @@ async function shoot(browser, url, view, level, file) {
   page.on('pageerror', (error) => logs.push(`[pageerror] ${error.message}`));
   const effects = level === undefined ? '' : `&effects=${level}`;
   await page.goto(
-    `${url}?seed=${encodeURIComponent(view.seed)}&size=small&zoom=1&waves=off` +
+    `${url}?seed=${encodeURIComponent(view.seed)}&size=small&zoom=${String(view.zoom ?? 1)}&waves=off` +
       `&month=${String(view.month)}&at=${String(view.x)},${String(view.y)}${effects}`,
   );
   await page.waitForSelector('.time-date', { timeout: 180_000 });
@@ -162,7 +167,7 @@ async function captureView(view) {
   const folder = path.join(out, viewName(view));
   fs.mkdirSync(folder, { recursive: true });
   const started = Date.now();
-  const meta = { seed: view.seed, month: view.month, shots: {}, logs: [] };
+  const meta = { seed: view.seed, month: view.month, zoom: view.zoom ?? 1, shots: {}, logs: [] };
   // Un navigateur par vue, fermé aussitôt : la mémoire du conteneur est comptée.
   const browser = await chromium.launch();
   try {
@@ -198,7 +203,8 @@ async function captureView(view) {
 
 /** Nom d'une vue : son dossier. CONTROL_VIEWS, s'il est donné, n'en garde que certaines. */
 const viewName = (view) =>
-  `${view.seed}-${String(view.x)}-${String(view.y)}-m${String(view.month)}`;
+  `${view.seed}-${String(view.x)}-${String(view.y)}-m${String(view.month)}` +
+  (view.zoom === undefined ? '' : `-z${String(view.zoom)}`);
 const only = (process.env.CONTROL_VIEWS ?? '').split(',').filter((name) => name !== '');
 
 (async () => {

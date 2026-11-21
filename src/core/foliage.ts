@@ -15,17 +15,24 @@
  *   descente, si bien qu'il mène au bois nu ou s'éteint par une rampe, jamais d'un coup. Comme pour
  *   le décor de 2b.6, l'automne et le bois nu ne viennent que là où le mois le plus froid descend
  *   sous `bareBelow`.
- * - Saison sèche (`dry`) : les jours où la pluie du mois tombe sous `dryShare` de sa moyenne
- *   (rainSeasonality de la latitude) ; symétrique.
+ * - Saison sèche (`dry`) : une rampe de la pluie du mois, comme la neige l'est de la
+ *   température. La pluie du mois rapportée à sa moyenne vaut 1 + r × c (r : rainSeasonality de
+ *   la latitude ; c : le facteur de saison de la case, cos(2π phase / an)) ; la part sèche croît
+ *   de 0 à 1 quand elle descend de `dryShare` à `dryShare − drySpan`. Son octet range r
+ *   (DRY_SCALE), non une date : la part se lit de la saison du jour (dryShareOf). Elle varie donc
+ *   sans à-coup d'une rangée à la suivante, là où une date tirait au bord de la zone sèche une
+ *   ligne droite d'est en ouest (relecture de 2b.7, problème 3). Rien ne sèche au cœur de l'été,
+ *   où la pluie du mois dépasse sa moyenne.
  * - Lumière d'hiver (`light`) : les jours dont le facteur de saison passe sous `factor` et dont
  *   le mois passe sous `below` et déjà `drop` degrés sous le mois le plus chaud (data/seasons.json,
  *   `light`) ; symétrique. Comme les autres états, elle suit le climat de la case, non sa
  *   latitude : son bord ne trace aucune ligne droite.
  *
- * Chaque état monte et descend en `minTransition` jours, centrés sur sa date : sa part de la case,
- * share(c, d) = borne((d − c) / transition + ½, 0, 1), où d est la distance au jour le plus chaud,
- * varie d'au plus 1 / transition par jour. Rien ne change dans les `summerDays` jours centrés sur
- * le jour le plus chaud : au cœur de l'été, la carte est celle de ses tuiles.
+ * Chaque état daté monte et descend en `minTransition` jours, centrés sur sa date : sa part de la
+ * case, share(c, d) = borne((d − c) / transition + ½, 0, 1), où d est la distance au jour le plus
+ * chaud, varie d'au plus 1 / transition par jour ; la saison sèche, de sa rampe, d'au plus
+ * r × 2π / an / drySpan par jour. Rien ne change dans les `summerDays` jours centrés sur le jour
+ * le plus chaud : au cœur de l'été, la carte est celle de ses tuiles.
  *
  * Déterminisme : les cosinus de dmath, tabulés aux jours entiers, sur les températures des couches
  * du monde, au dixième de degré, celles que lisait le décor de 2b.6 ; aucun tirage. Rien de cela
@@ -120,11 +127,42 @@ export function coldDates(annual: number, swing: number, rules: FoliageRules): n
   return autumn | (bare << 8);
 }
 
-/** L'octet de la saison sèche à `rain` de force de la saison des pluies (rainSeasonality). */
-export function dryDate(rain: number, rules: FoliageRules): number {
-  const { dryShare } = rules.foliage;
-  if (rain <= 0) return 1 < dryShare ? earliest(rules) : NO_DATE;
-  return dateByte(crossing((dryShare - 1) / rain), earliest(rules));
+/** Unités de l'octet de la saison sèche par unité de force de la saison des pluies. */
+export const DRY_SCALE = 250;
+
+/** Ce que la saison sèche lit des données : sa rampe de la pluie du mois (data/decor.json). */
+export type DryRule = Pick<Decor['foliage'], 'dryShare' | 'drySpan'>;
+
+/**
+ * L'octet de la saison sèche à `rain` de force de la saison des pluies (rainSeasonality) : r en
+ * DRY_SCALE, ou NO_DATE si la pluie du mois ne descend jamais sous `dryShare` de sa moyenne.
+ */
+export function dryCode(rain: number, rules: Pick<FoliageRules, 'foliage'>): number {
+  const code = Math.min(254, Math.round(rain * DRY_SCALE));
+  return rules.foliage.dryShare - 1 + code / DRY_SCALE > 0 ? code : NO_DATE;
+}
+
+/**
+ * La part sèche d'une case d'octet `code` (dryCode) au facteur de saison `factor` de son
+ * hémisphère (le cosinus de sa phase) : la rampe de la pluie du mois. Le shader de la carte
+ * calcule la même (seasonShader.ts, SEASON_EXPR.dry).
+ */
+export function dryShareOf(code: number, factor: number, dry: DryRule): number {
+  if (code === NO_DATE) return 0;
+  const rain = 1 + (code / DRY_SCALE) * factor;
+  return Math.min(1, Math.max(0, (dry.dryShare - rain) / dry.drySpan));
+}
+
+/**
+ * La distance au jour le plus chaud où la part sèche d'octet `code` passe `level` (de 0 à 1) en
+ * refroidissant : la saison sèche la tient au-delà, jusqu'à la distance symétrique ; Infinity si
+ * elle ne l'atteint jamais.
+ */
+export function dryDistance(code: number, level: number, dry: DryRule): number {
+  if (code === NO_DATE) return Number.POSITIVE_INFINITY;
+  const factor = (dry.dryShare - level * dry.drySpan - 1) / (code / DRY_SCALE);
+  const day = crossing(factor);
+  return Number.isNaN(day) ? Number.POSITIVE_INFINITY : day;
 }
 
 /**
@@ -157,7 +195,7 @@ export function worldFoliage(
   // Les octets de l'automne, du bois nu et de la lumière de chaque climat.
   const colds = new Map<number, number>();
   for (let y = 0; y < height; y++) {
-    const dry = dryDate(rainSeasonality(latitude(y, height)), rules);
+    const dry = dryCode(rainSeasonality(latitude(y, height)), rules);
     for (let x = 0; x < width; x++) {
       const cell = y * width + x;
       const temperature = layers.temperature[cell] ?? 0;
@@ -196,15 +234,16 @@ export interface FoliageShares {
 
 /**
  * Les parts des états de la case dont le calendrier est rangé aux octets [at, at + FOLIAGE_BYTES)
- * de `bytes`, au jour de phase `phase` : chaque état monte et descend autour de ses dates ;
- * l'automne monte à la sienne, en refroidissant, et descend avec le bois nu. Le shader de la carte
- * calcule les mêmes (mapShader.ts, SEASON_GLSL).
+ * de `bytes`, au jour de phase `phase` : chaque état daté monte et descend autour de ses dates ;
+ * l'automne monte à la sienne, en refroidissant, et descend avec le bois nu ; la saison sèche
+ * suit sa rampe (`dry`). Le shader de la carte calcule les mêmes (mapShader.ts, SEASON_GLSL).
  */
 export function foliageShares(
   bytes: ArrayLike<number>,
   at: number,
   phase: number,
   transition: number,
+  dry: DryRule,
 ): FoliageShares {
   const distance = Math.min(phase, YEAR_DAYS - phase);
   const autumnDate = bytes[at] ?? NO_DATE;
@@ -219,7 +258,7 @@ export function foliageShares(
   return {
     autumn,
     bare,
-    dry: stateShare(bytes[at + 2] ?? NO_DATE, distance, transition),
+    dry: dryShareOf(bytes[at + 2] ?? NO_DATE, cos((TAU * phase) / YEAR_DAYS), dry),
     light: stateShare(bytes[at + 3] ?? NO_DATE, distance, transition),
   };
 }

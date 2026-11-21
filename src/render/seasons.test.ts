@@ -450,11 +450,12 @@ describe('couleurs de la saison : tons, calendrier filtré, activité (ADR 0019,
 
   it('ne laisse sans programme des saisons aucun bloc dont un pixel changerait, ni ne le donne à tort l’été', () => {
     const transition = seasons.minTransition;
+    const dry = loadGameData().decor.foliage;
     let active = 0;
     let idle = 0;
     for (let row = 0; row < size.height / 64; row++) {
       for (let column = 0; column < size.width / 64; column++) {
-        const activity = seasonActivity(texels, size, 64, column, row, transition);
+        const activity = seasonActivity(texels, size, 64, column, row, transition, dry);
         for (let day = 0; day < 360; day += 6) {
           for (const light of [false, true]) {
             const north = phaseDay(day, false);
@@ -470,7 +471,7 @@ describe('couleurs de la saison : tons, calendrier filtré, activité (ADR 0019,
               for (let x = -1; x <= 64 && !changes; x++) {
                 const cx = (column * 64 + x + size.width) % size.width;
                 const cell = cy * size.width + cx;
-                const shares = foliageShares(texels, cell * FOLIAGE_BYTES, phase, transition);
+                const shares = foliageShares(texels, cell * FOLIAGE_BYTES, phase, transition, dry);
                 changes =
                   shares.autumn > 0 ||
                   shares.bare > 0 ||

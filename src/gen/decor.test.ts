@@ -6,7 +6,7 @@ import { VEGETATION_STATES } from '../core/data/schemas';
 import {
   cellMedianThreshold,
   coldDates,
-  dryDate,
+  dryCode,
   FOLIAGE_BYTES,
   FOLIAGE_STATE,
   foliageShares,
@@ -395,7 +395,7 @@ describe('saisons du décor (ADR 0017, § 5 ; ADR 0019, § 2)', () => {
     return [
       cold & 255,
       cold >>> 8,
-      dryDate(rainSeasonality(lat), foliageRules),
+      dryCode(rainSeasonality(lat), foliageRules),
       lightDate(annual, amplitude, foliageRules),
     ];
   };
@@ -416,7 +416,13 @@ describe('saisons du décor (ADR 0017, § 5 ; ADR 0019, § 2)', () => {
     decorSeason(
       snow,
       phenology,
-      foliageShares(bytesOf(annual, amplitude, lat), 0, phaseDay(month * 30, south), transition),
+      foliageShares(
+        bytesOf(annual, amplitude, lat),
+        0,
+        phaseDay(month * 30, south),
+        transition,
+        rules.foliage,
+      ),
       0.5,
       rules,
       light,
@@ -482,6 +488,7 @@ describe('saisons du décor (ADR 0017, § 5 ; ADR 0019, § 2)', () => {
             object.cell * FOLIAGE_BYTES,
             phaseDay(day, object.south),
             transition,
+            rules.foliage,
           ),
           object.level,
           rules,
@@ -548,7 +555,7 @@ describe('saisons du décor (ADR 0017, § 5 ; ADR 0019, § 2)', () => {
     expect(state('evergreen', 0, 10, 0.5, false, 0.4, share - 1e-6).snowy).toBe(false);
     expect(state('deciduous', 0, 10, 0.5, false, 0.4, 1).snowy).toBe(true);
     expect(state('deciduous', 0, 10, 0.5, false, 0.4, 0).snowy).toBe(false);
-    const shares = foliageShares(bytesOf(0, 0, 0), 0, 0, transition);
+    const shares = foliageShares(bytesOf(0, 0, 0), 0, 0, transition, rules.foliage);
     expect(
       decorSeason(0, 'evergreen', shares, 0.5, { snow: { ...rules.snow, share: 0 } }, false).snowy,
     ).toBe(false);
@@ -593,6 +600,7 @@ describe('saisons du décor (ADR 0017, § 5 ; ADR 0019, § 2)', () => {
                 cell * FOLIAGE_BYTES,
                 phaseDay(day + 0.5, south),
                 transition,
+                rules.foliage,
               );
               const tally = new Map<FoliageState, number>();
               for (let j = 0; j < 4; j++) {
@@ -669,6 +677,7 @@ describe('saisons du décor (ADR 0017, § 5 ; ADR 0019, § 2)', () => {
               cell * FOLIAGE_BYTES,
               phaseDay(month * 30, south),
               transition,
+              rules.foliage,
             );
             const level = cellMedianThreshold(x, y);
             expect(decorSeason(0, 'deciduous', shares, level, rules, false).state, flora.id).toBe(

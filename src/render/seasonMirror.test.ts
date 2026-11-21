@@ -3,7 +3,9 @@ import { loadGameData } from '../core/data';
 import { SEASON_STATES } from '../core/data/schemas';
 import { FOLIAGE_BYTES, foliageShares, leafThreshold, worldFoliage } from '../core/foliage';
 import { Fingerprint } from '../core/hash';
+import { seasonFactor } from '../core/seasons';
 import { phaseDay } from '../core/snow';
+import { DAYS_PER_MONTH } from '../core/time';
 import { WORLD_SIZES } from '../core/world';
 import { defaultWorldParams } from '../core/worldParams';
 import { generateWorld } from '../worldgen/generate';
@@ -16,7 +18,14 @@ import {
   TINT,
   type BakeWorld,
 } from './bake';
-import { mirrorPhase, mirrorState, seasonPixel, type SeasonTextures } from './seasonMirror';
+import {
+  mirrorPhase,
+  mirrorState,
+  seasonFarPixel,
+  seasonPixel,
+  type SeasonTextures,
+} from './seasonMirror';
+import { MEAN_COLUMN, STATE_COLUMNS } from './seasonShader';
 import { foliageTexels, seasonTexels, statePalettes, winterTone } from './seasons';
 
 // Le miroir des couleurs de la saison sur la cuisson réelle de blocs d'un monde Petit (ADR 0019,
@@ -26,6 +35,14 @@ const size = WORLD_SIZES.small;
 const biomes = bakeBiomes(data.biomes.entries);
 const riverBiome = data.biomes.indexOf('river') ?? -1;
 const transition = data.seasons.minTransition;
+/** Les uniformes des saisons au jour `day` : uSeason, le facteur de saison du nord, en f32. */
+const seasonUniforms = (day: number, light: boolean) => ({
+  day,
+  season: Math.fround(seasonFactor(day / DAYS_PER_MONTH)),
+  transition,
+  light,
+  dry: data.decor.foliage,
+});
 const SEEDS = ['pixelciv', 'graine', 'autre'] as const;
 /** Des blocs du nord (rangées 0 et 1) et du sud (2 et 3), de part et d'autre de la couture. */
 const CHUNKS = [
@@ -108,7 +125,7 @@ describe('miroir des couleurs de la saison (ADR 0019, § 2, 3 et 8)', () => {
     for (const world of worlds) {
       for (const chunk of world.chunks) {
         for (const day of DAYS) {
-          const uniforms = { day, transition, light: true };
+          const uniforms = seasonUniforms(day, true);
           for (const pixel of landPixels(chunk)) {
             const color = seasonPixel(
               world.textures,
@@ -138,6 +155,7 @@ describe('miroir des couleurs de la saison (ADR 0019, § 2, 3 et 8)', () => {
               mirrorPhase(day, south),
               leafThreshold(chunk.column * CHUNK_PX + pixel.x, chunk.row * CHUNK_PX + pixel.y),
               uniforms,
+              south,
             );
             const name = SEASON_STATES.at(state);
             const palette = name === undefined ? undefined : biome.seasons.states?.[name];
@@ -181,7 +199,7 @@ describe('miroir des couleurs de la saison (ADR 0019, § 2, 3 et 8)', () => {
         // Le jour le plus chaud de l'hémisphère du bloc, et dix jours de part et d'autre.
         const warmest = chunk.row < 2 ? 195 : 15;
         for (const day of [warmest - 10, warmest, warmest + 10]) {
-          const uniforms = { day, transition, light: true };
+          const uniforms = seasonUniforms(day, true);
           for (const pixel of landPixels(chunk)) {
             const color = seasonPixel(
               world.textures,
@@ -228,7 +246,7 @@ describe('miroir des couleurs de la saison (ADR 0019, § 2, 3 et 8)', () => {
     for (const world of worlds) {
       for (const chunk of world.chunks) {
         for (const day of [...DAYS, 45, 330]) {
-          const uniforms = { day, transition, light: false };
+          const uniforms = seasonUniforms(day, false);
           const states = new Map<number, Set<number>>();
           for (const pixel of landPixels(chunk)) {
             if (pixel.code === IDENTITY.none) continue;
@@ -240,6 +258,7 @@ describe('miroir des couleurs de la saison (ADR 0019, § 2, 3 et 8)', () => {
               cell * FOLIAGE_BYTES,
               phase,
               transition,
+              data.decor.foliage,
             );
             const settled = [shares.autumn, shares.bare, shares.dry].every(
               (share) => share === 0 || share === 1,
@@ -253,6 +272,7 @@ describe('miroir des couleurs de la saison (ADR 0019, § 2, 3 et 8)', () => {
               Math.fround(phase),
               leafThreshold(wx, wy),
               uniforms,
+              south,
             );
             expect(state).not.toBe(3);
             let seen = states.get(cell);
@@ -272,6 +292,83 @@ describe('miroir des couleurs de la saison (ADR 0019, § 2, 3 et 8)', () => {
     expect(cells).toBeGreaterThan(50_000);
   });
 
+  it('de loin, ne change la teinte d’aucun pixel d’eau, de rivière ni de rive, et suit les tons moyens', () => {
+    // La relecture de 2b.7 (problème 2) : de loin, le rapport des tons moyens s'appliquait à tout
+    // texel d'une case de terre, et le bleu des rivières et des côtes virait au rose, au rouge ou
+    // au violet. Sur les mêmes blocs, au niveau 0 des mipmaps (une échelle entre 0,71 et 1) : un
+    // pixel sans ton de terre (eau, rivière, rive d'une côte) garde son texel, comme toute sa case ;
+    // ailleurs, chaque canal prend le rapport des tons moyens de l'état et de l'été du biome.
+    let changed = 0;
+    let kept = 0;
+    for (const world of worlds) {
+      for (const chunk of world.chunks) {
+        for (const day of [DAYS[0] ?? 0, 290, 15]) {
+          const uniforms = seasonUniforms(day, true);
+          for (let y = 0; y < CHUNK_PX; y++) {
+            for (let x = 0; x < CHUNK_PX; x++) {
+              const at = y * CHUNK_PX + x;
+              const texel = chunk.pixels.subarray(at * 4, at * 4 + 4);
+              const color = seasonFarPixel(
+                world.textures,
+                uniforms,
+                chunk.column * 64,
+                chunk.row * 64,
+                x,
+                y,
+                texel,
+                chunk.identity,
+                false,
+              );
+              if (color === undefined) continue;
+              changed++;
+              // Toute la case porte des tons de terre, et le pixel aussi.
+              expect(chunk.identity[at]).not.toBe(IDENTITY.none);
+              const cell = (chunk.row * 64 + (y >> 2)) * size.width + chunk.column * 64 + (x >> 2);
+              const row = (world.textures.data[cell * 4 + 3] ?? 0) * STATE_COLUMNS;
+              const south = ((world.textures.data[cell * 4 + 2] ?? 0) & 1) === 1;
+              const state = mirrorState(
+                world.textures.foliage,
+                cell * FOLIAGE_BYTES,
+                mirrorPhase(day, south),
+                leafThreshold(chunk.column * 64 + (x >> 2), chunk.row * 64 + (y >> 2)),
+                uniforms,
+                south,
+              );
+              for (let k = 0; k < 3; k++) {
+                const mean = world.textures.states[(row + MEAN_COLUMN + 1 + state) * 4 + k] ?? 0;
+                const summer = world.textures.states[(row + MEAN_COLUMN) * 4 + k] ?? 0;
+                const want = ((texel[k] ?? 0) * mean) / Math.max(summer, 1);
+                expect(Math.abs((color[k] ?? 0) - Math.min(255, want))).toBeLessThanOrEqual(1);
+              }
+            }
+          }
+          // Les pixels sans ton de terre des cases de terre : jamais changés.
+          for (let y = 0; y < CHUNK_PX; y++) {
+            for (let x = 0; x < CHUNK_PX; x++) {
+              const at = y * CHUNK_PX + x;
+              if ((chunk.identity[at] ?? 0) !== IDENTITY.none) continue;
+              const color = seasonFarPixel(
+                world.textures,
+                uniforms,
+                chunk.column * 64,
+                chunk.row * 64,
+                x,
+                y,
+                chunk.pixels.subarray(at * 4, at * 4 + 4),
+                chunk.identity,
+                false,
+              );
+              expect(color).toBeUndefined();
+              kept++;
+            }
+          }
+        }
+      }
+    }
+    expect(changed).toBeGreaterThan(100_000);
+    expect(kept).toBeGreaterThan(10_000);
+  });
+
   it('fige le motif du miroir sur ces blocs, aux jours de l’année', () => {
     const fingerprint = new Fingerprint();
     const world = worlds.at(0);
@@ -282,7 +379,7 @@ describe('miroir des couleurs de la saison (ADR 0019, § 2, 3 et 8)', () => {
           for (const pixel of landPixels(chunk)) {
             const color = seasonPixel(
               world.textures,
-              { day, transition, light },
+              seasonUniforms(day, light),
               chunk.column * 64,
               chunk.row * 64,
               pixel.x,
@@ -297,6 +394,6 @@ describe('miroir des couleurs de la saison (ADR 0019, § 2, 3 et 8)', () => {
         }
       }
     }
-    expect(fingerprint.hex()).toBe('0a1b9fe7');
+    expect(fingerprint.hex()).toBe('571c697f');
   });
 });

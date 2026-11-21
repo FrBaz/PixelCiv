@@ -33,7 +33,7 @@ import {
 } from 'pixi.js';
 import type { Biome, Seasons } from '../core/data/schemas';
 import { seasonFactor } from '../core/seasons';
-import { FOLIAGE_BYTES } from '../core/foliage';
+import { FOLIAGE_BYTES, type DryRule } from '../core/foliage';
 import { CALENDAR_BYTES, phaseDay } from '../core/snow';
 import { DAYS_PER_MONTH } from '../core/time';
 import type { ChunkPatch, WorldInfo } from '../core/protocol';
@@ -62,7 +62,7 @@ import {
   MAP_FRAGMENT_WAVES_SEASONS,
   MAP_VERTEX,
 } from './mapShader';
-import { IDENTITY_HEIGHT, IDENTITY_WIDTH, STATE_COLUMNS } from './seasonShader';
+import { EXACT_SCALE, IDENTITY_HEIGHT, IDENTITY_WIDTH, STATE_COLUMNS } from './seasonShader';
 import {
   foliageTexels,
   SEASON_TILE,
@@ -196,6 +196,7 @@ export class MapView {
     uMode: { value: 0, type: 'f32' },
     uRiverColor: { value: new Float32Array([0, 0, 1]), type: 'vec3<f32>' },
     uFine: { value: 1, type: 'f32' },
+    uExact: { value: 1, type: 'f32' },
     uStreams: { value: 0, type: 'f32' },
   });
   /**
@@ -237,6 +238,8 @@ export class MapView {
     {
       uFoliageDays: { value: 1, type: 'f32' },
       uLight: { value: 0, type: 'f32' },
+      uDryShare: { value: 0, type: 'f32' },
+      uDrySpan: { value: 1, type: 'f32' },
     },
     { isStatic: true },
   );
@@ -246,6 +249,8 @@ export class MapView {
   private seasonColors: SeasonColors = 'full';
   /** Un bloc a-t-il pris un programme des saisons à la dernière image ? */
   private seasonShown = false;
+  /** La rampe de la saison sèche (data/decor.json, `foliage`), que lit l'activité des blocs. */
+  private readonly dry: DryRule;
   /** Calendrier de la végétation des cases (src/core/foliage.ts), et sa version filtrée. */
   private foliageBytes: Uint8Array = new Uint8Array(0);
   private foliage: BufferImageSource | undefined;
@@ -280,7 +285,7 @@ export class MapView {
   private overlays: OverlayBuilder | undefined;
   private mode: MapMode = 'natural';
 
-  constructor(app: Application, biomes: readonly Biome[], seasons: Seasons) {
+  constructor(app: Application, biomes: readonly Biome[], seasons: Seasons, dry: DryRule) {
     this.app = app;
     this.biomes = biomes;
     this.covers = coverUniforms(seasons);
@@ -299,6 +304,9 @@ export class MapView {
     this.states = dataSource(statePalettes(biomes, seasons.light), STATE_COLUMNS, biomes.length);
     this.seasonGlobals.uniforms.uFoliageDays = seasons.minTransition;
     this.seasonGlobals.uniforms.uLight = 1;
+    this.seasonGlobals.uniforms.uDryShare = dry.dryShare;
+    this.seasonGlobals.uniforms.uDrySpan = dry.drySpan;
+    this.dry = dry;
     this.seasonGlobals.update();
     this.tones = dataSource(shadowTones(biomes), 2, biomes.length);
     this.globals.uniforms.uBiomes = biomes.length;
@@ -555,6 +563,7 @@ export class MapView {
       column,
       row,
       this.seasonGlobals.uniforms.uFoliageDays,
+      this.dry,
     );
   }
 
@@ -590,6 +599,7 @@ export class MapView {
     const scale = displayScale(camera.zoom);
     // De près, la trame suit les pixels ; de loin, les cases, pour ne pas scintiller.
     this.globals.uniforms.uFine = scale >= 1 ? 1 : 0;
+    this.globals.uniforms.uExact = scale >= EXACT_SCALE ? 1 : 0;
     // Les ruisseaux ne paraissent qu'à partir de 2 pixels de l'écran (CSS) par pixel de carte.
     this.globals.uniforms.uStreams = scale / resolution >= STREAMS_SCALE ? 1 : 0;
     const viewport = this.viewport;

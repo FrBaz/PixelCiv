@@ -23,6 +23,7 @@ import {
   MAP_FRAGMENT_WAVES,
   MAP_FRAGMENT_WAVES_SEASONS,
 } from './mapShader';
+import { EXACT_SCALE } from './seasonShader';
 import { SEA_TILE, seaTones, wavePhase, waveTable } from './waves';
 
 // La vue de la carte et la mer animée (ADR 0015), sans GPU ni worker : le répartiteur de la
@@ -100,7 +101,7 @@ function mapView(width = 1280, height = 720, layers = emptyLayers(size), foliage
     screen: { width, height },
     stage,
   } as unknown as Application;
-  const map = new MapView(app, data.biomes.entries, data.seasons);
+  const map = new MapView(app, data.biomes.entries, data.seasons, data.decor.foliage);
   const info: WorldInfo = {
     params: defaultWorldParams(data.worldgen.parameters, 'essai', 'small'),
     size,
@@ -477,6 +478,28 @@ describe('couleurs de la saison sur la carte (ADR 0019, § 2, 3 et 6 ; ADR 0020)
   /** La vue d'un bloc du nord (rangée 0) ou du sud (rangée 3), au zoom 2. */
   const north = { x: 1024 + 128, y: 128, zoom: 2 };
   const south = { x: 1024 + 128, y: 1024 - 128, zoom: 2 };
+
+  it('lit la carte d’identité pixel à pixel tant que le GPU lit des pixels cuits (EXACT_SCALE)', () => {
+    // Au plus proche, le GPU lit le niveau 0 des mipmaps au-dessus de 2^(−1/2) : de 0,75 à 1, les
+    // couleurs de la saison restent celles des palettes déclarées (relecture de 2b.7, problème 2).
+    const { map, programs } = mapView();
+    const exact = () => {
+      const globals = programs().at(0)?.resources.globals as
+        { uniforms: { uExact: number; uFine: number } } | undefined;
+      return [globals?.uniforms.uExact, globals?.uniforms.uFine];
+    };
+    for (const [zoom, expected] of [
+      [2, [1, 1]],
+      [1, [1, 1]],
+      [0.8, [1, 0]],
+      [EXACT_SCALE, [1, 0]],
+      [0.74, [0, 0]],
+      [0.5, [0, 0]],
+    ] as const) {
+      map.draw({ x: 1024, y: 512, zoom });
+      expect(exact(), `zoom ${String(zoom)}`).toEqual(expected);
+    }
+  });
 
   it('ne donne les programmes des saisons qu’aux blocs dont une case change à cette date', () => {
     const { layers, foliage } = forest();

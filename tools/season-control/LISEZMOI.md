@@ -26,7 +26,7 @@ ln -s "$PWD/node_modules" <d>/avant/node_modules
 (cd <d>/avant && npx vite build --outDir <d>/dist/before --emptyOutDir)
 npx vite preview --outDir <d>/dist --port 4576 --strictPort &
 
-# 2. Capturer les neuf vues (environ sept minutes).
+# 2. Capturer les onze vues (environ neuf minutes).
 node tools/season-control/capture.cjs http://localhost:4576/ <d>/captures http://localhost:4576/before/
 
 # 3. Les comparer au miroir (une minute environ).
@@ -37,7 +37,7 @@ Le serveur de `vite preview` relève les fichiers à son démarrage : relance-le
 
 ## Les vues
 
-Toutes sur un monde Petit, sur PC (1 280 × 720 pixels, densité 1), au zoom 1 : un pixel de l'écran est un pixel de carte. La partie est en pause dès sa création, le mois est forcé par `?month=`, la mer immobile (`?waves=off`), le cran fixé par `?effects=`, l'interface masquée.
+Toutes sur un monde Petit, sur PC (1 280 × 720 pixels, densité 1), au zoom 1 : un pixel de l'écran est un pixel de carte ; les deux dernières au zoom 0,75, la branche de loin du code des saisons (une échelle sous 1), où chaque pixel de l'écran lit le niveau 0 des mipmaps, à un pixel de carte près. La partie est en pause dès sa création, le mois est forcé par `?month=`, la mer immobile (`?waves=off`), le cran fixé par `?effects=`, l'interface masquée.
 
 | Vue | Case visée | Mois | Ce qu'elle montre |
 |---|---|---|---|
@@ -50,6 +50,8 @@ Toutes sur un monde Petit, sur PC (1 280 × 720 pixels, densité 1), au zoom 1 :
 | `graine-303-150-m1.5` | (303, 150) | 1,5 | saison sèche des tropiques, été du sud |
 | `autre-235-33-m10.5` | (235, 33) | 10,5 | toundra et taïga, lumière d'hiver |
 | `autre-53-190-m4.2` | (53, 190) | 4,2 | automne du sud |
+| `graine-308-47-m9.8-z0.75` | (308, 47) | 9,8 | de loin, au zoom 0,75 : rivières et côtes de l'automne |
+| `pixelciv-412-62-m9.8-z0.75` | (412, 62) | 9,8 | de loin, au zoom 0,75 : le lac, ses rives et les rivières |
 
 ## Résultat attendu
 
@@ -58,5 +60,6 @@ Le contrôle échoue au moindre écart au-delà d'une unité. Pour chaque vue :
 - `offVersusBase.differ` : 0, si la construction d'avant a été capturée. Le cran coupé rend sa carte octet pour octet, neige et glace comprises.
 - `far` : 0. Chaque pixel des crans plein et atténué vaut ce que dit le miroir, à une unité près sur un canal : le ton de même rang d'une palette déclarée, sous l'ombrage et la teinte de la cuisson, ou le pixel du cran coupé.
 - `mismatch` : rare (au plus 0,5 % des pixels changés). Ce sont les produits qui tombent sur une demie, que le GPU et le miroir arrondissent chacun de son côté.
+- Vues de loin (`-z0.75`) : `waterChanged` et `blueChanged` à 0 (aucun pixel changé ne vient d'une case sans tons de terre, eau, rivière ou rive, ni n'est bleu au cran coupé), et `matched` égal à `changed` à 1 % près (chaque pixel changé vaut le miroir de loin, `seasonFarPixel`, pour l'un des pixels de carte que la caméra situe à un pixel près).
 - `reducedLight` : 0. Le cran atténué ne montre jamais la lumière d'hiver.
 - `changed` : non nul, sauf au cœur de l'été (`pixelciv-412-62-m6.5`), où il doit valoir 0 sur les terres du nord : la carte y est celle de ses tuiles.

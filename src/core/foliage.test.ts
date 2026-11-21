@@ -4,7 +4,10 @@ import { cos, TAU } from './dmath';
 import {
   cellMedianThreshold,
   coldDates,
-  dryDate,
+  dryCode,
+  dryDistance,
+  dryShareOf,
+  DRY_SCALE,
   FOLIAGE_BYTES,
   FOLIAGE_STATE,
   FOLIAGE_UNIT,
@@ -24,7 +27,7 @@ import { emptyLayers } from './world';
 
 const RULES: FoliageRules = { foliage: testData.decor.foliage, seasons: testData.seasons };
 const TRANSITION = RULES.seasons.minTransition;
-const { bareBelow, autumnBelow, autumnDrop, dryShare } = RULES.foliage;
+const { bareBelow, autumnBelow, autumnDrop, dryShare, drySpan } = RULES.foliage;
 
 /** Les octets du calendrier d'un climat (°C) à la latitude `lat`. */
 function bytesOf(annual: number, amplitude: number, lat = 0.4): number[] {
@@ -32,7 +35,7 @@ function bytesOf(annual: number, amplitude: number, lat = 0.4): number[] {
   return [
     cold & 255,
     cold >>> 8,
-    dryDate(rainSeasonality(lat), RULES),
+    dryCode(rainSeasonality(lat), RULES),
     lightDate(annual, amplitude, RULES),
   ];
 }
@@ -41,7 +44,7 @@ function bytesOf(annual: number, amplitude: number, lat = 0.4): number[] {
 function year(bytes: readonly number[]) {
   return Array.from({ length: YEAR_DAYS * 10 }, (_, index) => {
     const phase = index / 10;
-    return { phase, ...foliageShares(bytes, 0, phase, TRANSITION) };
+    return { phase, ...foliageShares(bytes, 0, phase, TRANSITION, RULES.foliage) };
   });
 }
 
@@ -158,8 +161,10 @@ describe('calendrier de la végétation (ADR 0019, § 2)', () => {
           monthly <= warmest - autumnDrop &&
           monthly >= bareBelow;
         if (autumn) expect(day.autumn > 0.5, where).toBe(true);
-        if (Math.abs(1 + rain * g - dryShare) > 1.2 * ((rain * TAU) / YEAR_DAYS) + 0.01) {
-          expect(day.dry > 0.5, where).toBe(1 + rain * g < dryShare);
+        // La saison sèche, une rampe de la pluie du mois : à mi-part, sous dryShare − drySpan / 2.
+        const middle = dryShare - drySpan / 2;
+        if (Math.abs(1 + rain * g - middle) > 1.2 * ((rain * TAU) / YEAR_DAYS) + 0.01) {
+          expect(day.dry > 0.5, where).toBe(1 + rain * g < middle);
         }
       }
     }
@@ -179,8 +184,14 @@ describe('calendrier de la végétation (ADR 0019, § 2)', () => {
       );
     }
     for (let day = 0; day < YEAR_DAYS; day += 7) {
-      const north = foliageShares(bytes, 0, phaseDay(day, false), TRANSITION);
-      const south = foliageShares(bytes, 7 * 4, phaseDay(day + YEAR_DAYS / 2, true), TRANSITION);
+      const north = foliageShares(bytes, 0, phaseDay(day, false), TRANSITION, RULES.foliage);
+      const south = foliageShares(
+        bytes,
+        7 * 4,
+        phaseDay(day + YEAR_DAYS / 2, true),
+        TRANSITION,
+        RULES.foliage,
+      );
       expect(south).toEqual(north);
     }
   });
@@ -191,9 +202,24 @@ describe('calendrier de la végétation (ADR 0019, § 2)', () => {
     // Un hiver doux, au-dessus du seuil du bois nu : ni automne ni bois nu (règle de 2b.6).
     expect(bytesOf(12, 5).slice(0, 2)).toEqual([NO_DATE, NO_DATE]);
     // La saison sèche des tropiques, vers 18° ; aucune à l'équateur, où il pleut toute l'année.
-    expect(dryDate(rainSeasonality(0.2), RULES)).not.toBe(NO_DATE);
-    expect(dryDate(rainSeasonality(0), RULES)).toBe(NO_DATE);
-    expect(dryDate(0, RULES)).toBe(NO_DATE);
+    expect(dryCode(rainSeasonality(0.2), RULES)).not.toBe(NO_DATE);
+    expect(dryCode(rainSeasonality(0), RULES)).toBe(NO_DATE);
+    expect(dryCode(0, RULES)).toBe(NO_DATE);
+    // Sa rampe : sèche au jour le plus froid vers 18°, rien au jour le plus chaud ; la distance où
+    // sa part passe un seuil est celle où la rampe l'atteint.
+    const code = dryCode(rainSeasonality(0.2), RULES);
+    expect(dryShareOf(code, -1, RULES.foliage)).toBe(1);
+    expect(dryShareOf(code, 1, RULES.foliage)).toBe(0);
+    for (const level of [0, 0.25, 0.5, 0.99]) {
+      const distance = dryDistance(code, level, RULES.foliage);
+      expect(distance).toBeGreaterThan(RULES.seasons.summerDays / 2);
+      expect(distance).toBeLessThan(COLDEST_PHASE);
+      const share = (d: number) => dryShareOf(code, cos((TAU * d) / YEAR_DAYS), RULES.foliage);
+      expect(share(distance - 0.05)).toBeLessThanOrEqual(level + 1e-9);
+      expect(share(distance + 0.05)).toBeGreaterThanOrEqual(level - 1e-9);
+    }
+    expect(dryDistance(NO_DATE, 0.5, RULES.foliage)).toBe(Number.POSITIVE_INFINITY);
+    expect(code).toBe(Math.round(rainSeasonality(0.2) * DRY_SCALE));
     // La lumière d'hiver : aucune là où le mois ne passe jamais sous `below`, les tropiques ni un
     // hiver qui reste au-dessus.
     const { below: threshold, drop, factor } = RULES.seasons.light;
@@ -251,6 +277,38 @@ describe('calendrier de la végétation (ADR 0019, § 2)', () => {
     expect(lights.size).toBeGreaterThan(2);
   });
 
+  it('sèche sans bord droit : d’une rangée à la suivante, la part sèche change peu, tout l’an', () => {
+    // La relecture de 2b.7 (problème 3) : datée par la latitude, la saison sèche passait d'une
+    // rangée de 55 jours à une de 14, puis à aucune ; au même jour, une rangée était sèche et sa
+    // voisine non, d'un bout à l'autre du monde. Une colonne de savane d'un même climat, du pôle à
+    // l'équateur, sur la hauteur d'un monde Petit : sa rampe varie peu d'une rangée à la suivante.
+    const size = { width: 1, height: 256 };
+    const layers = emptyLayers(size);
+    layers.temperature.fill(240);
+    layers.amplitude.fill(30);
+    const bytes = worldFoliage(size, layers, RULES);
+    let dry = 0;
+    let worst = 0;
+    for (let day = 0; day < YEAR_DAYS; day += 0.5) {
+      let before = -1;
+      for (let y = 0; y < size.height / 2; y++) {
+        const share = foliageShares(
+          bytes,
+          y * FOLIAGE_BYTES,
+          phaseDay(day, false),
+          TRANSITION,
+          RULES.foliage,
+        ).dry;
+        if (share > 0.99) dry++;
+        if (before >= 0) worst = Math.max(worst, Math.abs(share - before));
+        before = share;
+      }
+    }
+    // Des rangées sèches au cœur de leur saison sèche, et jamais plus d'un cinquième d'écart.
+    expect(dry).toBeGreaterThan(1000);
+    expect(worst).toBeLessThanOrEqual(0.2);
+  });
+
   it('donne les mêmes octets quel que soit l’ordre des cases, et ceux de leur climat', () => {
     const size = { width: 16, height: 16 };
     const layers = emptyLayers(size);
@@ -271,7 +329,7 @@ describe('calendrier de la végétation (ADR 0019, § 2)', () => {
           );
           return [cold & 255, cold >>> 8];
         })(),
-        dryDate(rainSeasonality(lat), RULES),
+        dryCode(rainSeasonality(lat), RULES),
         lightDate((layers.temperature[cell] ?? 0) / 10, (layers.amplitude[cell] ?? 0) / 10, RULES),
       ];
       expect(Array.from(bytes.subarray(cell * FOLIAGE_BYTES, (cell + 1) * FOLIAGE_BYTES))).toEqual(
@@ -281,7 +339,7 @@ describe('calendrier de la végétation (ADR 0019, § 2)', () => {
     // L'empreinte des calendriers de ces climats, aux réglages écrits ici : les mêmes octets sur
     // tous les navigateurs (dmath).
     const written: FoliageRules = {
-      foliage: { bareBelow: 5, autumnBelow: 12, autumnDrop: 3, dryShare: 0.65 },
+      foliage: { bareBelow: 5, autumnBelow: 12, autumnDrop: 3, dryShare: 0.65, drySpan: 0.25 },
       seasons: {
         minTransition: 12,
         summerDays: 30,
@@ -289,7 +347,7 @@ describe('calendrier de la végétation (ADR 0019, § 2)', () => {
       },
     };
     expect(new Fingerprint().typedArray(worldFoliage(size, layers, written)).hex()).toBe(
-      '674c38be',
+      '9a0cf6d2',
     );
   });
 

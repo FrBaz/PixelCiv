@@ -24,11 +24,18 @@ import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { loadGameData } from '../../src/core/data';
 import { worldFoliage } from '../../src/core/foliage';
+import { seasonFactor } from '../../src/core/seasons';
 import { DAYS_PER_MONTH } from '../../src/core/time';
 import { WORLD_SIZES } from '../../src/core/world';
 import { defaultWorldParams } from '../../src/core/worldParams';
 import { bakeBiomes, bakeRegion } from '../../src/render/bake';
-import { mirrorPhase, mirrorState, seasonPixel } from '../../src/render/seasonMirror';
+import {
+  mirrorPhase,
+  mirrorState,
+  seasonFarPixel,
+  seasonPixel,
+} from '../../src/render/seasonMirror';
+import { EXACT_SCALE } from '../../src/render/seasonShader';
 import { foliageTexels, seasonTexels, statePalettes } from '../../src/render/seasons';
 import { leafThreshold } from '../../src/core/foliage';
 import { generateWorld } from '../../src/worldgen/generate';
@@ -38,11 +45,14 @@ import { decodePng, type RgbImage } from '../wave-control/png';
 interface Meta {
   readonly seed: string;
   readonly month: number;
+  /** Le zoom des captures : 1, ou moins pour une vue de loin (la branche des mipmaps). */
+  readonly zoom?: number;
   readonly cam: {
     readonly x: number;
     readonly y: number;
     readonly vw: number;
     readonly vh: number;
+    readonly scale: number;
   };
   readonly shots: {
     readonly full: { readonly file: string };
@@ -106,12 +116,115 @@ describe('contrôle des pixels des couleurs de la saison (ADR 0019)', () => {
       states: statePalettes(data.biomes.entries, data.seasons.light),
     };
     const day = Math.fround(meta.month * DAYS_PER_MONTH);
+    // uSeason, le facteur de saison que la carte envoie (map.ts, setSeason), en flottant de 32 bits.
+    const season = Math.fround(seasonFactor(meta.month));
+    const dry = data.decor.foliage;
     const transition = data.seasons.minTransition;
     const shots = {
       full: image(folder, meta.shots.full.file),
       reduced: image(folder, meta.shots.reduced.file),
       off: image(folder, meta.shots.off.file),
     };
+    if ((meta.zoom ?? 1) < 1) {
+      // De loin (relecture de 2b.7, problème 2) : chaque pixel de l'écran lit, au niveau 0 des
+      // mipmaps (une échelle entre 0,71 et 1), un pixel de carte que la caméra situe à un pixel
+      // près. Un pixel changé doit venir d'un pixel qui porte un ton de terre, et valoir ce que dit
+      // le miroir (de près dès EXACT_SCALE, de loin sous elle) pour l'un des pixels possibles.
+      const { scale } = meta.cam;
+      const margin = 3;
+      const spanX = Math.ceil(vw / scale) + 2 * margin;
+      const farLeft = Math.floor(meta.cam.x - vw / 2 / scale) - margin;
+      const farTop = Math.max(0, Math.floor(meta.cam.y - vh / 2 / scale) - margin);
+      const farBottom = Math.min(H, Math.ceil(meta.cam.y + vh / 2 / scale) + margin);
+      const rows = farBottom - farTop;
+      const farIdentity = new Uint8Array(spanX * rows);
+      const farRegion = bakeRegion(
+        world,
+        ((farLeft % W) + W) % W,
+        farTop,
+        spanX,
+        rows,
+        farIdentity,
+      );
+      const local = (wx: number) => (((wx - farLeft) % W) + W) % W;
+      const codeAt = (wx: number, wy: number) => {
+        const lx = local(wx);
+        if (lx >= spanX || wy < farTop || wy >= farBottom) return 0;
+        return farIdentity[(wy - farTop) * spanX + lx] ?? 0;
+      };
+      const texelAt = (wx: number, wy: number) => {
+        const o = ((wy - farTop) * spanX + local(wx)) * 4;
+        return farRegion.subarray(o, o + 4);
+      };
+      const counts = { changed: 0, matched: 0, waterChanged: 0, blueChanged: 0 };
+      const examples: unknown[] = [];
+      for (const [level, light] of [
+        ['full', true],
+        ['reduced', false],
+      ] as const) {
+        const shot = shots[level];
+        const uniforms = { day, season, transition, light, dry };
+        for (let sy = 0; sy < vh; sy++) {
+          for (let sx = 0; sx < vw; sx++) {
+            const i = (sy * vw + sx) * 3;
+            const got = [shot.rgb[i] ?? 0, shot.rgb[i + 1] ?? 0, shot.rgb[i + 2] ?? 0];
+            const off = [
+              shots.off.rgb[i] ?? 0,
+              shots.off.rgb[i + 1] ?? 0,
+              shots.off.rgb[i + 2] ?? 0,
+            ];
+            if (got.every((byte, k) => byte === off[k])) continue;
+            counts.changed++;
+            if ((off[2] ?? 0) > (off[0] ?? 0) + 40 && (off[2] ?? 0) > (off[1] ?? 0)) {
+              counts.blueChanged++;
+            }
+            const mx = Math.floor(meta.cam.x + (sx + 0.5 - vw / 2) / scale);
+            const my = Math.floor(meta.cam.y + (sy + 0.5 - vh / 2) / scale);
+            let land = false;
+            let matched = false;
+            for (let dy = -1; dy <= 1; dy++) {
+              for (let dx = -1; dx <= 1; dx++) {
+                const wx = (((mx + dx) % W) + W) % W;
+                const wy = my + dy;
+                if (wy < farTop || wy >= farBottom) continue;
+                const texel = texelAt(wx, wy);
+                // De EXACT_SCALE à 1, le GPU lit des pixels cuits et le code des saisons passe par
+                // la carte d'identité, comme de près ; plus loin, par les tons moyens.
+                const color =
+                  scale >= EXACT_SCALE
+                    ? seasonPixel(textures, uniforms, 0, 0, wx, wy, texel, codeAt(wx, wy), false)
+                    : seasonFarPixel(textures, uniforms, 0, 0, wx, wy, texel, codeAt, false);
+                if (color === undefined) continue;
+                land = true;
+                if (color.every((byte, k) => Math.abs(byte - (got[k] ?? 0)) <= 1)) matched = true;
+              }
+            }
+            if (!land) {
+              counts.waterChanged++;
+              if (examples.length < 12) examples.push({ level, sx, sy, mx, my, got, off });
+            }
+            if (matched) counts.matched++;
+          }
+        }
+      }
+      const farResult = {
+        seed: meta.seed,
+        month: meta.month,
+        zoom: meta.zoom,
+        ...counts,
+        examples,
+      };
+      writeFileSync(path.join(folder, 'result.json'), JSON.stringify(farResult, null, 1));
+      // Aucun pixel d'eau, de rivière ni de rive (aucune case sans tons de terre) ne change, et
+      // aucun pixel bleu du cran coupé ; presque tous valent le miroir de loin.
+      expect(counts.changed).toBeGreaterThan(0);
+      expect({ water: counts.waterChanged, blue: counts.blueChanged }).toEqual({
+        water: 0,
+        blue: 0,
+      });
+      expect(counts.matched).toBeGreaterThanOrEqual(counts.changed * 0.99);
+      return;
+    }
     const result: Record<string, unknown> = { seed: meta.seed, month: meta.month, left, top };
     const base = meta.shots.base;
     if (base !== undefined) {
@@ -143,7 +256,7 @@ describe('contrôle des pixels des couleurs de la saison (ADR 0019)', () => {
           const code = identity[(y - regionTop) * vw + sx] ?? 0;
           const color = seasonPixel(
             textures,
-            { day, transition, light },
+            { day, season, transition, light, dry },
             0,
             0,
             x,
@@ -174,11 +287,8 @@ describe('contrôle des pixels des couleurs de la saison (ADR 0019)', () => {
               cell,
               mirrorPhase(day, south),
               leafThreshold(x, y),
-              {
-                day,
-                transition,
-                light: false,
-              },
+              { day, season, transition, light: false, dry },
+              south,
             );
             if (state === 3) counts.reducedLight++;
           }

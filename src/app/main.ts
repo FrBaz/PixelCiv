@@ -149,7 +149,7 @@ async function main(): Promise<void> {
   const brush = query.get('brush');
   const mapElement = element('map');
   const app = await createRenderer(mapElement);
-  const map = new MapView(app, data.biomes.entries, data.seasons);
+  const map = new MapView(app, data.biomes.entries, data.seasons, data.decor.foliage);
   // L'espèce de référence : la stature de son adulte moyen fixe la densité des individus de
   // la vue, et l'écart de ses nourrissons portés (ADR 0014, § 6).
   const species = data.species.entries.at(0);

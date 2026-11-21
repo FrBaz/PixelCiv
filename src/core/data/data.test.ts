@@ -1024,6 +1024,8 @@ describe('décor : data/flora.json et data/decor.json (ADR 0017)', () => {
       [{ foliage: { ...decor.foliage, autumnDrop: 21 } }, /^foliage\.autumnDrop/],
       [{ foliage: { ...decor.foliage, bareBelow: 13 } }, /^foliage : l'automne commence/],
       [{ foliage: { ...decor.foliage, dryShare: 1.2 } }, /^foliage\.dryShare/],
+      [{ foliage: { ...decor.foliage, drySpan: 0 } }, /^foliage\.drySpan/],
+      [{ foliage: { ...decor.foliage, drySpan: 1.5 } }, /^foliage\.drySpan/],
       [{ place: { ...decor.place, jitter: 0.46 } }, /^place\.jitter/],
       [{ place: { ...decor.place, jitter: -0.01 } }, /^place\.jitter/],
       [

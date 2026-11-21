@@ -21,7 +21,7 @@
  */
 import type { Biome, Light, Seasons } from '../core/data/schemas';
 import { SEASON_COVERS, SEASON_STATES, VEGETATION_TYPES } from '../core/data/schemas';
-import { FOLIAGE_BYTES, FOLIAGE_UNIT, NO_DATE } from '../core/foliage';
+import { dryDistance, FOLIAGE_BYTES, FOLIAGE_UNIT, NO_DATE, type DryRule } from '../core/foliage';
 import { coverShare } from '../core/seasons';
 import {
   calendarLevel,
@@ -407,7 +407,7 @@ export interface SeasonActivity {
 /**
  * L'activité du bloc (column, row) de `chunkCells` cases de côté, d'après le calendrier filtré
  * `texels` (foliageTexels), avec ou sans la lumière d'hiver : les quatre valeurs sans lumière,
- * puis les quatre avec.
+ * puis les quatre avec. La saison sèche gagne son premier pixel quand sa rampe (`dry`) quitte 0.
  */
 export function seasonActivity(
   texels: Uint8Array,
@@ -416,6 +416,7 @@ export function seasonActivity(
   column: number,
   row: number,
   transition: number,
+  dry: DryRule,
 ): SeasonActivity {
   const side = chunkCells / SEASON_TILE;
   const tiles = new Float32Array(side * side * 8).fill(Number.POSITIVE_INFINITY);
@@ -434,7 +435,7 @@ export function seasonActivity(
         return date === NO_DATE ? Number.POSITIVE_INFINITY : date * FOLIAGE_UNIT - half;
       };
       const autumn = (texels[at + 1] ?? NO_DATE) === NO_DATE ? Number.POSITIVE_INFINITY : day(0);
-      const warming = Math.min(day(1), day(2));
+      const warming = Math.min(day(1), dryDistance(texels[at + 2] ?? NO_DATE, 0, dry));
       const cooling = Math.min(warming, autumn);
       const values = [cooling, warming, Math.min(cooling, day(3)), Math.min(warming, day(3))];
       // Les tuiles dont cette case touche le carré ou l'anneau.

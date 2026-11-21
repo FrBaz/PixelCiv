@@ -23,6 +23,7 @@ import {
   cellMedianThreshold,
   FOLIAGE_BYTES,
   FOLIAGE_UNIT,
+  dryDistance,
   foliageShares,
   NO_DATE,
 } from '../core/foliage';
@@ -684,7 +685,19 @@ export class DecorSource implements ObjectSource {
       date(autumn * FOLIAGE_UNIT + offset);
       date(YEAR_DAYS - bare * FOLIAGE_UNIT - offset);
     }
-    if (states.dry) symmetric(this.foliage[base + 2] ?? NO_DATE);
+    if (states.dry) {
+      // La saison sèche suit sa rampe : sa part franchit le seuil à une distance du jour le plus
+      // chaud que le seuil de l'objet fixe (src/core/foliage.ts, dryDistance).
+      const distance = dryDistance(
+        this.foliage[base + 2] ?? NO_DATE,
+        level,
+        this.data.decor.foliage,
+      );
+      if (Number.isFinite(distance)) {
+        date(distance);
+        date(YEAR_DAYS - distance);
+      }
+    }
     if (this.lightShown) symmetric(this.foliage[base + 3] ?? NO_DATE);
     this.starts[at] = phase;
     this.aheads[at] = ahead - DAY_MARGIN;
@@ -756,7 +769,7 @@ export class DecorSource implements ObjectSource {
       const code = decorSeasonCode(
         snow,
         look.phenology,
-        foliageShares(this.foliage, cell * FOLIAGE_BYTES, phase, transition),
+        foliageShares(this.foliage, cell * FOLIAGE_BYTES, phase, transition, rules.foliage),
         threshold,
         rules,
         this.lightShown,
