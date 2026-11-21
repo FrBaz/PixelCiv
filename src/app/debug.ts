@@ -11,7 +11,14 @@
  * mesures ne dépendent pas du GPU : dans un navigateur qui rend en logiciel, les images par
  * seconde ne disent rien de lui.
  */
-import { GROUP_STRIDE, type GroupsFrame, type LegArrays, type StepStats } from '../core/protocol';
+import {
+  GROUP_STRIDE,
+  type FaunaFrame,
+  type FaunaLegArrays,
+  type GroupsFrame,
+  type LegArrays,
+  type StepStats,
+} from '../core/protocol';
 
 export interface DebugSample {
   /**
@@ -35,7 +42,16 @@ export interface DebugSample {
   readonly batchDays: number | undefined;
   /** Marcheurs à la fin du dernier lot (ADR 0014). */
   readonly walkers: number | undefined;
-  /** Étapes et octets de positions (étapes et images des groupes) reçus par seconde. */
+  /**
+   * Gibier (ADR 0018) : ses animaux au dernier lot, et la durée moyenne de son jour, sur les mêmes
+   * jours que celle du jour entier.
+   */
+  readonly animals: number | undefined;
+  readonly faunaDayMs: number | undefined;
+  /**
+   * Étapes et octets de positions reçus par seconde : étapes et images des groupes, et celles du
+   * gibier (faunaBytes).
+   */
   readonly legsPerSecond: number | undefined;
   readonly positionBytesPerSecond: number | undefined;
   /**
@@ -70,6 +86,15 @@ export interface DebugSample {
   readonly level: number | undefined;
   readonly k: number | undefined;
   readonly textureBytes: number | undefined;
+  /**
+   * Objets du décor posés à l'écran à la dernière image, et durées moyennes, par image, de la
+   * mise à jour du décor et de celle du gibier dans le calque commun, comprises dans la mise à
+   * jour (ADR 0017 et 0018 ; relecture 2b.6, problème 20 : la ligne du décor comptait aussi le
+   * gibier, et gardait en pause la durée de la dernière image refaite).
+   */
+  readonly decorObjects: number | undefined;
+  readonly decorMs: number;
+  readonly faunaLayerMs: number;
 }
 
 /**
@@ -92,6 +117,13 @@ export interface FrameCost {
   readonly textureBytes?: number;
   /** Appels de dessin de l'image, s'ils se comptent (DrawCallCounter). */
   readonly drawCalls?: number;
+  /**
+   * Objets du décor posés à l'écran, et la mise à jour, dans le calque commun, du décor et du
+   * gibier (ms), nulle quand l'image n'a pas été refaite (PeopleLayer.objectCost).
+   */
+  readonly decorObjects?: number;
+  readonly decorMs?: number;
+  readonly faunaLayerMs?: number;
   /** Le rappel de l'image, et le rendu de la scène par PixiJS qui le suit. */
   readonly updateMs?: number;
   readonly renderMs?: number;
@@ -106,6 +138,26 @@ export interface FrameCost {
 export const LEG_BYTES = 4 + 4 + 8 + 8 + 2;
 /** Octets d'un membre dans l'image des groupes : emplacement, identifiant, apparence, stature, position, porteur. */
 export const MEMBER_BYTES = 4 + 4 + 2 + 1 + 8 + 4;
+
+/** Octets d'une étape du gibier : celles des individus, et son allure (FaunaLegArrays). */
+export const FAUNA_LEG_BYTES = LEG_BYTES + 1;
+/** Octets d'un animal dans l'image du gibier : emplacement, identifiant, sorte, position. */
+export const ANIMAL_BYTES = 4 + 4 + 1 + 8;
+
+/**
+ * Octets du gibier d'un delta ou d'un instantané : ses étapes, et son image s'il en porte une,
+ * étapes en cours comprises (relecture 2b.6, problème 20 : elles n'étaient pas comptées).
+ */
+export function faunaBytes(
+  legs: FaunaLegArrays | undefined,
+  frame: FaunaFrame | undefined,
+): number {
+  const animals = frame?.slots.length ?? 0;
+  const frameLegs = frame?.legs.slots.length ?? 0;
+  return (
+    (legs?.slots.length ?? 0) * FAUNA_LEG_BYTES + animals * ANIMAL_BYTES + frameLegs * LEG_BYTES
+  );
+}
 
 /** Octets de positions d'un delta ou d'un instantané : ses étapes, et son image s'il en porte une. */
 export function positionBytes(legs: LegArrays | undefined, frame: GroupsFrame | undefined): number {
@@ -145,11 +197,12 @@ export class DebugSampler {
   /** Positions reçues : instant (ms), étapes, octets. */
   private received: { readonly at: number; readonly legs: number; readonly bytes: number }[] = [];
   /** Durée totale des jours ordinaires de chacun des derniers lots, et leur nombre. */
-  private days: { readonly total: number; readonly count: number }[] = [];
+  private days: { readonly total: number; readonly fauna: number; readonly count: number }[] = [];
   private dayCount = 0;
   private months: number[] = [];
   private batches: number[] = [];
   private walkers: number | undefined;
+  private animals: number | undefined;
 
   /** Enregistre la durée d'une image, et ce qu'y ont coûté les individus. */
   frame(durationMs: number, cost?: FrameCost): void {
@@ -172,7 +225,11 @@ export class DebugSampler {
   batch(stats: StepStats): void {
     const ordinary = stats.days - (stats.monthMs === undefined ? 0 : 1);
     if (stats.dayMs !== undefined && ordinary > 0) {
-      this.days.push({ total: stats.dayMs * ordinary, count: ordinary });
+      this.days.push({
+        total: stats.dayMs * ordinary,
+        fauna: (stats.faunaMs ?? 0) * ordinary,
+        count: ordinary,
+      });
       this.dayCount += ordinary;
       // Les lots les plus anciens s'oublient, tant qu'il reste DAY_WINDOW jours sans eux.
       let first = this.days.at(0);
@@ -185,6 +242,7 @@ export class DebugSampler {
     if (stats.monthMs !== undefined) keep(this.months, stats.monthMs, MONTH_WINDOW);
     if (stats.days > 0) keep(this.batches, stats.days, BATCH_WINDOW);
     this.walkers = stats.walkers;
+    this.animals = stats.animals;
   }
 
   /** Les mesures ; `now` (ms) date les positions reçues, comptées sur la dernière seconde. */
@@ -211,6 +269,11 @@ export class DebugSampler {
       worstMonthMs: this.months.length > 0 ? Math.max(...this.months) : undefined,
       batchDays: mean(this.batches),
       walkers: this.walkers,
+      animals: this.animals,
+      faunaDayMs:
+        this.dayCount > 0
+          ? this.days.reduce((sum, batch) => sum + batch.fauna, 0) / this.dayCount
+          : undefined,
       legsPerSecond: recent?.reduce((sum, entry) => sum + entry.legs, 0),
       positionBytesPerSecond: recent?.reduce((sum, entry) => sum + entry.bytes, 0),
       main: {
@@ -234,6 +297,9 @@ export class DebugSampler {
       level: last?.level,
       k: last?.k,
       textureBytes: last?.textureBytes,
+      decorObjects: last?.decorObjects,
+      decorMs: average((cost) => cost.decorMs ?? 0),
+      faunaLayerMs: average((cost) => cost.faunaLayerMs ?? 0),
     };
   }
 }

@@ -57,6 +57,9 @@ export interface DebugInfo {
   /** Jours par lot, en moyenne, et marcheurs au dernier lot (ADR 0014). */
   readonly batchDays: number | undefined;
   readonly walkers: number | undefined;
+  /** Gibier (ADR 0018) : animaux au dernier lot, et durée moyenne de son jour. */
+  readonly animals?: number | undefined;
+  readonly faunaDayMs?: number | undefined;
   /** Étapes et octets de positions reçus par seconde. */
   readonly legsPerSecond: number | undefined;
   readonly positionBytesPerSecond: number | undefined;
@@ -78,6 +81,21 @@ export interface DebugInfo {
   readonly level: number | undefined;
   readonly k: number | undefined;
   readonly textureBytes: number | undefined;
+  /**
+   * Décor (ADR 0017) : ses objets posés à l'écran à la dernière image, durée moyenne de sa mise à
+   * jour par image, blocs posés depuis le début de la partie et leur durée totale.
+   */
+  readonly decorObjects: number | undefined;
+  readonly decorMs: number;
+  readonly decorChunks?: number;
+  readonly decorBuildMs?: number;
+  /**
+   * Gibier (ADR 0018) : animaux dont un pixel au moins tombait dans la vue à la dernière image,
+   * et durée moyenne de sa mise à jour dans le calque commun, par image (relecture 2b.6,
+   * problème 20 : elle se comptait avec celle du décor).
+   */
+  readonly faunaDrawn?: number;
+  readonly faunaLayerMs: number;
   readonly memoryMb: number | undefined;
   /** Moteur de rendu (webgl, webgpu) et densité de pixels de l'écran. */
   readonly renderer: { readonly name: string; readonly resolution: number };

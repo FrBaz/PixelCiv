@@ -10,10 +10,22 @@
  *
  * Écrit en GLSL ES 1.0, comme le shader des particules de PixiJS, en précision haute : les
  * coordonnées des palettes dépassent ce que la moyenne précision lit sans erreur.
+ *
+ * Les objets du calque commun (le décor, tâche 2b.6, ADR 0017 ; le gibier ensuite) sont des
+ * particules du même conteneur, peintes par le même programme : leurs motifs sont rangés sous
+ * ceux des humains dans l'atlas des rôles, leurs palettes dans la même texture. Une palette dit
+ * aussi l'alpha de chaque rôle : 0, le rôle ne se peint pas ; entre 0 et 1, un noir translucide
+ * (l'ombre « multiply ») ; la sortie est prémultipliée. Le bleu de la couleur d'une particule
+ * porte ses drapeaux (OBJECT_FLAG) : avec `ground`, les pixels de l'ombre portée prennent le ton
+ * d'ombre de la palette de la case du sol qu'ils couvrent, d'après la texture des saisons de la
+ * carte, la neige comprise, tramée comme sur la carte (ADR 0017, § 4 ; C1 D10).
  */
 import { BufferImageSource, GlProgram, Matrix, Shader, TextureStyle, UniformGroup } from 'pixi.js';
 import { PALETTE_ROLES } from '../core/data/humans';
+import { DECOR_LEGEND, legendRole } from '../gen/legend';
 import type { HumanPalette } from './humans';
+import { BAYER_GLSL, COVER_GLSL } from './mapShader';
+import { OBJECT_FLAG, type ObjectPalette } from './objects';
 
 /** Apparences par rangée de la texture des palettes, et sa largeur en texels. */
 export const PALETTES_PER_ROW = 8;
@@ -24,11 +36,12 @@ export const MAX_PALETTE_ROWS = 2048;
 
 /**
  * Couleur de particule qui désigne la place `slot` de la texture des palettes : son octet bas
- * dans le rouge, son octet haut dans le vert, l'alpha plein. PixiJS la range telle quelle dans
- * l'attribut de couleur (quatre octets non signés, normalisés), que le shader relit.
+ * dans le rouge, son octet haut dans le vert, les drapeaux d'un objet (OBJECT_FLAG) dans le bleu,
+ * l'alpha plein. PixiJS la range telle quelle dans l'attribut de couleur (quatre octets non
+ * signés, normalisés), que le shader relit.
  */
-export function slotColor(slot: number): number {
-  return 0xff000000 + (slot & 0xffff);
+export function slotColor(slot: number, flags = 0): number {
+  return 0xff000000 + (flags & 0xff) * 0x10000 + (slot & 0xffff);
 }
 
 /** Place que désigne une couleur de particule (slotColor), comme la relit le shader. */
@@ -56,6 +69,12 @@ const glslFloat = (value: number) => value.toFixed(1);
  * texel de paletteTexel, à tout nombre de rangées. `roleRed` est le rouge du texel de l'atlas
  * des rôles, `vColor` la couleur de la particule, normalisés comme les lit le GPU.
  */
+/** Rôles de l'ombre portée des objets (tools/role-grids.ts, withShadow), que lit le shader. */
+export const SHADOW_ROLE_RANGE = [
+  legendRole(DECOR_LEGEND, 'shadow', 0),
+  legendRole(DECOR_LEGEND, 'shadow', 1),
+] as const;
+
 export const PALETTE_ADDRESS = {
   role: 'floor(roleRed * 255.0 + 0.5)',
   slot: 'floor(vColor.r * 255.0 + 0.5) + 256.0 * floor(vColor.g * 255.0 + 0.5)',
@@ -76,6 +95,7 @@ uniform vec2 uResolution;
 
 varying vec2 vUV;
 varying vec4 vColor;
+varying vec2 vScreen;
 
 vec2 roundPixels(vec2 position, vec2 targetSize) {
   return (floor(((position * 0.5 + 0.5) * targetSize) + 0.5) / targetSize) * 2.0 - 1.0;
@@ -83,6 +103,8 @@ vec2 roundPixels(vec2 position, vec2 targetSize) {
 
 void main(void) {
   gl_Position = vec4((uTranslationMatrix * vec3(aVertex + aPosition, 1.0)).xy, 0.0, 1.0);
+  // Le point de l'écran, en pixels CSS : l'ombre « ground » y lit la case du sol.
+  vScreen = aVertex + aPosition;
   if (uRound == 1.0) {
     gl_Position.xy = roundPixels(gl_Position.xy, uResolution);
   }
@@ -97,20 +119,72 @@ precision highp sampler2D;
 
 varying vec2 vUV;
 varying vec4 vColor;
+varying vec2 vScreen;
 
 uniform sampler2D uTexture;
 uniform sampler2D uPalettes;
 uniform float uPaletteRows;
+/** Le sol, pour l'ombre « ground » : la texture des saisons, et les tons d'ombre des biomes. */
+uniform sampler2D uGround;
+uniform sampler2D uGroundTones;
+/** Origine de la carte à l'écran et pixels CSS par pixel de carte ; cases du monde ; biomes. */
+uniform vec4 uGroundView;
+uniform vec2 uGroundCells;
+uniform float uGroundBiomes;
+/** cos(2π (mois − 6,5) / 12), comme pour la carte. */
+uniform float uSeason;
+
+${BAYER_GLSL}
+
+/** Le ton d'ombre du sol sous le point screen (pixels CSS), neige et glace comprises. */
+vec4 groundShadow(vec2 screen) {
+  vec2 mapPixel = floor((screen - uGroundView.xy) / uGroundView.z);
+  vec2 cell = floor(mapPixel / 4.0);
+  if (cell.y < 0.0 || cell.y >= uGroundCells.y) return vec4(0.0);
+  cell.x = mod(cell.x, uGroundCells.x);
+  vec4 data = texture2D(uGround, (cell + 0.5) / uGroundCells);
+  float temperature = ${COVER_GLSL.temperature};
+  float amplitude = ${COVER_GLSL.amplitude};
+  float flags = ${COVER_GLSL.flags};
+  float south = ${COVER_GLSL.south};
+  float cover = ${COVER_GLSL.cover};
+  float waterCell = ${COVER_GLSL.waterCell};
+  float forest = ${COVER_GLSL.forest};
+  float biome = floor(data.a * 255.0 + 0.5);
+  float monthly = ${COVER_GLSL.monthly};
+  float snow = ${COVER_GLSL.snow};
+  float coverage = 0.0;
+  if (waterCell < 0.5 && cover == 1.0) {
+    coverage = ${COVER_GLSL.forestSnow};
+  } else if (waterCell > 0.5 && cover == 2.0) {
+    coverage = ${COVER_GLSL.ice};
+  } else if (waterCell > 0.5 && cover == 3.0) {
+    coverage = ${COVER_GLSL.seaIce};
+  }
+  vec2 pixel = vec2(mod(mapPixel.x, uGroundCells.x * 4.0), mapPixel.y);
+  float tone = coverage > bayer(pixel) ? 1.5 : 0.5;
+  return vec4(texture2D(uGroundTones, vec2(tone / 2.0, (biome + 0.5) / uGroundBiomes)).rgb, 1.0);
+}
 
 void main(void) {
   float roleRed = texture2D(uTexture, vUV).r;
   float role = ${PALETTE_ADDRESS.role};
   if (role < 0.5) discard;
-  float slot = ${PALETTE_ADDRESS.slot};
-  float column = ${PALETTE_ADDRESS.column};
-  float row = ${PALETTE_ADDRESS.row};
-  vec2 at = vec2(${PALETTE_ADDRESS.u}, ${PALETTE_ADDRESS.v});
-  gl_FragColor = vec4(texture2D(uPalettes, at).rgb, 1.0);
+  float objectFlags = floor(vColor.b * 255.0 + 0.5);
+  float ground = mod(floor(objectFlags / ${OBJECT_FLAG.ground.toFixed(1)}), 2.0);
+  vec4 tone;
+  if (ground > 0.5 && role > ${(SHADOW_ROLE_RANGE[0] - 0.5).toFixed(1)} && role < ${(SHADOW_ROLE_RANGE[1] + 0.5).toFixed(1)}) {
+    tone = groundShadow(vScreen);
+  } else {
+    float slot = ${PALETTE_ADDRESS.slot};
+    float column = ${PALETTE_ADDRESS.column};
+    float row = ${PALETTE_ADDRESS.row};
+    vec2 at = vec2(${PALETTE_ADDRESS.u}, ${PALETTE_ADDRESS.v});
+    tone = texture2D(uPalettes, at);
+  }
+  // Prémultiplié : un rôle sans couleur ne se peint pas ; un noir translucide assombrit.
+  if (tone.a < 0.002) discard;
+  gl_FragColor = vec4(tone.rgb * tone.a, tone.a);
 }
 `;
 
@@ -171,8 +245,11 @@ export class PaletteTexture {
     return this.pixels.byteLength;
   }
 
-  /** La place de l'apparence `look`, rangée à sa première demande d'après `palette()`. */
-  slotOf(look: number, palette: () => HumanPalette): number {
+  /**
+   * La place de l'apparence `look`, rangée à sa première demande d'après `palette()` : les
+   * humains (RGB, opaques) et les objets (RGBA, PALETTE_KEYS) partagent la texture.
+   */
+  slotOf(look: number, palette: () => HumanPalette | ObjectPalette): number {
     const known = this.slots.get(look);
     if (known !== undefined) return known;
     const slot = this.slots.size;
@@ -182,16 +259,17 @@ export class PaletteTexture {
     return slot;
   }
 
-  private write(slot: number, palette: HumanPalette): void {
+  private write(slot: number, palette: HumanPalette | ObjectPalette): void {
     const { column, row } = paletteTexel(slot, 0);
     const start = (row * PALETTE_WIDTH + column) * 4;
     for (let role = 0; role < PALETTE_ROLES; role++) {
-      const color = palette[role];
+      const color: readonly number[] | undefined = palette[role];
       const at = start + role * 4;
       this.pixels[at] = color?.[0] ?? 0;
       this.pixels[at + 1] = color?.[1] ?? 0;
       this.pixels[at + 2] = color?.[2] ?? 0;
-      this.pixels[at + 3] = color === undefined ? 0 : 255;
+      // Un ton RGB est opaque ; un ton RGBA dit son alpha.
+      this.pixels[at + 3] = color === undefined ? 0 : (color[3] ?? 255);
     }
     this.dirty = true;
     this.written++;
@@ -244,8 +322,36 @@ export class PaletteTexture {
   }
 }
 
+/** Le sol que lit l'ombre « ground » : la texture des saisons de la carte, et les tons d'ombre. */
+export interface GroundTextures {
+  readonly data: BufferImageSource;
+  readonly tones: BufferImageSource;
+  /** Cases du monde, et nombre de biomes (lignes des tons). */
+  readonly columns: number;
+  readonly rows: number;
+  readonly biomes: number;
+}
+
+/** Une texture d'un texel, en attendant le premier monde. */
+export function emptyGround(): GroundTextures {
+  const texel = () => dataSource(new Uint8Array(4), 1, 1);
+  return { data: texel(), tones: texel(), columns: 1, rows: 1, biomes: 1 };
+}
+
+/** Réglages du sol : origine de la carte, échelle, monde, saison. */
+type GroundGroup = UniformGroup<{
+  uGroundView: { value: Float32Array; type: 'vec4<f32>' };
+  uGroundCells: { value: Float32Array; type: 'vec2<f32>' };
+  uGroundBiomes: { value: number; type: 'f32' };
+  uSeason: { value: number; type: 'f32' };
+}>;
+
 /** Le shader des humains, sur l'atlas des rôles `roles` et les palettes `palettes`. */
-export function humanShader(roles: BufferImageSource, palettes: PaletteTexture): Shader {
+export function humanShader(
+  roles: BufferImageSource,
+  palettes: PaletteTexture,
+  ground: GroundTextures = emptyGround(),
+): Shader {
   return new Shader({
     glProgram: GlProgram.from({
       vertex: HUMAN_VERTEX,
@@ -264,8 +370,51 @@ export function humanShader(roles: BufferImageSource, palettes: PaletteTexture):
       },
       uPalettes: palettes.source,
       humans: new UniformGroup({ uPaletteRows: { value: palettes.rows, type: 'f32' } }),
+      uGround: ground.data,
+      uGroundTones: ground.tones,
+      ground: new UniformGroup({
+        uGroundView: { value: new Float32Array(4), type: 'vec4<f32>' },
+        uGroundCells: { value: new Float32Array([ground.columns, ground.rows]), type: 'vec2<f32>' },
+        uGroundBiomes: { value: ground.biomes, type: 'f32' },
+        uSeason: { value: 0, type: 'f32' },
+      }),
     },
   });
+}
+
+/**
+ * Le shader suit le sol : la texture des saisons et les tons d'un monde nouveau, puis, à chaque
+ * image refaite, l'origine de la carte et l'échelle (en pixels CSS) et la saison.
+ */
+export function followGround(
+  shader: Shader,
+  ground: GroundTextures,
+  view: { readonly x: number; readonly y: number; readonly scale: number; readonly season: number },
+): void {
+  const resources = shader.resources as {
+    uGround: BufferImageSource;
+    uGroundTones: BufferImageSource;
+    ground: GroundGroup;
+  };
+  if (resources.uGround !== ground.data) shader.resources.uGround = ground.data;
+  if (resources.uGroundTones !== ground.tones) shader.resources.uGroundTones = ground.tones;
+  const uniforms = resources.ground.uniforms;
+  const shown = uniforms.uGroundView;
+  const cells = uniforms.uGroundCells;
+  const changed =
+    shown[0] !== Math.fround(view.x) ||
+    shown[1] !== Math.fround(view.y) ||
+    shown[2] !== Math.fround(view.scale) ||
+    cells[0] !== ground.columns ||
+    cells[1] !== ground.rows ||
+    uniforms.uGroundBiomes !== ground.biomes ||
+    uniforms.uSeason !== Math.fround(view.season);
+  if (!changed) return;
+  shown.set([view.x, view.y, view.scale, 0]);
+  cells.set([ground.columns, ground.rows]);
+  uniforms.uGroundBiomes = ground.biomes;
+  uniforms.uSeason = Math.fround(view.season);
+  resources.ground.update();
 }
 
 /**

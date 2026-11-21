@@ -1,0 +1,27 @@
+# légende decor
+# pieds 7
+# reed, variante 0 : 14 × 23 pixels, à la densité de la planche des humains (adulte de 43 rangées).
+# Dessin original du jeu ; tracé par un script à la conception de 2b.6, mis au format à sa réalisation, retouchable à la main.
+..........S...
+..........S...
+..........S...
+..........F...
+.........gF...
+.....z...gF...
+.....z...gF...
+S...Fz..oQF.CC
+S...Fg..oQF.oo
+S..oQF..oQF.oo
+F..oQF..oQF.oo
+F..oQF..fgF.f.
+.F.oQF..fgF.f.
+.F.fgF..fgF.f.
+.F.fgF..fgF.f.
+.F.fgF.f.gF.f.
+.F.fgF.f.gF.f.
+.F.fgF.f.gF.f.
+.F.g.F.f.gF.f.
+.F.g.F.f.gF.f.
+.F.g.F.f.gF.f.
+.F.g.F.f.gF.f.
+.F.g.F.f.gF.f.

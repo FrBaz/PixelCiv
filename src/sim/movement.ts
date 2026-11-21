@@ -347,6 +347,12 @@ export class Movement {
   /** Tuiles par rangée de tuiles, dans restHead. */
   private readonly tilesX: number;
   /**
+   * Places tenues dans chaque tuile de 8 × 8 cases (tile × tilesX + colonne de tuile), que hold,
+   * release et clear tiennent à jour : le gibier les lit pour choisir ses buts loin des camps
+   * (ADR 0018), sans chercher la place la plus proche. Un compte, que rien des humains ne lit.
+   */
+  readonly heldInTile: Uint32Array<ArrayBuffer>;
+  /**
    * Par emplacement, d'un bloc pour qu'une recherche ne lise qu'une ligne de mémoire : x, y,
    * le suivant de sa case, et 1 si la place est celle de qui part ce mois-ci (REST_STRIDE).
    */
@@ -402,6 +408,7 @@ export class Movement {
     this.tilesX = (width + TILE_MASK) >> TILE_SHIFT;
     const tilesY = (height + TILE_MASK) >> TILE_SHIFT;
     this.restHead = new Int32Array((this.tilesX * tilesY) << (2 * TILE_SHIFT)).fill(NO);
+    this.heldInTile = new Uint32Array(this.tilesX * tilesY);
   }
 
   /** Rang, dans restHead, de la case (column, row) du monde. */
@@ -539,6 +546,10 @@ export class Movement {
     this.restPrev[slot] = NO;
     if (head >= 0) this.restPrev[head] = slot;
     this.restHead[cell] = slot;
+    if (cell >= 0) {
+      const tile = cell >> (2 * TILE_SHIFT);
+      this.heldInTile[tile] = (this.heldInTile[tile] ?? 0) + 1;
+    }
   }
 
   /** Libère la place que tient `slot`, s'il en tient une. */
@@ -550,6 +561,8 @@ export class Movement {
     if (prev >= 0) this.rest[prev * REST_STRIDE + 2] = next;
     else this.restHead[cell] = next;
     if (next >= 0) this.restPrev[next] = prev;
+    const tile = cell >> (2 * TILE_SHIFT);
+    this.heldInTile[tile] = Math.max(0, (this.heldInTile[tile] ?? 0) - 1);
     this.restCell[slot] = NO;
     this.restPrev[slot] = NO;
     this.rest[slot * REST_STRIDE + 2] = NO;
@@ -655,6 +668,7 @@ export class Movement {
       if (rest >= 0) this.restHead[rest] = NO;
     }
     this.restCell.fill(NO);
+    this.heldInTile.fill(0);
     for (let at = 2; at < this.rest.length; at += REST_STRIDE) this.rest[at] = NO;
     this.restPrev.fill(NO);
     this.carrier.fill(NO);

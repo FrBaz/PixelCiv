@@ -4,6 +4,7 @@
  * continue. Les textes affichés sont des clés de traduction.
  */
 import { z } from 'zod';
+import { FloraLookSchema } from './decor';
 import {
   bakedWaterTone,
   CREST_TONES,
@@ -105,10 +106,28 @@ export const BiomeSchema = z
     forage: z
       .object({ plants: z.number().min(0), game: z.number().min(0), fish: z.number().min(0) })
       .strict(),
-    /** Flore : densités d'arbres et de buissons, de 0 à 1, et espèces (data/flora.json). */
+    /**
+     * Flore : densités d'arbres et de buissons, de 0 à 1, et espèces (data/flora.json). Le décor
+     * (ADR 0017) tire l'espèce d'un arbre ou d'un buisson parmi celles de sa sorte, selon leur
+     * poids (`weights`, 1 par défaut).
+     */
     flora: z
-      .object({ trees: ShareSchema, shrubs: ShareSchema, species: z.array(IdSchema) })
-      .strict(),
+      .object({
+        trees: ShareSchema,
+        shrubs: ShareSchema,
+        species: z.array(IdSchema),
+        weights: z.record(IdSchema, z.number().min(0.01).max(100)).optional(),
+      })
+      .strict()
+      .refine(
+        (flora) => Object.keys(flora.weights ?? {}).every((id) => flora.species.includes(id)),
+        { message: 'un poids pour une espèce du biome', path: ['weights'] },
+      ),
+    /**
+     * Faune (MON-10, FAU-01 ; ADR 0018) : qualité de l'habitat, de 0 à 1, pour chaque espèce de
+     * gibier qu'il abrite (data/fauna.json) ; vide là où rien ne vit.
+     */
+    fauna: z.record(IdSchema, ShareSchema),
     /** Palette par rôles (REN-09) : ombre, base, lumière. */
     palette: z.object({ shadow: ColorSchema, base: ColorSchema, light: ColorSchema }).strict(),
     /** Motif des tuiles de 4 px (REN-01), que la cuisson tire de la palette. */
@@ -382,9 +401,14 @@ export const ResourceSchema = z
 export type Resource = z.infer<typeof ResourceSchema>;
 export const ResourcesSchema = uniqueIds(ResourceSchema);
 
-/** Espèce de la flore : arbre ou buisson (MON-10). */
+/** Espèce de la flore : arbre ou buisson (MON-10), et son apparence dans le décor (ADR 0017). */
 export const FloraSchema = z
-  .object({ id: IdSchema, kind: z.enum(['tree', 'shrub']), name: MessageKeySchema })
+  .object({
+    id: IdSchema,
+    kind: z.enum(['tree', 'shrub']),
+    name: MessageKeySchema,
+    look: FloraLookSchema,
+  })
   .strict();
 
 export type Flora = z.infer<typeof FloraSchema>;

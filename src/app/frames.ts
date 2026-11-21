@@ -116,8 +116,11 @@ export class FrameQueue {
   }
 }
 
-/** Ce qui reçoit les étapes : le miroir des positions. */
-export interface LegTarget {
+/**
+ * Ce qui reçoit les étapes : le miroir des positions, ou la chronologie du gibier, qui lit en plus
+ * l'allure de l'étape dans ses tableaux (`legs`, au rang `index`).
+ */
+export interface LegTarget<T extends LegArrays = LegArrays> {
   apply(
     slot: number,
     day: number,
@@ -126,12 +129,14 @@ export interface LegTarget {
     stepX: number,
     stepY: number,
     count: number,
+    legs: T,
+    index: number,
   ): void;
 }
 
 /** Étapes d'un delta, et le rang de la prochaine à appliquer. */
-interface QueuedLegs {
-  readonly legs: LegArrays;
+interface QueuedLegs<T extends LegArrays> {
+  readonly legs: T;
   next: number;
 }
 
@@ -143,16 +148,16 @@ interface QueuedLegs {
  * étapes d'un delta, toutes appliquées ou oubliées, passent à `dropped`, qui rend leurs
  * tampons au worker.
  */
-export class LegQueue {
-  private queue: QueuedLegs[] = [];
-  private readonly dropped: (legs: LegArrays) => void;
+export class LegQueue<T extends LegArrays = LegArrays> {
+  private queue: QueuedLegs<T>[] = [];
+  private readonly dropped: (legs: T) => void;
 
-  constructor(dropped: (legs: LegArrays) => void = () => undefined) {
+  constructor(dropped: (legs: T) => void = () => undefined) {
     this.dropped = dropped;
   }
 
   /** Les étapes d'un delta. */
-  push(legs: LegArrays): void {
+  push(legs: T): void {
     if (legs.slots.length === 0) this.dropped(legs);
     else this.queue.push({ legs, next: 0 });
   }
@@ -166,7 +171,7 @@ export class LegQueue {
    * Applique à `target`, dans l'ordre de leur arrivée, les étapes parties à l'instant `t` au
    * plus tard. Une étape d'un même jour qu'une autre la remplace : c'est un écart de côté.
    */
-  applyUntil(t: number, target: LegTarget): void {
+  applyUntil(t: number, target: LegTarget<T>): void {
     this.consume((days, index, legs) => {
       if ((days[index] ?? 0) > t) return false;
       target.apply(
@@ -177,6 +182,8 @@ export class LegQueue {
         legs.step[2 * index] ?? 0,
         legs.step[2 * index + 1] ?? 0,
         legs.count[index] ?? 0,
+        legs,
+        index,
       );
       return true;
     });
@@ -186,7 +193,7 @@ export class LegQueue {
    * Passe à `target`, dans l'ordre de leur arrivée et sans les ôter de la file, les étapes en
    * attente parties au jour `from` au plus tôt.
    */
-  forEachFrom(from: number, target: LegTarget): void {
+  forEachFrom(from: number, target: LegTarget<T>): void {
     for (const { legs, next } of this.queue) {
       const { days } = legs;
       for (let index = next; index < days.length; index++) {
@@ -199,13 +206,15 @@ export class LegQueue {
           legs.step[2 * index] ?? 0,
           legs.step[2 * index + 1] ?? 0,
           legs.count[index] ?? 0,
+          legs,
+          index,
         );
       }
     }
   }
 
   /** Passe les étapes, dans l'ordre, tant que `take` les prend. */
-  private consume(take: (days: Uint32Array, index: number, legs: LegArrays) => boolean): void {
+  private consume(take: (days: Uint32Array, index: number, legs: T) => boolean): void {
     while (this.queue.length > 0) {
       const head = this.queue[0];
       const { days } = head.legs;

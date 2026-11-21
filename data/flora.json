@@ -2,71 +2,213 @@
   {
     "id": "conifer",
     "kind": "tree",
-    "name": "flora.conifer"
+    "name": "flora.conifer",
+    "look": {
+      "form": "conifer",
+      "phenology": "evergreen",
+      "foliage": {
+        "summer": ["#5f9a62", "#36714a", "#214f38", "#143327"]
+      },
+      "wood": ["#a57c52", "#7a5636", "#553a25", "#352417"]
+    }
   },
   {
     "id": "broadleaf",
     "kind": "tree",
-    "name": "flora.broadleaf"
+    "name": "flora.broadleaf",
+    "look": {
+      "form": "broadleaf",
+      "bare": "broadleaf-bare",
+      "phenology": "deciduous",
+      "foliage": {
+        "summer": ["#8fbf4a", "#5c9a3a", "#3a6e2e", "#234a24"],
+        "autumn": ["#f2c85b", "#d98b2b", "#a9541f", "#6b3218"]
+      },
+      "wood": ["#a57c52", "#7a5636", "#553a25", "#352417"]
+    }
   },
   {
     "id": "birch",
     "kind": "tree",
-    "name": "flora.birch"
+    "name": "flora.birch",
+    "look": {
+      "form": "birch",
+      "bare": "birch-bare",
+      "phenology": "deciduous",
+      "foliage": {
+        "summer": ["#a8cf5c", "#77a944", "#4f7f34", "#2f5424"],
+        "autumn": ["#f6dc6a", "#e0b23a", "#a87a22", "#6a4b16"]
+      },
+      "wood": ["#f4f1e8", "#d8d3c6", "#9e998c", "#2b2a28"]
+    }
   },
   {
     "id": "larch",
     "kind": "tree",
-    "name": "flora.larch"
+    "name": "flora.larch",
+    "look": {
+      "form": "conifer",
+      "bare": "larch-bare",
+      "phenology": "deciduous",
+      "foliage": {
+        "summer": ["#9cc45e", "#6c9a40", "#47702f", "#2c4a22"],
+        "autumn": ["#f4d35e", "#d9a53a", "#9c6e25", "#5c4318"]
+      },
+      "wood": ["#a57c52", "#7a5636", "#553a25", "#352417"]
+    }
   },
   {
     "id": "palm",
     "kind": "tree",
-    "name": "flora.palm"
+    "name": "flora.palm",
+    "look": {
+      "form": "palm",
+      "phenology": "evergreen",
+      "foliage": {
+        "summer": ["#a6cf5f", "#6fa63f", "#4a7d2e", "#2d5421"]
+      },
+      "wood": ["#b99a6a", "#8e7149", "#654f33", "#3f3121"],
+      "fruit": {
+        "tones": ["#a57a45", "#7a5430", "#53381f", "#33220f"],
+        "months": [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]
+      }
+    }
   },
   {
     "id": "tropical-hardwood",
     "kind": "tree",
-    "name": "flora.tropical-hardwood"
+    "name": "flora.tropical-hardwood",
+    "look": {
+      "form": "tropical-hardwood",
+      "phenology": "evergreen",
+      "foliage": {
+        "summer": ["#6fae4a", "#3f8a3a", "#2a6430", "#1a4224"]
+      },
+      "wood": ["#a57c52", "#7a5636", "#553a25", "#352417"]
+    }
   },
   {
     "id": "acacia",
     "kind": "tree",
-    "name": "flora.acacia"
+    "name": "flora.acacia",
+    "look": {
+      "form": "acacia",
+      "phenology": "dry",
+      "foliage": {
+        "summer": ["#b4c46a", "#8a9f48", "#617634", "#3d4d23"],
+        "dry": ["#d6c77a", "#b19e52", "#7f6f38", "#4f4424"]
+      },
+      "wood": ["#a57c52", "#7a5636", "#553a25", "#352417"]
+    }
   },
   {
     "id": "mangrove-tree",
     "kind": "tree",
-    "name": "flora.mangrove-tree"
+    "name": "flora.mangrove-tree",
+    "look": {
+      "form": "mangrove",
+      "phenology": "evergreen",
+      "foliage": {
+        "summer": ["#79a957", "#4d8644", "#33613a", "#1f3f2a"]
+      },
+      "wood": ["#a57c52", "#7a5636", "#553a25", "#352417"]
+    }
   },
   {
     "id": "heather",
     "kind": "shrub",
-    "name": "flora.heather"
+    "name": "flora.heather",
+    "look": {
+      "form": "heather",
+      "phenology": "evergreen",
+      "foliage": {
+        "summer": ["#8a9a5a", "#66763f", "#46552c", "#2c381d"]
+      },
+      "wood": ["#a57c52", "#7a5636", "#553a25", "#352417"],
+      "fruit": {
+        "tones": ["#d28ee0", "#a457bb", "#733a85", "#47234f"],
+        "months": [7, 8]
+      }
+    }
   },
   {
     "id": "scrub",
     "kind": "shrub",
-    "name": "flora.scrub"
+    "name": "flora.scrub",
+    "look": {
+      "form": "scrub",
+      "phenology": "dry",
+      "foliage": {
+        "summer": ["#b3b56a", "#8b8d4a", "#626634", "#3e4124"],
+        "dry": ["#d2c27e", "#ab9a58", "#7c6d3c", "#4e4426"]
+      },
+      "wood": ["#a57c52", "#7a5636", "#553a25", "#352417"]
+    }
   },
   {
     "id": "cactus",
     "kind": "shrub",
-    "name": "flora.cactus"
+    "name": "flora.cactus",
+    "look": {
+      "form": "cactus",
+      "phenology": "evergreen",
+      "foliage": {
+        "summer": ["#7fb069", "#5a8c4c", "#3d6838", "#264427"]
+      },
+      "wood": ["#a57c52", "#7a5636", "#553a25", "#352417"]
+    }
   },
   {
     "id": "berry-bush",
     "kind": "shrub",
-    "name": "flora.berry-bush"
+    "name": "flora.berry-bush",
+    "look": {
+      "form": "berry-bush",
+      "phenology": "deciduous",
+      "foliage": {
+        "summer": ["#86b44e", "#5a8f3c", "#3b672f", "#244424"],
+        "autumn": ["#f0a040", "#d0602a", "#a03a22", "#6a2418"],
+        "bare": ["#a08466", "#7a6048", "#564233", "#3a2c22"]
+      },
+      "wood": ["#a57c52", "#7a5636", "#553a25", "#352417"],
+      "fruit": {
+        "tones": ["#ff7a7a", "#d1304a", "#8e1d33", "#55101f"],
+        "months": [6, 7, 8, 9]
+      }
+    }
   },
   {
     "id": "reed",
     "kind": "shrub",
-    "name": "flora.reed"
+    "name": "flora.reed",
+    "look": {
+      "form": "reed",
+      "phenology": "deciduous",
+      "foliage": {
+        "summer": ["#c2c46e", "#999b4c", "#6e7034", "#454622"],
+        "autumn": ["#e8d070", "#c9a848", "#957832", "#5f4c22"],
+        "bare": ["#e3d39a", "#c4b06e", "#97844d", "#665732"]
+      },
+      "wood": ["#a57c52", "#7a5636", "#553a25", "#352417"],
+      "fruit": {
+        "tones": ["#9a6a3e", "#7a4f2c", "#56361d", "#352010"],
+        "months": [6, 7, 8, 9, 10, 11, 0, 1]
+      }
+    }
   },
   {
     "id": "dwarf-willow",
     "kind": "shrub",
-    "name": "flora.dwarf-willow"
+    "name": "flora.dwarf-willow",
+    "look": {
+      "form": "dwarf-willow",
+      "phenology": "deciduous",
+      "foliage": {
+        "summer": ["#a3b98a", "#7c9468", "#57704c", "#374a33"],
+        "autumn": ["#f2d36a", "#d0a840", "#9c7a2c", "#62491c"],
+        "bare": ["#b07a5a", "#8a5a40", "#62402e", "#40291d"]
+      },
+      "wood": ["#a57c52", "#7a5636", "#553a25", "#352417"]
+    }
   }
 ]

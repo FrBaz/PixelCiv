@@ -11,7 +11,7 @@ import { LAYER_NAMES, type GenerationStage, type WorldLayers, type WorldSize } f
 import type { WorldParams } from './worldParams';
 
 /** Version du protocole, vérifiée à la poignée de main. */
-export const PROTOCOL_VERSION = 6;
+export const PROTOCOL_VERSION = 7;
 
 /**
  * Pinceau de biome : donne à une case de terre un autre biome de terre. C'est un outil
@@ -222,6 +222,46 @@ export interface GroupsFrame {
   readonly legs: LegArrays;
 }
 
+/**
+ * Allures du gibier (ADR 0018) : au repos, au pas, au galop. Une étape d'arrêt (zéro jour) a
+ * l'allure du repos.
+ */
+export const FAUNA_GAIT = { rest: 0, walk: 1, run: 2 } as const;
+
+/**
+ * Étapes du gibier (protocole 7) : celles des humains (LegArrays), et l'allure de chacune
+ * (FAUNA_GAIT), dont le rendu tire l'image de l'animal, et non de sa vitesse apparente. Une étape
+ * de zéro jour arrête l'animal à son départ : celle d'un animal qui coupe son étape pour repartir,
+ * qu'une étape du même jour remplace s'il repart.
+ */
+export interface FaunaLegArrays extends LegArrays {
+  readonly gaits: Uint8Array<ArrayBuffer>;
+}
+
+/**
+ * Gibier (protocole 7, ADR 0018) : chaque animal vivant, par emplacements croissants, son
+ * emplacement, son identifiant, sa sorte (FAUNA_SPECIES, FAUNA_YOUNG, FAUNA_MALE, FAUNA_RUN), sa
+ * position (x, y, en unités de core/position.ts), et l'étape en cours de qui marche, repartie de
+ * l'instant de l'image, à l'allure que dit FAUNA_RUN. Les deltas apportent ensuite les étapes qui
+ * commencent (FaunaLegArrays). Rien de plus : l'identifiant de la harde, que le fil principal ne
+ * lit pas, ne voyage pas (relecture 2b.6, problème 16 ; 2b.8 l'ajoutera s'il lui sert). Les étapes
+ * de l'image gardent le format de celles des humains, jour compris (celui de l'image), que la
+ * chronologie lit comme les autres (LegQueue, legAt) : quatre octets par animal en route.
+ */
+export interface FaunaFrame {
+  readonly slots: Uint32Array<ArrayBuffer>;
+  readonly ids: Uint32Array<ArrayBuffer>;
+  readonly kinds: Uint8Array<ArrayBuffer>;
+  readonly positions: Int32Array<ArrayBuffer>;
+  readonly legs: LegArrays;
+}
+
+/** Bits de FaunaFrame.kinds : l'espèce (rang dans data/fauna.json), puis jeune, mâle adulte, au galop. */
+export const FAUNA_SPECIES = 0x0f;
+export const FAUNA_YOUNG = 0x10;
+export const FAUNA_MALE = 0x20;
+export const FAUNA_RUN = 0x40;
+
 /** Tampons d'étapes, à transférer. */
 export function legBuffers(legs: LegArrays): ArrayBuffer[] {
   return [
@@ -230,6 +270,22 @@ export function legBuffers(legs: LegArrays): ArrayBuffer[] {
     legs.start.buffer,
     legs.step.buffer,
     legs.count.buffer,
+  ];
+}
+
+/** Tampons d'étapes du gibier, à transférer. */
+export function faunaLegBuffers(legs: FaunaLegArrays): ArrayBuffer[] {
+  return [...legBuffers(legs), legs.gaits.buffer];
+}
+
+/** Tampons d'une image du gibier, à transférer. */
+export function faunaBuffers(frame: FaunaFrame): ArrayBuffer[] {
+  return [
+    frame.slots.buffer,
+    frame.ids.buffer,
+    frame.kinds.buffer,
+    frame.positions.buffer,
+    ...legBuffers(frame.legs),
   ];
 }
 
@@ -333,6 +389,11 @@ export interface StepStats {
   readonly walkers: number;
   /** Étapes commencées pendant le lot, écarts de côté compris. */
   readonly legs: number;
+  /** Animaux du gibier à la fin du lot, et leurs étapes commencées pendant le lot (ADR 0018). */
+  readonly animals: number;
+  readonly faunaLegs: number;
+  /** Durée moyenne du jour du gibier, sur les jours ordinaires du lot. */
+  readonly faunaMs?: number;
 }
 
 /** Messages du worker vers le fil principal. */
@@ -361,6 +422,8 @@ export type WorkerMessage =
       readonly time: TimeInfo;
       readonly layers: WorldLayers;
       readonly frame: GroupsFrame;
+      /** Le gibier, à l'instant de l'état (protocole 7, ADR 0018). */
+      readonly fauna: FaunaFrame;
       readonly chronicle: readonly ChronicleView[];
     }
   /**
@@ -378,6 +441,13 @@ export type WorkerMessage =
       readonly chronicle: readonly ChronicleView[];
       readonly legs?: LegArrays;
       readonly frame?: GroupsFrame;
+      /**
+       * Étapes du gibier commencées pendant le lot, avec leur allure, et l'image du gibier quand
+       * elle change (pas mensuel, apparitions et disparitions hors du mois) ; elle vaut à partir de
+       * l'instant `time` (protocole 7).
+       */
+      readonly faunaLegs?: FaunaLegArrays;
+      readonly fauna?: FaunaFrame;
     }
   /** Fiche demandée ; ni l'un ni l'autre si la cible n'existe pas. */
   | {
@@ -445,12 +515,15 @@ export function transferablesOf(message: MainMessage | WorkerMessage): ArrayBuff
       return [
         ...LAYER_NAMES.map((name) => message.layers[name].buffer),
         ...frameBuffers(message.frame),
+        ...faunaBuffers(message.fauna),
       ];
     case 'delta':
       return [
         ...message.chunks.map((chunk) => chunk.biome.buffer),
         ...(message.legs === undefined ? [] : legBuffers(message.legs)),
         ...(message.frame === undefined ? [] : frameBuffers(message.frame)),
+        ...(message.faunaLegs === undefined ? [] : faunaLegBuffers(message.faunaLegs)),
+        ...(message.fauna === undefined ? [] : faunaBuffers(message.fauna)),
       ];
     case 'recycle':
       return [...message.buffers];

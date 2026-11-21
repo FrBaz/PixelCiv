@@ -13,67 +13,15 @@ import {
   paletteTexel,
   PaletteTexture,
   roleSource,
+  SHADOW_ROLE_RANGE,
   slotColor,
 } from './humanShader';
 import type { HumanPalette } from './humans';
+import { OBJECT_FLAG, type ObjectPalette } from './objects';
+import { evaluateGlsl } from './testing';
 
-/**
- * Évalue hors du GPU une expression GLSL de PALETTE_ADDRESS : nombres, variables (vColor.r
- * comprise), + − * /, parenthèses, floor et mod, chaque résultat arrondi en flottant de 32 bits,
- * comme le calcule un GPU en précision haute.
- */
-function evaluate(expression: string, variables: Readonly<Record<string, number>>): number {
-  const tokens = expression.match(/\d+\.\d+|\d+|[A-Za-z_][\w.]*|[-+*/(),]/g) ?? [];
-  let at = 0;
-  const next = () => tokens[at++] ?? '';
-  const peek = () => tokens[at] ?? '';
-  const f = Math.fround;
-  const primary = (): number => {
-    const token = next();
-    if (token === '(') {
-      const value = sum();
-      next();
-      return value;
-    }
-    if (/^\d/.test(token)) return f(Number(token));
-    if (peek() === '(') {
-      next();
-      const args = [sum()];
-      while (peek() === ',') {
-        next();
-        args.push(sum());
-      }
-      next();
-      const [x = Number.NaN, y = Number.NaN] = args;
-      if (token === 'floor') return Math.floor(x);
-      if (token === 'mod') return f(x - f(y * Math.floor(f(x / y))));
-      throw new Error(`fonction inconnue : ${token}`);
-    }
-    if (!Object.hasOwn(variables, token)) throw new Error(`variable inconnue : ${token}`);
-    return f(variables[token] ?? Number.NaN);
-  };
-  const product = (): number => {
-    let value = primary();
-    while (peek() === '*' || peek() === '/') {
-      const operator = next();
-      const right = primary();
-      value = f(operator === '*' ? value * right : value / right);
-    }
-    return value;
-  };
-  const sum = (): number => {
-    let value = product();
-    while (peek() === '+' || peek() === '-') {
-      const operator = next();
-      const right = product();
-      value = f(operator === '+' ? value + right : value - right);
-    }
-    return value;
-  };
-  const value = sum();
-  if (at !== tokens.length) throw new Error(`expression mal lue : ${expression}`);
-  return value;
-}
+/** Une expression de PALETTE_ADDRESS, évaluée hors du GPU (testing.ts). */
+const evaluate = evaluateGlsl;
 
 /** Une palette dont chaque rôle r prend la couleur (r, seed, 255 − r). */
 const paletteOf = (seed: number): HumanPalette =>
@@ -199,5 +147,51 @@ describe('shader des humains (ADR 0016, § 8)', () => {
     expect(() => {
       for (let look = 0; look <= MAX_LOOKS; look++) full.slotOf(look, () => []);
     }).toThrow(RangeError);
+  });
+
+  it('porte dans le bleu les drapeaux d’un objet, sans toucher la place que relit le shader', () => {
+    for (const slot of [0, 255, 256, MAX_LOOKS - 1]) {
+      for (const flags of [0, OBJECT_FLAG.flip, OBJECT_FLAG.ground, 255]) {
+        const color = slotColor(slot, flags);
+        expect(colorSlot(color)).toBe(slot);
+        expect((color >>> 16) & 255).toBe(flags);
+        expect(color >>> 24).toBe(255);
+        // Ce que relit le fragment : les drapeaux, et le drapeau de l'ombre « ground ».
+        const variables = { 'vColor.b': ((color >>> 16) & 255) / 255 };
+        const objectFlags = evaluateGlsl('floor(vColor.b * 255.0 + 0.5)', variables);
+        expect(objectFlags).toBe(flags);
+        const ground = evaluateGlsl(
+          `mod(floor(objectFlags / ${OBJECT_FLAG.ground.toFixed(1)}), 2.0)`,
+          { objectFlags },
+        );
+        expect(ground).toBe((flags & OBJECT_FLAG.ground) === 0 ? 0 : 1);
+      }
+    }
+    // Le fragment lit ainsi ses drapeaux, et l'ombre du sol sur les seuls rôles de l'ombre.
+    expect(HUMAN_FRAGMENT).toContain('float objectFlags = floor(vColor.b * 255.0 + 0.5);');
+    expect(HUMAN_FRAGMENT).toContain(
+      `float ground = mod(floor(objectFlags / ${OBJECT_FLAG.ground.toFixed(1)}), 2.0);`,
+    );
+    expect(HUMAN_FRAGMENT).toContain(
+      `role > ${(SHADOW_ROLE_RANGE[0] - 0.5).toFixed(1)} && role < ${(SHADOW_ROLE_RANGE[1] + 0.5).toFixed(1)}`,
+    );
+  });
+
+  it('range l’alpha des palettes d’objets, opaques pour les humains, et le fragment le rend prémultiplié', () => {
+    const texture = new PaletteTexture(1);
+    const human = texture.slotOf(7, () => paletteOf(7));
+    const object: ObjectPalette = Array.from({ length: PALETTE_ROLES }, (_, role) =>
+      role === 1 ? [19, 19, 28, 255] : role === 20 ? [0, 0, 0, 97] : undefined,
+    );
+    const decor = texture.slotOf(2 ** 20, () => object);
+    expect(texture.colorAt(human, 40)).toEqual([40, 7, 215, 255]);
+    expect(texture.colorAt(decor, 1)).toEqual([19, 19, 28, 255]);
+    expect(texture.colorAt(decor, 20)).toEqual([0, 0, 0, 97]);
+    expect(texture.colorAt(decor, 21)).toEqual([0, 0, 0, 0]);
+    // Un rôle sans couleur ne se peint pas ; un ton translucide se mélange, prémultiplié ; un
+    // ton opaque, celui des humains, sort tel quel.
+    expect(HUMAN_FRAGMENT).toContain('if (tone.a < 0.002) discard;');
+    expect(HUMAN_FRAGMENT).toContain('gl_FragColor = vec4(tone.rgb * tone.a, tone.a);');
+    expect(HUMAN_FRAGMENT).not.toContain('gl_FragColor = vec4(texture2D(uPalettes, at).rgb, 1.0);');
   });
 });

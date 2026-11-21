@@ -135,6 +135,28 @@ export function DebugPanel() {
     ],
     ['debug.drawCalls', number(info?.drawCalls, 0)],
     [
+      'debug.decor',
+      info?.decorObjects === undefined
+        ? t('debug.unavailable')
+        : t('debug.decorValue', {
+            objects: info.decorObjects,
+            ms: round(info.decorMs, 2),
+            chunks: info.decorChunks ?? 0,
+            build: round(info.decorBuildMs ?? 0, 1),
+          }),
+    ],
+    [
+      'debug.fauna',
+      info?.animals === undefined
+        ? t('debug.unavailable')
+        : t('debug.faunaValue', {
+            animals: info.animals,
+            drawn: info.faunaDrawn ?? 0,
+            update: round(info.faunaLayerMs, 2),
+            ms: round(info.faunaDayMs ?? 0, 3),
+          }),
+    ],
+    [
       'debug.memory',
       info?.memoryMb === undefined
         ? t('debug.unavailable')

@@ -8,19 +8,37 @@ import {
   type ParticleContainer,
   type Shader,
   type Sprite,
+  type Texture,
 } from 'pixi.js';
 import { describe, expect, it, vi } from 'vitest';
 import { PositionMirror } from '../app/frames';
 import { loadGameData, type Appearance } from '../core/data';
-import { NO_CARRIER, type GroupsFrame, type LegArrays } from '../core/protocol';
+import { FAUNA_GAIT, NO_CARRIER, type GroupsFrame, type LegArrays } from '../core/protocol';
 import { FIXED } from '../core/position';
 import { RandomStream, streamSeed } from '../core/rng';
 import { visualCode } from '../core/visual';
 import { CHUNK_PX } from './bake';
 import { displayScale, physicalZoom, TILE_PX, visibleChunks, type Camera } from './camera';
 import { viewDensity, type Box } from './crowd';
-import { FIRST_PALETTE_ROWS, PALETTES_PER_ROW, type PaletteTexture } from './humanShader';
-import { LEVEL_ROWS } from './humans';
+import { PALETTE_ROLES } from '../core/data/humans';
+import { seasonFactor } from '../core/seasons';
+import {
+  FIRST_PALETTE_ROWS,
+  PALETTES_PER_ROW,
+  SHADOW_ROLE_RANGE,
+  type PaletteTexture,
+} from './humanShader';
+import { DECOR_ATLAS } from './decor';
+import { FAUNA_ATLAS, FaunaLayer, type FaunaMotion } from './fauna';
+import { humanAtlas, LEVEL_ROWS } from './humans';
+import {
+  ObjectList,
+  PALETTE_KEYS,
+  type ObjectAtlas,
+  type ObjectSource,
+  type ObjectView,
+  type PaletteSlots,
+} from './objects';
 import { bannerCloth, PeopleLayer, stepDuration, STEP_MS, type PeopleScene } from './people';
 
 // Le calque des individus, sur une application factice : la scène, et la densité de l'écran
@@ -714,5 +732,409 @@ describe('individus à leur position (ADR 0014, ADR 0016)', () => {
     }
     expect(palettes.written).toBe(looks);
     expect(people.stats.cached).toBe(looks);
+  });
+});
+
+// Le calque commun (ADR 0017, § 7) : une source d'objets factice, sur un atlas de rôles à elle,
+// de la largeur de celui des humains. Son motif : six pixels de large, des rangées peintes au
+// rôle 17 au-dessus des pieds, deux rangées d'ombre portée dessous.
+const OBJECT_PAINT = 17;
+const OBJECT_SHADOW = SHADOW_ROLE_RANGE[0];
+const FAKE_ATLAS: ObjectAtlas = (() => {
+  const width = humanAtlas.width;
+  const roles = new Uint8Array(width * 12);
+  for (let v = 0; v < 10; v++) {
+    for (let u = 0; u < 6; u++) roles[v * width + u] = v < 8 ? OBJECT_PAINT : OBJECT_SHADOW;
+  }
+  // Un trou au milieu du motif : là, on voit au travers.
+  roles[width + 2] = 0;
+  return { width, height: 12, roles, motifs: [0, 0, 6, 10, 3, 8], shadowRoles: [OBJECT_SHADOW] };
+})();
+/** Le même atlas, sans ombre déclarée : ses deux rangées du bas sont peintes sur l'objet. */
+const UNSHADED_ATLAS: ObjectAtlas = { ...FAKE_ATLAS, shadowRoles: undefined };
+
+/** Une source d'objets factice : des objets aux pieds donnés, en cases, une seule palette. */
+class FakeObjects implements ObjectSource {
+  atlas = FAKE_ATLAS;
+  version = 0;
+  updates = 0;
+  views: ObjectView[] = [];
+  generations: number[] = [];
+  private readonly list = new ObjectList();
+  readonly feet: readonly (readonly [number, number])[];
+  constructor(feet: readonly (readonly [number, number])[]) {
+    this.feet = feet;
+  }
+  update(view: ObjectView, palettes: PaletteSlots): ObjectList {
+    this.updates++;
+    this.views.push(view);
+    this.generations.push(palettes.generation);
+    const { list } = this;
+    list.clear();
+    const cell = TILE_PX * view.scale;
+    const slot = palettes.slot(PALETTE_KEYS.decor[0], () =>
+      Array.from({ length: PALETTE_ROLES }, (_, role) =>
+        role === OBJECT_PAINT ? [10, 120, 30, 255] : undefined,
+      ),
+    );
+    for (const [x, y] of this.feet) {
+      const footX = Math.round(x * cell);
+      const footY = Math.round(y * cell);
+      const { k } = view;
+      list.push(footX - 3 * k, footY - 8 * k, footY, 6 * k, 10 * k, 0, slot, k);
+    }
+    list.sort();
+    return list;
+  }
+}
+
+/** Le calque, l'atlas factice (ou les atlas `atlases`) rangé sous celui des humains. */
+function setupWithObjects(resolution: number, gl = false, ...atlases: ObjectAtlas[]) {
+  const stage = new Container();
+  const renderer: { resolution: number; gl?: object } = { resolution };
+  if (gl) renderer.gl = {};
+  const app = { renderer, stage } as unknown as Application;
+  const people = new PeopleLayer(app, {
+    genetics: data.genetics,
+    appearance: data.appearance,
+    reference,
+    objects: atlases.length === 0 ? [FAKE_ATLAS] : atlases,
+  });
+  const layer = stage.children.at(0);
+  if (!(layer instanceof Container)) throw new Error('calque introuvable');
+  return { people, layer, renderer };
+}
+
+describe('calque commun : décor et humains (ADR 0017, § 7)', () => {
+  it('trie les objets avec les humains par leurs pieds, d’un seul conteneur et d’une seule texture', () => {
+    const { people, layer } = setupWithObjects(1);
+    // Un humain au centre de la case (100, 50) ; un objet aux pieds au-dessus des siens, un
+    // autre au-dessous, un troisième à pieds égaux.
+    const objects = new FakeObjects([
+      [100.5, 50.3],
+      [100.6, 50.75],
+      [100.4, 50.5],
+    ]);
+    const shown = { ...scene(frame(1, [1, 100, 50, 1])), objects: [objects], month: 6.5 };
+    people.draw(shown, aimedAt(100, 50, 8), viewport, world);
+    const drawn = rendered(people, layer, 1);
+    // Les dessins, du fond vers l'avant : l'objet du fond, celui des pieds égaux, l'humain,
+    // l'objet de devant.
+    expect(drawn.map((entry) => entry.entity)).toEqual([0, 0, 1, 0]);
+    const tops = drawn.map((entry) => entry.box.top + entry.box.height);
+    expect(tops[0]).toBeLessThan(tops[2] ?? 0);
+    expect(tops[3]).toBeGreaterThan(tops[2] ?? 0);
+    // Des positions entières de l'écran, à la densité de la vue.
+    for (const entry of drawn) {
+      expect(Number.isInteger(entry.box.left) && Number.isInteger(entry.box.top)).toBe(true);
+    }
+    // Une seule source de texture : les rôles des humains, puis ceux des objets.
+    const sources = new Set(people.shown.particles.map((particle) => particle.texture.source));
+    expect(sources.size).toBe(1);
+    expect(people.stats.objects).toBe(3);
+    // Une palette pour les trois objets, rangée une fois.
+    const slots = new Set(people.shown.particles.map((particle) => particle.color & 0xffff));
+    expect(slots.size).toBe(2);
+    expect(people.paletteTexture.count).toBe(2);
+  });
+
+  it('touche ce qu’on voit : un pixel peint d’un objet cache l’humain à l’appui, ni son ombre ni son trou', () => {
+    for (const resolution of [1, 2.75]) {
+      const { people, layer } = setupWithObjects(resolution);
+      // L'objet de devant couvre le bas de l'humain.
+      const objects = new FakeObjects([[100.52, 50.62]]);
+      const shown = { ...scene(frame(1, [1, 100, 50, 1])), objects: [objects], month: 6.5 };
+      people.draw(shown, aimedAt(100, 50, 8), viewport, world);
+      const drawn = rendered(people, layer, resolution);
+      const human = drawn.find((entry) => entry.entity === 1);
+      const object = drawn.find((entry) => entry.entity === 0);
+      if (human === undefined || object === undefined) throw new Error('dessins absents');
+      expect(drawn.indexOf(object)).toBeGreaterThan(drawn.indexOf(human));
+      const counts = { painted: 0, hole: 0 };
+      const unit = object.unit;
+      for (let y = object.box.top; y < object.box.top + object.box.height; y++) {
+        for (let x = object.box.left; x < object.box.left + object.box.width; x++) {
+          if (!contains(human.box, x + 0.5, y + 0.5)) continue;
+          const u = Math.floor((x - object.box.left) / unit);
+          const v = Math.floor((y - object.box.top) / unit);
+          const role = FAKE_ATLAS.roles[v * FAKE_ATLAS.width + u] ?? 0;
+          const picked = people.pick(x + 0.5, y + 0.5, 0);
+          if (role === OBJECT_PAINT) {
+            counts.painted++;
+            expect(picked, `(${String(x)}, ${String(y)}) peint`).toBeUndefined();
+          } else {
+            counts.hole++;
+            expect(picked?.kind === 'person' ? picked.id : undefined).toBe(1);
+          }
+        }
+      }
+      expect(counts.painted).toBeGreaterThan(0);
+      expect(counts.hole).toBeGreaterThan(0);
+      // L'ombre portée tombe sous les pieds de l'objet, au sol : elle ne cache rien, et un
+      // appui sur elle trouve, à la tolérance du doigt, l'humain tout proche ; un appui sur un
+      // pixel peint de l'objet, non.
+      const slop = 12;
+      const shadowRow = object.box.top + 9 * unit;
+      const left = object.box.left + 2 * unit;
+      const onShadow = people.pick(left + 0.5, shadowRow + 0.5, slop);
+      expect(onShadow?.kind === 'person' ? onShadow.id : undefined, 'ombre').toBe(1);
+      const onPaint = people.pick(left + 0.5, object.box.top + 7 * unit + 0.5, slop);
+      expect(onPaint, 'pixel peint').toBeUndefined();
+      // Un atlas sans ombre déclarée (le gibier) : le même rôle y est peint sur l'objet, et cache.
+      const plain = setupWithObjects(resolution, false, UNSHADED_ATLAS);
+      const unshaded = new FakeObjects([[100.52, 50.62]]);
+      unshaded.atlas = UNSHADED_ATLAS;
+      plain.people.draw({ ...shown, objects: [unshaded] }, aimedAt(100, 50, 8), viewport, world);
+      expect(plain.people.pick(left + 0.5, shadowRow + 0.5, slop), 'rôle peint').toBeUndefined();
+      // Au-dessus de l'objet, l'humain se touche.
+      const above = people.pick(human.box.left + 1, human.box.top + 1, 0);
+      expect(above?.kind === 'person' ? above.id : undefined).toBe(1);
+    }
+  });
+
+  it('compte à part les objets et la mise à jour de chaque source, sans durée quand l’image ne se refait pas', () => {
+    // Relecture 2b.6, problème 20 : la ligne du décor comptait aussi le gibier, et gardait, en
+    // pause, la durée de la dernière image refaite.
+    const { people } = setupWithObjects(1);
+    const near = new FakeObjects([
+      [100.5, 50.5],
+      [100.6, 50.7],
+    ]);
+    // Le second objet de cette source tombe hors de la vue.
+    const far = new FakeObjects([
+      [100.4, 50.4],
+      [400.5, 50.5],
+    ]);
+    let clock = 0;
+    const now = vi.spyOn(performance, 'now').mockImplementation(() => (clock += 1));
+    const shown = { ...scene(frame(1, [1, 100, 50, 1])), objects: [near, far], month: 6.5 };
+    people.draw(shown, aimedAt(100, 50, 8), viewport, world);
+    expect(people.objectCost(near)?.shown).toBe(2);
+    expect(people.objectCost(far)?.shown).toBe(1);
+    expect(people.stats.objects).toBe(3);
+    expect(people.objectCost(near)?.ms).toBeGreaterThan(0);
+    expect(people.objectCost(far)?.ms).toBeGreaterThan(0);
+    expect(people.stats.objectsMs).toBeGreaterThan(0);
+    // La même image : aucune source ne se met à jour, et aucune durée ne se compte.
+    people.draw(shown, aimedAt(100, 50, 8), viewport, world);
+    expect(near.updates).toBe(1);
+    expect(people.stats.objectsMs).toBe(0);
+    expect(people.objectCost(near)).toEqual({ shown: 2, ms: 0 });
+    expect(people.objectCost(far)).toEqual({ shown: 1, ms: 0 });
+    // Une source que la scène ne porte pas n'a rien coûté.
+    expect(people.objectCost(new FakeObjects([]))).toBeUndefined();
+    now.mockRestore();
+  });
+
+  it('montre les objets de près seulement, sur un monde sans foule aussi, et ne les met à jour qu’aux images refaites', () => {
+    const { people, layer } = setupWithObjects(1);
+    const objects = new FakeObjects([[300.5, 120.5]]);
+    // Un monde sans image des groupes : le décor se montre quand même.
+    const empty = new PositionMirror({ carry, passable: () => true });
+    const bare: PeopleScene = {
+      source: empty,
+      t: 0,
+      walkMs: 0,
+      stepMs: STEP_MS.slowest,
+      passable: () => true,
+      objects: [objects],
+      month: 6.5,
+    };
+    people.draw(bare, aimedAt(300, 120, 8), viewport, world);
+    expect(rendered(people, layer, 1).map((entry) => entry.entity)).toEqual([0]);
+    // À la densité et au niveau des individus.
+    const density = viewDensity(displayScale(8), 1, reference, LEVEL_ROWS);
+    expect(objects.views.at(-1)?.level).toBe(density.level);
+    expect(objects.views.at(-1)?.k).toBe(density.k);
+    // La même image : la source n'est pas rappelée, et rien ne se refait.
+    const version = people.drawVersion;
+    people.draw(bare, aimedAt(300, 120, 8), viewport, world);
+    expect(objects.updates).toBe(1);
+    expect(people.drawVersion).toBe(version);
+    // Le jour change, ou la source : l'image se refait.
+    people.draw({ ...bare, month: 6.6 }, aimedAt(300, 120, 8), viewport, world);
+    expect(objects.updates).toBe(2);
+    expect(people.drawVersion).toBe(version + 1);
+    objects.version++;
+    people.draw({ ...bare, month: 6.6 }, aimedAt(300, 120, 8), viewport, world);
+    expect(objects.updates).toBe(3);
+    expect(people.drawVersion).toBe(version + 2);
+    // De loin (zooms 1 et 2), ni objet ni mise à jour ; sans source, rien non plus.
+    for (const zoom of [1, 2]) {
+      people.draw({ ...bare, month: 6.6 }, aimedAt(300, 120, zoom), viewport, world);
+      expect(rendered(people, layer, 1)).toEqual([]);
+    }
+    expect(objects.updates).toBe(3);
+    people.draw({ ...bare, objects: [] }, aimedAt(300, 120, 8), viewport, world);
+    expect(rendered(people, layer, 1)).toEqual([]);
+    // Un autre monde : une texture des palettes neuve, d'une autre génération, que la source
+    // reçoit, pour redemander ses places.
+    people.clear();
+    people.draw(bare, aimedAt(300, 120, 8), viewport, world);
+    expect(new Set(objects.generations).size).toBe(2);
+    expect(objects.generations.at(-1)).toBeGreaterThan(objects.generations.at(0) ?? 0);
+  });
+
+  it('refuse un atlas d’objets d’une autre largeur, et une source dont l’atlas n’est pas rangé', () => {
+    const stage = new Container();
+    const app = { renderer: { resolution: 1 }, stage } as unknown as Application;
+    const narrow = { ...FAKE_ATLAS, width: 512 };
+    expect(
+      () =>
+        new PeopleLayer(app, {
+          genetics: data.genetics,
+          appearance: data.appearance,
+          reference,
+          objects: [narrow],
+        }),
+    ).toThrow(/512/);
+    const { people } = setup(1);
+    const shown = { ...scene(frame(1, [1, 100, 50, 1])), objects: [new FakeObjects([])] };
+    expect(() => {
+      people.draw(shown, aimedAt(100, 50, 8), viewport, world);
+    }).toThrow(/atlas/);
+  });
+
+  it('fait lire au shader le sol sous l’ombre « ground » : origine de la carte, échelle, saison', () => {
+    const adapter = DOMAdapter.get();
+    DOMAdapter.set({
+      ...adapter,
+      createCanvas: () => ({ getContext: () => null }) as unknown as ICanvas,
+    });
+    try {
+      for (const resolution of [1, 2.75]) {
+        const { people } = setupWithObjects(resolution, true);
+        const objects = new FakeObjects([[100.5, 50.5]]);
+        const ground = {
+          data: new BufferImageSource({ resource: new Uint8Array(4 * 8), width: 4, height: 2 }),
+          tones: new BufferImageSource({ resource: new Uint8Array(4 * 6), width: 2, height: 3 }),
+          columns: 4,
+          rows: 2,
+          biomes: 3,
+        };
+        people.setGround(ground);
+        const camera = aimedAt(100, 50, 8 * resolution);
+        const month = 1.25;
+        people.draw(
+          { ...scene(frame(1, [1, 100, 50, 1])), objects: [objects], month },
+          camera,
+          viewport,
+          world,
+        );
+        const shader = (insides(people).humans as { shader?: Shader }).shader;
+        const resources = shader?.resources as {
+          uGround: BufferImageSource;
+          uGroundTones: BufferImageSource;
+          ground: {
+            uniforms: {
+              uGroundView: Float32Array;
+              uGroundCells: Float32Array;
+              uGroundBiomes: number;
+              uSeason: number;
+            };
+          };
+        };
+        expect(resources.uGround === ground.data, 'texture des saisons lue').toBe(true);
+        expect(resources.uGroundTones === ground.tones, 'tons d’ombre lus').toBe(true);
+        const scale = displayScale(camera.zoom);
+        const originX = Math.round(viewport.width / 2 - camera.x * scale);
+        const originY = Math.round(viewport.height / 2 - camera.y * scale);
+        expect(Array.from(resources.ground.uniforms.uGroundView)).toEqual(
+          [originX / resolution, originY / resolution, scale / resolution, 0].map(Math.fround),
+        );
+        expect(Array.from(resources.ground.uniforms.uGroundCells)).toEqual([4, 2]);
+        expect(resources.ground.uniforms.uGroundBiomes).toBe(3);
+        expect(resources.ground.uniforms.uSeason).toBe(Math.fround(seasonFactor(month)));
+      }
+    } finally {
+      DOMAdapter.set(adapter);
+    }
+  });
+});
+
+// Le gibier (ADR 0018, § 7) : une vraie source, FaunaLayer, sur l'atlas du build rangé sous ceux
+// des humains et du décor, que mène une chronologie factice : un animal immobile, au repos.
+function oneAnimal(x: number, y: number, kind: number, facing: number): FaunaMotion {
+  return {
+    frame: {
+      slots: Uint32Array.of(0),
+      ids: Uint32Array.of(7),
+      kinds: Uint8Array.of(kind),
+      positions: Int32Array.of(Math.round(x * FIXED), Math.round(y * FIXED)),
+      legs: noLegs(),
+    },
+    version: 1,
+    moved: [],
+    fallen: {
+      count: 0,
+      at: 0,
+      generation: 0,
+      kinds: new Uint8Array(0),
+      ids: new Uint32Array(0),
+      positions: new Int32Array(0),
+      facing: new Int8Array(0),
+    },
+    span(_index, out) {
+      out[0] = Math.round(x * FIXED);
+      out[1] = 0;
+      out[2] = Math.round(y * FIXED);
+      out[3] = 0;
+    },
+    position(_index, _t, out) {
+      out[0] = Math.round(x * FIXED);
+      out[1] = Math.round(y * FIXED);
+    },
+    gait: () => FAUNA_GAIT.rest,
+    facing: () => facing,
+  };
+}
+
+describe('calque commun : le gibier (ADR 0018, § 7)', () => {
+  it('trie l’animal avec l’humain par ses pieds ; sans ombre, ses pixels peints le cachent à l’appui, et il ne se choisit pas', () => {
+    for (const resolution of [1, 2.75]) {
+      const { people, layer } = setupWithObjects(resolution, false, DECOR_ATLAS, FAUNA_ATLAS);
+      // Un sanglier qui va vers l'est, ses pieds devant ceux de l'humain de la case (100, 50).
+      const game = new FaunaLayer(data, oneAnimal(100.6, 50.7, 1, 1), 512);
+      const shown = { ...scene(frame(1, [1, 100, 50, 1])), objects: [game], month: 6.5 };
+      people.draw(shown, aimedAt(100, 50, 8), viewport, world);
+      const drawn = rendered(people, layer, resolution);
+      const person = drawn.find((entry) => entry.entity === 1);
+      const boar = drawn.find((entry) => entry.entity === 0);
+      if (person === undefined || boar === undefined) throw new Error('dessins absents');
+      expect(drawn.indexOf(boar)).toBeGreaterThan(drawn.indexOf(person));
+      expect(people.stats.objects).toBe(1);
+      // Retourné vers l'est : son échelle est négative.
+      expect(boar.unit).toBeLessThan(0);
+      const unit = Math.abs(boar.unit);
+      const { frame: motif } = boar.texture as Texture;
+      const top = humanAtlas.height + DECOR_ATLAS.height;
+      expect(motif.y).toBeGreaterThanOrEqual(top);
+      const counts = { painted: 0, hole: 0 };
+      for (let y = boar.box.top; y < boar.box.top + boar.box.height; y++) {
+        for (let x = boar.box.left; x < boar.box.left + boar.box.width; x++) {
+          if (!contains(person.box, x + 0.5, y + 0.5)) continue;
+          const u = Math.floor((x - boar.box.left) / unit);
+          const v = Math.floor((y - boar.box.top) / unit);
+          const column = motif.x + motif.width - 1 - u;
+          const role = FAUNA_ATLAS.roles[(motif.y - top + v) * FAUNA_ATLAS.width + column] ?? 0;
+          const picked = people.pick(x + 0.5, y + 0.5, 0);
+          if (role !== 0) {
+            counts.painted++;
+            expect(picked, `(${String(x)}, ${String(y)}) peint`).toBeUndefined();
+          } else {
+            counts.hole++;
+            expect(picked?.kind === 'person' ? picked.id : undefined).toBe(1);
+          }
+        }
+      }
+      expect(counts.painted).toBeGreaterThan(0);
+      expect(counts.hole).toBeGreaterThan(0);
+      // Au-dessus de lui, l'humain se touche.
+      const above = people.pick(person.box.left + 1, person.box.top + 1, 0);
+      expect(above?.kind === 'person' ? above.id : undefined).toBe(1);
+      // De loin, rien : le gibier ne se montre que dans la vue rapprochée.
+      people.draw(shown, aimedAt(100, 50, 2), viewport, world);
+      expect(people.stats.objects).toBe(0);
+    }
   });
 });

@@ -9,6 +9,7 @@
  * - Flore : densités d'arbres et de buissons, celles du biome, que module un bruit.
  */
 import { altitudeLevelIndex } from '../core/altitude';
+import { floraCode } from '../core/flora';
 import type { Catalog } from '../core/data/catalog';
 import {
   ALTITUDE_FAMILIES,
@@ -34,10 +35,12 @@ export interface ResourceData {
   readonly resources: Catalog<Resource>;
 }
 
-/** Bruit des densités de la flore : des bosquets et des clairières. */
+/**
+ * Bruit des densités de la flore : des bosquets et des clairières. Son écart autour des
+ * densités du biome (FLORA_VARIATION) et le code de chaque case (floraCode) sont dans
+ * src/core/flora.ts, que lit aussi le décor (ADR 0017).
+ */
 const FLORA_NOISE = { frequency: 24, octaves: 3 };
-/** Écart des densités autour de celles du biome, en part (±). */
-const FLORA_VARIATION = 0.35;
 
 export function placeResources(
   sampler: CylinderSampler,
@@ -125,8 +128,7 @@ export function placeResources(
   const density = (base: number, layer: NoiseLayer, cell: number) => {
     if (base <= 0) return 0;
     const x = cell % width;
-    const noise = sampler.fractalAt(layer, FLORA_NOISE, x, (cell - x) / width);
-    return Math.round(255 * Math.min(1, Math.max(0, base * (1 + FLORA_VARIATION * noise))));
+    return floraCode(base, sampler.fractalAt(layer, FLORA_NOISE, x, (cell - x) / width));
   };
   for (let cell = 0; cell < count; cell++) {
     const flora = biomes.entries.at(biome[cell] ?? 0)?.flora;

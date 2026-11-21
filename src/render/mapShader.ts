@@ -26,7 +26,7 @@
  * carte ne le donne qu'aux blocs où l'onde se voit ; partout ailleurs, `MAP_FRAGMENT` reste
  * celui de la tâche 2b.3, à l'octet près, en image comme en coût.
  */
-import { COVER_RAMPS, type CoverRamp } from '../core/seasons';
+import { COVER_RAMPS, FOREST_SNOW_SHARE, type CoverRamp } from '../core/seasons';
 import { glslFloat } from './glsl';
 import { WAVE_GLSL } from './waves';
 
@@ -36,6 +36,41 @@ export { glslFloat } from './glsl';
 function coverExpression(ramp: CoverRamp): string {
   return `clamp((${glslFloat(ramp.onset)} - monthly) / ${glslFloat(ramp.span)}, 0.0, 1.0) * ${glslFloat(ramp.full)}`;
 }
+
+/**
+ * La couverture d'une case, écrite une fois en expressions GLSL : le shader de la carte les
+ * assemble (MAP_FRAGMENT), celui des humains et des objets aussi, pour l'ombre « ground »
+ * (humanShader.ts), et les essais les évaluent hors du GPU contre la part de neige que lit le
+ * décor (render/seasons.ts, snowShare) : un arbre s'enneige d'après la neige que montre la
+ * carte. `data` est le texel de la case dans la texture des saisons, normalisé comme le lit le
+ * GPU ; `uSeason` le facteur de saison du mois.
+ */
+export const COVER_GLSL = {
+  temperature: 'data.r * 255.0 / 2.0 - 64.0',
+  amplitude: 'data.g * 255.0 / 8.0',
+  flags: 'floor(data.b * 255.0 + 0.5)',
+  south: 'mod(flags, 2.0)',
+  cover: 'mod(floor(flags / 16.0), 4.0)',
+  waterCell: 'mod(floor(flags / 64.0), 2.0)',
+  forest: 'floor(flags / 128.0)',
+  monthly: 'temperature + amplitude * uSeason * (south > 0.5 ? -1.0 : 1.0)',
+  snow: coverExpression(COVER_RAMPS.snow),
+  ice: coverExpression(COVER_RAMPS.ice),
+  seaIce: coverExpression(COVER_RAMPS['sea-ice']),
+  forestSnow: `snow * (forest > 0.5 ? ${glslFloat(FOREST_SNOW_SHARE)} : 1.0)`,
+} as const;
+
+/** La matrice de Bayer 4 × 4 de la trame des couvertures, en GLSL (crédits : CREDITS.md). */
+export const BAYER_GLSL = `float bayer2(vec2 q) {
+  return mod(2.0 * q.x + 3.0 * q.y, 4.0);
+}
+
+/** Seuil de la matrice de Bayer 4 × 4 au point entier p, dans (0, 1). */
+float bayer(vec2 p) {
+  vec2 a = mod(p, 2.0);
+  vec2 b = mod(floor(p / 2.0), 2.0);
+  return (4.0 * bayer2(a) + bayer2(b) + 0.5) / 16.0;
+}`;
 
 export const MAP_VERTEX = /* glsl */ `
 in vec2 aPosition;
@@ -83,16 +118,7 @@ uniform float uFine;
 /** 1 : ruisseaux visibles (de près). */
 uniform float uStreams;
 
-float bayer2(vec2 q) {
-  return mod(2.0 * q.x + 3.0 * q.y, 4.0);
-}
-
-/** Seuil de la matrice de Bayer 4 × 4 au point entier p, dans (0, 1). */
-float bayer(vec2 p) {
-  vec2 a = mod(p, 2.0);
-  vec2 b = mod(floor(p / 2.0), 2.0);
-  return (4.0 * bayer2(a) + bayer2(b) + 0.5) / 16.0;
-}
+${BAYER_GLSL}
 
 void main() {
   vec4 texel = texture(uChunk, vUV);
@@ -101,15 +127,15 @@ void main() {
   vec2 cellUv = (cell + 0.5) / uWorldCells;
   vec4 data = texture(uData, cellUv);
 
-  float temperature = data.r * 255.0 / 2.0 - 64.0;
-  float amplitude = data.g * 255.0 / 8.0;
-  float flags = floor(data.b * 255.0 + 0.5);
-  float south = mod(flags, 2.0);
-  float cover = mod(floor(flags / 16.0), 4.0);
-  float waterCell = mod(floor(flags / 64.0), 2.0);
-  float forest = floor(flags / 128.0);
+  float temperature = ${COVER_GLSL.temperature};
+  float amplitude = ${COVER_GLSL.amplitude};
+  float flags = ${COVER_GLSL.flags};
+  float south = ${COVER_GLSL.south};
+  float cover = ${COVER_GLSL.cover};
+  float waterCell = ${COVER_GLSL.waterCell};
+  float forest = ${COVER_GLSL.forest};
   float biome = floor(data.a * 255.0 + 0.5);
-  float monthly = temperature + amplitude * uSeason * (south > 0.5 ? -1.0 : 1.0);
+  float monthly = ${COVER_GLSL.monthly};
 
   // Au plus près, chaque pixel dit s'il est de terre (bit faible du rouge) et s'il porte
   // un ruisseau (bit faible du vert) ; de loin, la moyenne des mipmaps brouille ces bits,
@@ -126,12 +152,12 @@ void main() {
   if (stream > 0.5) color = uRiverColor;
 
   // Couverture du mois (C1, D9) : neige, glace, banquise.
-  float snow = ${coverExpression(COVER_RAMPS.snow)};
-  float ice = ${coverExpression(COVER_RAMPS.ice)};
+  float snow = ${COVER_GLSL.snow};
+  float ice = ${COVER_GLSL.ice};
   float coverage = 0.0;
   if (!water && cover == 1.0) {
     // Les arbres dépassent : les forêts gardent moins de neige.
-    coverage = snow * (forest > 0.5 ? 0.7 : 1.0);
+    coverage = ${COVER_GLSL.forestSnow};
   } else if (!water && (waterCell > 0.5 || cover != 0.0)) {
     // Une terre posée sur l'eau, ou la rive d'un fleuve : la neige y tombe aussi.
     coverage = snow;
@@ -143,7 +169,7 @@ void main() {
   } else if (water && cover == 2.0) {
     coverage = ice;
   } else if (water && cover == 3.0) {
-    coverage = ${coverExpression(COVER_RAMPS['sea-ice'])};
+    coverage = ${COVER_GLSL.seaIce};
   }
   vec2 dither = uFine > 0.5 ? pixel + uOrigin * 4.0 : cell;
   if (coverage > bayer(dither)) {

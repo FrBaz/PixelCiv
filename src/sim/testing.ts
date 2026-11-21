@@ -4,7 +4,7 @@
  * n'importe pas ce module.
  */
 import { loadGameData, type Species } from '../core/data';
-import { loadCatalog } from '../core/data/catalog';
+import { catalogOf, loadCatalog } from '../core/data/catalog';
 import { SpeciesListSchema } from '../core/data/people';
 import type { SpawnGroupCommand } from '../core/protocol';
 import { copyLayers, emptyLayers, type WorldLayers } from '../core/world';
@@ -32,6 +32,15 @@ export function withHuman(change: (human: Species) => Species): SimContent {
     ...testData,
     species: loadCatalog('variante de data/species.json', SpeciesListSchema, [change(testHuman)]),
   };
+}
+
+/**
+ * Le contenu `content` sans gibier (ADR 0018) : une partie créée avec lui n'en sème pas, et ses
+ * jours n'en font rien. La suite des humains n'en dépend pas (state.test.ts le vérifie) : les
+ * tests longs des humains s'en servent, et ne paient pas le gibier.
+ */
+export function withoutFauna<T extends SimContent>(content: T): T {
+  return { ...content, fauna: catalogOf([]) };
 }
 
 /** Température d'un monde plat, en dixièmes de degré : 15 °C, une belle saison sans fin. */
@@ -80,9 +89,9 @@ export function testWorld(seed = 'graine'): WorldLayers {
   return copyLayers(world);
 }
 
-/** Nouvel état, sur le monde Petit de cette graine. */
-export function testState(seed = 'graine'): SimState {
-  return createState(testParams(seed), testWorld(seed), testData);
+/** Nouvel état, sur le monde Petit de cette graine ; `content` sans gibier n'en sème pas. */
+export function testState(seed = 'graine', content: SimContent = testData): SimState {
+  return createState(testParams(seed), testWorld(seed), content);
 }
 
 /** Coordonnées des n premières cases dont le biome est de la famille voulue. */

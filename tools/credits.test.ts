@@ -35,14 +35,30 @@ const sources = readdirSync(path.join(root, 'src'), { recursive: true, encoding:
     return { name, text: readFileSync(path.join(root, name), 'utf8') };
   });
 
-/** Ce qui trahit un algorithme repris dans le code : son nom, ou ses constantes. */
+/**
+ * Ce qui trahit un algorithme repris dans le code : son nom, ou ses constantes. Le finaliseur de
+ * MurmurHash3 se reconnaît à ses multiplicateurs, même hors de splitmix32.
+ */
 const SIGNATURES: readonly { readonly algorithm: string; readonly signature: RegExp }[] = [
-  { algorithm: 'SplitMix et finaliseur de MurmurHash3', signature: /\bsplitmix32\(/ },
+  {
+    algorithm: 'SplitMix et finaliseur de MurmurHash3',
+    signature: /\bsplitmix32\(|0x85ebca6b|0xc2b2ae35/i,
+  },
   { algorithm: 'FNV-1a', signature: /0x811c9dc5/i },
   { algorithm: 'Algorithme de Dial', signature: /Algorithme de Dial/ },
   { algorithm: 'Mortalité de Siler', signature: /\bSiler\b/ },
   { algorithm: 'Transformation de Box et Muller', signature: /Box et Muller/ },
   { algorithm: 'Tramage ordonné de Bayer', signature: /\bBayer\b/ },
+];
+
+/**
+ * Algorithmes connus que le jeu ne crédite pas : leur signature ne doit paraître nulle part. Un
+ * hachage du décor ou du gibier passe par splitmix32 ou streamSeed, déjà crédités (ADR 0017) ;
+ * reprendre l'un de ceux-ci demande sa ligne dans CREDITS.md, et de le passer dans SIGNATURES.
+ */
+const UNCREDITED: readonly { readonly algorithm: string; readonly signature: RegExp }[] = [
+  // Finaliseur « lowbias32 » de Chris Wellons (hash-prospector).
+  { algorithm: 'lowbias32', signature: /0x7feb352d|0x846ca68b/i },
 ];
 
 describe('crédits des algorithmes', () => {
@@ -65,6 +81,23 @@ describe('crédits des algorithmes', () => {
         `fichiers de ${algorithm} absents de CREDITS.md`,
       ).toEqual([]);
     }
+  });
+});
+
+describe('algorithmes non crédités', () => {
+  it('ne paraissent dans aucun fichier du jeu', () => {
+    for (const { algorithm, signature } of UNCREDITED) {
+      const users = sources.filter((source) => signature.test(source.text)).map((s) => s.name);
+      expect(users, `${algorithm} repris sans crédit (CREDITS.md, ADR 0008)`).toEqual([]);
+    }
+  });
+
+  it('se reconnaissent à leurs constantes', () => {
+    const lowbias32 = 'h = Math.imul(h, 0x7feb352d); h ^= h >>> 15; h = Math.imul(h, 0x846ca68b);';
+    expect(UNCREDITED.some(({ signature }) => signature.test(lowbias32))).toBe(true);
+    const murmur = 'z = Math.imul(z ^ (z >>> 16), 0x85ebca6b);';
+    const splitmix = SIGNATURES.find(({ algorithm }) => algorithm.startsWith('SplitMix'));
+    expect(splitmix?.signature.test(murmur)).toBe(true);
   });
 });
 

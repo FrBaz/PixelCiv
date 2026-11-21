@@ -8,9 +8,11 @@
 // pause. La page rend alors la scène et lit le tampon WebGL ; elle range, pour chaque particule
 // des humains, dans l'ordre du dessin, son cadre dans l'atlas des rôles, sa place, son échelle
 // et la place de sa palette (sa couleur), puis la texture des palettes telle que le CPU l'a
-// écrite. Chaque vue écrit meta.json, frame.rgba et palettes.rgba dans <dossier>/<nom>/, que
-// pixels.control.ts compare ensuite à l'atlas des rôles du build et à cette texture.
-// CONTROL_VIEWS=pc-z8,pixel5-z4 n'en capture que certaines.
+// écrite, puis rend la carte seule (le calque commun caché). Chaque vue écrit meta.json,
+// frame.rgba, bare.rgba et palettes.rgba dans <dossier>/<nom>/, que pixels.control.ts compare
+// ensuite à l'atlas des rôles du build, à cette texture et, pour l'ombre portée, à la carte seule.
+// CONTROL_VIEWS=pc-z8,pixel5-z4 n'en capture que certaines ; CONTROL_QUERY ajoute des paramètres
+// à l'adresse de chaque vue (shadow=ground : l'ombre « ground », que la règle de l'ombre refuse).
 //
 // Un navigateur par vue, fermé aussitôt : une capture sur Pixel 5 tient une dizaine de mégaoctets.
 //
@@ -50,6 +52,8 @@ if (address === undefined || out === undefined) {
   process.exit(2);
 }
 const only = (process.env.CONTROL_VIEWS ?? '').split(',').filter((name) => name !== '');
+/** Paramètres de plus de l'adresse de chaque vue (CONTROL_QUERY=shadow=ground, par exemple). */
+const extra = process.env.CONTROL_QUERY ?? '';
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 /** Avant le chargement : garde l'application PixiJS, met la partie en pause dès sa création. */
@@ -105,10 +109,24 @@ function dump() {
   const read = new Uint8Array(width * height * 4);
   gl.readPixels(0, 0, width, height, gl.RGBA, gl.UNSIGNED_BYTE, read);
   // Le tampon se lit de bas en haut : l'image se range de haut en bas.
-  const frame = new Uint8Array(width * height * 4);
-  for (let y = 0; y < height; y++) {
-    frame.set(read.subarray((height - 1 - y) * width * 4, (height - y) * width * 4), y * width * 4);
-  }
+  const flipped = (pixels) => {
+    const image = new Uint8Array(width * height * 4);
+    for (let y = 0; y < height; y++) {
+      image.set(
+        pixels.subarray((height - 1 - y) * width * 4, (height - y) * width * 4),
+        y * width * 4,
+      );
+    }
+    return image;
+  };
+  const frame = flipped(read);
+  // La carte seule, au même instant : le calque commun caché, puis rendu de nouveau.
+  humans.visible = false;
+  app.render();
+  gl.readPixels(0, 0, width, height, gl.RGBA, gl.UNSIGNED_BYTE, read);
+  const bare = flipped(read);
+  humans.visible = true;
+  app.render();
   const base64 = (bytes) => {
     let text = '';
     for (let at = 0; at < bytes.length; at += 0x8000) {
@@ -143,6 +161,7 @@ function dump() {
     atlasHeight: roles.height,
     particles,
     frame: base64(frame),
+    bare: base64(bare),
     palettes: base64(palettes.resource),
   };
 }
@@ -158,7 +177,7 @@ async function capture(view) {
     page.on('console', (message) => {
       if (message.type() === 'error') errors.push(message.text());
     });
-    const query = `?seed=${view.seed}&size=small&zoom=${String(view.zoom)}&crowd=${String(view.crowd)}`;
+    const query = `?seed=${view.seed}&size=small&zoom=${String(view.zoom)}&crowd=${String(view.crowd)}${extra === '' ? '' : `&${extra}`}`;
     await page.goto(new URL(query, address).href);
     await page.waitForSelector('.time-date', { timeout: 180_000 });
     await page.waitForFunction(() => window.__app !== undefined, null, { timeout: 60_000 });
@@ -172,9 +191,11 @@ async function capture(view) {
     const folder = path.join(out, view.name);
     fs.mkdirSync(folder, { recursive: true });
     fs.writeFileSync(path.join(folder, 'frame.rgba'), Buffer.from(result.frame, 'base64'));
+    fs.writeFileSync(path.join(folder, 'bare.rgba'), Buffer.from(result.bare, 'base64'));
     fs.writeFileSync(path.join(folder, 'palettes.rgba'), Buffer.from(result.palettes, 'base64'));
     const meta = { ...view, ...result, errors };
     delete meta.frame;
+    delete meta.bare;
     delete meta.palettes;
     fs.writeFileSync(path.join(folder, 'meta.json'), JSON.stringify(meta));
     console.log(

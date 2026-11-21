@@ -30,9 +30,10 @@ export const SAVE_MAGIC = 'PXCV';
  * mois (ADR 0013). Le jour va dans les données JSON, non dans les métadonnées, que
  * l'en-tête vérifie avant toute migration. 7, les individus hors de la grille de la tâche
  * 2b.3 : la position et le mouvement de chacun, sa grégarité, et le camp de chaque groupe ;
- * les marches des groupes disparaissent (ADR 0014).
+ * les marches des groupes disparaissent (ADR 0014). 8, le gibier de la tâche 2b.6 : ses
+ * animaux et ses hardes, en colonnes (ADR 0018) ; une partie de la 7 le reçoit à la relecture.
  */
-export const SAVE_FORMAT_VERSION = 7;
+export const SAVE_FORMAT_VERSION = 8;
 
 /**
  * Taille maximale d'une sauvegarde, compressée ou non, en octets. Elle borne la mémoire

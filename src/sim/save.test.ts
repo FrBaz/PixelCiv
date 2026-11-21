@@ -6,6 +6,9 @@ import { LAYER_NAMES } from '../core/world';
 import { GENERATOR_VERSION } from '../worldgen/generate';
 import { FIXED } from '../core/position';
 import { describeMovement } from './movement';
+import { FAUNA_STREAM } from './fauna';
+import { SAVED_FAUNA_SHARE } from './faunaSave';
+import { catalogOf } from '../core/data/catalog';
 import { ANCESTRY_SLOTS, CARRIED, INTENTION, LEAVE, NONE, REST, WALK } from './population';
 import { replay } from './replay';
 import { MIGRATIONS, restoreState, saveState } from './save';
@@ -221,9 +224,9 @@ describe('sauvegarde de la simulation', () => {
 
   it('refuse les sauvegardes de la phase 0, sans monde à reprendre', async () => {
     // Seules les versions 3, celle de la phase 1, qui reçoit une population vide, 4, celle
-    // de la phase 2 avant sa relecture, 5, celle d'avant les deux horloges, et 6, celle
-    // d'avant les individus hors de la grille, se migrent.
-    expect(Object.keys(MIGRATIONS)).toEqual(['3', '4', '5', '6']);
+    // de la phase 2 avant sa relecture, 5, celle d'avant les deux horloges, 6, celle d'avant
+    // les individus hors de la grille, et 7, celle d'avant le gibier, se migrent.
+    expect(Object.keys(MIGRATIONS)).toEqual(['3', '4', '5', '6', '7']);
     for (let version = 1; version < 3; version++) {
       const old = encodeSave(save(played(1)), version);
       await expect(readSave(old, MIGRATIONS)).rejects.toMatchObject({ code: 'obsolete' });
@@ -651,6 +654,216 @@ describe('sauvegarde des deux horloges et des positions (ADR 0013, ADR 0014)', (
       step(migrated, [], testData);
       step(again, [], testData);
       expect(fingerprint(migrated), `mois ${String(month)}`).toBe(fingerprint(again));
+    }
+  });
+});
+
+describe('sauvegarde du gibier (version 8, ADR 0018, § 5)', () => {
+  /** Une partie en cours de mois, des animaux en route, des fuites devant les marcheurs. */
+  function wild(): SimState {
+    const state = testState('pixelciv');
+    step(state, scatteredGroups(state, 40), testData);
+    for (let day = 0; day < 37; day++) advanceDay(state, [], testData);
+    return state;
+  }
+
+  it('relit le gibier tel qu’il était, étapes en cours comprises, et la partie se poursuit à l’identique', async () => {
+    const original = wild();
+    const walking = [...original.fauna.stepDays.subarray(0, original.fauna.end)].filter(
+      (days) => days > 0,
+    ).length;
+    expect(walking).toBeGreaterThan(10);
+    expect(original.fauna.free.length + original.fauna.herdFree.length).toBeGreaterThan(0);
+    const restored = restore(await readSave(await writeSave(save(original)), MIGRATIONS));
+    expect(fingerprint(restored)).toBe(fingerprint(original));
+    expect(restored.fauna.count).toBe(original.fauna.count);
+    for (let day = 0; day < 75; day++) {
+      advanceDay(original, [], testData);
+      advanceDay(restored, [], testData);
+    }
+    expect(fingerprint(restored)).toBe(fingerprint(original));
+  });
+
+  it('ramène les espèces sauvegardées à celles du contenu d’aujourd’hui', () => {
+    const original = wild();
+    const data = save(original);
+    // Le même gibier, relu avec un contenu dont les espèces sont dans l'autre ordre.
+    const reversed = { ...testData, fauna: catalogOf([...testData.fauna.entries].reverse()) };
+    const restored = restoreState(data, reversed);
+    const fauna = restored.fauna;
+    for (let slot = 0; slot < fauna.end; slot++) {
+      if (fauna.alive[slot] !== 1) continue;
+      const before = testData.fauna.entries[original.fauna.species[slot] ?? 0]?.id;
+      expect(reversed.fauna.entries[fauna.species[slot] ?? 0]?.id).toBe(before);
+    }
+    // Une espèce disparue du contenu rend la sauvegarde illisible.
+    const json = data.json as { fauna: { species: string[] } };
+    const gone = {
+      ...data,
+      json: { ...json, fauna: { ...json.fauna, species: ['aurochs', 'boar', 'hare'] } },
+    };
+    expect(() => restore(gone)).toThrow(expect.objectContaining({ code: 'corrupt' }) as Error);
+  });
+
+  it('refuse chaque défaut d’un gibier abîmé', () => {
+    const data = save(wild());
+    const json = data.json as { fauna: Record<string, unknown> };
+    const arrays = data.arrays;
+    const ints = arrays.faunaInts as Int32Array;
+    const bytes = arrays.faunaBytes as Uint8Array;
+    const herdInts = arrays.herdInts as Int32Array;
+    const herdBytes = arrays.herdBytes as Uint8Array;
+    // Le premier vivant, et sa harde.
+    const alive = [...Array(bytes.length / 4).keys()].filter((slot) => bytes[slot * 4] === 1);
+    const slot = alive[0] ?? 0;
+    const herd = ints[slot * 10] ?? 0;
+    const free = arrays.faunaFree as Int32Array;
+    expect(free.length).toBeGreaterThan(0);
+    const changed = <T extends Int32Array | Uint8Array | Uint32Array | Uint16Array>(
+      array: T,
+      at: number,
+      value: number,
+    ): T => {
+      const copy = array.slice() as T;
+      copy[at] = value;
+      return copy;
+    };
+    const withArrays = (change: Record<string, unknown>): SaveData =>
+      ({ ...data, arrays: { ...arrays, ...change } }) as SaveData;
+    const withFauna = (change: Record<string, unknown>): SaveData => ({
+      ...data,
+      json: { ...json, fauna: { ...json.fauna, ...change } },
+    });
+    const huge = Math.floor(512 * 256 * SAVED_FAUNA_SHARE) + 1;
+    const cases: [string, SaveData][] = [
+      ['gibier illisible', { ...data, json: { ...json, fauna: 3 } }],
+      ['compteur nul', withFauna({ nextId: 0 })],
+      ['compteur des hardes fractionnaire', withFauna({ nextHerdId: 2.5 })],
+      ['espèces illisibles', withFauna({ species: 'deer' })],
+      ['colonne absente', withArrays({ faunaIds: undefined })],
+      [
+        'colonne de mauvais type',
+        withArrays({ faunaDays: Uint32Array.from(arrays.faunaDays as Uint16Array) }),
+      ],
+      ['colonne trop courte', withArrays({ faunaInts: ints.slice(1) })],
+      ['hardes de mauvaise taille', withArrays({ herdInts: herdInts.slice(1) })],
+      [
+        'trop d’animaux',
+        withArrays({
+          faunaIds: new Uint32Array(huge),
+          faunaDays: new Uint16Array(huge),
+          faunaInts: new Int32Array(huge * 10),
+          faunaBytes: new Uint8Array(huge * 4),
+        }),
+      ],
+      ['vivant ni mort', withArrays({ faunaBytes: changed(bytes, slot * 4, 2) })],
+      ['espèce hors de la liste', withArrays({ faunaBytes: changed(bytes, slot * 4 + 1, 9) })],
+      ['sexe illisible', withArrays({ faunaBytes: changed(bytes, slot * 4 + 2, 2) })],
+      ['allure inconnue', withArrays({ faunaBytes: changed(bytes, slot * 4 + 3, 3) })],
+      ['sans harde', withArrays({ faunaInts: changed(ints, slot * 10, -1) })],
+      ['harde morte', withArrays({ herdBytes: changed(herdBytes, herd * 2, 0) })],
+      [
+        'harde d’une autre espèce',
+        withArrays({
+          herdBytes: changed(herdBytes, herd * 2 + 1, ((herdBytes[herd * 2 + 1] ?? 0) + 1) % 3),
+        }),
+      ],
+      [
+        'position hors du monde',
+        withArrays({ faunaInts: changed(ints, slot * 10 + 2, 512 * FIXED) }),
+      ],
+      ['position négative', withArrays({ faunaInts: changed(ints, slot * 10 + 3, -1) })],
+      ['place hors du monde', withArrays({ faunaInts: changed(ints, slot * 10 + 5, 256 * FIXED) })],
+      [
+        'pas démesuré',
+        withArrays({
+          faunaInts: changed(ints, slot * 10 + 6, 5 * FIXED),
+          faunaDays: changed(arrays.faunaDays as Uint16Array, slot, 1),
+        }),
+      ],
+      [
+        'pas sans jours',
+        withArrays({
+          faunaInts: changed(ints, slot * 10 + 7, 100),
+          faunaDays: changed(arrays.faunaDays as Uint16Array, slot, 0),
+        }),
+      ],
+      [
+        'étape trop longue',
+        withArrays({ faunaDays: changed(arrays.faunaDays as Uint16Array, slot, 1001) }),
+      ],
+      [
+        'étape hors du monde',
+        withArrays({
+          faunaInts: changed(ints, slot * 10 + 7, 4 * FIXED),
+          faunaDays: changed(arrays.faunaDays as Uint16Array, slot, 1000),
+        }),
+      ],
+      [
+        'identifiant nul',
+        withArrays({ faunaIds: changed(arrays.faunaIds as Uint32Array, slot, 0) }),
+      ],
+      [
+        'identifiant à venir',
+        withArrays({ faunaIds: changed(arrays.faunaIds as Uint32Array, slot, 0xfffffff) }),
+      ],
+      ['identifiant de harde nul', withArrays({ herdInts: changed(herdInts, herd * 7, 0) })],
+      ['domaine hors du monde', withArrays({ herdInts: changed(herdInts, herd * 7 + 1, 512) })],
+      ['but hors du monde', withArrays({ herdInts: changed(herdInts, herd * 7 + 4, -5) })],
+      ['pile libre d’un vivant', withArrays({ faunaFree: changed(free, 0, slot) })],
+      [
+        'pile libre hors des emplacements',
+        withArrays({ faunaFree: changed(free, 0, bytes.length) }),
+      ],
+      ['pile libre en double', withArrays({ faunaFree: Int32Array.of(free[0], free[0]) })],
+      ['emplacement perdu', withArrays({ faunaFree: free.slice(1) })],
+      ['hardes perdues', withArrays({ herdFree: new Int32Array(0) })],
+    ];
+    expect(() => restore(data)).not.toThrow();
+    for (const [label, forged] of cases) {
+      expect(() => restore(forged), label).toThrow(
+        expect.objectContaining({ code: 'corrupt' }) as Error,
+      );
+    }
+  });
+
+  it('migre une partie de la version 7 : son gibier se sème d’après son état, de façon déterministe', async () => {
+    const original = wild();
+    const current = save(original);
+    // Une vraie partie de la version 7 : ni gibier, ni flux du gibier ; on lui en forge un, que
+    // la migration ôte.
+    const {
+      fauna: _fauna,
+      rng,
+      ...json
+    } = current.json as { fauna: unknown; rng: Record<string, unknown> };
+    const v7: SaveData = {
+      meta: current.meta,
+      json: { ...json, rng: { ...rng, [FAUNA_STREAM]: [1, 2, 3, 4] } },
+      arrays: Object.fromEntries(
+        Object.entries(current.arrays).filter(([name]) => !/^(fauna|herd)/.test(name)),
+      ),
+    };
+    const file = encodeSave(v7, 7);
+    const read = await readSave(file, MIGRATIONS);
+    expect((read.json as { fauna: unknown }).fauna).toBeNull();
+    expect((read.json as { rng: Record<string, unknown> }).rng[FAUNA_STREAM]).toBeUndefined();
+    const migrated = restore(read);
+    // Le gibier semé d'après l'état de la partie, stocks entamés compris, comme seedFauna le fait.
+    expect(migrated.fauna.count).toBeGreaterThan(300);
+    const control = restore(read);
+    expect(fingerprint(control)).toBe(fingerprint(migrated));
+    // Le flux forgé n'y a rien changé : la même partie sans lui donne le même gibier.
+    const clean = restore(
+      await readSave(encodeSave({ ...v7, json: { ...json, rng } }, 7), MIGRATIONS),
+    );
+    expect(fingerprint(clean)).toBe(fingerprint(migrated));
+    // La migration ne touche pas aux humains ; la partie continue de façon déterministe.
+    expect(fingerprint(migrated, { fauna: false })).toBe(fingerprint(original, { fauna: false }));
+    for (let month = 0; month < 2; month++) {
+      step(migrated, [], testData);
+      step(control, [], testData);
+      expect(fingerprint(control), `mois ${String(month)}`).toBe(fingerprint(migrated));
     }
   });
 });

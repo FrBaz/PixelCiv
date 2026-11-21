@@ -1,11 +1,20 @@
 import { describe, expect, it } from 'vitest';
 import { Rng } from '../core/rng';
-import { NO_CARRIER, type GroupsFrame, type LegArrays } from '../core/protocol';
 import {
+  NO_CARRIER,
+  type FaunaFrame,
+  type FaunaLegArrays,
+  type GroupsFrame,
+  type LegArrays,
+} from '../core/protocol';
+import {
+  ANIMAL_BYTES,
   DAY_WINDOW,
   DebugSampler,
   displayOverrides,
   DrawCallCounter,
+  FAUNA_LEG_BYTES,
+  faunaBytes,
   LEG_BYTES,
   MEMBER_BYTES,
   positionBytes,
@@ -42,16 +51,40 @@ describe('DebugSampler', () => {
     // derniers lots, sur mille jours au moins.
     expect(DAY_WINDOW).toBe(1000);
     for (let batch = 0; batch < 500; batch++) {
-      sampler.batch({ batchMs: 1, days: 3, dayMs: 2, walkers: 40, legs: 0 });
+      sampler.batch({
+        batchMs: 1,
+        days: 3,
+        dayMs: 2,
+        walkers: 40,
+        legs: 0,
+        animals: 0,
+        faunaLegs: 0,
+      });
     }
     expect(sampler.sample().dayMs).toBe(2);
     for (let batch = 0; batch < 100; batch++) {
-      sampler.batch({ batchMs: 1, days: 3, dayMs: 0.5, walkers: 40 + batch, legs: 0 });
+      sampler.batch({
+        batchMs: 1,
+        days: 3,
+        dayMs: 0.5,
+        walkers: 40 + batch,
+        legs: 0,
+        animals: 0,
+        faunaLegs: 0,
+      });
     }
     // Les 300 jours rapides, et les 702 jours lents qui les précèdent.
     expect(sampler.sample().dayMs).toBeCloseTo((300 * 0.5 + 702 * 2) / 1002, 9);
     for (let batch = 100; batch < 334; batch++) {
-      sampler.batch({ batchMs: 1, days: 3, dayMs: 0.5, walkers: 40 + batch, legs: 0 });
+      sampler.batch({
+        batchMs: 1,
+        days: 3,
+        dayMs: 0.5,
+        walkers: 40 + batch,
+        legs: 0,
+        animals: 0,
+        faunaLegs: 0,
+      });
     }
     expect(sampler.sample().dayMs).toBe(0.5);
     expect(sampler.sample().batchDays).toBe(3);
@@ -64,6 +97,8 @@ describe('DebugSampler', () => {
         monthMs: month < 2 ? 900 : 50 + month,
         walkers: 7,
         legs: 0,
+        animals: 0,
+        faunaLegs: 0,
       });
     }
     expect(sampler.sample().dayMs).toBe(0.5);
@@ -71,9 +106,55 @@ describe('DebugSampler', () => {
     expect(sampler.sample().worstMonthMs).toBe(63);
     expect(sampler.sample().walkers).toBe(7);
     // Un lot de deux jours et d'un pas mensuel : deux jours ordinaires.
-    sampler.batch({ batchMs: 5, days: 3, dayMs: 1, monthMs: 40, walkers: 3, legs: 0 });
+    sampler.batch({
+      batchMs: 5,
+      days: 3,
+      dayMs: 1,
+      monthMs: 40,
+      walkers: 3,
+      legs: 0,
+      animals: 0,
+      faunaLegs: 0,
+    });
     expect(sampler.sample().dayMs).toBeCloseTo((333 * 3 * 0.5 + 2) / 1001, 9);
     expect(sampler.sample().batchDays).toBeCloseTo((3 * 15 + 14 + 3) / 30, 9);
+  });
+
+  it('moyenne le jour du gibier sur les mêmes jours, et garde ses animaux du dernier lot', () => {
+    const sampler = new DebugSampler();
+    expect(sampler.sample()).toMatchObject({ animals: undefined, faunaDayMs: undefined });
+    sampler.batch({
+      batchMs: 3,
+      days: 3,
+      dayMs: 1,
+      walkers: 0,
+      legs: 0,
+      animals: 600,
+      faunaLegs: 40,
+      faunaMs: 0.3,
+    });
+    sampler.batch({
+      batchMs: 3,
+      days: 1,
+      dayMs: 1,
+      walkers: 0,
+      legs: 0,
+      animals: 612,
+      faunaLegs: 9,
+      faunaMs: 0.7,
+    });
+    // Le pas mensuel d'un lot n'en est pas : seuls ses jours ordinaires comptent.
+    sampler.batch({
+      batchMs: 60,
+      days: 1,
+      monthMs: 50,
+      walkers: 0,
+      legs: 0,
+      animals: 605,
+      faunaLegs: 0,
+    });
+    expect(sampler.sample().faunaDayMs).toBeCloseTo((3 * 0.3 + 0.7) / 4, 9);
+    expect(sampler.sample().animals).toBe(605);
   });
 
   it('approche un jour de 4 µs, que l’horloge du worker ne mesure qu’à 0,1 ms près', () => {
@@ -89,7 +170,15 @@ describe('DebugSampler', () => {
         if (rank % 25 === 0) measured = rank + random.nextInt(25);
         if (rank === measured) total += 0.1;
       }
-      sampler.batch({ batchMs: total, days: 3, dayMs: total / 3, walkers: 0, legs: 0 });
+      sampler.batch({
+        batchMs: total,
+        days: 3,
+        dayMs: total / 3,
+        walkers: 0,
+        legs: 0,
+        animals: 0,
+        faunaLegs: 0,
+      });
       if (day + 3 < DAY_WINDOW) continue;
       // Passé mille jours, la moyenne reste à un quart près de la vraie durée.
       const shown = sampler.sample().dayMs ?? 0;
@@ -123,6 +212,20 @@ describe('DebugSampler', () => {
     };
     expect(positionBytes(legs(10), undefined)).toBe(260);
     expect(positionBytes(undefined, frame)).toBe(4 * 26 + 30 * 23 + 2 * 5 * 4);
+    // Le gibier (relecture 2b.6, problème 20) : une étape pèse 27 octets, allure comprise, un
+    // animal de l'image 17, et ses étapes en cours 26.
+    expect([FAUNA_LEG_BYTES, ANIMAL_BYTES]).toEqual([27, 17]);
+    const faunaLegs: FaunaLegArrays = { ...legs(6), gaits: new Uint8Array(6) };
+    const fauna: FaunaFrame = {
+      slots: new Uint32Array(12),
+      ids: new Uint32Array(12),
+      kinds: new Uint8Array(12),
+      positions: new Int32Array(24),
+      legs: legs(3),
+    };
+    expect(faunaBytes(faunaLegs, undefined)).toBe(6 * 27);
+    expect(faunaBytes(undefined, fauna)).toBe(12 * 17 + 3 * 26);
+    expect(faunaBytes(undefined, undefined)).toBe(0);
     // Dix deltas par seconde, de 100 étapes : 1 000 étapes par seconde ; ceux d'il y a plus
     // d'une seconde ne comptent plus.
     for (let at = 0; at < 3000; at += 100) sampler.receive(at, 100, 2600);
@@ -143,9 +246,17 @@ describe('DebugSampler', () => {
         cached: 400,
         pages: 2,
         drawCalls: 12,
+        decorObjects: 3000 + frameIndex,
+        decorMs: slow ? 4 : 0.5,
+        faunaLayerMs: slow ? 1 : 0.25,
       });
     }
     const sample = sampler.sample();
+    // Le décor (ADR 0017) : ses objets de la dernière image, la moyenne de sa mise à jour ; à
+    // part, celle du gibier (relecture 2b.6, problème 20).
+    expect(sample.decorObjects).toBe(3089);
+    expect(sample.decorMs).toBeCloseTo(0.5, 9);
+    expect(sample.faunaLayerMs).toBeCloseTo(0.25, 9);
     expect(sample.crowd.positions).toBeCloseTo(1, 9);
     expect(sample.crowd.sort).toBeCloseTo(0.5, 9);
     // Sans mesure de la mise à jour, du rendu ni de la chronologie, rien n'en est compté.

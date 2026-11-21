@@ -3,6 +3,8 @@ import altitudeLevels from '../../../data/altitude-levels.json';
 import appearance from '../../../data/appearance.json';
 import biomes from '../../../data/biomes.json';
 import cultures from '../../../data/cultures.json';
+import decor from '../../../data/decor.json';
+import fauna from '../../../data/fauna.json';
 import flora from '../../../data/flora.json';
 import genetics from '../../../data/genetics.json';
 import humans from '../../../data/humans.json';
@@ -10,7 +12,9 @@ import nomads from '../../../data/nomads.json';
 import resources from '../../../data/resources.json';
 import species from '../../../data/species.json';
 import worldgen from '../../../data/worldgen.json';
-import { DataError, loadCatalog, loadSettings, type Catalog } from './catalog';
+import { catalogOf, DataError, loadCatalog, loadSettings, type Catalog } from './catalog';
+import { DecorSchema, outlineBelow } from './decor';
+import { FaunaFileSchema } from './fauna';
 import { BODY_KINDS, HumansSchema, LOOK_BITS } from './humans';
 import {
   AppearanceSchema,
@@ -42,16 +46,23 @@ export type {
   TraitRole,
 } from './people';
 export type { AltitudeLevel, Biome, Flora, Resource } from './schemas';
+export type { Decor, DecorRamp, FloraLook, LandUse, Phenology, ShadowMethod } from './decor';
+export type { FaunaRules, FaunaSpecies } from './fauna';
 export type { Parameter, ParameterName, Worldgen } from './worldgen';
 export type { BodyKind, Humans, Outfit, Piece, Ramp3, Ramp4, Region } from './humans';
 
 /** Charge tout le contenu ; lève une DataError s'il est invalide. */
 export function loadGameData() {
+  const faunaFile = loadSettings('data/fauna.json', FaunaFileSchema, fauna);
   const data = {
     biomes: loadCatalog('data/biomes.json', BiomesSchema, biomes),
     altitudeLevels: loadCatalog('data/altitude-levels.json', AltitudeLevelsSchema, altitudeLevels),
     resources: loadCatalog('data/resources.json', ResourcesSchema, resources),
     flora: loadCatalog('data/flora.json', FlorasSchema, flora),
+    decor: loadSettings('data/decor.json', DecorSchema, decor),
+    /** Le gibier (ADR 0018) : ses espèces, puis ses règles communes. */
+    fauna: catalogOf(faunaFile.species),
+    faunaRules: faunaFile.rules,
     worldgen: loadSettings('data/worldgen.json', WorldgenSchema, worldgen),
     species: loadCatalog('data/species.json', SpeciesListSchema, species),
     genetics: loadSettings('data/genetics.json', GeneticsSchema, genetics),
@@ -112,6 +123,8 @@ export function checkContent(data: GameData): string[] {
         problems.push(`data/biomes.json (flore) : ${biome.id} liste des ${kind} sans densité`);
     }
   }
+  problems.push(...checkDecor(data));
+  problems.push(...checkFauna(data));
   // Espèces : leurs biomes existent, et leur apparence décrit chaque locus et chaque
   // trait de data/genetics.json, avec des allèles connus et au moins un de fréquence
   // non nulle.
@@ -158,6 +171,84 @@ export function checkContent(data: GameData): string[] {
     problems.push(
       'data/resources.json : 255 ressources au plus (couche des gisements sur un octet)',
     );
+  return problems;
+}
+
+/**
+ * Cohérence du décor (ADR 0017) : les biomes des rochers épars existent ; chaque minerai de
+ * data/resources.json a l'aspect de son rocher, et data/decor.json n'en décrit pas d'autre.
+ * Les formes que nomment le décor et la flore ont leurs grilles, ce que vérifie le build de
+ * l'atlas du décor (tools/decor-atlas.ts).
+ */
+export function checkDecor(data: GameData): string[] {
+  const problems: string[] = [];
+  const { decor } = data;
+  const unknownBiomes = Object.keys(decor.rocks).filter(
+    (id) => data.biomes.indexOf(id) === undefined,
+  );
+  if (unknownBiomes.length > 0) {
+    problems.push(`data/decor.json (rochers) : biomes inconnus : ${unknownBiomes.join(', ')}`);
+  }
+  const minerals = data.resources.entries.filter((resource) => resource.deposit !== undefined);
+  const missing = minerals.filter((resource) => !Object.hasOwn(decor.deposits, resource.id));
+  if (missing.length > 0) {
+    problems.push(
+      `data/decor.json (gisements) : minerais sans rocher : ${missing.map((m) => m.id).join(', ')}`,
+    );
+  }
+  const extra = Object.keys(decor.deposits).filter(
+    (id) => !minerals.some((resource) => resource.id === id),
+  );
+  if (extra.length > 0) {
+    problems.push(`data/decor.json (gisements) : minerais inconnus : ${extra.join(', ')}`);
+  }
+  // Le contour, plus sombre que chaque ton que prend un objet (consigne : un contour sombre) :
+  // flore, pierre, minerais et neige.
+  const ramps: [string, readonly string[]][] = [['stone', decor.stone]];
+  for (const entry of data.flora.entries) {
+    const { foliage, wood, fruit } = entry.look;
+    for (const [state, ramp] of Object.entries(foliage)) ramps.push([`${entry.id}.${state}`, ramp]);
+    ramps.push([`${entry.id}.wood`, wood]);
+    if (fruit !== undefined) ramps.push([`${entry.id}.fruit`, fruit.tones]);
+  }
+  for (const [id, deposit] of Object.entries(decor.deposits)) {
+    if (deposit.ore !== undefined) ramps.push([`${id}.ore`, deposit.ore]);
+  }
+  for (const biome of data.biomes.entries) {
+    const cover = biome.seasons.palette;
+    if (cover !== undefined) {
+      ramps.push([`${biome.id}.snow`, [cover.light, cover.base, cover.shadow, decor.snow.deep]]);
+    }
+  }
+  const lighter = ramps.filter(([, ramp]) => !outlineBelow(decor.outline, ramp));
+  if (lighter.length > 0) {
+    problems.push(
+      `data/decor.json (contour) : pas plus sombre que les tons de ${lighter.map(([id]) => id).join(', ')}`,
+    );
+  }
+  return problems;
+}
+
+/**
+ * Cohérence du gibier (ADR 0018) : les habitats des biomes ne nomment que des espèces de
+ * data/fauna.json, et aucun gibier ne vit là où le biome n'en rend pas (`forage.game` nul : l'eau,
+ * le salar), puisque ses effectifs se tiennent au stock de gibier de ses cases. Les formes que
+ * nomment les espèces ont leurs grilles, ce que vérifie le build de l'atlas (tools/fauna-atlas.ts).
+ */
+export function checkFauna(data: GameData): string[] {
+  const problems: string[] = [];
+  const unknown = new Set<string>();
+  for (const biome of data.biomes.entries) {
+    for (const [id, quality] of Object.entries(biome.fauna)) {
+      if (data.fauna.indexOf(id) === undefined) unknown.add(id);
+      if (quality > 0 && biome.forage.game === 0) {
+        problems.push(`data/biomes.json (faune) : ${biome.id} abrite du gibier sans en rendre`);
+      }
+    }
+  }
+  if (unknown.size > 0) {
+    problems.push(`data/biomes.json (faune) : inconnus : ${[...unknown].join(', ')}`);
+  }
   return problems;
 }
 

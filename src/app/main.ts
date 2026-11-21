@@ -2,7 +2,14 @@
 // de simulation, puis les relie.
 import { h, render } from 'preact';
 import { loadGameData, type GameData } from '../core/data';
-import { frameBuffers, legBuffers, PROTOCOL_VERSION, type InspectTarget } from '../core/protocol';
+import {
+  faunaBuffers,
+  faunaLegBuffers,
+  frameBuffers,
+  legBuffers,
+  PROTOCOL_VERSION,
+  type InspectTarget,
+} from '../core/protocol';
 import { dayIndex, SPEED_FACTORS, type GameTime } from '../core/time';
 import { WORLD_SIZES, type WorldLayers, type WorldSizeId } from '../core/world';
 import { defaultWorldParams, type WorldParams } from '../core/worldParams';
@@ -24,11 +31,14 @@ import {
 } from '../render/camera';
 import { FINGER_SLOP, POINTER_SLOP } from '../render/crowd';
 import { PeopleLayer, stepDuration } from '../render/people';
+import { DECOR_ATLAS, DecorSource } from '../render/decor';
+import { FAUNA_ATLAS, FaunaLayer } from '../render/fauna';
 import { previewPixels } from '../render/preview';
 import { SPAWN_COUNT } from '../sim/commands';
 import { walkCost } from '../sim/terrain';
 import type { SheetContent } from '../ui/Sheet';
 import { FrameGate, invalidateOnRestore } from '../render/frameGate';
+import { SHADOW_METHODS, type ShadowMethod } from '../core/data/decor';
 import { createRenderer, renderOnDemand, timeRendering } from '../render/renderer';
 import { App } from '../ui/App';
 import { escapeKey } from '../ui/escape';
@@ -79,6 +89,7 @@ import {
   DebugSampler,
   displayOverrides,
   DrawCallCounter,
+  faunaBytes,
   positionBytes,
   usedMemoryMb,
 } from './debug';
@@ -89,6 +100,7 @@ import { describeCell } from './inspect';
 import { SheetRequests } from './sheets';
 import { crowdCells, crowdGroups, CROWD_GROUP, OccupiedCells, spawnTarget } from './spawn';
 import { CrowdTimeline } from './frames';
+import { FaunaTimeline } from './faunaFrames';
 import { GameClock } from './gameClock';
 import { PreviewScheduler } from './preview';
 import { SimulationClient } from './simulation';
@@ -133,9 +145,21 @@ async function main(): Promise<void> {
     genetics: data.genetics,
     appearance: data.appearance,
     reference: species.display.stature,
+    objects: [DECOR_ATLAS, FAUNA_ATLAS],
   });
   // Couches du monde affiché, pour l'inspection, les légendes et la franchissabilité.
   let worldLayers: WorldLayers | undefined;
+  // Le décor du monde (ADR 0017), en mode naturel. Débogage : ?decor=off le retire ;
+  // ?shadow=ground|multiply|dither|none change la méthode de l'ombre portée.
+  let decor: DecorSource | undefined;
+  const decorOff = query.get('decor') === 'off';
+  // Le gibier du monde (ADR 0018), en mode naturel, comme le décor ; ?fauna=off le cache.
+  let game: FaunaLayer | undefined;
+  const faunaOff = query.get('fauna') === 'off';
+  const shadowQuery = query.get('shadow');
+  const shadowMethod = SHADOW_METHODS.find(
+    (method): method is ShadowMethod => method === shadowQuery,
+  );
   /**
    * La case, comptée comme cellIndex, se franchit-elle ? Comme pour la simulation (walkCost),
    * gardé par case : 1 oui, 2 non, 0 pas encore lu. Une case repeinte s'oublie.
@@ -164,6 +188,16 @@ async function main(): Promise<void> {
       simulation.send({ type: 'recycle', buffers: legBuffers(legs) });
     },
   });
+  // Le gibier (ADR 0018), à l'instant affiché comme les individus : ses images et ses étapes
+  // datées, avec leur allure ; leurs tampons lus retournent au worker.
+  const fauna = new FaunaTimeline(
+    (legs) => {
+      simulation.send({ type: 'recycle', buffers: faunaLegBuffers(legs) });
+    },
+    (frame) => {
+      simulation.send({ type: 'recycle', buffers: faunaBuffers(frame) });
+    },
+  );
   const modeData = {
     biomes: data.biomes.entries,
     altitudeLevels: data.altitudeLevels.entries,
@@ -450,9 +484,15 @@ async function main(): Promise<void> {
     const calls = drawCalls.take();
     if (returning) returning = false;
     else {
+      // Le décor et le gibier, chacun pour soi (relecture 2b.6, problème 20).
+      const decorCost = decor === undefined ? undefined : people.objectCost(decor);
+      const faunaCost = game === undefined ? undefined : people.objectCost(game);
       sampler.frame(ticker.elapsedMS, {
         ...people.stats,
         ...frameCost,
+        decorObjects: decorCost?.shown,
+        decorMs: decorCost?.ms,
+        faunaLayerMs: faunaCost?.ms,
         drawCalls: calls,
         rendered: frames.drawn,
       });
@@ -463,9 +503,11 @@ async function main(): Promise<void> {
     const shown = clock.advance(now);
     if (shown > shownInstant) walkMs += ticker.elapsedMS;
     shownInstant = shown;
-    map.setSeason(overrides.month ?? clock.month());
+    const month = overrides.month ?? clock.month();
+    map.setSeason(month);
     const showing = performance.now();
     crowd.show(shown);
+    fauna.show(shown);
     frameCost.showMs = performance.now() - showing;
     const today: GameTime = clock.today();
     if (dayIndex(today) !== shownIndex && time.value !== undefined) {
@@ -485,6 +527,9 @@ async function main(): Promise<void> {
         walkMs,
         stepMs: stepDuration(SPEED_FACTORS[speed]),
         passable,
+        objects:
+          mapMode.value === 'natural' ? [decor, game].filter((source) => source !== undefined) : [],
+        month,
       },
       camera,
       map.viewport,
@@ -512,6 +557,9 @@ async function main(): Promise<void> {
       memoryMb: usedMemoryMb(),
       renderer,
       chunks: map.pendingChunks,
+      decorChunks: decor?.stats.chunksBuilt,
+      decorBuildMs: decor?.stats.buildMs,
+      faunaDrawn: game?.stats.drawn,
     };
     refreshInspected();
     // La fiche ouverte suit la vie de l'individu ou du groupe, chaque seconde, sauf si une
@@ -552,6 +600,11 @@ async function main(): Promise<void> {
         worldInfo.value = message.world;
         const layers = message.layers;
         worldLayers = layers;
+        decor = decorOff
+          ? undefined
+          : new DecorSource(data, layers, message.world.size, message.world.params.seed);
+        if (decor !== undefined && shadowMethod !== undefined) decor.shadow = shadowMethod;
+        game = faunaOff ? undefined : new FaunaLayer(data, fauna, message.world.size.width);
         passability = new Uint8Array(layers.biome.length);
         inspected.value = undefined;
         // Une autre partie : les réponses attendues portent sur l'ancienne, et sont ignorées.
@@ -559,16 +612,28 @@ async function main(): Promise<void> {
         sheet.value = undefined;
         people.clear();
         crowd.reset(message.frame, message.time, message.world.size.width);
-        sampler.receive(performance.now(), 0, positionBytes(undefined, message.frame));
+        fauna.reset(message.fauna, message.time, message.world.size.width);
+        sampler.receive(
+          performance.now(),
+          0,
+          positionBytes(undefined, message.frame) + faunaBytes(undefined, message.fauna),
+        );
         occupied.reset();
         chronicleRequest++;
         chronicleLoading.value = false;
         showFacts(snapshotFacts(message.chronicle));
         const { width } = message.world.size;
         map.setWorld(message.world, layers, (mode) => overlayTexels(mode, layers, modeData, width));
+        const ground = map.ground;
+        if (ground !== undefined) people.setGround(ground);
         actions.setMapMode(mapMode.value);
         const world = map.world;
         if (world !== undefined) controls.center(world);
+        // Débogage et captures : ?at=x,y vise la case (x, y).
+        const at = (query.get('at') ?? '').split(',').map(Number);
+        if (at.length === 2 && at.every(Number.isFinite)) {
+          controls.aim(((at[0] ?? 0) + 0.5) * TILE_PX, ((at[1] ?? 0) + 0.5) * TILE_PX);
+        }
         time.value = message.time;
         clock.reset(message.time, performance.now());
         shownIndex = dayIndex(message.time);
@@ -583,16 +648,20 @@ async function main(): Promise<void> {
         if (message.chunks.length > 0) {
           passability.fill(0);
           people.invalidate();
+          // Les blocs repeints se reposent (ADR 0017, § 1 ; l'occupation du sol de la phase 3
+          // passera par là).
+          decor?.invalidate(message.chunks);
         }
         // Les étapes du lot attendent leur jour ; l'image des groupes, quand elle change, vaut
         // à partir de l'instant du delta (ADR 0014).
         sampler.receive(
           performance.now(),
-          message.legs?.slots.length ?? 0,
-          positionBytes(message.legs, message.frame),
+          (message.legs?.slots.length ?? 0) + (message.faunaLegs?.slots.length ?? 0),
+          positionBytes(message.legs, message.frame) + faunaBytes(message.faunaLegs, message.fauna),
         );
         const receiving = performance.now();
         crowd.receive(message.time, message.legs, message.frame);
+        fauna.receive(message.time, message.faunaLegs, message.fauna);
         frameCost.receiveMs += performance.now() - receiving;
         const info = worldInfo.value;
         if (info !== undefined) occupied.update(message.chronicle, info.size);

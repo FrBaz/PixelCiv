@@ -26,6 +26,7 @@ const water = (
   resources: [],
   forage: { plants: 0, game: 0, fish: 0 },
   flora: { trees: 0, shrubs: 0, species: [] },
+  fauna: {},
   palette: { shadow, base, light },
   tile: 'water',
   vegetation: 'none',

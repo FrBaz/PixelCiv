@@ -28,7 +28,10 @@ export const WAKE_SLACK_MS = 1;
 
 /** Un message envoyé, ses tampons transférés et l'instant de son envoi. */
 export interface SentMessage {
+  /** Le message tel que le reçoit le fil principal : un clone, ses tampons transférés. */
   readonly message: WorkerMessage;
+  /** Le message tel que l'hôte l'a posté : ses tampons transférés y sont désormais détachés. */
+  readonly original: WorkerMessage;
   readonly transfer: Transferable[];
   readonly at: number;
 }
@@ -58,7 +61,12 @@ export class FakeEnvironment implements HostEnvironment {
    * de l'hôte sont détachés, et une couche envoyée sans copie le trahirait.
    */
   post(message: WorkerMessage, transfer: Transferable[]): void {
-    this.sent.push({ message: structuredClone(message, { transfer }), transfer, at: this.time });
+    this.sent.push({
+      message: structuredClone(message, { transfer }),
+      original: message,
+      transfer,
+      at: this.time,
+    });
     if (message.type === 'delta') this.time += this.deltaCost;
   }
 

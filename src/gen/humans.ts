@@ -230,7 +230,12 @@ function cover(
   }
 }
 
-export type OutlineMode = 'keep' | 'thick' | 'none';
+/**
+ * Contour d'une réduction : celui de la planche, au facteur 1 (« keep ») ; retracé là où la forme
+ * a trois pixels d'épaisseur (« thick ») ; sur tout le bord de la silhouette (« silhouette », le
+ * gibier des petits niveaux, dont la consigne veut le contour sombre) ; ou aucun (« none »).
+ */
+export type OutlineMode = 'keep' | 'thick' | 'silhouette' | 'none';
 
 /** Part d'un bloc que l'œil doit couvrir pour s'y montrer (reduceRoles). */
 const EYE_SHARE = 0.05;
@@ -294,7 +299,30 @@ export function reduceRoles(
   }
   // Le rôle intérieur de chaque pixel opaque, jamais 0 (interior), puis le contour.
   const voted = { width, height, roles: inner, anchorX: outLeft, anchorY: height };
-  return outline === 'thick' ? thickOutline(voted) : voted;
+  if (outline === 'thick') return thickOutline(voted);
+  return outline === 'silhouette' ? silhouetteOutline(voted, eyes) : voted;
+}
+
+/**
+ * Le contour de toute la silhouette (« silhouette ») : chaque pixel du bord de la forme (un de
+ * ses quatre voisins est vide, ou hors de l'image) devient le contour, sauf un œil (`eyes`), qui
+ * reste l'œil. Une patte, une oreille d'un pixel de large deviennent ainsi le contour, comme sur
+ * les petits sprites des planches.
+ */
+export function silhouetteOutline(image: RoleImage, eyes: readonly number[] = []): RoleImage {
+  const { width, height } = image;
+  const at = (u: number, v: number) =>
+    u >= 0 && u < width && v >= 0 && v < height && (image.roles[v * width + u] ?? 0) !== 0;
+  const roles = new Uint8Array(width * height);
+  for (let v = 0; v < height; v++) {
+    for (let u = 0; u < width; u++) {
+      const role = image.roles[v * width + u] ?? 0;
+      if (role === 0) continue;
+      const edge = !at(u - 1, v) || !at(u + 1, v) || !at(u, v - 1) || !at(u, v + 1);
+      roles[v * width + u] = edge && !eyes.includes(role) ? KEPT : role;
+    }
+  }
+  return { ...image, roles };
 }
 
 /**

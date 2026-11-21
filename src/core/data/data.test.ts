@@ -12,6 +12,16 @@ import {
   type Species,
 } from './index';
 import { HumansSchema, LEVEL_STEP, MAX_OUTFITS, MAX_SKIN_PALETTES } from './humans';
+import { DecorSchema, FloraLookSchema } from './decor';
+import {
+  FaunaFileSchema,
+  FaunaListSchema,
+  FaunaRulesSchema,
+  FaunaSpeciesSchema,
+  MAX_DENSITY,
+  MAX_FAUNA_SPECIES,
+  MAX_HERD,
+} from './fauna';
 import {
   AppearanceSchema,
   FACE_BOUNDS,
@@ -22,7 +32,7 @@ import {
   SpeciesSchema,
   type Nomads,
 } from './people';
-import { AltitudeLevelsSchema, BiomesSchema } from './schemas';
+import { AltitudeLevelsSchema, BiomeSchema, BiomesSchema, FloraSchema } from './schemas';
 import {
   bakedWaterTone,
   CREST_TONES,
@@ -885,5 +895,410 @@ describe('humains des planches et leurs tenues (ADR 0016)', () => {
     expect(issues(HumansSchema, withHumans({ animations }))).toContain(
       "animations : l'animation walk est montrée",
     );
+  });
+});
+
+describe('décor : data/flora.json et data/decor.json (ADR 0017)', () => {
+  const data = loadGameData();
+  /** Les problèmes qu'un schéma relève, chemin compris ; aucun si la valeur est valide. */
+  const issues = (schema: { safeParse: (value: unknown) => SafeResult }, value: unknown) => {
+    const parsed = schema.safeParse(value);
+    return parsed.success
+      ? []
+      : (parsed.error?.issues ?? []).map((issue) => `${issue.path.join('.')} : ${issue.message}`);
+  };
+  interface SafeResult {
+    success: boolean;
+    error?: { issues: { path: PropertyKey[]; message: string }[] };
+  }
+  const decor = data.decor;
+  const withDecor = (change: object) => ({ ...decor, ...change });
+  const look = (id: string) => {
+    const entry = data.flora.entries.at(data.flora.indexOf(id) ?? -1);
+    if (entry === undefined) throw new Error(`espèce ${id} absente`);
+    return entry.look;
+  };
+  // Une rampe valide : de la lumière à l'ombre profonde, de plus en plus sombre.
+  const ramp = ['#444444', '#333333', '#222222', '#111111'];
+
+  it('donne une apparence à chaque espèce, des saisons aux buissons, des fruits à leurs mois', () => {
+    for (const entry of data.flora.entries) expect(FloraSchema.parse(entry)).toEqual(entry);
+    // Les buissons ont leurs saisons (consigne de 2b.6, C1 D9) : baies, roseaux et saule nain
+    // sont caducs, sans grille nue, avec des tons d'hiver.
+    for (const id of ['berry-bush', 'reed', 'dwarf-willow']) {
+      expect(look(id).phenology, id).toBe('deciduous');
+      expect(look(id).bare, id).toBeUndefined();
+      expect(look(id).foliage.bare, id).toBeDefined();
+    }
+    expect(look('berry-bush').fruit?.months).not.toContain(0);
+    expect(DecorSchema.parse(decor)).toEqual(decor);
+  });
+
+  it('refuse une apparence incomplète ou contradictoire', () => {
+    const broadleaf = look('broadleaf');
+    const berry = look('berry-bush');
+    expect(issues(FloraLookSchema, broadleaf)).toEqual([]);
+    expect(issues(FloraLookSchema, berry)).toEqual([]);
+    // Une rampe de trois tons.
+    expect(issues(FloraLookSchema, { ...broadleaf, wood: ramp.slice(0, 3) }).join()).toMatch(
+      /^wood/,
+    );
+    // Une rampe dans le désordre : l'ombre profonde à la place de la lumière (relecture 2b.6,
+    // problème 5), ou deux tons égaux.
+    const summer = broadleaf.foliage.summer;
+    const reversed = [...summer].reverse();
+    expect(
+      issues(FloraLookSchema, {
+        ...broadleaf,
+        foliage: { ...broadleaf.foliage, summer: reversed },
+      }),
+    ).toContain(
+      "foliage.summer : des tons de plus en plus sombres, de la lumière à l'ombre profonde",
+    );
+    expect(
+      issues(FloraLookSchema, { ...broadleaf, wood: [ramp[0], ramp[0], ramp[2], ramp[3]] }),
+    ).toContain("wood : des tons de plus en plus sombres, de la lumière à l'ombre profonde");
+    expect(
+      issues(FloraLookSchema, { ...broadleaf, wood: ['#11111', ...ramp.slice(1)] }).join(),
+    ).toMatch(/wood\.0 : couleur #rrggbb/);
+    // Une caduque sans automne, sans forme nue ni tons d'hiver.
+    expect(issues(FloraLookSchema, { ...broadleaf, foliage: { summer: ramp } })).toContain(
+      "foliage.autumn : une espèce caduque a ses tons d'automne",
+    );
+    const { bare: _bare, ...noBare } = broadleaf;
+    expect(issues(FloraLookSchema, noBare)).toContain(
+      "bare : une espèce caduque a sa forme nue ou ses tons d'hiver",
+    );
+    expect(
+      issues(FloraLookSchema, { ...noBare, foliage: { ...broadleaf.foliage, bare: ramp } }),
+    ).toEqual([]);
+    // Une persistante n'a ni automne, ni hiver ; une sèche a ses tons secs, et elle seule.
+    const conifer = look('conifer');
+    expect(
+      issues(FloraLookSchema, { ...conifer, foliage: { ...conifer.foliage, autumn: ramp } }),
+    ).toContain("foliage.autumn : seule une espèce caduque a des tons d'automne");
+    expect(issues(FloraLookSchema, { ...conifer, bare: 'larch-bare' })).toContain(
+      "bare : seule une espèce caduque a une forme ou des tons d'hiver",
+    );
+    const acacia = look('acacia');
+    expect(issues(FloraLookSchema, { ...acacia, foliage: { summer: ramp } })).toContain(
+      'foliage.dry : une espèce de saison sèche, et elle seule, a ses tons secs',
+    );
+    expect(
+      issues(FloraLookSchema, { ...conifer, foliage: { ...conifer.foliage, dry: ramp } }),
+    ).toContain('foliage.dry : une espèce de saison sèche, et elle seule, a ses tons secs');
+    // Un fruit hors des mois de l'année, deux fois le même mois, ou sans mois.
+    const fruit = (months: number[]) => ({ ...berry, fruit: { tones: ramp, months } });
+    expect(issues(FloraLookSchema, fruit([12])).join()).toMatch(/fruit\.months\.0/);
+    expect(issues(FloraLookSchema, fruit([-1])).join()).toMatch(/fruit\.months\.0/);
+    expect(issues(FloraLookSchema, fruit([6.5])).join()).toMatch(/fruit\.months\.0/);
+    expect(issues(FloraLookSchema, fruit([6, 6]))).toContain('fruit.months : chaque mois une fois');
+    expect(issues(FloraLookSchema, fruit([])).join()).toMatch(/fruit\.months/);
+    expect(issues(FloraLookSchema, { ...broadleaf, shape: 'tall' }).join()).toMatch(/shape/);
+  });
+
+  it('refuse chaque réglage du décor hors de ses bornes', () => {
+    expect(issues(DecorSchema, decor)).toEqual([]);
+    const refused: [object, RegExp][] = [
+      [{ outline: '#13131' }, /^outline : couleur/],
+      [{ shadow: { ...decor.shadow, alpha: 1.2 } }, /^shadow\.alpha/],
+      [{ shadow: { ...decor.shadow, alpha: -0.1 } }, /^shadow\.alpha/],
+      [{ shadow: { ...decor.shadow, sx: 1.6 } }, /^shadow\.sx/],
+      [{ shadow: { ...decor.shadow, sy: 1.1 } }, /^shadow\.sy/],
+      [{ shadow: { ...decor.shadow, sy: -0.1 } }, /^shadow\.sy/],
+      [{ shadow: { ...decor.shadow, method: 'blur' } }, /^shadow\.method/],
+      [{ snow: { ...decor.snow, share: 1.5 } }, /^snow\.share/],
+      [{ snow: { ...decor.snow, deep: 'blanc' } }, /^snow\.deep/],
+      [{ foliage: { ...decor.foliage, bareBelow: -31 } }, /^foliage\.bareBelow/],
+      [{ foliage: { ...decor.foliage, autumnBelow: 41 } }, /^foliage\.autumnBelow/],
+      [{ foliage: { ...decor.foliage, autumnDrop: -1 } }, /^foliage\.autumnDrop/],
+      [{ foliage: { ...decor.foliage, autumnDrop: 21 } }, /^foliage\.autumnDrop/],
+      [{ foliage: { ...decor.foliage, bareBelow: 13 } }, /^foliage : l'automne commence/],
+      [{ foliage: { ...decor.foliage, dryShare: 1.2 } }, /^foliage\.dryShare/],
+      [{ place: { ...decor.place, jitter: 0.46 } }, /^place\.jitter/],
+      [{ place: { ...decor.place, jitter: -0.01 } }, /^place\.jitter/],
+      [
+        { place: { ...decor.place, shrub: { ...decor.place.shrub, side: [0.5, 0.3] } } },
+        /^place\.shrub\.side : une étendue/,
+      ],
+      [
+        { place: { ...decor.place, shrub: { ...decor.place.shrub, depth: [0.7, 1.2] } } },
+        /^place\.shrub\.depth\.1/,
+      ],
+      [
+        { place: { ...decor.place, rock: { ...decor.place.rock, side: 0.5 } } },
+        /^place\.rock\.side/,
+      ],
+      [{ stone: ramp.slice(0, 3) }, /^stone/],
+      [{ stone: [...ramp].reverse() }, /^stone : des tons de plus en plus sombres/],
+      [{ rocks: { mountain: { chance: 1.5, form: 'rock' } } }, /^rocks\.mountain\.chance/],
+      [{ rocks: { mountain: { chance: 0.5 } } }, /^rocks\.mountain\.form/],
+      [{ rocks: { mountain: { chance: 0.5, form: 'Rock' } } }, /^rocks\.mountain\.form/],
+      [{ rocks: { mountain: 0.5 } }, /^rocks\.mountain/],
+      [{ rocks: { Mountain: { chance: 0.5, form: 'rock' } } }, /^rocks/],
+      [{ deposits: { iron: { form: 'ore-rock', ore: ramp.slice(0, 3) } } }, /^deposits\.iron\.ore/],
+      [{ deposits: { iron: { form: 'ore-rock', colour: 'red' } } }, /^deposits\.iron/],
+      [
+        { landUse: { field: { trees: 0, shrubs: 0, rocks: 1 } } },
+        /^landUse : l'occupation « none »/,
+      ],
+      [{ landUse: { none: { trees: 1.2, shrubs: 1, rocks: 1 } } }, /^landUse\.none\.trees/],
+      [{ landUse: { none: { trees: 1, shrubs: 1 } } }, /^landUse\.none\.rocks/],
+      [{ seasons: true }, /seasons/],
+    ];
+    for (const [change, expected] of refused) {
+      const found = issues(DecorSchema, withDecor(change));
+      expect(found.join(' | '), JSON.stringify(change)).toMatch(expected);
+    }
+  });
+
+  it('borne les poids de la flore des biomes à leurs espèces', () => {
+    const taiga = data.biomes.entries.at(data.biomes.indexOf('taiga') ?? -1);
+    if (taiga === undefined) throw new Error('taïga absente');
+    expect(issues(BiomeSchema, taiga)).toEqual([]);
+    const withWeights = (weights: Record<string, number>) => ({
+      ...taiga,
+      flora: { ...taiga.flora, weights },
+    });
+    expect(issues(BiomeSchema, withWeights({ palm: 2 }))).toContain(
+      'flora.weights : un poids pour une espèce du biome',
+    );
+    expect(issues(BiomeSchema, withWeights({ conifer: 0 })).join()).toMatch(
+      /flora\.weights\.conifer/,
+    );
+    expect(issues(BiomeSchema, withWeights({ conifer: 101 })).join()).toMatch(
+      /flora\.weights\.conifer/,
+    );
+  });
+
+  it('relève un biome ou un minerai inconnu du décor, et un minerai sans rocher', () => {
+    const withSettings = (change: object): GameData => ({ ...data, decor: withDecor(change) });
+    const volcano = { chance: 0.5, form: 'rock' };
+    expect(checkContent(withSettings({ rocks: { ...decor.rocks, volcano } }))).toEqual([
+      'data/decor.json (rochers) : biomes inconnus : volcano',
+    ]);
+    const { gold: _gold, ...withoutGold } = decor.deposits;
+    expect(checkContent(withSettings({ deposits: withoutGold }))).toEqual([
+      'data/decor.json (gisements) : minerais sans rocher : gold',
+    ]);
+    expect(
+      checkContent(withSettings({ deposits: { ...decor.deposits, fish: { form: 'rock' } } })),
+    ).toEqual(['data/decor.json (gisements) : minerais inconnus : fish']);
+  });
+
+  it('borde chaque objet d’un contour plus sombre que ses tons, et lui donne une ombre portée', () => {
+    // Relecture 2b.6, problème 5 : la consigne veut un contour sombre et une ombre portée.
+    expect(checkContent(data)).toEqual([]);
+    const withSettings = (change: object): GameData => ({ ...data, decor: withDecor(change) });
+    const [problem] = checkContent(withSettings({ outline: '#ffffff' }));
+    expect(problem).toMatch(
+      /^data\/decor\.json \(contour\) : pas plus sombre que les tons de stone, /,
+    );
+    expect(problem).toMatch(/broadleaf\.summer/);
+    // Un contour à peine plus clair que l'ombre de la pierre la plus sombre suffit à le refuser.
+    const [deep] = checkContent(withSettings({ outline: decor.stone[2] }));
+    expect(deep).toMatch(/^data\/decor\.json \(contour\) : pas plus sombre que les tons de stone/);
+    // L'ombre portée par défaut existe, se projette, et ne peut qu'assombrir le sol que montre
+    // la carte : un noir translucide, ou la trame du contour (problème 2 : « ground » peignait
+    // le ton brut de la palette, plus clair que le sol sur 10 à 52 % de ses pixels).
+    expect(decor.shadow.method).not.toBe('none');
+    expect(['multiply', 'dither']).toContain(decor.shadow.method);
+    if (decor.shadow.method === 'multiply') expect(decor.shadow.alpha).toBeGreaterThan(0);
+    expect(decor.shadow.sx).toBeGreaterThan(0);
+    expect(decor.shadow.sy).toBeGreaterThan(0);
+  });
+});
+
+describe('gibier : data/fauna.json et les habitats des biomes (ADR 0018)', () => {
+  const data = loadGameData();
+  interface SafeResult {
+    success: boolean;
+    error?: { issues: { path: PropertyKey[]; message: string }[] };
+  }
+  const issues = (schema: { safeParse: (value: unknown) => SafeResult }, value: unknown) => {
+    const parsed = schema.safeParse(value);
+    return parsed.success
+      ? []
+      : (parsed.error?.issues ?? []).map((issue) => `${issue.path.join('.')} : ${issue.message}`);
+  };
+  const species = (id: string) => {
+    const entry = data.fauna.entries.at(data.fauna.indexOf(id) ?? -1);
+    if (entry === undefined) throw new Error(`espèce ${id} absente`);
+    return entry;
+  };
+  // Une rampe valide : de la lumière à l'ombre profonde, de plus en plus sombre.
+  const ramp = ['#444444', '#333333', '#222222', '#111111'];
+
+  it('décrit le cerf, le sanglier et le lièvre, nommés au masculin et au féminin', () => {
+    expect(data.fauna.entries.map((entry) => entry.id)).toEqual(['deer', 'boar', 'hare']);
+    const catalog = fr as Record<string, unknown>;
+    for (const entry of data.fauna.entries) {
+      expect(FaunaSpeciesSchema.parse(entry)).toEqual(entry);
+      const name = catalog[entry.name] as { masculine?: unknown; feminine?: unknown } | undefined;
+      expect(typeof name?.masculine, entry.id).toBe('string');
+      expect(typeof name?.feminine, entry.id).toBe('string');
+    }
+    // Le lièvre vit seul ; cerf et sanglier vont en hardes.
+    expect(species('hare').herd).toEqual([1, 1]);
+    expect(species('deer').herd[1]).toBeGreaterThan(1);
+    expect(FaunaRulesSchema.parse(data.faunaRules)).toEqual(data.faunaRules);
+    // Chaque biome de terre qui rend du gibier abrite au moins une espèce, hors des glaces et des
+    // sommets ; l'eau n'en abrite aucune.
+    for (const biome of data.biomes.entries) {
+      const qualities = Object.values(biome.fauna);
+      if (biome.family === 'water') expect(qualities, biome.id).toEqual([]);
+      else if (!['glacier', 'high-mountain'].includes(biome.id) && biome.forage.game > 0)
+        expect(
+          qualities.some((quality) => quality > 0),
+          biome.id,
+        ).toBe(true);
+    }
+  });
+
+  it('refuse chaque valeur d’une espèce hors de ses bornes', () => {
+    const deer = species('deer');
+    const hare = species('hare');
+    expect(issues(FaunaSpeciesSchema, deer)).toEqual([]);
+    const refused: [object, RegExp][] = [
+      [{ density: MAX_DENSITY + 0.001 }, /^density/],
+      [{ density: -0.001 }, /^density/],
+      [{ herd: [0, 4] }, /^herd\.0/],
+      [{ herd: [5, 4] }, /^herd : bas ≤ haut/],
+      [{ herd: [2, MAX_HERD + 1] }, /^herd\.1/],
+      [{ herd: [2, 4.5] }, /^herd\.1/],
+      [{ spread: 4.1 }, /^spread/],
+      [{ gap: 1.1 }, /^gap/],
+      [{ lag: 11 }, /^lag/],
+      [{ lag: 1.5 }, /^lag/],
+      [{ roam: [0.1, 2] }, /^roam\.0/],
+      [{ roam: [3, 2] }, /^roam : bas ≤ haut/],
+      [{ range: 0.5 }, /^range/],
+      [{ rest: [0, 3] }, /^rest\.0/],
+      [{ rest: [2, 61] }, /^rest\.1/],
+      [{ pace: { walk: 0.01, run: 1 } }, /^pace\.walk/],
+      [{ pace: { walk: 2, run: 1 } }, /^pace\.run : la fuite va au moins au pas/],
+      [{ pace: { walk: 1, run: 4.5 } }, /^pace\.run/],
+      [{ flee: { ...deer.flee, distance: 6.5 } }, /^flee\.distance/],
+      [{ flee: { ...deer.flee, length: 0.2 } }, /^flee\.length/],
+      [{ flee: { ...deer.flee, calm: 0 } }, /^flee\.calm/],
+      [{ birth: { ...deer.birth, months: [12] } }, /^birth\.months\.0/],
+      [{ birth: { ...deer.birth, months: [-1] } }, /^birth\.months\.0/],
+      [{ birth: { ...deer.birth, months: [4, 4] } }, /^birth\.months : chaque mois une fois/],
+      [{ birth: { ...deer.birth, months: [] } }, /^birth\.months/],
+      [{ birth: { ...deer.birth, growth: 2.5 } }, /^birth\.growth/],
+      [{ birth: { ...deer.birth, young: 0 } }, /^birth\.young/],
+      [{ cull: 1.2 }, /^cull/],
+      [{ colonize: -0.1 }, /^colonize/],
+      [{ lifespan: 0.5 }, /^lifespan/],
+      [{ males: 1.1 }, /^males/],
+      [{ look: { ...deer.look, coat: ramp.slice(0, 3) } }, /^look\.coat/],
+      [
+        { look: { ...deer.look, coat: [...deer.look.coat].reverse() } },
+        /^look\.coat : des tons de plus en plus sombres/,
+      ],
+      [{ look: { ...deer.look, pale: ['#fff', ...ramp.slice(1)] } }, /^look\.pale\.0 : couleur/],
+      [{ look: { ...deer.look, young: 0.5 } }, /^look\.young/],
+      [{ look: { ...deer.look, maleFrom: undefined } }, /^look\.maleFrom : une forme du mâle/],
+      [{ look: { ...hare.look, maleFrom: 2 } }, /^look\.maleFrom : une forme du mâle/],
+      [{ look: { ...deer.look, form: 'Deer' } }, /^look\.form/],
+      [{ id: 'Deer' }, /^id/],
+      [{ name: 'cerf' }, /^name : clé de traduction/],
+      [{ speed: 2 }, /speed/],
+    ];
+    for (const [change, expected] of refused) {
+      const found = issues(FaunaSpeciesSchema, { ...deer, ...change });
+      expect(found.join(' | '), JSON.stringify(change)).toMatch(expected);
+    }
+    // Une espèce solitaire se tient sur son but.
+    expect(issues(FaunaSpeciesSchema, { ...hare, spread: 0.5 })).toContain(
+      'spread : une espèce solitaire se tient sur son but',
+    );
+  });
+
+  it('refuse chaque règle commune hors de ses bornes', () => {
+    const rules = data.faunaRules;
+    expect(issues(FaunaRulesSchema, rules)).toEqual([]);
+    const refused: [object, RegExp][] = [
+      [{ territory: 24 }, /^territory : un diviseur de 128/],
+      [{ territory: 4 }, /^territory/],
+      [{ territory: 256 }, /^territory/],
+      [{ draws: { ...rules.draws, goal: 0 } }, /^draws\.goal/],
+      [{ draws: { ...rules.draws, goal: 9 } }, /^draws\.goal/],
+      [{ draws: { ...rules.draws, place: 17 } }, /^draws\.place/],
+      [{ draws: { ...rules.draws, cell: 0 } }, /^draws\.cell/],
+      [{ camps: 6.5 }, /^camps/],
+      [{ jitter: 0.6 }, /^jitter/],
+      [{ turns: [200] }, /^turns\.0/],
+      [{ turns: [10, 20, 30, 40, 50, 60, 70, 80, 90] }, /^turns/],
+      [{ neighbors: 0 }, /^neighbors/],
+      [{ idle: { ...rules.idle, period: 500 } }, /^idle\.period/],
+      [{ idle: { ...rules.idle, flick: rules.idle.graze + 1 } }, /^idle : flick ≤ graze/],
+      [{ idle: { ...rules.idle, rise: rules.idle.period + 1 } }, /^idle : flick ≤ graze/],
+      [{ idle: { ...rules.idle, chew: 50 } }, /^idle\.chew/],
+      [{ cadence: { ...rules.cadence, walk: 0.2 } }, /^cadence\.walk/],
+      [{ cadence: { ...rules.cadence, run: 17 } }, /^cadence\.run/],
+      [{ fall: { stumble: 900, lie: 800 } }, /^fall : stumble ≤ lie/],
+      [{ fall: { stumble: 100, lie: 20_000 } }, /^fall\.lie/],
+      [{ outline: '#13131' }, /^outline : couleur/],
+      [{ herds: 3 }, /herds/],
+    ];
+    for (const [change, expected] of refused) {
+      const found = issues(FaunaRulesSchema, { ...rules, ...change });
+      expect(found.join(' | '), JSON.stringify(change)).toMatch(expected);
+    }
+  });
+
+  it(`refuse deux espèces du même identifiant, plus de ${String(MAX_FAUNA_SPECIES)} espèces, et un fichier incomplet`, () => {
+    const deer = species('deer');
+    expect(issues(FaunaListSchema, [deer, deer])).toContain('1.id : identifiant en double : deer');
+    const many = Array.from({ length: MAX_FAUNA_SPECIES + 1 }, (_, index) => ({
+      ...deer,
+      id: `deer-${'abcdefghijklmnopq'.charAt(index)}`,
+    }));
+    expect(issues(FaunaListSchema, many).join()).toMatch(/16/);
+    expect(issues(FaunaListSchema, many.slice(0, MAX_FAUNA_SPECIES))).toEqual([]);
+    expect(issues(FaunaFileSchema, { species: data.fauna.entries }).join()).toMatch(/^rules/);
+    // Le contour borde le gibier d'un ton plus sombre que la lumière, la base et l'ombre de
+    // chaque rampe (relecture 2b.6, problème 5 : un contour blanc passait).
+    const file = { rules: data.faunaRules, species: data.fauna.entries };
+    expect(issues(FaunaFileSchema, file)).toEqual([]);
+    const white = issues(FaunaFileSchema, {
+      ...file,
+      rules: { ...data.faunaRules, outline: '#ffffff' },
+    });
+    expect(white).toContain(
+      'species.0.look.coat : le contour (rules.outline) plus sombre que la lumière, la base et l’ombre',
+    );
+    expect(white).toHaveLength(
+      data.fauna.entries.reduce((sum, entry) => sum + (entry.look.horn === undefined ? 3 : 4), 0),
+    );
+    expect(issues(FaunaFileSchema, { rules: data.faunaRules }).join()).toMatch(/^species/);
+  });
+
+  it('borne la qualité des habitats, et la demande à chaque biome', () => {
+    const steppe = data.biomes.entries.at(data.biomes.indexOf('steppe') ?? -1);
+    if (steppe === undefined) throw new Error('steppe absente');
+    expect(issues(BiomeSchema, steppe)).toEqual([]);
+    expect(issues(BiomeSchema, { ...steppe, fauna: { hare: 1.2 } }).join()).toMatch(/^fauna\.hare/);
+    expect(issues(BiomeSchema, { ...steppe, fauna: { Hare: 0.5 } }).join()).toMatch(/^fauna/);
+    const { fauna: _fauna, ...withoutFauna } = steppe;
+    expect(issues(BiomeSchema, withoutFauna).join()).toMatch(/^fauna/);
+  });
+
+  it('relève une espèce inconnue dans un biome, et du gibier là où le biome n’en rend pas', () => {
+    const withBiome = (id: string, fauna: Record<string, number>): GameData => {
+      const entries = data.biomes.entries.map((biome) =>
+        biome.id === id ? { ...biome, fauna } : biome,
+      );
+      return { ...data, biomes: { entries, indexOf: (key) => data.biomes.indexOf(key) } };
+    };
+    expect(checkContent(withBiome('steppe', { hare: 1, bison: 0.5 }))).toEqual([
+      'data/biomes.json (faune) : inconnus : bison',
+    ]);
+    expect(checkContent(withBiome('salar', { hare: 0.2 }))).toEqual([
+      'data/biomes.json (faune) : salar abrite du gibier sans en rendre',
+    ]);
+    // Une qualité nulle n'abrite rien : elle passe, même sans gibier.
+    expect(checkContent(withBiome('salar', { hare: 0 }))).toEqual([]);
   });
 });
