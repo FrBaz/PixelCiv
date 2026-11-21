@@ -57,7 +57,7 @@ Toutes sur un monde Petit, sur PC (1 280 × 720 pixels, densité 1), au zoom 1 :
 
 Le contrôle échoue au moindre écart au-delà d'une unité. Pour chaque vue :
 
-- `offVersusBase.differ` : 0, si la construction d'avant a été capturée. Le cran coupé rend sa carte octet pour octet, neige et glace comprises.
+- `offVersusBase.differ` : 0, si la construction d'avant a été capturée. Le cran coupé rend sa carte octet pour octet, neige et glace comprises. **Ce n'est plus vrai depuis la fonte lente de la relecture (f6e1dbb)** : à la fonte de chaque hémisphère, la neige et la glace du cran coupé diffèrent de celles de e5b1f3f (à la publication de 2b.7, 45 215 pixels sur les onze vues, tous des tons de neige ou de glace, et le contrôle échoue sur six vues) ; hors de la neige et de la glace, le cran coupé rend 7c893a7 au pixel près (79 905 pixels de neige ou de glace en diffèrent, aucun autre). Classer ces écarts plutôt qu'attendre 0 est soumis à l'auteur.
 - `far` : 0. Chaque pixel des crans plein et atténué vaut ce que dit le miroir, à une unité près sur un canal : le ton de même rang d'une palette déclarée, sous l'ombrage et la teinte de la cuisson, ou le pixel du cran coupé.
 - `mismatch` : rare (au plus 0,5 % des pixels changés). Ce sont les produits qui tombent sur une demie, que le GPU et le miroir arrondissent chacun de son côté.
 - Vues de loin (`-z0.75`) : `waterChanged` et `blueChanged` à 0 (aucun pixel changé ne vient d'une case sans tons de terre, eau, rivière ou rive, ni n'est bleu au cran coupé), et `matched` égal à `changed` à 1 % près (chaque pixel changé vaut le miroir de loin, `seasonFarPixel`, pour l'un des pixels de carte que la caméra situe à un pixel près).

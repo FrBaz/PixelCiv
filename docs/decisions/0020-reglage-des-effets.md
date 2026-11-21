@@ -36,7 +36,7 @@ Voir l'ADR 0019, § 6 : images dessinées et rendu par image à chaque cran, en 
 ## Conséquences
 
 - Le jeu garde sa première préférence d'appareil ; la langue ou l'échelle de l'interface pourront suivre le même chemin.
-- La mer animée et les saisons se coupent d'un geste, ce qui rend aussi leur coût ; le cran coupé rend la carte du premier temps de 2b.7 au pixel près.
+- La mer animée et les saisons se coupent d'un geste, ce qui rend aussi leur coût ; le cran coupé rend la carte de 7c893a7 hors de la neige et de la glace, au pixel près, et celle du premier temps de 2b.7 hors de la fonte, que la relecture a refaite (ADR 0019, § 4).
 - Le réglage ne touche ni la sauvegarde ni le protocole.
 
 ## Ce qui reste à décider par l'auteur
