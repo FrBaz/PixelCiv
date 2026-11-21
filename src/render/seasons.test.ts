@@ -460,12 +460,16 @@ describe('couleurs de la saison : tons, calendrier filtré, activité (ADR 0019,
             const north = phaseDay(day, false);
             const southPhase = phaseDay(day, true);
             const shown = seasonInRect(activity, 16, 0, 0, 256, 256, north, southPhase, light);
+            // Les cases du bloc, et l'anneau d'une case autour de lui : celles qui peuvent prêter
+            // leurs tons aux pixels de son bord (la critique des captures : un bloc dont seules
+            // les voisines changent gardait le programme de la carte).
             let changes = false;
-            for (let y = 0; y < 64 && !changes; y++) {
-              const cy = row * 64 + y;
+            for (let y = -1; y <= 64 && !changes; y++) {
+              const cy = Math.min(size.height - 1, Math.max(0, row * 64 + y));
               const phase = southern(cy, size.height) ? southPhase : north;
-              for (let x = 0; x < 64 && !changes; x++) {
-                const cell = cy * size.width + column * 64 + x;
+              for (let x = -1; x <= 64 && !changes; x++) {
+                const cx = (column * 64 + x + size.width) % size.width;
+                const cell = cy * size.width + cx;
                 const shares = foliageShares(texels, cell * FOLIAGE_BYTES, phase, transition);
                 changes =
                   shares.autumn > 0 ||

@@ -391,7 +391,8 @@ export const SEASON_TILE = 4;
 
 /**
  * Activité des saisons d'un bloc (ADR 0019, § 6) : pour chaque tuile de SEASON_TILE × SEASON_TILE
- * cases, la distance au jour le plus chaud (en jours) à partir de laquelle un de ses états, ou la
+ * cases, et l'anneau d'une case qui l'entoure (les cases qui prêtent leurs tons aux pixels de son
+ * bord), la distance au jour le plus chaud (en jours) à partir de laquelle un de leurs états, ou la
  * lumière d'hiver, gagne un premier pixel, par hémisphère et par moitié de l'année (refroidissement,
  * réchauffement : l'automne ne vient qu'au refroidissement) ; Infinity si rien n'y change. La carte
  * ne donne le programme des saisons qu'aux blocs dont la partie visible porte une tuile active.
@@ -419,12 +420,15 @@ export function seasonActivity(
   const side = chunkCells / SEASON_TILE;
   const tiles = new Float32Array(side * side * 8).fill(Number.POSITIVE_INFINITY);
   const half = transition / 2;
-  for (let y = 0; y < chunkCells; y++) {
-    const cy = row * chunkCells + y;
+  // Un pixel au bord d'une tuile peut prendre son ton d'une case voisine (la case bilinéaire qui
+  // le prête, bake.ts) : chaque tuile compte aussi l'anneau d'une case autour d'elle, jusque dans
+  // les blocs voisins, x bouclé et y borné.
+  for (let y = -1; y <= chunkCells; y++) {
+    const cy = Math.min(size.height - 1, Math.max(0, row * chunkCells + y));
     const south = cy >= size.height / 2;
-    for (let x = 0; x < chunkCells; x++) {
-      const cell = cy * size.width + column * chunkCells + x;
-      const at = cell * FOLIAGE_BYTES;
+    for (let x = -1; x <= chunkCells; x++) {
+      const cx = (((column * chunkCells + x) % size.width) + size.width) % size.width;
+      const at = (cy * size.width + cx) * FOLIAGE_BYTES;
       const day = (slot: number) => {
         const date = texels[at + slot] ?? NO_DATE;
         return date === NO_DATE ? Number.POSITIVE_INFINITY : date * FOLIAGE_UNIT - half;
@@ -432,13 +436,21 @@ export function seasonActivity(
       const autumn = (texels[at + 1] ?? NO_DATE) === NO_DATE ? Number.POSITIVE_INFINITY : day(0);
       const warming = Math.min(day(1), day(2));
       const cooling = Math.min(warming, autumn);
-      const tile = (Math.floor(y / SEASON_TILE) * side + Math.floor(x / SEASON_TILE)) * 8;
-      const base = tile + (south ? 2 : 0);
       const values = [cooling, warming, Math.min(cooling, day(3)), Math.min(warming, day(3))];
-      tiles[base] = Math.min(tiles[base] ?? Infinity, values[0] ?? Infinity);
-      tiles[base + 1] = Math.min(tiles[base + 1] ?? Infinity, values[1] ?? Infinity);
-      tiles[base + 4] = Math.min(tiles[base + 4] ?? Infinity, values[2] ?? Infinity);
-      tiles[base + 5] = Math.min(tiles[base + 5] ?? Infinity, values[3] ?? Infinity);
+      // Les tuiles dont cette case touche le carré ou l'anneau.
+      const t0 = Math.max(0, Math.floor((y - 1) / SEASON_TILE));
+      const t1 = Math.min(side - 1, Math.floor((y + 1) / SEASON_TILE));
+      const u0 = Math.max(0, Math.floor((x - 1) / SEASON_TILE));
+      const u1 = Math.min(side - 1, Math.floor((x + 1) / SEASON_TILE));
+      for (let ty = t0; ty <= t1; ty++) {
+        for (let tx = u0; tx <= u1; tx++) {
+          const base = (ty * side + tx) * 8 + (south ? 2 : 0);
+          tiles[base] = Math.min(tiles[base] ?? Infinity, values[0] ?? Infinity);
+          tiles[base + 1] = Math.min(tiles[base + 1] ?? Infinity, values[1] ?? Infinity);
+          tiles[base + 4] = Math.min(tiles[base + 4] ?? Infinity, values[2] ?? Infinity);
+          tiles[base + 5] = Math.min(tiles[base + 5] ?? Infinity, values[3] ?? Infinity);
+        }
+      }
     }
   }
   return { tiles, side };
