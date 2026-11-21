@@ -215,8 +215,8 @@ describe('survie (tâche 2.4)', () => {
       state,
       (cell, biome) => biome.id === 'tundra' && extremes(state, cell).coldest < cold.to - 1,
     );
-    const winter = cellFood(state.world, state.size, tundra, JANUARY, testData)[4];
-    const summer = cellFood(state.world, state.size, tundra, JULY, testData)[4];
+    const winter = cellFood(state.world, state.size, state.calendars, tundra, JANUARY, testData)[4];
+    const summer = cellFood(state.world, state.size, state.calendars, tundra, JULY, testData)[4];
     expect(winter).toBeLessThan(summer * 0.5);
     expect(winter).toBeCloseTo(
       (testData.biomes.entries.at(state.world.biome[tundra] ?? 0)?.forage.game ?? 0) *
@@ -233,7 +233,7 @@ describe('survie (tâche 2.4)', () => {
     expect(fishSeason(0, covered)).toBe(1);
     expect(fishSeason(1, covered)).toBeCloseTo(covered, 12);
     const fishCap = (cell: number, tick: number) =>
-      cellFood(state.world, state.size, cell, tick, testData)[5];
+      cellFood(state.world, state.size, state.calendars, cell, tick, testData)[5];
     // Les seuils sont ceux du shader de la carte, qui lit aussi COVER_RAMPS.
     const iceBelow = COVER_RAMPS.ice.onset - COVER_RAMPS.ice.span;
     const seaIceBelow = COVER_RAMPS['sea-ice'].onset - COVER_RAMPS['sea-ice'].span;
@@ -293,10 +293,9 @@ describe('survie (tâche 2.4)', () => {
       );
       const fish = testData.biomes.entries.at(state.world.biome[water] ?? 0)?.forage.fish ?? 0;
       expect(fish).toBeGreaterThan(0);
-      expect(cellFood(state.world, state.size, water, JULY, testData)[5]).toBeCloseTo(
-        fish * capacity,
-        6,
-      );
+      expect(
+        cellFood(state.world, state.size, state.calendars, water, JULY, testData)[5],
+      ).toBeCloseTo(fish * capacity, 6);
     }
   });
 
@@ -313,12 +312,15 @@ describe('survie (tâche 2.4)', () => {
     const cells = state.world.biome.length;
     // Ce que cellFood donne de chaque case : rendements, puis plafonds, des plantes, du gibier
     // et du poisson.
-    const stride = cellFood(state.world, state.size, 0, JULY, testData).length;
+    const stride = cellFood(state.world, state.size, state.calendars, 0, JULY, testData).length;
     const food = (content: SimContent, month: number) => {
       const all = new Float64Array(cells * stride);
       for (let cell = 0; cell < cells; cell++) {
         all.set(
-          cellFood(state.world, state.size, cell, month, content).subarray(0, stride),
+          cellFood(state.world, state.size, state.calendars, cell, month, content).subarray(
+            0,
+            stride,
+          ),
           cell * stride,
         );
       }
@@ -345,14 +347,24 @@ describe('survie (tâche 2.4)', () => {
   it('tient une case intacte au plafond, la suit une fois entamée, puis la libère', () => {
     const state = testState();
     const { cell } = cellOf(state, 'temperate-forest');
-    const full = totalStock(state.food, state.world, state.size, cell, JULY, testData);
+    const full = totalStock(
+      state.food,
+      state.world,
+      state.size,
+      state.calendars,
+      cell,
+      JULY,
+      testData,
+    );
     expect(full).toBeGreaterThan(0);
     state.food.stocks.fill(0, cell * FOOD_STRIDE, cell * FOOD_STRIDE + FOOD_STRIDE);
     deplete(state.food, cell);
     expect(state.food.count).toBe(1);
-    expect(totalStock(state.food, state.world, state.size, cell, JULY, testData)).toBe(0);
+    expect(
+      totalStock(state.food, state.world, state.size, state.calendars, cell, JULY, testData),
+    ).toBe(0);
     for (let month = 0; month < 48 && state.food.count > 0; month++) {
-      regrowFood(state.food, state.world, state.size, JULY, testData);
+      regrowFood(state.food, state.world, state.size, state.calendars, JULY, testData);
     }
     expect(depletedCells(state.food)).toEqual([]);
     expect(state.food.count).toBe(0);
@@ -381,6 +393,7 @@ describe('survie (tâche 2.4)', () => {
         state.food,
         state.world,
         state.size,
+        state.calendars,
         state.tick,
         testData,
       );
@@ -401,7 +414,7 @@ describe('survie (tâche 2.4)', () => {
       const members = groupMembers(state.people).get(group.id) ?? [];
       const reserve: number[] = [];
       for (let month = 0; month < 3 * 12; month++) {
-        regrowFood(state.food, state.world, state.size, state.tick, testData);
+        regrowFood(state.food, state.world, state.size, state.calendars, state.tick, testData);
         feedGroup(
           group,
           members,
@@ -409,6 +422,7 @@ describe('survie (tâche 2.4)', () => {
           state.food,
           state.world,
           state.size,
+          state.calendars,
           state.tick,
           testData,
         );
@@ -480,7 +494,9 @@ describe('survie (tâche 2.4)', () => {
     const state = testState();
     for (const biome of ['coastal-ocean', 'lake']) {
       const { cell } = cellOf(state, biome);
-      expect(cellFood(state.world, state.size, cell, JULY, testData)[5]).toBeGreaterThan(0);
+      expect(
+        cellFood(state.world, state.size, state.calendars, cell, JULY, testData)[5],
+      ).toBeGreaterThan(0);
     }
     // Une case de terre traversée par une rivière a son poisson.
     const river = state.world.drainage.findIndex((code, cell) => {
@@ -488,7 +504,9 @@ describe('survie (tâche 2.4)', () => {
       return riverClass(code) >= 2 && family !== 'water';
     });
     expect(river).toBeGreaterThanOrEqual(0);
-    expect(cellFood(state.world, state.size, river, JULY, testData)[5]).toBeGreaterThan(0);
+    expect(
+      cellFood(state.world, state.size, state.calendars, river, JULY, testData)[5],
+    ).toBeGreaterThan(0);
   });
 });
 
@@ -501,7 +519,17 @@ describe('cueillette d’un groupe (tâche 2.4)', () => {
     if (group === undefined) throw new Error('aucun groupe');
     const members = groupMembers(state.people).get(group.id) ?? [];
     const feed = (tick: number) =>
-      feedGroup(group, members, state.people, state.food, state.world, state.size, tick, content);
+      feedGroup(
+        group,
+        members,
+        state.people,
+        state.food,
+        state.world,
+        state.size,
+        state.calendars,
+        tick,
+        content,
+      );
     return { state, group, members, feed };
   }
 

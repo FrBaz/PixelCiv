@@ -31,7 +31,8 @@ import {
   SPEEDS,
   type GameTime,
 } from '../core/time';
-import { CHUNK_SIZE, GENERATION_STAGES, LAYER_NAMES } from '../core/world';
+import { worldCalendars } from '../core/snow';
+import { CHUNK_SIZE, GENERATION_STAGES, LAYER_NAMES, WORLD_SIZES } from '../core/world';
 import { advanceDay } from '../sim/day';
 import { INTENTION, WALK } from '../sim/population';
 import { replay } from '../sim/replay';
@@ -174,11 +175,21 @@ describe('partie', () => {
     const snapshot = env.messages('snapshot').at(0);
     expect(snapshot?.world).toEqual({ params: testParams(), size: { width: 512, height: 256 } });
     expect(snapshot?.layers.biome).toEqual(testWorld().biome);
+    // Les calendriers de la neige et de la glace (protocole 8, ADR 0019) : huit octets par case,
+    // ceux que le monde donne.
+    const size = WORLD_SIZES.small;
+    expect(snapshot?.calendars).toHaveLength(size.width * size.height * 8);
+    expect(snapshot?.calendars).toEqual(
+      worldCalendars(size, testWorld(), testData.biomes.entries, testData.seasons),
+    );
     const entry = env.sent.find((sent) => sent.message.type === 'snapshot');
-    // Les couches du monde, plus les sept tableaux de l'image des groupes et les cinq des
-    // étapes en cours (ADR 0014), puis les quatre de l'image du gibier et les cinq de ses étapes
-    // en cours (protocole 7, ADR 0018).
-    expect(entry?.transfer).toHaveLength(LAYER_NAMES.length + 21);
+    // Les couches du monde et les calendriers, plus les sept tableaux de l'image des groupes et
+    // les cinq des étapes en cours (ADR 0014), puis les quatre de l'image du gibier et les cinq
+    // de ses étapes en cours (protocole 7, ADR 0018).
+    expect(entry?.transfer).toHaveLength(LAYER_NAMES.length + 1 + 21);
+    if (entry?.original.type === 'snapshot') {
+      expect(entry.transfer).toContain(entry.original.calendars.buffer);
+    }
     expect(snapshot?.fauna.ids.length).toBeGreaterThan(400);
     expect(snapshot?.time).toEqual({ tick: 0, day: 0, paused: false, speed: 'normal' });
     expect(entry?.transfer.every((buffer) => buffer instanceof ArrayBuffer)).toBe(true);

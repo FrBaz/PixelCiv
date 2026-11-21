@@ -6,10 +6,11 @@
  * du biome (data/biomes.json) et la saison du mois (SAI-03) :
  * - les plantes ne se trouvent qu'à la belle saison, moins à la saison sèche des tropiques ;
  * - le gibier se raréfie dans le froid, selon data/nomads.json (`stocks.game.cold`) ;
- * - la pêche baisse sous la couverture que la carte montre (C1, D9 ; core/seasons.ts) : la
- *   couverture du biome (`seasons.cover` : glace de l'eau douce, banquise de la mer côtière,
- *   neige des terres), et la glace des rivières pour une rivière qui traverse une case de
- *   terre. Ce qui reste sous une couverture pleine se lit dans `stocks.fish.covered`.
+ * - la pêche baisse sous la couverture que la carte montre (C1, D9 ; data/seasons.json ;
+ *   src/sim/cover.ts) : la couverture du biome (`seasons.cover` : glace de l'eau douce, banquise
+ *   de la mer côtière, neige des terres), et la glace des rivières pour une rivière qui traverse
+ *   une case de terre, au milieu du mois. Ce qui reste sous une couverture pleine se lit dans
+ *   `stocks.fish.covered`.
  * Une rivière ajoute la pêche de sa classe à la case de terre qu'elle traverse ; la mer
  * côtière, les lacs et le lit des fleuves portent la pêche de leur biome, et se pêchent
  * depuis la rive. Le gibier chassé, c'est la faune, qui s'épuise et se reconstitue
@@ -26,16 +27,13 @@
  * La nutrition de ses membres suit ce qu'il a trouvé ; la faim tue et rend moins fécond
  * (cycle de vie).
  */
-import type { Biome, Catalog, Nomads, Species } from '../core/data';
+import type { Biome, Catalog, Nomads, Seasons, Species } from '../core/data';
 import { wrapNearX } from '../core/cylinder';
-import {
-  COVER_RAMPS,
-  coverShare,
-  rainSeasonality,
-  seasonFactor,
-  type CoverRamp,
-} from '../core/seasons';
+import { rainSeasonality, seasonFactor, type CoverRamp } from '../core/seasons';
+import { coverRamps, phaseDay, type CalendarCover } from '../core/snow';
+import { DAYS_PER_MONTH } from '../core/time';
 import { riverClass, type WorldLayers, type WorldSize } from '../core/world';
+import { fishingCover } from './cover';
 import { dominantSubspecies, monthOf, MONTHS_PER_YEAR } from './people';
 import type { Population } from './population';
 import type { Group } from './society';
@@ -57,6 +55,8 @@ export interface ForageContent {
   readonly biomes: Catalog<Biome>;
   readonly species: Catalog<Species>;
   readonly nomads: Nomads;
+  /** La neige, la glace et la banquise (data/seasons.json), sous lesquelles la pêche baisse. */
+  readonly seasons: Seasons;
 }
 
 /** Valeurs par case dans FoodStocks.stocks : plantes, gibier, poisson. */
@@ -91,25 +91,38 @@ interface BiomeTable {
   readonly plants: Float32Array;
   readonly game: Float32Array;
   readonly fish: Float32Array;
-  /** Couverture saisonnière du biome (`seasons.cover`), qui gêne sa pêche. */
-  readonly cover: readonly CoverRamp[];
+  /** Couverture saisonnière du biome (`seasons.cover`), qui gêne sa pêche, et sa rampe. */
+  readonly cover: readonly (CalendarCover | undefined)[];
+  readonly ramp: readonly CoverRamp[];
+  /** La rampe de la glace d'eau douce, celle des rivières des cases de terre. */
+  readonly river: CoverRamp;
   /** 1 pour une eau, qui ne porte que la pêche de son biome, sans part de rivière. */
   readonly water: Uint8Array;
 }
 
-const tables = new WeakMap<Catalog<Biome>, BiomeTable>();
+const tables = new WeakMap<Catalog<Biome>, WeakMap<Seasons, BiomeTable>>();
 
-function biomeTable(biomes: Catalog<Biome>): BiomeTable {
-  let table = tables.get(biomes);
+function biomeTable(biomes: Catalog<Biome>, seasons: Seasons): BiomeTable {
+  let bySeasons = tables.get(biomes);
+  if (bySeasons === undefined) {
+    bySeasons = new WeakMap();
+    tables.set(biomes, bySeasons);
+  }
+  let table = bySeasons.get(seasons);
   if (table !== undefined) return table;
+  const ramps = coverRamps(seasons);
   table = {
     plants: Float32Array.from(biomes.entries, (biome) => biome.forage.plants),
     game: Float32Array.from(biomes.entries, (biome) => biome.forage.game),
     fish: Float32Array.from(biomes.entries, (biome) => biome.forage.fish),
-    cover: biomes.entries.map((biome) => COVER_RAMPS[biome.seasons.cover]),
+    cover: biomes.entries.map((biome) =>
+      biome.seasons.cover === 'none' ? undefined : biome.seasons.cover,
+    ),
+    ramp: biomes.entries.map((biome) => ramps[biome.seasons.cover]),
+    river: ramps.ice,
     water: Uint8Array.from(biomes.entries, (biome) => (biome.family === 'water' ? 1 : 0)),
   };
-  tables.set(biomes, table);
+  bySeasons.set(seasons, table);
   return table;
 }
 
@@ -142,21 +155,24 @@ export const CELL_FOOD = { growth: 0, caps: 3 } as const;
 
 /**
  * Climat du mois, ligne par ligne : facteur de saison (signé selon l'hémisphère) et pluie
- * du mois rapportée à la moyenne (saison sèche des tropiques, D8). Il ne dépend que du pas
- * et de la hauteur du monde : on le garde d'un appel à l'autre.
+ * du mois rapportée à la moyenne (saison sèche des tropiques, D8) ; jour de phase du milieu du
+ * mois, au nord et au sud (src/core/snow.ts). Il ne dépend que du pas et de la hauteur du
+ * monde : on le garde d'un appel à l'autre.
  */
 interface MonthClimate {
   readonly tick: number;
   readonly height: number;
   readonly season: Float64Array;
   readonly rain: Float64Array;
+  readonly phase: { readonly north: number; readonly south: number };
 }
 
 let cachedClimate: MonthClimate | undefined;
 
 function monthClimate(height: number, tick: number): MonthClimate {
   if (cachedClimate?.tick === tick && cachedClimate.height === height) return cachedClimate;
-  const factor = seasonFactor(monthOf(tick));
+  const month = monthOf(tick);
+  const factor = seasonFactor(month);
   const season = new Float64Array(height);
   const rain = new Float64Array(height);
   for (let y = 0; y < height; y++) {
@@ -164,26 +180,30 @@ function monthClimate(height: number, tick: number): MonthClimate {
     const lat = Math.abs((2 * (y + 0.5)) / height - 1);
     rain[y] = 1 + rainSeasonality(lat) * (season[y] ?? 0);
   }
-  cachedClimate = { tick, height, season, rain };
+  const day = month * DAYS_PER_MONTH;
+  const phase = { north: phaseDay(day, false), south: phaseDay(day, true) };
+  cachedClimate = { tick, height, season, rain, phase };
   return cachedClimate;
 }
 
 const scratch = new Float64Array(6);
 
 /**
- * Ce que rend une case, et jusqu'où, ce mois-ci (voir CELL_FOOD). Le tampon rendu sert à
- * tous les appels : on le lit avant le suivant.
+ * Ce que rend une case, et jusqu'où, ce mois-ci (voir CELL_FOOD), sous la couverture de ses
+ * calendriers `calendars` (src/core/snow.ts, worldCalendars ; SimState.calendars). Le tampon
+ * rendu sert à tous les appels : on le lit avant le suivant.
  */
 export function cellFood(
   world: WorldLayers,
   size: WorldSize,
+  calendars: Uint8Array,
   cell: number,
   tick: number,
   content: ForageContent,
 ): Float64Array {
-  const table = biomeTable(content.biomes);
+  const table = biomeTable(content.biomes, content.seasons);
   const climate = monthClimate(size.height, tick);
-  return cellFoodWith(table, climate, content.nomads, world, size.width, cell);
+  return cellFoodWith(table, climate, content.nomads, world, size.width, calendars, cell);
 }
 
 /** Température d'une case ce mois-ci, en degrés. */
@@ -213,7 +233,7 @@ export function gameCap(
   tick: number,
   content: ForageContent,
 ): number {
-  const table = biomeTable(content.biomes);
+  const table = biomeTable(content.biomes, content.seasons);
   const climate = monthClimate(size.height, tick);
   const temperature = monthTemperature(climate, world, size.width, cell);
   return (
@@ -229,6 +249,7 @@ function cellFoodWith(
   nomads: Nomads,
   world: WorldLayers,
   width: number,
+  calendars: Uint8Array,
   cell: number,
 ): Float64Array {
   const { stocks, river } = nomads;
@@ -238,13 +259,21 @@ function cellFoodWith(
   const plants = (table.plants[biome] ?? 0) * plantSeason(temperature, climate.rain[y] ?? 1);
   const game = gameYield(table, nomads, biome, temperature);
   const { covered } = stocks.fish;
-  const cover = table.cover[biome] ?? COVER_RAMPS.none;
-  let fish = (table.fish[biome] ?? 0) * fishSeason(coverShare(cover, temperature), covered);
+  const season = climate.season[y] ?? 0;
+  const phase = y >= climate.height / 2 ? climate.phase.south : climate.phase.north;
+  const cover = table.cover[biome];
+  const ramp = table.ramp.at(biome);
+  let fish = table.fish[biome] ?? 0;
+  if (cover !== undefined && ramp !== undefined && fish > 0) {
+    const share = fishingCover(world, calendars, cell, cover, ramp, season, phase);
+    fish *= fishSeason(share, covered);
+  }
   if (table.water[biome] !== 1) {
     // La rivière d'une case de terre gèle comme l'eau douce, à la manière de la carte.
     const stream = river[riverClass(world.drainage[cell] ?? 0)] ?? 0;
     if (stream > 0) {
-      fish += stream * fishSeason(coverShare(COVER_RAMPS.ice, temperature), covered);
+      const share = fishingCover(world, calendars, cell, 'ice', table.river, season, phase);
+      fish += stream * fishSeason(share, covered);
     }
   }
   scratch[0] = plants;
@@ -261,6 +290,7 @@ export function totalStock(
   food: FoodStocks,
   world: WorldLayers,
   size: WorldSize,
+  calendars: Uint8Array,
   cell: number,
   tick: number,
   content: ForageContent,
@@ -269,7 +299,7 @@ export function totalStock(
     const at = cell * FOOD_STRIDE;
     return (food.stocks[at] ?? 0) + (food.stocks[at + 1] ?? 0) + (food.stocks[at + 2] ?? 0);
   }
-  const values = cellFood(world, size, cell, tick, content);
+  const values = cellFood(world, size, calendars, cell, tick, content);
   return values[3] + values[4] + values[5];
 }
 
@@ -278,6 +308,7 @@ export function stocksInto(
   food: FoodStocks,
   world: WorldLayers,
   size: WorldSize,
+  calendars: Uint8Array,
   cell: number,
   tick: number,
   content: ForageContent,
@@ -291,7 +322,7 @@ export function stocksInto(
     out[at + 2] = food.stocks[from + 2] ?? 0;
     return;
   }
-  const values = cellFood(world, size, cell, tick, content);
+  const values = cellFood(world, size, calendars, cell, tick, content);
   out[at] = values[3];
   out[at + 1] = values[4];
   out[at + 2] = values[5];
@@ -305,17 +336,18 @@ export function regrowFood(
   food: FoodStocks,
   world: WorldLayers,
   size: WorldSize,
+  calendars: Uint8Array,
   tick: number,
   content: ForageContent,
 ): void {
   if (food.count === 0) return;
-  const table = biomeTable(content.biomes);
+  const table = biomeTable(content.biomes, content.seasons);
   const climate = monthClimate(size.height, tick);
   const { depleted, stocks } = food;
   // Quatre cases à la fois : la plupart sont au plafond, et on les saute d'un coup.
   const words = new Uint32Array(depleted.buffer, 0, depleted.length >> 2);
   const regrow = (cell: number) => {
-    const values = cellFoodWith(table, climate, content.nomads, world, size.width, cell);
+    const values = cellFoodWith(table, climate, content.nomads, world, size.width, calendars, cell);
     const plantsCap = values[3];
     const gameCap = values[4];
     const fishCap = values[5];
@@ -434,6 +466,7 @@ export function feedGroup(
   food: FoodStocks,
   world: WorldLayers,
   size: WorldSize,
+  calendars: Uint8Array,
   tick: number,
   content: ForageContent,
 ): number {
@@ -468,7 +501,7 @@ export function feedGroup(
   let available = 0;
   for (let index = 0; index < count; index++) {
     const cell = cells[index] ?? 0;
-    stocksInto(food, world, size, cell, tick, content, stocks, index * 3);
+    stocksInto(food, world, size, calendars, cell, tick, content, stocks, index * 3);
     const bonus = preferred?.[world.biome[cell] ?? 0] === 1 ? PREFERRED : 1;
     const total =
       (stocks[index * 3] ?? 0) + (stocks[index * 3 + 1] ?? 0) + (stocks[index * 3 + 2] ?? 0);
