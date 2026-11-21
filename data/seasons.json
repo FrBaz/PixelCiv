@@ -34,8 +34,8 @@
     "maxLag": 30
   },
   "light": {
-    "from": 0.25,
-    "to": 0.5,
+    "below": 10,
+    "drop": 5,
     "factor": -0.3,
     "toward": "#5d6b86",
     "mix": 0.25,

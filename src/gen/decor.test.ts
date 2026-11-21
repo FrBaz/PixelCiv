@@ -396,7 +396,7 @@ describe('saisons du décor (ADR 0017, § 5 ; ADR 0019, § 2)', () => {
       cold & 255,
       cold >>> 8,
       dryDate(rainSeasonality(lat), foliageRules),
-      lightDate(lat, foliageRules),
+      lightDate(annual, amplitude, foliageRules),
     ];
   };
   /**

@@ -29,7 +29,12 @@ const { bareBelow, autumnBelow, autumnDrop, dryShare } = RULES.foliage;
 /** Les octets du calendrier d'un climat (°C) à la latitude `lat`. */
 function bytesOf(annual: number, amplitude: number, lat = 0.4): number[] {
   const cold = coldDates(annual, amplitude, RULES);
-  return [cold & 255, cold >>> 8, dryDate(rainSeasonality(lat), RULES), lightDate(lat, RULES)];
+  return [
+    cold & 255,
+    cold >>> 8,
+    dryDate(rainSeasonality(lat), RULES),
+    lightDate(annual, amplitude, RULES),
+  ];
 }
 
 /** Les parts des états, au dixième de jour, sur l'année. */
@@ -180,7 +185,7 @@ describe('calendrier de la végétation (ADR 0019, § 2)', () => {
     }
   });
 
-  it('ne dénude rien sous les tropiques, y sèche à la saison sèche, et ne donne la lumière d’hiver qu’aux latitudes du réglage', () => {
+  it('ne dénude rien sous les tropiques, y sèche à la saison sèche, et ne donne la lumière d’hiver qu’aux mois froids', () => {
     const [autumn, bare] = bytesOf(25, 1.5, 0.2);
     expect([autumn, bare]).toEqual([NO_DATE, NO_DATE]);
     // Un hiver doux, au-dessus du seuil du bois nu : ni automne ni bois nu (règle de 2b.6).
@@ -189,17 +194,61 @@ describe('calendrier de la végétation (ADR 0019, § 2)', () => {
     expect(dryDate(rainSeasonality(0.2), RULES)).not.toBe(NO_DATE);
     expect(dryDate(rainSeasonality(0), RULES)).toBe(NO_DATE);
     expect(dryDate(0, RULES)).toBe(NO_DATE);
-    // La lumière d'hiver : rien sous `from`, au plus long à `to` et au-delà.
-    const { from, to } = RULES.seasons.light;
-    expect(lightDate(from, RULES)).toBe(NO_DATE);
-    expect(lightDate(from - 0.1, RULES)).toBe(NO_DATE);
-    const middle = lightDate((from + to) / 2, RULES);
-    const full = lightDate(to, RULES);
-    expect(full).toBeLessThan(middle);
-    expect(lightDate(0.95, RULES)).toBe(full);
-    // Au plus long, la fenêtre commence quand le facteur de saison passe sous `factor`.
-    const day = full * FOLIAGE_UNIT;
-    expect(cos((TAU * day) / YEAR_DAYS)).toBeCloseTo(RULES.seasons.light.factor, 2);
+    // La lumière d'hiver : aucune là où le mois ne passe jamais sous `below`, les tropiques ni un
+    // hiver qui reste au-dessus.
+    const { below: threshold, drop, factor } = RULES.seasons.light;
+    expect(lightDate(25, 1.5, RULES)).toBe(NO_DATE);
+    expect(lightDate(threshold + 4, 3.9, RULES)).toBe(NO_DATE);
+    // Ni là où l'année n'a guère de saison, un haut plateau de l'équateur, froid toute l'année
+    // (sans quoi le nord et le sud de l'équateur s'y éclaireraient chacun à son hiver, de part et
+    // d'autre d'une ligne droite) ; dès que le mois descend de `drop` sous le plus chaud, si.
+    expect(lightDate(4, 1, RULES)).toBe(NO_DATE);
+    expect(lightDate(4, drop / 2 - 0.1, RULES)).toBe(NO_DATE);
+    expect(lightDate(4, drop / 2 + 0.1, RULES)).toBeLessThan(NO_DATE);
+    // Au plus long, là où le mois est froid toute la moitié froide de l'année (un hiver
+    // continental, une toundra, un glacier) : la fenêtre commence quand le facteur de saison
+    // passe sous `factor`.
+    const full = lightDate(-2, 18, RULES);
+    expect(lightDate(-14, 14.25, RULES)).toBe(full);
+    expect(lightDate(-20, 10, RULES)).toBe(full);
+    expect(cos((TAU * full * FOLIAGE_UNIT) / YEAR_DAYS)).toBeCloseTo(factor, 2);
+    // Entre les deux, un hiver doux : une fenêtre plus courte, autour du jour le plus froid.
+    const mild = lightDate(12, 5, RULES);
+    expect(mild).toBeGreaterThan(full);
+    expect(mild).toBeLessThan(NO_DATE);
+    // Du plus doux au plus froid, la fenêtre s'ouvre peu à peu : sa date ne remonte jamais.
+    let previous = NO_DATE;
+    for (let annual = 20; annual >= -10; annual -= 0.1) {
+      const date = lightDate(annual, 6, RULES);
+      expect(date).toBeLessThanOrEqual(previous);
+      previous = date;
+    }
+    expect(previous).toBe(full);
+  });
+
+  it('date la lumière d’hiver par le climat de la case, non par sa latitude', () => {
+    // La critique des essais : une borne de latitude tirait, au cœur de l'hiver, une ligne droite
+    // d'est en ouest à travers toutes les terres. Des colonnes d'un même climat, du pôle à
+    // l'équateur : chacune a la même lumière à toutes les latitudes.
+    const size = { width: 8, height: 64 };
+    const layers = emptyLayers(size);
+    for (let cell = 0; cell < size.width * size.height; cell++) {
+      const x = cell % size.width;
+      layers.temperature[cell] = 220 - x * 30;
+      layers.amplitude[cell] = 80;
+    }
+    const bytes = worldFoliage(size, layers, RULES);
+    const lights = new Set<number>();
+    for (let x = 0; x < size.width; x++) {
+      const column = new Set<number>();
+      for (let y = 0; y < size.height; y++) {
+        column.add(bytes[(y * size.width + x) * FOLIAGE_BYTES + 3] ?? -1);
+      }
+      expect(column.size, `colonne ${String(x)}`).toBe(1);
+      lights.add([...column][0] ?? -1);
+    }
+    // Et ces climats, du plus doux au plus froid, n'ont pas tous la même.
+    expect(lights.size).toBeGreaterThan(2);
   });
 
   it('donne les mêmes octets quel que soit l’ordre des cases, et ceux de leur climat', () => {
@@ -223,7 +272,7 @@ describe('calendrier de la végétation (ADR 0019, § 2)', () => {
           return [cold & 255, cold >>> 8];
         })(),
         dryDate(rainSeasonality(lat), RULES),
-        lightDate(lat, RULES),
+        lightDate((layers.temperature[cell] ?? 0) / 10, (layers.amplitude[cell] ?? 0) / 10, RULES),
       ];
       expect(Array.from(bytes.subarray(cell * FOLIAGE_BYTES, (cell + 1) * FOLIAGE_BYTES))).toEqual(
         expected,
@@ -236,11 +285,11 @@ describe('calendrier de la végétation (ADR 0019, § 2)', () => {
       seasons: {
         minTransition: 12,
         summerDays: 30,
-        light: { from: 0.25, to: 0.5, factor: -0.3, toward: '#5d6b86', mix: 0.25, scale: 0.94 },
+        light: { below: 10, drop: 5, factor: -0.3, toward: '#5d6b86', mix: 0.25, scale: 0.94 },
       },
     };
     expect(new Fingerprint().typedArray(worldFoliage(size, layers, written)).hex()).toBe(
-      '7d502fcd',
+      '674c38be',
     );
   });
 

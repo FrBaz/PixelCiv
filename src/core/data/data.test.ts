@@ -1386,23 +1386,25 @@ describe('saisons : data/seasons.json (ADR 0019)', () => {
     expect(valid({ ...seasons, seaIce: { ...seasons.seaIce, meltRate: 3 } })).toBe(false);
   });
 
-  it('borne la lumière d’hiver : latitudes ordonnées, facteur, mélange et échelle', () => {
+  it('borne la lumière d’hiver : seuils du mois, facteur, mélange et échelle', () => {
     const light = (change: Partial<Seasons['light']>) =>
       valid({ ...seasons, light: { ...seasons.light, ...change } });
     expect(seasons.light).toEqual({
-      from: 0.25,
-      to: 0.5,
+      below: 10,
+      drop: 5,
       factor: -0.3,
       toward: '#5d6b86',
       mix: 0.25,
       scale: 0.94,
     });
-    expect(light({ from: -0.01 })).toBe(false);
-    expect(light({ from: 0.96 })).toBe(false);
-    expect(light({ to: 1.01 })).toBe(false);
-    expect(light({ to: 0.04 })).toBe(false);
-    expect(light({ from: 0.5 })).toBe(false);
-    expect(light({ from: 0.49 })).toBe(true);
+    expect(light({ below: -31 })).toBe(false);
+    expect(light({ below: 41 })).toBe(false);
+    expect(light({ below: -30 })).toBe(true);
+    expect(light({ drop: -0.1 })).toBe(false);
+    expect(light({ drop: 31 })).toBe(false);
+    expect(light({ drop: 0 })).toBe(true);
+    // Les bornes de latitude de la conception ne passent plus.
+    expect(valid({ ...seasons, light: { ...seasons.light, from: 0.25 } })).toBe(false);
     expect(light({ factor: -0.96 })).toBe(false);
     expect(light({ factor: 0.91 })).toBe(false);
     expect(light({ toward: '#5D6B86' })).toBe(false);

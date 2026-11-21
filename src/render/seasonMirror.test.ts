@@ -297,6 +297,6 @@ describe('miroir des couleurs de la saison (ADR 0019, § 2, 3 et 8)', () => {
         }
       }
     }
-    expect(fingerprint.hex()).toBe('2da79754');
+    expect(fingerprint.hex()).toBe('0a1b9fe7');
   });
 });

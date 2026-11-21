@@ -17,8 +17,10 @@
  *   sous `bareBelow`.
  * - Saison sèche (`dry`) : les jours où la pluie du mois tombe sous `dryShare` de sa moyenne
  *   (rainSeasonality de la latitude) ; symétrique.
- * - Lumière d'hiver (`light`) : les jours dont le facteur de saison passe sous la borne de la
- *   latitude de la case (data/seasons.json, `light`) ; symétrique.
+ * - Lumière d'hiver (`light`) : les jours dont le facteur de saison passe sous `factor` et dont
+ *   le mois passe sous `below` et déjà `drop` degrés sous le mois le plus chaud (data/seasons.json,
+ *   `light`) ; symétrique. Comme les autres états, elle suit le climat de la case, non sa
+ *   latitude : son bord ne trace aucune ligne droite.
  *
  * Chaque état monte et descend en `minTransition` jours, centrés sur sa date : sa part de la case,
  * share(c, d) = borne((d − c) / transition + ½, 0, 1), où d est la distance au jour le plus chaud,
@@ -126,13 +128,18 @@ export function dryDate(rain: number, rules: FoliageRules): number {
 }
 
 /**
- * L'octet de la lumière d'hiver à la latitude `lat` (0 à l'équateur, 1 aux pôles) : la borne du
- * facteur de saison va de −1 (aucun jour) à `from` jusqu'à `factor` à `to`.
+ * L'octet de la lumière d'hiver d'une case de température annuelle `annual` et de demi-amplitude
+ * `swing` (°C) : les jours de la moitié froide de l'année, où le facteur de saison passe sous
+ * `factor`, dont le mois passe sous `below` et déjà `drop` degrés sous le mois le plus chaud ;
+ * jamais si le mois n'y descend pas.
  */
-export function lightDate(lat: number, rules: FoliageRules): number {
-  const { from, to, factor } = rules.seasons.light;
-  const open = Math.min(1, Math.max(0, (lat - from) / (to - from)));
-  return dateByte(crossing(-1 + (factor + 1) * open), earliest(rules));
+export function lightDate(annual: number, swing: number, rules: FoliageRules): number {
+  const { below: threshold, drop, factor } = rules.seasons.light;
+  const dropped = swing > 0 ? crossing(1 - drop / swing) : Number.NaN;
+  return dateByte(
+    Math.max(crossing(factor), below(annual, swing, threshold), dropped),
+    earliest(rules),
+  );
 }
 
 /**
@@ -147,11 +154,10 @@ export function worldFoliage(
 ): Uint8Array<ArrayBuffer> {
   const { width, height } = size;
   const bytes = new Uint8Array(width * height * FOLIAGE_BYTES);
+  // Les octets de l'automne, du bois nu et de la lumière de chaque climat.
   const colds = new Map<number, number>();
   for (let y = 0; y < height; y++) {
-    const lat = latitude(y, height);
-    const dry = dryDate(rainSeasonality(lat), rules);
-    const light = lightDate(lat, rules);
+    const dry = dryDate(rainSeasonality(latitude(y, height)), rules);
     for (let x = 0; x < width; x++) {
       const cell = y * width + x;
       const temperature = layers.temperature[cell] ?? 0;
@@ -159,14 +165,16 @@ export function worldFoliage(
       const key = temperature * 65536 + amplitude;
       let cold = colds.get(key);
       if (cold === undefined) {
-        cold = coldDates(temperature / 10, amplitude / 10, rules);
+        const annual = temperature / 10;
+        const swing = amplitude / 10;
+        cold = coldDates(annual, swing, rules) | (lightDate(annual, swing, rules) << 16);
         colds.set(key, cold);
       }
       const at = cell * FOLIAGE_BYTES;
       bytes[at] = cold & 255;
-      bytes[at + 1] = cold >>> 8;
+      bytes[at + 1] = (cold >>> 8) & 255;
       bytes[at + 2] = dry;
-      bytes[at + 3] = light;
+      bytes[at + 3] = cold >>> 16;
     }
   }
   return bytes;

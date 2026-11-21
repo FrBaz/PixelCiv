@@ -559,27 +559,26 @@ export const IceCoverSchema = z
   .refine(fills, FILLS);
 
 /**
- * Lumière d'hiver (ADR 0019, § 3) : aux latitudes moyennes et hautes, dans la moitié froide de
- * l'année, chaque palette de terre et chaque objet du décor qui n'est dans aucun état de
- * végétation prend sa version d'hiver, la même règle pour tous : chaque ton s'approche de
- * `toward` de la part `mix`, puis se multiplie par `scale`. Sa fenêtre est datée par la latitude :
- * nulle sous `from` (0 à l'équateur, 1 aux pôles), elle s'ouvre jusqu'à `to`, où elle couvre les
- * jours dont le facteur de saison (seasonFactor, signé par l'hémisphère) passe sous `factor`.
+ * Lumière d'hiver (ADR 0019, § 3) : dans la moitié froide de l'année, là où le mois est froid,
+ * chaque palette de terre et chaque objet du décor qui n'est dans aucun état de végétation prend
+ * sa version d'hiver, la même règle pour tous : chaque ton s'approche de `toward` de la part `mix`,
+ * puis se multiplie par `scale`. Sa fenêtre est datée par le climat de la case, comme les états de
+ * la végétation : les jours dont le facteur de saison (seasonFactor, signé par l'hémisphère) passe
+ * sous `factor`, dont le mois passe sous `below` °C et déjà `drop` °C sous le mois le plus chaud
+ * (comme l'automne : pas de saison là où l'année n'en a guère, sous l'équateur). Le bord de la
+ * lumière suit ainsi le climat, et non une latitude : une borne de latitude tirait une ligne
+ * droite d'est en ouest au cœur de l'hiver.
  */
 export const LightSchema = z
   .object({
-    from: z.number().min(0).max(0.95),
-    to: z.number().min(0.05).max(1),
+    below: z.number().min(-30).max(40),
+    drop: z.number().min(0).max(30),
     factor: z.number().min(-0.95).max(0.9),
     toward: ColorSchema,
     mix: z.number().min(0).max(1),
     scale: z.number().min(0.5).max(1.5),
   })
-  .strict()
-  .refine((light) => light.from < light.to, {
-    message: 'la lumière s’ouvre de sa première latitude à la seconde',
-    path: ['to'],
-  });
+  .strict();
 
 /**
  * Saisons (data/seasons.json ; C1, D9 ; ADR 0019) : la neige des terres, la glace de l'eau douce
