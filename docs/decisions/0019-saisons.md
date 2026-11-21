@@ -111,7 +111,7 @@ Images dessinées par seconde, en pause, à ×1 et à ×16, et durée de `app.re
 - La cuisson tient une carte d'identité de ses tons, sans changer ses pixels ; le shader de la carte a quatre programmes ; leur coût sur un vrai téléphone reste à mesurer, et le réglage coupé rend celui du premier temps.
 - Les seuils du décor de 2b.6 deviennent des dates : un objet suit la majorité de son sol, et la toundra froide reverdit au cœur de l'été.
 - Le contrôle des pixels des saisons (`tools/season-control/`) se relance quand le code des saisons, son miroir ou la cuisson changent.
-- Les deux temps s'empilent sur la PR #12 (2b.6, `claude/2b-6-decor-gibier`), qui n'est pas fusionnée : ils retouchent `src/render/decor.ts`, `src/gen/decor.ts` et la réduction des grilles du décor, et tout changement demandé sur la PR #12 devra y être reporté par fusion (critique, facultatif 3).
+- Les deux temps sont partis de la tête de 2b.6 (7c893a7, `claude/2b-6-decor-gibier`), que l'auteur a fusionnée dans main le 21 novembre (PR #12, commit de fusion 446c954, de même arbre que 7c893a7) : ils retouchent `src/render/decor.ts`, `src/gen/decor.ts` et la réduction des grilles du décor, et la PR de 2b.7 ne montre plus que ses propres commits (critique, facultatif 3).
 
 ## Ce qui reste à décider par l'auteur
 
