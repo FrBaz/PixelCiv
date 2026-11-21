@@ -17,6 +17,7 @@ import {
   slotColor,
 } from './humanShader';
 import type { HumanPalette } from './humans';
+import { COVER_GLSL } from './mapShader';
 import { OBJECT_FLAG, type ObjectPalette } from './objects';
 import { evaluateGlsl } from './testing';
 
@@ -193,5 +194,26 @@ describe('shader des humains (ADR 0016, § 8)', () => {
     expect(HUMAN_FRAGMENT).toContain('if (tone.a < 0.002) discard;');
     expect(HUMAN_FRAGMENT).toContain('gl_FragColor = vec4(tone.rgb * tone.a, tone.a);');
     expect(HUMAN_FRAGMENT).not.toContain('gl_FragColor = vec4(texture2D(uPalettes, at).rgb, 1.0);');
+  });
+
+  it('lit sous l’ombre « ground » la neige de la carte : ses calendriers, ses rampes, sa composition', () => {
+    // Tâche 2b.7, ADR 0019 : l'ombre portée d'un objet se pose sur le sol que montre la carte,
+    // enneigé à la part que compose le calendrier de la case avec sa rampe, au jour de la vue.
+    for (const uniform of [
+      'uniform sampler2D uGroundCalendars;',
+      'uniform float uDay;',
+      'uniform vec3 uSnowRamp;',
+      'uniform vec3 uIceRamp;',
+      'uniform vec3 uSeaIceRamp;',
+      'uniform float uForestSnow;',
+    ]) {
+      expect(HUMAN_FRAGMENT).toContain(uniform);
+    }
+    const ground = HUMAN_FRAGMENT.slice(HUMAN_FRAGMENT.indexOf('vec4 groundShadow('));
+    expect(ground).toContain('texture2D(uGroundCalendars, at)');
+    for (const name of ['phase', 'most', 'summer', 'now', 'level', 'share'] as const) {
+      expect(ground).toContain(COVER_GLSL[name]);
+    }
+    expect(ground).toContain(`coverage = (${COVER_GLSL.share}) * keep;`);
   });
 });

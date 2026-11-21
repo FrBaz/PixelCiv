@@ -50,6 +50,12 @@ export type BakeReply =
        * carte ne dessine avec l'onde qu'un bloc dont la partie visible touche une tuile de mer.
        */
       readonly seaMask: Uint8Array<ArrayBuffer>;
+      /**
+       * Carte d'identité des tons du bloc (src/render/bake.ts, IDENTITY) : un octet par pixel, le
+       * rang du ton de chaque pixel de terre et la case qui le prête, que le shader des saisons
+       * recolore rang pour rang (ADR 0019, § 2).
+       */
+      readonly identity: Uint8Array<ArrayBuffer>;
     }
   /** Demande devenue sans objet : le monde a changé entre-temps. */
   | {
@@ -61,14 +67,16 @@ export type BakeReply =
     };
 
 /**
- * La réponse du worker à la cuisson `request` du monde `generation` : les pixels cuits, et le
- * masque de la mer animée aux tons `seaTones`, tous deux transférés (`transfer`).
+ * La réponse du worker à la cuisson `request` du monde `generation` : les pixels cuits, le
+ * masque de la mer animée aux tons `seaTones` et la carte d'identité des tons, transférés
+ * (`transfer`).
  */
 export function bakedReply(
   request: Extract<BakeRequest, { type: 'bake' }>,
   generation: number,
   pixels: Uint8Array<ArrayBuffer>,
   seaTones: readonly number[],
+  identity: Uint8Array<ArrayBuffer>,
 ): { readonly reply: BakeReply; readonly transfer: Transferable[] } {
   const mask = seaMask(pixels, seaTones, CHUNK_PX);
   return {
@@ -80,7 +88,8 @@ export function bakedReply(
       version: request.version,
       pixels,
       seaMask: mask,
+      identity,
     },
-    transfer: [pixels.buffer, mask.buffer],
+    transfer: [pixels.buffer, mask.buffer, identity.buffer],
   };
 }

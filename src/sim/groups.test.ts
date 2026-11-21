@@ -732,6 +732,7 @@ describe('couture et pôles (monde cylindrique, F-11)', () => {
       state.food,
       state.world,
       state.size,
+      state.calendars,
       state.tick,
       testData,
     );

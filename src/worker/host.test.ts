@@ -31,7 +31,8 @@ import {
   SPEEDS,
   type GameTime,
 } from '../core/time';
-import { CHUNK_SIZE, GENERATION_STAGES, LAYER_NAMES } from '../core/world';
+import { worldCalendars } from '../core/snow';
+import { CHUNK_SIZE, GENERATION_STAGES, LAYER_NAMES, WORLD_SIZES } from '../core/world';
 import { advanceDay } from '../sim/day';
 import { INTENTION, WALK } from '../sim/population';
 import { replay } from '../sim/replay';
@@ -174,11 +175,21 @@ describe('partie', () => {
     const snapshot = env.messages('snapshot').at(0);
     expect(snapshot?.world).toEqual({ params: testParams(), size: { width: 512, height: 256 } });
     expect(snapshot?.layers.biome).toEqual(testWorld().biome);
+    // Les calendriers de la neige et de la glace (protocole 8, ADR 0019) : huit octets par case,
+    // ceux que le monde donne.
+    const size = WORLD_SIZES.small;
+    expect(snapshot?.calendars).toHaveLength(size.width * size.height * 8);
+    expect(snapshot?.calendars).toEqual(
+      worldCalendars(size, testWorld(), testData.biomes.entries, testData.seasons),
+    );
     const entry = env.sent.find((sent) => sent.message.type === 'snapshot');
-    // Les couches du monde, plus les sept tableaux de l'image des groupes et les cinq des
-    // étapes en cours (ADR 0014), puis les quatre de l'image du gibier et les cinq de ses étapes
-    // en cours (protocole 7, ADR 0018).
-    expect(entry?.transfer).toHaveLength(LAYER_NAMES.length + 21);
+    // Les couches du monde et les calendriers, plus les sept tableaux de l'image des groupes et
+    // les cinq des étapes en cours (ADR 0014), puis les quatre de l'image du gibier et les cinq
+    // de ses étapes en cours (protocole 7, ADR 0018).
+    expect(entry?.transfer).toHaveLength(LAYER_NAMES.length + 1 + 21);
+    if (entry?.original.type === 'snapshot') {
+      expect(entry.transfer).toContain(entry.original.calendars.buffer);
+    }
     expect(snapshot?.fauna.ids.length).toBeGreaterThan(400);
     expect(snapshot?.time).toEqual({ tick: 0, day: 0, paused: false, speed: 'normal' });
     expect(entry?.transfer.every((buffer) => buffer instanceof ArrayBuffer)).toBe(true);
@@ -1150,6 +1161,27 @@ describe('deux horloges (ADR 0013)', () => {
     // Le même journal, rejoué jour par jour, redonne cet état.
     const replayed = replay(testParams(), testWorld(), log as LoggedCommand[], end, testData);
     expect(fingerprint(replayed)).toBe(prints[0]);
+  });
+
+  it("garde ses calendriers après l'instantané : la pêche de l'hôte est celle du rejeu (ADR 0019)", async () => {
+    // L'instantané transfère une copie des calendriers ; l'état garde les siens, que la pêche
+    // lit à chaque pas mensuel. Quinze mois de soixante groupes, printemps du nord compris :
+    // détachés, ils rendraient à la pêche la rampe de l'instant, et l'état s'écarterait du rejeu.
+    const { env, host } = await startedHost();
+    const sent = env.sent.find((entry) => entry.message.type === 'snapshot');
+    if (sent?.original.type !== 'snapshot') throw new Error('pas d’instantané');
+    expect(sent.original.calendars.byteLength).toBe(0);
+    const commands = spawns(60, 20);
+    host.receive({ type: 'setSpeed', speed: 'faster' });
+    for (const command of commands) host.receive({ type: 'game', command });
+    env.advance(monthDuration('faster') * 15 + WAKE_SLACK_MS);
+    host.receive({ type: 'setPaused', paused: true });
+    const saved = await savedState(env, host, 1);
+    const json = saved.json as { day: number; commandLog: LoggedCommand[] };
+    const until = { tick: saved.meta.tick, day: json.day };
+    expect(until.tick).toBeGreaterThanOrEqual(15);
+    const replayed = replay(testParams(), testWorld(), json.commandLog, until, testData);
+    expect(fingerprint(restoreState(saved, testData))).toBe(fingerprint(replayed));
   });
 
   it('se rejoue au jour près, commandes reçues en marche et en pause comprises', async () => {

@@ -1,7 +1,24 @@
 import { describe, expect, it } from 'vitest';
 import type { Biome, Catalog } from '../core/data';
 import type { SpawnGroupCommand } from '../core/protocol';
-import { COVER_RAMPS, coverShare, latitude } from '../core/seasons';
+import { cos, TAU } from '../core/dmath';
+import { coverShare, latitude, southern } from '../core/seasons';
+import {
+  calendarLevel,
+  codeAmplitude,
+  codeTemperature,
+  composeCover,
+  coverRamps,
+  encodeAmplitude,
+  encodeTemperature,
+  iceAt,
+  phaseDay,
+  RAMP_ONLY,
+  snowAt,
+  YEAR_DAYS,
+  type CalendarCover,
+} from '../core/snow';
+import { DAYS_PER_MONTH } from '../core/time';
 import { riverClass } from '../core/world';
 import { DEATH_CAUSES } from './population';
 import {
@@ -57,6 +74,9 @@ function nordics(at: { x: number; y: number }, count: number): SpawnGroupCommand
 /** Pas de janvier et de juillet de la première année : le mois le plus froid et le plus chaud au nord. */
 const JANUARY = 0;
 const JULY = 6;
+
+/** Les rampes des couvertures, de data/seasons.json. */
+const COVER_RAMPS = coverRamps(testData.seasons);
 
 /** Températures du mois le plus froid et du plus chaud d'une case, en °C. */
 function extremes(state: SimState, cell: number) {
@@ -215,8 +235,8 @@ describe('survie (tâche 2.4)', () => {
       state,
       (cell, biome) => biome.id === 'tundra' && extremes(state, cell).coldest < cold.to - 1,
     );
-    const winter = cellFood(state.world, state.size, tundra, JANUARY, testData)[4];
-    const summer = cellFood(state.world, state.size, tundra, JULY, testData)[4];
+    const winter = cellFood(state.world, state.size, state.calendars, tundra, JANUARY, testData)[4];
+    const summer = cellFood(state.world, state.size, state.calendars, tundra, JULY, testData)[4];
     expect(winter).toBeLessThan(summer * 0.5);
     expect(winter).toBeCloseTo(
       (testData.biomes.entries.at(state.world.biome[tundra] ?? 0)?.forage.game ?? 0) *
@@ -233,8 +253,8 @@ describe('survie (tâche 2.4)', () => {
     expect(fishSeason(0, covered)).toBe(1);
     expect(fishSeason(1, covered)).toBeCloseTo(covered, 12);
     const fishCap = (cell: number, tick: number) =>
-      cellFood(state.world, state.size, cell, tick, testData)[5];
-    // Les seuils sont ceux du shader de la carte, qui lit aussi COVER_RAMPS.
+      cellFood(state.world, state.size, state.calendars, cell, tick, testData)[5];
+    // Les seuils sont ceux du shader de la carte, qui lit aussi les rampes de data/seasons.json.
     const iceBelow = COVER_RAMPS.ice.onset - COVER_RAMPS.ice.span;
     const seaIceBelow = COVER_RAMPS['sea-ice'].onset - COVER_RAMPS['sea-ice'].span;
     // Une rivière dans une case de terre, l'eau douce qui gèle la première.
@@ -282,6 +302,111 @@ describe('survie (tâche 2.4)', () => {
     expect(fishCap(mild, JANUARY)).toBeCloseTo(fishCap(mild, JULY), 6);
   });
 
+  it('suit la glace à inertie de la carte : prise en retard, partie en retard (ADR 0019, § 1)', () => {
+    const state = testState();
+    const { capacity } = testData.nomads.stocks.fish;
+    const cells = state.world.biome.length;
+    // Les mêmes cases sans inertie : le calendrier de la rampe seule, partout.
+    const rampOnly = new Uint8Array(state.calendars.length);
+    for (let at = 0; at < rampOnly.length; at += 4) rampOnly.set(RAMP_ONLY, at);
+    const fishOf = (calendars: Uint8Array, cell: number, tick: number) =>
+      cellFood(state.world, state.size, calendars, cell, tick, testData)[5];
+    let lakes = 0;
+    let later = 0;
+    for (let cell = 0; cell < cells / 2; cell++) {
+      const biome = testData.biomes.entries.at(state.world.biome[cell] ?? 0);
+      const { coldest, warmest } = extremes(state, cell);
+      if (biome?.seasons.cover !== 'ice' || coldest > -4.5 || warmest < 2) continue;
+      lakes++;
+      for (let tick = 0; tick < 12; tick++) {
+        const inertia = fishOf(state.calendars, cell, tick);
+        const ramp = fishOf(rampOnly, cell, tick);
+        // Au nord, d'août à décembre la glace prend plus tard, de janvier à juin elle part plus
+        // tard ; au cœur de l'hiver et de l'été, la pêche de la rampe.
+        const cooling = tick >= JULY;
+        if (cooling)
+          expect(inertia, `case ${String(cell)}, mois ${String(tick)}`).toBeGreaterThanOrEqual(
+            ramp - 1e-9,
+          );
+        else
+          expect(inertia, `case ${String(cell)}, mois ${String(tick)}`).toBeLessThanOrEqual(
+            ramp + 1e-9,
+          );
+        if (tick === JANUARY || tick === JULY) expect(inertia).toBeCloseTo(ramp, 9);
+        if (!cooling && inertia < ramp - 0.05 * capacity) later++;
+      }
+    }
+    // Des lacs du nord, dont la glace retient la pêche au printemps, un mois au moins.
+    expect(lakes).toBeGreaterThan(15);
+    expect(later).toBeGreaterThan(lakes / 2);
+  });
+
+  it('lit, pour chaque case et chaque mois, la couverture de la carte : nord et sud, rivières à la glace', () => {
+    const state = testState();
+    const { width, height } = state.size;
+    const count = width * height;
+    const { covered, capacity } = testData.nomads.stocks.fish;
+    const ramps = coverRamps(testData.seasons);
+    // La part couverte que montre la carte au milieu du mois : la phase de l'hémisphère de la
+    // case, la température de ce jour, la composition des calendriers (ADR 0019, § 1).
+    const shareOf = (cell: number, cover: CalendarCover, tick: number) => {
+      const south = southern(Math.floor(cell / width), height);
+      const phase = phaseDay(((tick % 12) + 0.5) * DAYS_PER_MONTH, south);
+      const annual = codeTemperature(encodeTemperature((state.world.temperature[cell] ?? 0) / 10));
+      const amplitude = codeAmplitude(encodeAmplitude((state.world.amplitude[cell] ?? 0) / 10));
+      const daily = annual + amplitude * cos((TAU * phase) / YEAR_DAYS);
+      const at = cover === 'snow' ? snowAt(cell) : iceAt(cell, count);
+      return composeCover(
+        ramps[cover],
+        annual,
+        amplitude,
+        daily,
+        phase,
+        calendarLevel(state.calendars, at, phase),
+      );
+    };
+    const seen = { north: 0, south: 0, rivers: 0, moving: 0 };
+    for (let cell = 0; cell < count; cell++) {
+      const biome = testData.biomes.entries.at(state.world.biome[cell] ?? 0);
+      if (biome === undefined) continue;
+      const fish = Math.fround(biome.forage.fish);
+      const water = biome.family === 'water';
+      const stream = water
+        ? 0
+        : (testData.nomads.river[riverClass(state.world.drainage[cell] ?? 0)] ?? 0);
+      const cover = biome.seasons.cover === 'none' ? undefined : biome.seasons.cover;
+      if ((fish <= 0 || cover === undefined) && stream <= 0) continue;
+      let changes = false;
+      for (let tick = 0; tick < 12; tick++) {
+        let expected = 0;
+        if (fish > 0) {
+          const share = cover === undefined ? 0 : shareOf(cell, cover, tick);
+          expected += fish * fishSeason(share, covered);
+          if (share > 0 && share < ramps[cover ?? 'snow'].full) changes = true;
+        }
+        if (stream > 0) {
+          const share = shareOf(cell, 'ice', tick);
+          expected += stream * fishSeason(share, covered);
+          if (share > 0 && share < ramps.ice.full) changes = true;
+        }
+        const fishCap = cellFood(state.world, state.size, state.calendars, cell, tick, testData)[5];
+        if (Math.abs(fishCap - expected * capacity) > 1e-6 * capacity) {
+          throw new Error(`case ${String(cell)}, mois ${String(tick)} : ${String(fishCap)}`);
+        }
+      }
+      if (!changes) continue;
+      seen.moving++;
+      if (stream > 0) seen.rivers++;
+      if (southern(Math.floor(cell / width), height)) seen.south++;
+      else seen.north++;
+    }
+    // Des milliers de cases dont la pêche gèle ou dégèle un mois ou l'autre, aux deux hémisphères,
+    // rivières des terres comprises.
+    expect(seen.north).toBeGreaterThan(500);
+    expect(seen.south).toBeGreaterThan(500);
+    expect(seen.rivers).toBeGreaterThan(500);
+  });
+
   it('ne compte la pêche du lit d’un fleuve qu’une fois (F-6)', () => {
     const state = testState();
     const { capacity } = testData.nomads.stocks.fish;
@@ -293,10 +418,9 @@ describe('survie (tâche 2.4)', () => {
       );
       const fish = testData.biomes.entries.at(state.world.biome[water] ?? 0)?.forage.fish ?? 0;
       expect(fish).toBeGreaterThan(0);
-      expect(cellFood(state.world, state.size, water, JULY, testData)[5]).toBeCloseTo(
-        fish * capacity,
-        6,
-      );
+      expect(
+        cellFood(state.world, state.size, state.calendars, water, JULY, testData)[5],
+      ).toBeCloseTo(fish * capacity, 6);
     }
   });
 
@@ -313,12 +437,15 @@ describe('survie (tâche 2.4)', () => {
     const cells = state.world.biome.length;
     // Ce que cellFood donne de chaque case : rendements, puis plafonds, des plantes, du gibier
     // et du poisson.
-    const stride = cellFood(state.world, state.size, 0, JULY, testData).length;
+    const stride = cellFood(state.world, state.size, state.calendars, 0, JULY, testData).length;
     const food = (content: SimContent, month: number) => {
       const all = new Float64Array(cells * stride);
       for (let cell = 0; cell < cells; cell++) {
         all.set(
-          cellFood(state.world, state.size, cell, month, content).subarray(0, stride),
+          cellFood(state.world, state.size, state.calendars, cell, month, content).subarray(
+            0,
+            stride,
+          ),
           cell * stride,
         );
       }
@@ -345,14 +472,24 @@ describe('survie (tâche 2.4)', () => {
   it('tient une case intacte au plafond, la suit une fois entamée, puis la libère', () => {
     const state = testState();
     const { cell } = cellOf(state, 'temperate-forest');
-    const full = totalStock(state.food, state.world, state.size, cell, JULY, testData);
+    const full = totalStock(
+      state.food,
+      state.world,
+      state.size,
+      state.calendars,
+      cell,
+      JULY,
+      testData,
+    );
     expect(full).toBeGreaterThan(0);
     state.food.stocks.fill(0, cell * FOOD_STRIDE, cell * FOOD_STRIDE + FOOD_STRIDE);
     deplete(state.food, cell);
     expect(state.food.count).toBe(1);
-    expect(totalStock(state.food, state.world, state.size, cell, JULY, testData)).toBe(0);
+    expect(
+      totalStock(state.food, state.world, state.size, state.calendars, cell, JULY, testData),
+    ).toBe(0);
     for (let month = 0; month < 48 && state.food.count > 0; month++) {
-      regrowFood(state.food, state.world, state.size, JULY, testData);
+      regrowFood(state.food, state.world, state.size, state.calendars, JULY, testData);
     }
     expect(depletedCells(state.food)).toEqual([]);
     expect(state.food.count).toBe(0);
@@ -381,6 +518,7 @@ describe('survie (tâche 2.4)', () => {
         state.food,
         state.world,
         state.size,
+        state.calendars,
         state.tick,
         testData,
       );
@@ -401,7 +539,7 @@ describe('survie (tâche 2.4)', () => {
       const members = groupMembers(state.people).get(group.id) ?? [];
       const reserve: number[] = [];
       for (let month = 0; month < 3 * 12; month++) {
-        regrowFood(state.food, state.world, state.size, state.tick, testData);
+        regrowFood(state.food, state.world, state.size, state.calendars, state.tick, testData);
         feedGroup(
           group,
           members,
@@ -409,6 +547,7 @@ describe('survie (tâche 2.4)', () => {
           state.food,
           state.world,
           state.size,
+          state.calendars,
           state.tick,
           testData,
         );
@@ -480,7 +619,9 @@ describe('survie (tâche 2.4)', () => {
     const state = testState();
     for (const biome of ['coastal-ocean', 'lake']) {
       const { cell } = cellOf(state, biome);
-      expect(cellFood(state.world, state.size, cell, JULY, testData)[5]).toBeGreaterThan(0);
+      expect(
+        cellFood(state.world, state.size, state.calendars, cell, JULY, testData)[5],
+      ).toBeGreaterThan(0);
     }
     // Une case de terre traversée par une rivière a son poisson.
     const river = state.world.drainage.findIndex((code, cell) => {
@@ -488,7 +629,9 @@ describe('survie (tâche 2.4)', () => {
       return riverClass(code) >= 2 && family !== 'water';
     });
     expect(river).toBeGreaterThanOrEqual(0);
-    expect(cellFood(state.world, state.size, river, JULY, testData)[5]).toBeGreaterThan(0);
+    expect(
+      cellFood(state.world, state.size, state.calendars, river, JULY, testData)[5],
+    ).toBeGreaterThan(0);
   });
 });
 
@@ -501,7 +644,17 @@ describe('cueillette d’un groupe (tâche 2.4)', () => {
     if (group === undefined) throw new Error('aucun groupe');
     const members = groupMembers(state.people).get(group.id) ?? [];
     const feed = (tick: number) =>
-      feedGroup(group, members, state.people, state.food, state.world, state.size, tick, content);
+      feedGroup(
+        group,
+        members,
+        state.people,
+        state.food,
+        state.world,
+        state.size,
+        state.calendars,
+        tick,
+        content,
+      );
     return { state, group, members, feed };
   }
 

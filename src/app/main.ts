@@ -10,6 +10,7 @@ import {
   PROTOCOL_VERSION,
   type InspectTarget,
 } from '../core/protocol';
+import { worldFoliage } from '../core/foliage';
 import { dayIndex, SPEED_FACTORS, type GameTime } from '../core/time';
 import { WORLD_SIZES, type WorldLayers, type WorldSizeId } from '../core/world';
 import { defaultWorldParams, type WorldParams } from '../core/worldParams';
@@ -63,6 +64,7 @@ import {
   previewImage,
   previewKey,
   raise,
+  effectsLevel,
   seaMotion,
   sheet,
   shownDay,
@@ -91,9 +93,18 @@ import {
   DrawCallCounter,
   faunaBytes,
   positionBytes,
+  rendererName,
   usedMemoryMb,
 } from './debug';
 import { frameSignature, waveInputs } from './cadence';
+import {
+  effectSettings,
+  initialEffects,
+  preferenceStore,
+  saveEffects,
+  softwareRenderer,
+  type EffectLevel,
+} from '../ui/effects';
 import { centerOf, visibleArea, type Rect } from './focus';
 import { SaveManager, SaveStore } from './saves';
 import { describeCell } from './inspect';
@@ -133,10 +144,12 @@ async function main(): Promise<void> {
   // worker y ajoute celle du monde de référence, à la poignée de main.
   const determinism = determinismSelfTest();
   const query = new URLSearchParams(location.search);
+  // Les préférences de l'appareil (le réglage des effets), hors de la sauvegarde de la partie.
+  const preferences = preferenceStore(globalThis);
   const brush = query.get('brush');
   const mapElement = element('map');
   const app = await createRenderer(mapElement);
-  const map = new MapView(app, data.biomes.entries);
+  const map = new MapView(app, data.biomes.entries, data.seasons, data.decor.foliage);
   // L'espèce de référence : la stature de son adulte moyen fixe la densité des individus de
   // la vue, et l'écart de ses nourrissons portés (ADR 0014, § 6).
   const species = data.species.entries.at(0);
@@ -476,6 +489,13 @@ async function main(): Promise<void> {
   // toute vitesse ; sa force, le réglage des effets (seaMotion), nulle si l'on demande moins
   // de mouvement. Débogage : ?waves=off, ?waveStep=N et ?month=N (displayOverrides).
   const overrides = displayOverrides(query);
+  // Le réglage des effets (ADR 0020) : le cran de l'adresse (?effects=, pour les captures, qui ne
+  // se garde pas), sinon celui que l'appareil a gardé, sinon celui de l'appareil : coupés en rendu
+  // logiciel, pleins ailleurs, au doigt seul compris en attendant l'essai sur un vrai téléphone.
+  effectsLevel.value = initialEffects(overrides.effects ?? null, preferences, {
+    software: softwareRenderer(rendererName('gl' in app.renderer ? app.renderer.gl : undefined)),
+    touchOnly,
+  });
   const reducedMotion = matchMedia('(prefers-reduced-motion: reduce)');
   app.ticker.add((ticker) => {
     // La durée réelle de l'image : deltaMS est plafonné à 100 ms, et cacherait les à-coups.
@@ -518,6 +538,10 @@ async function main(): Promise<void> {
     drawnCamera = camera;
     const waves = waveInputs(overrides, reducedMotion.matches, seaMotion.value, now);
     map.setWaves(waves.step, waves.force);
+    // Les couleurs de la saison du cran ; la lumière d'hiver éclaire aussi le décor.
+    const effects = effectSettings(effectsLevel.value, reducedMotion.matches);
+    map.setSeasonColors(effects.seasons);
+    if (decor !== undefined) decor.light = effects.seasons === 'full';
     map.draw(camera);
     const speed = time.value?.speed ?? 'normal';
     people.draw(
@@ -600,9 +624,22 @@ async function main(): Promise<void> {
         worldInfo.value = message.world;
         const layers = message.layers;
         worldLayers = layers;
+        // Le calendrier de la végétation (ADR 0019, § 2) : une fonction du climat, que la carte et
+        // le décor lisent dans les mêmes octets ; rien ne le change en cours de partie.
+        const foliage = worldFoliage(message.world.size, layers, {
+          foliage: data.decor.foliage,
+          seasons: data.seasons,
+        });
         decor = decorOff
           ? undefined
-          : new DecorSource(data, layers, message.world.size, message.world.params.seed);
+          : new DecorSource(
+              data,
+              layers,
+              message.world.size,
+              message.world.params.seed,
+              message.calendars,
+              foliage,
+            );
         if (decor !== undefined && shadowMethod !== undefined) decor.shadow = shadowMethod;
         game = faunaOff ? undefined : new FaunaLayer(data, fauna, message.world.size.width);
         passability = new Uint8Array(layers.biome.length);
@@ -623,7 +660,9 @@ async function main(): Promise<void> {
         chronicleLoading.value = false;
         showFacts(snapshotFacts(message.chronicle));
         const { width } = message.world.size;
-        map.setWorld(message.world, layers, (mode) => overlayTexels(mode, layers, modeData, width));
+        map.setWorld(message.world, layers, message.calendars, foliage, (mode) =>
+          overlayTexels(mode, layers, modeData, width),
+        );
         const ground = map.ground;
         if (ground !== undefined) people.setGround(ground);
         actions.setMapMode(mapMode.value);
@@ -774,6 +813,10 @@ async function main(): Promise<void> {
         (center.x - origin.left) * resolution,
         (center.y - origin.top) * resolution,
       );
+    },
+    setEffects: (level: EffectLevel) => {
+      effectsLevel.value = level;
+      saveEffects(preferences, level);
     },
     setMapMode: (mode: MapModeId) => {
       mapMode.value = mode;

@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { loadCatalog } from '../core/data/catalog';
 import { BiomesSchema } from '../core/data/schemas';
 import { encodeSave, readSave, SaveError, writeSave, type SaveData } from '../core/save/format';
+import { worldCalendars } from '../core/snow';
 import { LAYER_NAMES } from '../core/world';
 import { GENERATOR_VERSION } from '../worldgen/generate';
 import { FIXED } from '../core/position';
@@ -56,6 +57,38 @@ describe('sauvegarde de la simulation', () => {
     expect(fingerprint(restored)).toBe(fingerprint(state));
     expect(restored.commandLog).toEqual(state.commandLog);
     expect(restored.params).toEqual(state.params);
+  });
+
+  it('refait à la relecture les calendriers de la neige et de la glace, que le pinceau ne change pas', async () => {
+    // Trente mois où le pinceau a fait du désert de six cases de terre (played) : les calendriers
+    // de l'état sont ceux du monde généré, et la relecture les refait depuis le monde repeint.
+    const state = played(30);
+    expect(state.commandLog.length).toBeGreaterThan(5);
+    const restored = restore(await readSave(await writeSave(save(state)), MIGRATIONS));
+    expect(restored.calendars).toEqual(state.calendars);
+    expect(restored.calendars).not.toBe(state.calendars);
+    // Chaque biome de terre sur des cases de terre de toutes latitudes : aucun calendrier ne bouge.
+    const painted = testState();
+    const before = painted.calendars.slice();
+    const lands = testData.biomes.entries.filter((biome) => biome.family !== 'water');
+    // Une case de terre sur 97, des pôles à l'équateur.
+    const cells = cellsOf(painted, land, painted.world.biome.length).filter(
+      (_, index) => index % 97 === 0,
+    );
+    expect(new Set(cells.map((cell) => Math.floor(cell.y / 32))).size).toBeGreaterThan(6);
+    applyCommands(
+      painted,
+      cells.map((cell, index) => ({
+        type: 'paintBiome' as const,
+        ...cell,
+        biome: lands[index % lands.length]?.id ?? 'desert',
+      })),
+      testData,
+    );
+    expect(painted.world.biome).not.toEqual(testWorld().biome);
+    expect(
+      worldCalendars(painted.size, painted.world, testData.biomes.entries, testData.seasons),
+    ).toEqual(before);
   });
 
   it("se poursuit à l'identique après rechargement", async () => {

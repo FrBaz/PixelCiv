@@ -1,13 +1,29 @@
 import { describe, expect, it } from 'vitest';
 import { loadGameData } from '../core/data';
-import { SEASON_COVERS, VEGETATION_TYPES } from '../core/data/schemas';
-import { FOREST_SNOW_SHARE, seasonFactor, southern } from '../core/seasons';
-import { emptyLayers } from '../core/world';
+import { SEASON_COVERS, SEASON_STATES, VEGETATION_TYPES } from '../core/data/schemas';
+import { FOLIAGE_BYTES, foliageShares, NO_DATE, worldFoliage } from '../core/foliage';
+import { coverShare, seasonFactor, southern } from '../core/seasons';
+import {
+  coverRamps,
+  iceAt,
+  phaseDay,
+  snowAt,
+  worldCalendars,
+  type CalendarCover,
+} from '../core/snow';
+import { emptyLayers, WORLD_SIZES } from '../core/world';
+import { fishingCover } from '../sim/cover';
+import { testWorld } from '../sim/testing';
 import { parseColor } from './bake';
-import { glslFloat } from './glsl';
 import { HUMAN_FRAGMENT } from './humanShader';
 import { COVER_GLSL, MAP_FRAGMENT } from './mapShader';
+import { MEAN_COLUMN, STATE_COLUMNS } from './seasonShader';
 import {
+  foliageTexels,
+  seasonActivity,
+  seasonInRect,
+  statePalettes,
+  winterTone,
   biomeCodes,
   cellSeasonCodes,
   encodeAmplitude,
@@ -16,11 +32,13 @@ import {
   seasonPalettes,
   seasonTexels,
   shadowTones,
-  snowShare,
+  snowShareOn,
+  snowThresholdsOn,
 } from './seasons';
-import { evaluateGlsl } from './testing';
+import { evaluateCover } from './testing';
 
-const { biomes } = loadGameData();
+const data = loadGameData();
+const { biomes, seasons } = data;
 
 describe('texture des saisons', () => {
   it('code la température par demi-degré, l’amplitude par huitième de degré, bornées', () => {
@@ -95,7 +113,7 @@ describe('texture des saisons', () => {
   });
 });
 
-describe('neige du décor et ombre « ground » (ADR 0017, § 4 et 5)', () => {
+describe('neige du décor et ombre « ground » (ADR 0017, § 4 et 5 ; ADR 0019)', () => {
   /** Une case de chaque biome, à des climats variés, dans les deux hémisphères. */
   function sampleWorld() {
     const climates = [-200, -60, -10, 0, 5, 12, 30, 80, 150, 260];
@@ -110,10 +128,18 @@ describe('neige du décor et ombre « ground » (ADR 0017, § 4 et 5)', () => {
         layers.biome[cell] = x;
         layers.temperature[cell] = (climates[climate] ?? 0) + (x % 3);
         layers.amplitude[cell] = amplitudes[amplitude] ?? 0;
+        layers.precipitation[cell] = 120 + 90 * (x % 7);
       }
     }
-    return { size, layers };
+    const calendars = worldCalendars(size, layers, biomes.entries, seasons);
+    return { size, layers, calendars };
   }
+
+  /** La rampe de la couverture d'une case de terre ou d'eau, comme le shader la choisit. */
+  const rampOf = (cover: number): readonly [number, number, number] => {
+    const { ramp } = cover === 1 ? seasons.snow : cover === 3 ? seasons.seaIce : seasons.freshIce;
+    return [ramp.onset, ramp.span, ramp.full];
+  };
 
   it('lit pour chaque case les codes de la texture des saisons, à l’octet près', () => {
     const { size, layers } = sampleWorld();
@@ -131,60 +157,75 @@ describe('neige du décor et ombre « ground » (ADR 0017, § 4 et 5)', () => {
   });
 
   it('enneige le décor de la part de neige que pose le shader de la carte, évaluée hors du GPU', () => {
-    const { size, layers } = sampleWorld();
+    const { size, layers, calendars } = sampleWorld();
     const texels = seasonTexels(size, layers, biomes.entries);
     let snowy = 0;
     let forest = 0;
-    for (const month of [0.5, 2.25, 6.5, 10.75, 11.9]) {
+    let lingering = 0;
+    for (const month of [0.5, 2.25, 3.6, 4.4, 6.5, 8.1, 10.75, 11.9]) {
       const season = seasonFactor(month);
+      const day = month * 30;
       for (let cell = 0; cell < size.width * size.height; cell++) {
-        // Le texel de la case, normalisé comme le lit le GPU, puis chaque expression du shader.
-        const variables: Record<string, number> = {
-          'data.r': (texels[cell * 4] ?? 0) / 255,
-          'data.g': (texels[cell * 4 + 1] ?? 0) / 255,
-          'data.b': (texels[cell * 4 + 2] ?? 0) / 255,
-          uSeason: Math.fround(season),
-        };
-        for (const name of [
-          'temperature',
-          'amplitude',
-          'flags',
-          'south',
-          'cover',
-          'waterCell',
-          'forest',
-          'monthly',
-          'snow',
-          'forestSnow',
-        ] as const) {
-          variables[name] = evaluateGlsl(COVER_GLSL[name], variables);
-        }
-        // La carte : la neige de la forêt sur une case de terre couverte de neige, rien sinon.
-        const land = variables.waterCell === 0 && variables.cover === 1;
-        const map = land ? variables.forestSnow : 0;
-        const decor = snowShare(
+        const texel = [
           texels[cell * 4] ?? 0,
           texels[cell * 4 + 1] ?? 0,
           texels[cell * 4 + 2] ?? 0,
+        ] as const;
+        const flags = texel[2];
+        // La carte : la neige d'une case de terre couverte de neige, celle des forêts réduite.
+        const land = ((flags >> 6) & 1) === 0 && ((flags >> 4) & 3) === 1;
+        const { share } = evaluateCover(COVER_GLSL, {
+          texel,
+          calendar: calendars.subarray(snowAt(cell), snowAt(cell) + 4),
+          ramp: rampOf(1),
           season,
+          day,
+        });
+        const keep = flags >> 7 === 1 ? Math.fround(seasons.snow.forest) : 1;
+        const map = land ? Math.fround(share * keep) : 0;
+        const decor = snowShareOn(
+          texel[0],
+          texel[1],
+          flags,
+          calendars,
+          snowAt(cell),
+          season,
+          day,
+          seasons,
         );
         expect(decor, `case ${String(cell)}, mois ${String(month)}`).toBeCloseTo(map, 5);
         if (map > 0) snowy++;
-        if (map > 0 && variables.forest === 1) forest++;
+        if (map > 0 && flags >> 7 === 1) forest++;
+        // Plus de neige au printemps que la rampe de l'instant : l'inertie de la neige.
+        const south = (flags & 1) === 1;
+        const annual = texel[0] / 2 - 64;
+        const ramp = coverShare(
+          seasons.snow.ramp,
+          annual + (texel[1] / 8) * season * (south ? -1 : 1),
+        );
+        if (land && month > 3 && month < 6 && !south && map > ramp * keep + 0.1) lingering++;
       }
     }
-    // Des cases enneigées, de forêt comprises, dont la part garde FOREST_SNOW_SHARE.
+    // Des cases enneigées, de forêt comprises, et de la neige qui traîne au printemps du nord.
     expect(snowy).toBeGreaterThan(100);
     expect(forest).toBeGreaterThan(10);
-    expect(COVER_GLSL.forestSnow).toContain(glslFloat(FOREST_SNOW_SHARE));
+    expect(lingering).toBeGreaterThan(10);
     // Le shader de la carte, et celui des objets pour l'ombre « ground », lisent ces expressions.
-    for (const name of ['monthly', 'snow', 'forestSnow'] as const) {
+    for (const name of ['monthly', 'phase', 'most', 'summer', 'now', 'level', 'share'] as const) {
       expect(MAP_FRAGMENT).toContain(COVER_GLSL[name]);
       expect(HUMAN_FRAGMENT).toContain(COVER_GLSL[name]);
     }
   });
 
-  it('suit le shader pour chaque code de la case : hémisphère, couverture, eau, forêt', () => {
+  it('suit le shader pour chaque code de la case et chaque jour : hémisphère, couverture, eau, forêt', () => {
+    // Des calendriers de toutes les formes : sans inertie, tardifs, longs, au plafond.
+    const shapes = [
+      [0, 0, 1, 1],
+      [60, 200, 12, 12],
+      [100, 240, 40, 30],
+      [127, 0, 12, 12],
+      [10, 244, 255, 255],
+    ] as const;
     let checked = 0;
     for (const south of [false, true]) {
       for (let cover = 0; cover < SEASON_COVERS.length; cover++) {
@@ -193,35 +234,34 @@ describe('neige du décor et ombre « ground » (ADR 0017, § 4 et 5)', () => {
             const flags = encodeFlags({ south, vegetation: 2, cover, water, forest });
             for (const temperature of [0, 100, 120, 128, 129, 140]) {
               for (const amplitude of [0, 60, 200]) {
-                for (const season of [-1, -0.3, 0.4, 1]) {
-                  const variables: Record<string, number> = {
-                    'data.r': temperature / 255,
-                    'data.g': amplitude / 255,
-                    'data.b': flags / 255,
-                    uSeason: Math.fround(season),
-                  };
-                  for (const name of [
-                    'temperature',
-                    'amplitude',
-                    'flags',
-                    'south',
-                    'cover',
-                    'waterCell',
-                    'forest',
-                    'monthly',
-                    'snow',
-                    'forestSnow',
-                  ] as const) {
-                    variables[name] = evaluateGlsl(COVER_GLSL[name], variables);
+                for (const month of [0.5, 3.3, 6.5, 9.2, 11.8]) {
+                  for (const calendar of shapes) {
+                    const season = seasonFactor(month);
+                    const { share } = evaluateCover(COVER_GLSL, {
+                      texel: [temperature, amplitude, flags],
+                      calendar,
+                      ramp: rampOf(1),
+                      season,
+                      day: month * 30,
+                    });
+                    const keep = forest ? Math.fround(seasons.snow.forest) : 1;
+                    const map = !water && cover === 1 ? Math.fround(share * keep) : 0;
+                    const label = `drapeaux ${String(flags)}, ${String(temperature)}, ${String(amplitude)}, ${String(month)}`;
+                    expect(
+                      snowShareOn(
+                        temperature,
+                        amplitude,
+                        flags,
+                        calendar,
+                        0,
+                        season,
+                        month * 30,
+                        seasons,
+                      ),
+                      label,
+                    ).toBeCloseTo(map, 5);
+                    checked++;
                   }
-                  const land = variables.waterCell === 0 && variables.cover === 1;
-                  const map = land ? variables.forestSnow : 0;
-                  const label = `drapeaux ${String(flags)}, ${String(temperature)}, ${String(amplitude)}, ${String(season)}`;
-                  expect(snowShare(temperature, amplitude, flags, season), label).toBeCloseTo(
-                    map,
-                    5,
-                  );
-                  checked++;
                 }
               }
             }
@@ -229,7 +269,103 @@ describe('neige du décor et ombre « ground » (ADR 0017, § 4 et 5)', () => {
         }
       }
     }
-    expect(checked).toBe(2 * SEASON_COVERS.length * 2 * 2 * 6 * 3 * 4);
+    expect(checked).toBe(2 * SEASON_COVERS.length * 2 * 2 * 6 * 3 * 5 * 5);
+  });
+
+  it('voit, dans la pêche, la couverture de la carte, au milieu de chaque mois', () => {
+    // Critique de la conception, facultatif 2 : la pêche (src/sim/cover.ts) et le shader
+    // calculent la même part, depuis les mêmes codes arrondis et les mêmes calendriers.
+    const world = testWorld('graine');
+    const size = WORLD_SIZES.small;
+    const count = size.width * size.height;
+    const calendars = worldCalendars(size, world, biomes.entries, seasons);
+    const texels = seasonTexels(size, world, biomes.entries);
+    const ramps = coverRamps(seasons);
+    let covered = 0;
+    for (let cell = 0; cell < count; cell += 3) {
+      const biome = biomes.entries.at(world.biome[cell] ?? 0);
+      const kinds: CalendarCover[] =
+        biome?.family === 'water'
+          ? biome.seasons.cover === 'none'
+            ? []
+            : [biome.seasons.cover]
+          : ['snow', 'ice'];
+      const south = southern(Math.floor(cell / size.width), size.height);
+      for (const kind of kinds) {
+        const at = kind === 'snow' ? snowAt(cell) : iceAt(cell, count);
+        const ramp = ramps[kind];
+        for (let tick = 0; tick < 12; tick++) {
+          const month = tick + 0.5;
+          const season = seasonFactor(month) * (south ? -1 : 1);
+          const phase = phaseDay(month * 30, south);
+          const fishing = fishingCover(world, calendars, cell, kind, ramp, season, phase);
+          const { share } = evaluateCover(COVER_GLSL, {
+            texel: [texels[cell * 4] ?? 0, texels[cell * 4 + 1] ?? 0, texels[cell * 4 + 2] ?? 0],
+            calendar: calendars.subarray(at, at + 4),
+            ramp: [ramp.onset, ramp.span, ramp.full],
+            season: seasonFactor(month),
+            day: month * 30,
+          });
+          expect(fishing, `case ${String(cell)}, ${kind}, mois ${String(tick)}`).toBeCloseTo(
+            share,
+            5,
+          );
+          if (share > 0) covered++;
+        }
+      }
+    }
+    expect(covered).toBeGreaterThan(20_000);
+  });
+
+  it("donne au décor les jours où la neige d'une case arrive et part, et eux seuls", () => {
+    // Pour chaque case du monde d'essai, jour après jour : l'état enneigé du décor (decorSeason,
+    // snow.share) ne change qu'en franchissant l'un des deux seuils de g, ou au jour le plus
+    // froid et au plus chaud, où le refroidissement change (DecorSource.refreshStates).
+    const { size, layers, calendars } = sampleWorld();
+    const texels = seasonTexels(size, layers, biomes.entries);
+    const share = data.decor.snow.share;
+    let changes = 0;
+    let crossings = 0;
+    for (let cell = 0; cell < size.width * size.height; cell++) {
+      const [t = 0, a = 0, flags = 0] = texels.subarray(cell * 4, cell * 4 + 3);
+      const [arrival, departure] = snowThresholdsOn(
+        t,
+        a,
+        flags,
+        calendars,
+        snowAt(cell),
+        share,
+        seasons,
+      );
+      const south = (flags & 1) === 1;
+      let before: boolean | undefined;
+      let g0 = Number.NaN;
+      for (let step = 0; step <= 720; step++) {
+        const month = step / 60;
+        const factor = seasonFactor(month);
+        const g = south ? -factor : factor;
+        const snow = snowShareOn(t, a, flags, calendars, snowAt(cell), factor, month * 30, seasons);
+        const snowy = snow > 0 && snow >= share;
+        if (before !== undefined && snowy !== before) {
+          changes++;
+          const between = (threshold: number) =>
+            !Number.isNaN(threshold) &&
+            Math.min(g0, g) - 1e-9 <= threshold &&
+            threshold <= Math.max(g0, g) + 1e-9;
+          const phase = phaseDay(month * 30, south);
+          const flip = Math.abs(phase - 180) < 0.6 || phase < 0.6 || phase > 359.4;
+          expect(
+            between(arrival) || between(departure) || flip,
+            `case ${String(cell)}, ${String(month)}`,
+          ).toBe(true);
+          if (between(arrival) || between(departure)) crossings++;
+        }
+        before = snowy;
+        g0 = g;
+      }
+    }
+    expect(changes).toBeGreaterThan(50);
+    expect(crossings).toBeGreaterThan(50);
   });
 
   it('range pour chaque biome son ton d’ombre, puis celui de sa couverture', () => {
@@ -242,5 +378,119 @@ describe('neige du décor et ombre « ground » (ADR 0017, § 4 et 5)', () => {
       expect(at(0), biome.id).toEqual([...parseColor(biome.palette.shadow), 255]);
       expect(at(1), biome.id).toEqual([...parseColor(cover), 255]);
     });
+  });
+});
+
+describe('couleurs de la saison : tons, calendrier filtré, activité (ADR 0019, § 2, 3 et 6)', () => {
+  const rules = { foliage: data.decor.foliage, seasons };
+  const layers = testWorld('pixelciv');
+  const size = WORLD_SIZES.small;
+  const foliage = worldFoliage(size, layers, rules);
+  const texels = foliageTexels(foliage, layers, biomes.entries);
+
+  it('range les tons des états de chaque biome, l’hiver de sa palette d’été, puis les tons moyens', () => {
+    const states = statePalettes(biomes.entries, seasons.light);
+    const at = (row: number, column: number) => {
+      const offset = (row * STATE_COLUMNS + column) * 4;
+      return Array.from(states.subarray(offset, offset + 3));
+    };
+    biomes.entries.forEach((biome, row) => {
+      const ranks = ['shadow', 'base', 'light'] as const;
+      SEASON_STATES.forEach((state, index) => {
+        const palette = biome.seasons.states?.[state];
+        ranks.forEach((rank, column) => {
+          expect(at(row, index * 3 + column), `${biome.id} ${state}`).toEqual(
+            palette === undefined ? [0, 0, 0] : [...parseColor(palette[rank])],
+          );
+        });
+      });
+      ranks.forEach((rank, column) => {
+        expect(at(row, 9 + column), `${biome.id} hiver`).toEqual(
+          biome.family === 'water'
+            ? [0, 0, 0]
+            : [...winterTone(parseColor(biome.palette[rank]), seasons.light)],
+        );
+      });
+      // Le ton moyen de l'été est entre l'ombre et la lumière de sa palette.
+      const mean = at(row, MEAN_COLUMN);
+      const shadow = parseColor(biome.palette.shadow);
+      const light = parseColor(biome.palette.light);
+      mean.forEach((value, channel) => {
+        const low = Math.min(shadow[channel], light[channel]);
+        const high = Math.max(shadow[channel], light[channel]);
+        expect(value).toBeGreaterThanOrEqual(low - 1);
+        expect(value).toBeLessThanOrEqual(high + 1);
+      });
+    });
+    // La lumière d'hiver : un quart vers le ton visé, puis × 0,94 (les réglages livrés).
+    expect(winterTone([76, 150, 60], seasons.light)).toEqual([75, 131, 74]);
+  });
+
+  it('efface du calendrier du shader les états que le biome de la case ne prend pas', () => {
+    const lake = biomes.indexOf('lake') ?? -1;
+    const taiga = biomes.indexOf('taiga') ?? -1;
+    const grassland = biomes.indexOf('grassland') ?? -1;
+    let checked = 0;
+    for (let cell = 0; cell < layers.biome.length; cell++) {
+      const biome = biomes.entries.at(layers.biome[cell] ?? 0);
+      if (biome === undefined) continue;
+      const raw = Array.from(foliage.subarray(cell * FOLIAGE_BYTES, (cell + 1) * FOLIAGE_BYTES));
+      const kept = Array.from(texels.subarray(cell * FOLIAGE_BYTES, (cell + 1) * FOLIAGE_BYTES));
+      const states = biome.seasons.states ?? {};
+      expect(kept).toEqual([
+        states.autumn === undefined ? NO_DATE : raw[0],
+        states.bare === undefined ? NO_DATE : raw[1],
+        states.dry === undefined ? NO_DATE : raw[2],
+        biome.family === 'water' ? NO_DATE : raw[3],
+      ]);
+      if ([lake, taiga, grassland].includes(layers.biome[cell] ?? -1)) checked++;
+    }
+    expect(checked).toBeGreaterThan(1000);
+  });
+
+  it('ne laisse sans programme des saisons aucun bloc dont un pixel changerait, ni ne le donne à tort l’été', () => {
+    const transition = seasons.minTransition;
+    const dry = loadGameData().decor.foliage;
+    let active = 0;
+    let idle = 0;
+    for (let row = 0; row < size.height / 64; row++) {
+      for (let column = 0; column < size.width / 64; column++) {
+        const activity = seasonActivity(texels, size, 64, column, row, transition, dry);
+        for (let day = 0; day < 360; day += 6) {
+          for (const light of [false, true]) {
+            const north = phaseDay(day, false);
+            const southPhase = phaseDay(day, true);
+            const shown = seasonInRect(activity, 16, 0, 0, 256, 256, north, southPhase, light);
+            // Les cases du bloc, et l'anneau d'une case autour de lui : celles qui peuvent prêter
+            // leurs tons aux pixels de son bord (la critique des captures : un bloc dont seules
+            // les voisines changent gardait le programme de la carte).
+            let changes = false;
+            for (let y = -1; y <= 64 && !changes; y++) {
+              const cy = Math.min(size.height - 1, Math.max(0, row * 64 + y));
+              const phase = southern(cy, size.height) ? southPhase : north;
+              for (let x = -1; x <= 64 && !changes; x++) {
+                const cx = (column * 64 + x + size.width) % size.width;
+                const cell = cy * size.width + cx;
+                const shares = foliageShares(texels, cell * FOLIAGE_BYTES, phase, transition, dry);
+                changes =
+                  shares.autumn > 0 ||
+                  shares.bare > 0 ||
+                  shares.dry > 0 ||
+                  (light && shares.light > 0);
+              }
+            }
+            if (changes)
+              expect(shown, `bloc (${String(column)}, ${String(row)}), jour ${String(day)}`).toBe(
+                true,
+              );
+            if (shown) active++;
+            else idle++;
+          }
+        }
+      }
+    }
+    // Les blocs sans rien qui change à cette date gardent le programme de la carte.
+    expect(idle).toBeGreaterThan(active / 4);
+    expect(active).toBeGreaterThan(0);
   });
 });

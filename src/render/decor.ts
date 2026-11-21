@@ -9,15 +9,27 @@
  * la carte à l'écran : quand la vue défile sans quitter les cases collectées (par carrés de
  * COLLECT_CELLS), rien ne se recollecte ; quand le jour change, seuls les états se refont.
  *
- * Saisons : la part de neige d'une case vient des codes de la texture des saisons, par la formule
- * du shader de la carte (src/render/seasons.ts, snowShare) ; le feuillage, du climat de la case
- * (src/gen/decor.ts, decorSeason). Rien n'est recuit : seules la palette et, pour un caduc nu, le
- * motif changent.
+ * Saisons : la part de neige d'une case vient des codes de la texture des saisons et de son
+ * calendrier de neige, par la composition du shader de la carte (src/render/seasons.ts,
+ * snowShareOn ; ADR 0019) ; le feuillage et la lumière d'hiver, du calendrier de la végétation de
+ * la case (src/core/foliage.ts), celui du sol de la carte, au seuil de la majorité des pixels de la
+ * case (src/gen/decor.ts, decorSeason). Rien n'est recuit : seules la palette et, pour un caduc
+ * nu, le motif changent.
  */
 import decorAtlas from 'virtual:decor-atlas';
-import type { Decor, GameData, LandUse, ShadowMethod } from '../core/data';
+import type { Decor, GameData, LandUse, Phenology, ShadowMethod } from '../core/data';
 import { PALETTE_ROLES } from '../core/data/humans';
-import { latitude, rainSeasonality, southern } from '../core/seasons';
+import {
+  cellMedianThreshold,
+  FOLIAGE_BYTES,
+  FOLIAGE_UNIT,
+  dryDistance,
+  foliageShares,
+  NO_DATE,
+} from '../core/foliage';
+import { seasonFactor, southern } from '../core/seasons';
+import { phaseDay, snowAt, YEAR_DAYS } from '../core/snow';
+import { DAYS_PER_MONTH } from '../core/time';
 import { CHUNK_SIZE, type WorldLayers, type WorldSize } from '../core/world';
 import {
   cellObjects,
@@ -28,7 +40,7 @@ import {
   entryOf,
   fruitingMask,
   monthMask,
-  seasonMoment,
+  PHENOLOGY_STATES,
   variantOf,
   type DecorLook,
   type DecorState,
@@ -51,7 +63,7 @@ import {
   type ObjectView,
   type PaletteSlots,
 } from './objects';
-import { biomeCodes, cellSeasonCodes, snowShare, snowThreshold } from './seasons';
+import { biomeCodes, cellSeasonCodes, snowDaysOn, snowShareOn, winterTone } from './seasons';
 
 /** Rôles de l'atlas du décor, un octet par pixel, décodés une fois. */
 function decodeRoles(base64: string): Uint8Array {
@@ -126,6 +138,8 @@ export interface DecorLookState {
   readonly look: number;
   readonly state: DecorState;
   readonly snowy: boolean;
+  /** Sous la lumière d'hiver (ADR 0019, § 3) : ses tons, hors contour, neige et ombre. */
+  readonly lit?: boolean;
   readonly fruit: boolean;
   /** Biome dont la palette de couverture blanchit l'objet enneigé. */
   readonly biome: number;
@@ -140,7 +154,7 @@ export interface DecorLookState {
  * hors neige et la neige sous la neige ; l'ombre, selon la méthode.
  */
 export function decorPalette(
-  data: Pick<GameData, 'flora' | 'resources' | 'biomes'> & { readonly decor: Decor },
+  data: Pick<GameData, 'flora' | 'resources' | 'biomes' | 'seasons'> & { readonly decor: Decor },
   table: DecorTable,
   choice: DecorLookState,
   method: ShadowMethod,
@@ -149,8 +163,15 @@ export function decorPalette(
   const palette: (ObjectColor | undefined)[] = new Array<ObjectColor | undefined>(PALETTE_ROLES);
   const outline: ObjectColor = [...parseColor(decor.outline), 255];
   palette[1] = outline;
-  const set = (region: string, colors: readonly ObjectColor[]) => {
-    colors.forEach((color, rank) => {
+  // La lumière d'hiver passe sur les tons de l'objet, ni sur son contour, ni sur sa neige, ni sur
+  // son ombre : la même règle que les palettes d'hiver du sol (winterTone).
+  const light = choice.lit === true ? data.seasons.light : undefined;
+  const lit = (colors: readonly ObjectColor[]): readonly ObjectColor[] =>
+    light === undefined
+      ? colors
+      : colors.map((color) => [...winterTone([color[0], color[1], color[2]], light), color[3]]);
+  const set = (region: string, colors: readonly ObjectColor[], shine = true) => {
+    (shine ? lit(colors) : colors).forEach((color, rank) => {
       palette[legendRole(DECOR_LEGEND, region, rank)] = color;
     });
   };
@@ -191,8 +212,9 @@ export function decorPalette(
       : undefined;
   const bareGrid = choice.state === DECOR_STATE.bare && look?.bare !== undefined;
   const under = flora === undefined ? stone : bareGrid ? wood : current;
-  set('snow', snow ?? under);
-  set('cap', snow ?? [outline, outline, outline, outline]);
+  if (snow === undefined) set('snow', under);
+  else set('snow', snow, false);
+  set('cap', snow ?? [outline, outline, outline, outline], false);
   const [even, odd] = SHADOW_ROLES;
   if (method === 'multiply') {
     const shade: ObjectColor = [0, 0, 0, Math.round(decor.shadow.alpha * 255)];
@@ -221,11 +243,20 @@ export interface DecorStats {
 /** Le décor d'un monde, source d'objets du calque commun (src/render/objects.ts). */
 export class DecorSource implements ObjectSource {
   readonly atlas = DECOR_ATLAS;
-  version = 0;
+  /** Ce qui refait la collecte : le monde, ses blocs, l'ombre. */
+  private collected = 0;
+  /** Ce qui ne demande qu'une réévaluation des états : la lumière d'hiver. */
+  private relit = 0;
   private method: ShadowMethod;
-  private readonly data: Pick<GameData, 'flora' | 'resources' | 'biomes'> & {
+  private readonly data: Pick<GameData, 'flora' | 'resources' | 'biomes' | 'seasons'> & {
     readonly decor: Decor;
   };
+  /** Calendriers de la neige et de la glace du monde (src/core/snow.ts), ceux de la carte. */
+  private readonly calendars: Uint8Array;
+  /** Calendrier de la végétation du monde (src/core/foliage.ts), celui du sol de la carte. */
+  private readonly foliage: Uint8Array;
+  /** La lumière d'hiver se montre-t-elle (le réglage des effets, ADR 0020) ? */
+  private lightShown = false;
   private readonly world: DecorWorld;
   private readonly landUse: LandUse;
   private readonly chunks = new Map<number, ChunkObjects>();
@@ -237,24 +268,23 @@ export class DecorSource implements ObjectSource {
   private looks = new Uint16Array(0);
   private variants = new Uint8Array(0);
   private codes = new Uint8Array(0);
-  private climate = new Float64Array(0);
   /** L'objet est-il au sud ? Lu de sa case une fois par collecte. */
   private souths = new Uint8Array(0);
+  /** Seuil de l'objet : celui de la majorité des pixels de sa case (cellMedianThreshold). */
+  private levels = new Float64Array(0);
+  /** Jours de phase où sa neige arrive et part (snowDaysOn), NaN sans neige. */
+  private snowDays = new Float64Array(0);
   /**
-   * L'intervalle de g (facteur de saison signé par l'hémisphère) où la composition de l'objet ne
-   * change pas, cooling et mois du fruit mis à part : ses seuils les plus proches, resserrés de
-   * INTERVAL_MARGIN. Hors de lui, l'objet se réévalue ; dedans, rien ne change.
+   * L'arc de jours de phase où la composition de l'objet ne change pas, fruit mis à part : la phase
+   * de sa dernière évaluation, et ce qu'elle peut avancer ou reculer avant sa prochaine date (ses
+   * dates les plus proches, resserrées de DAY_MARGIN). Hors de lui, l'objet se réévalue.
    */
-  private lows = new Float64Array(0);
-  private highs = new Float64Array(0);
-  /**
-   * Les seuils de g où la composition de chaque objet peut changer, THRESHOLDS par objet (NaN :
-   * pas de seuil), lus de sa case et de son espèce une fois par collecte (prepare).
-   */
-  private thresholds = new Float64Array(0);
-  /** Ce qu'ont vu les derniers états : refroidissement au nord et au sud, mois du nord. */
-  private lastCooling = -1;
+  private starts = new Float64Array(0);
+  private aheads = new Float64Array(0);
+  private behinds = new Float64Array(0);
+  /** Mois du nord des derniers états, et la lumière d'hiver qu'ils montraient. */
   private lastMonth = -1;
+  private lastLight = false;
   private readonly seasonCodes: ReturnType<typeof biomeCodes>;
   private choices = new Int32Array(0);
   /** Clé de la dernière collecte, et jour de ses états. */
@@ -282,12 +312,18 @@ export class DecorSource implements ObjectSource {
   private buildMs = 0;
 
   constructor(
-    data: Pick<GameData, 'flora' | 'resources' | 'biomes'> & { readonly decor: Decor },
+    data: Pick<GameData, 'flora' | 'resources' | 'biomes' | 'seasons'> & {
+      readonly decor: Decor;
+    },
     layers: WorldLayers,
     size: WorldSize,
     seed: string,
+    calendars: Uint8Array,
+    foliage: Uint8Array,
   ) {
     this.data = data;
+    this.calendars = calendars;
+    this.foliage = foliage;
     this.method = data.decor.shadow.method;
     this.world = {
       size,
@@ -337,7 +373,30 @@ export class DecorSource implements ObjectSource {
   set shadow(method: ShadowMethod) {
     if (method === this.method) return;
     this.method = method;
-    this.version++;
+    this.collected++;
+  }
+
+  /**
+   * Ce qui change l'image du décor, que lit la signature du calque (src/render/people.ts) : la
+   * collecte, et la lumière d'hiver, qui ne refait que les états (relecture de 2b.7, problème 9 :
+   * en pause, changer de cran laissait aux objets la lumière du cran d'avant).
+   */
+  get version(): number {
+    return this.collected + this.relit;
+  }
+
+  /**
+   * La lumière d'hiver se montre-t-elle (le cran plein du réglage des effets, ADR 0020) ? Les objets
+   * collectés se réévaluent à la mise à jour suivante.
+   */
+  get light(): boolean {
+    return this.lightShown;
+  }
+
+  set light(shown: boolean) {
+    if (shown === this.lightShown) return;
+    this.lightShown = shown;
+    this.relit++;
   }
 
   /** Ce que coûte le décor, à la dernière mise à jour. */
@@ -355,7 +414,7 @@ export class DecorSource implements ObjectSource {
    * nommés, ou tous, se reposent, et la prochaine image recollecte.
    */
   invalidate(chunks?: readonly { readonly column: number; readonly row: number }[]): void {
-    this.version++;
+    this.collected++;
     if (chunks === undefined) {
       this.chunks.clear();
       return;
@@ -445,7 +504,7 @@ export class DecorSource implements ObjectSource {
     const r1 = Math.floor((view.bottom + (reach.tall * k) / scale) / TILE_PX);
     const q = COLLECT_CELLS;
     const key = [
-      this.version,
+      this.collected,
       palettes.generation,
       scale,
       level,
@@ -457,7 +516,8 @@ export class DecorSource implements ObjectSource {
     ];
     const day = Math.floor(view.month * 30);
     if (key.every((value, index) => value === this.collectedWith[index])) {
-      if (day !== this.day) this.refreshStates(view, palettes);
+      if (day !== this.day || this.lightShown !== this.lastLight)
+        this.refreshStates(view, palettes);
     } else {
       this.collectedWith = key;
       this.collect(
@@ -544,9 +604,9 @@ export class DecorSource implements ObjectSource {
     }
     this.day = Number.NaN;
     this.choices.fill(-1, 0, count);
-    // Tout objet collecté se réévalue : un intervalle vide.
-    this.lows.fill(Number.POSITIVE_INFINITY, 0, count);
-    this.highs.fill(Number.NEGATIVE_INFINITY, 0, count);
+    // Tout objet collecté se réévalue : un arc vide.
+    this.aheads.fill(-1, 0, count);
+    this.behinds.fill(-1, 0, count);
     this.refreshStates(view, palettes);
     list.sort();
   }
@@ -569,11 +629,12 @@ export class DecorSource implements ObjectSource {
     this.looks = grow(this.looks);
     this.variants = grow(this.variants);
     this.codes = grow(this.codes, 3);
-    this.climate = grow(this.climate, 3);
     this.souths = grow(this.souths);
-    this.lows = grow(this.lows);
-    this.highs = grow(this.highs);
-    this.thresholds = grow(this.thresholds, THRESHOLDS);
+    this.levels = grow(this.levels);
+    this.snowDays = grow(this.snowDays, 2);
+    this.starts = grow(this.starts);
+    this.aheads = grow(this.aheads);
+    this.behinds = grow(this.behinds);
     this.choices = grow(this.choices);
   }
 
@@ -586,74 +647,107 @@ export class DecorSource implements ObjectSource {
     this.codes[at * 3] = codes.temperature;
     this.codes[at * 3 + 1] = codes.amplitude;
     this.codes[at * 3 + 2] = codes.flags;
-    const annual = layers.temperature[cell] / 10;
-    const amplitude = layers.amplitude[cell] / 10;
-    const rain = rainSeasonality(latitude(row, size.height));
-    this.climate[at * 3] = annual;
-    this.climate[at * 3 + 1] = amplitude;
-    this.climate[at * 3 + 2] = rain;
-    // Les seuils de g (refreshStates) : la neige de la case, puis, selon la saison de l'espèce, le
-    // feuillage nu, l'automne et sa baisse depuis le mois le plus chaud, la saison sèche.
-    const { snow, foliage } = this.data.decor;
-    const phenology = this.world.table.looks.at(this.looks[at] ?? 0)?.phenology;
-    const deciduous = amplitude > 0 && phenology === 'deciduous';
-    const base = at * THRESHOLDS;
-    this.thresholds[base] = snowThreshold(
+    this.levels[at] = cellMedianThreshold(cell % size.width, row);
+    // Les jours où la neige de la case arrive et part (src/core/snow.ts) : deux dates de l'objet.
+    const [arrival, departure] = snowDaysOn(
       codes.temperature,
       codes.amplitude,
       codes.flags,
-      snow.share,
+      this.calendars,
+      snowAt(cell),
+      this.data.decor.snow.share,
+      this.data.seasons,
     );
-    this.thresholds[base + 1] = deciduous ? (foliage.bareBelow - annual) / amplitude : Number.NaN;
-    this.thresholds[base + 2] = deciduous ? (foliage.autumnBelow - annual) / amplitude : Number.NaN;
-    this.thresholds[base + 3] = deciduous ? 1 - foliage.autumnDrop / amplitude : Number.NaN;
-    this.thresholds[base + 4] =
-      rain !== 0 && phenology === 'dry' ? (foliage.dryShare - 1) / rain : Number.NaN;
+    this.snowDays[at * 2] = arrival;
+    this.snowDays[at * 2 + 1] = departure;
+  }
+
+  /**
+   * Les dates de phase où la composition de l'objet `at`, de saisons `phenology`, peut changer :
+   * l'arrivée et le départ de sa neige (snowDaysOn, exacts, si bien que la neige qui atteint son
+   * seuil au jour le plus froid même se voit), et les jours où la part de chacun de ses états, et de
+   * la lumière d'hiver si elle se montre, franchit son seuil (`level`) ; l'arc de l'objet (starts,
+   * aheads, behinds) va de la plus proche avant la phase `phase` à la plus proche après.
+   */
+  private bound(at: number, phase: number, phenology: Phenology, level: number): void {
+    const states = PHENOLOGY_STATES[phenology];
+    const transition = this.data.seasons.minTransition;
+    const offset = (level - 0.5) * transition;
+    const cell = this.cells[at] ?? 0;
+    const base = cell * FOLIAGE_BYTES;
+    let ahead = Number.POSITIVE_INFINITY;
+    let behind = Number.POSITIVE_INFINITY;
+    const date = (day: number) => {
+      if (Number.isNaN(day)) return;
+      const forward = (((day - phase) % YEAR_DAYS) + YEAR_DAYS) % YEAR_DAYS;
+      ahead = Math.min(ahead, forward);
+      behind = Math.min(behind, forward === 0 ? 0 : YEAR_DAYS - forward);
+    };
+    /** Un état symétrique autour du jour le plus froid, de date `byte`. */
+    const symmetric = (byte: number) => {
+      if (byte === NO_DATE) return;
+      const day = byte * FOLIAGE_UNIT + offset;
+      date(day);
+      date(YEAR_DAYS - day);
+    };
+    date(this.snowDays[at * 2] ?? Number.NaN);
+    date(this.snowDays[at * 2 + 1] ?? Number.NaN);
+    const autumn = this.foliage[base] ?? NO_DATE;
+    const bare = this.foliage[base + 1] ?? NO_DATE;
+    if (states.bare) symmetric(bare);
+    if (states.autumn && autumn !== NO_DATE && bare !== NO_DATE) {
+      date(autumn * FOLIAGE_UNIT + offset);
+      date(YEAR_DAYS - bare * FOLIAGE_UNIT - offset);
+    }
+    if (states.dry) {
+      // La saison sèche suit sa rampe : sa part franchit le seuil à une distance du jour le plus
+      // chaud que le seuil de l'objet fixe (src/core/foliage.ts, dryDistance).
+      const distance = dryDistance(
+        this.foliage[base + 2] ?? NO_DATE,
+        level,
+        this.data.decor.foliage,
+      );
+      if (Number.isFinite(distance)) {
+        date(distance);
+        date(YEAR_DAYS - distance);
+      }
+    }
+    if (this.lightShown) symmetric(this.foliage[base + 3] ?? NO_DATE);
+    this.starts[at] = phase;
+    this.aheads[at] = ahead - DAY_MARGIN;
+    this.behinds[at] = behind - DAY_MARGIN;
   }
 
   /**
    * Les états de saison des objets collectés au mois de la vue, et ce qui en dépend. Un objet ne se
-   * réévalue que lorsque le facteur de saison sort de l'intervalle où sa composition ne change
-   * pas, quand le refroidissement change, ou quand son fruit paraît ou disparaît au nouveau
-   * mois ; seuls les objets dont la composition change reprennent motif et palette (relecture
-   * 2b.6, problème 17 : chaque jour, tous les objets collectés se réévaluaient).
+   * réévalue que lorsque le jour sort de l'arc où sa composition ne change pas (bound), que la
+   * lumière d'hiver paraît ou disparaît, ou que son fruit paraît ou disparaît au nouveau mois ;
+   * seuls les objets dont la composition change reprennent motif et palette (relecture 2b.6,
+   * problème 17 : chaque jour, tous les objets collectés se réévaluaient).
    */
   private refreshStates(view: ObjectView, palettes: PaletteSlots): void {
     const list = this.list;
-    const moment = seasonMoment(view.month);
     const { table } = this.world;
     const { k } = view;
     const level = this.level;
     const rules = this.data.decor;
+    const transition = this.data.seasons.minTransition;
     const { motifs } = DECOR_ATLAS;
     const flags = this.method === 'ground' ? OBJECT_FLAG.ground : 0;
-    const { factor } = moment;
-    const cooling = (moment.coolingNorth ? 1 : 0) + (moment.coolingSouth ? 2 : 0);
-    const month = Math.floor(moment.month) % 12;
+    const day = view.month * DAYS_PER_MONTH;
+    const factor = seasonFactor(view.month);
+    const phases = [phaseDay(day, false), phaseDay(day, true)] as const;
+    const month = Math.floor(view.month) % 12;
     const previousMonth = this.lastMonth;
-    const coolingChanged = cooling !== this.lastCooling;
     const monthChanged = month !== previousMonth;
-    this.lastCooling = cooling;
+    const lightChanged = this.lightShown !== this.lastLight;
     this.lastMonth = month;
-    // Les seuils de g les plus proches de part et d'autre, que bound resserre (ci-dessous) : une
-    // seule fonction pour toute la passe, sans allocation par objet.
-    let g = 0;
-    let low = Number.NEGATIVE_INFINITY;
-    let high = Number.POSITIVE_INFINITY;
-    const bound = (threshold: number) => {
-      if (Number.isNaN(threshold)) return;
-      if (threshold < g - INTERVAL_MARGIN) low = Math.max(low, threshold);
-      else if (threshold > g + INTERVAL_MARGIN) high = Math.min(high, threshold);
-      else {
-        low = Number.POSITIVE_INFINITY;
-        high = Number.NEGATIVE_INFINITY;
-      }
-    };
+    this.lastLight = this.lightShown;
     for (let at = 0; at < list.count; at++) {
       const lookIndex = this.looks[at] ?? 0;
       const mask = this.fruitMasks[lookIndex] ?? 0;
       const south = this.souths[at] === 1;
-      g = south ? -factor : factor;
+      const phase = phases[south ? 1 : 0];
       // Le fruit ne change qu'entre un mois où il se montre et un mois où il ne se montre pas : au
       // nouveau mois, seuls les objets dont le fruit paraît ou disparaît se réévaluent.
       const shift = south ? 6 : 0;
@@ -663,13 +757,11 @@ export class DecorSource implements ObjectSource {
         (previousMonth < 0 ||
           ((mask >> ((month + shift) % 12)) & 1) !==
             ((mask >> ((previousMonth + shift) % 12)) & 1));
-      if (
-        !coolingChanged &&
-        !fruitChanged &&
-        g > (this.lows[at] ?? 0) &&
-        g < (this.highs[at] ?? 0)
-      ) {
-        continue;
+      if (!lightChanged && !fruitChanged) {
+        const moved = (((phase - (this.starts[at] ?? 0)) % YEAR_DAYS) + YEAR_DAYS) % YEAR_DAYS;
+        if (moved < (this.aheads[at] ?? -1) || YEAR_DAYS - moved < (this.behinds[at] ?? -1)) {
+          continue;
+        }
       }
       const look = table.looks.at(lookIndex);
       if (look === undefined) continue;
@@ -677,38 +769,38 @@ export class DecorSource implements ObjectSource {
       const temperatureCode = this.codes[at * 3] ?? 0;
       const amplitudeCode = this.codes[at * 3 + 1] ?? 0;
       const flagCode = this.codes[at * 3 + 2] ?? 0;
-      const snow = snowShare(temperatureCode, amplitudeCode, flagCode, factor);
-      // Le climat du feuillage (foliageClimate), sans objet.
-      const annual = this.climate[at * 3] ?? 0;
-      const amplitude = this.climate[at * 3 + 1] ?? 0;
-      const rain = this.climate[at * 3 + 2] ?? 0;
+      const snow = snowShareOn(
+        temperatureCode,
+        amplitudeCode,
+        flagCode,
+        this.calendars,
+        snowAt(cell),
+        factor,
+        day,
+        this.data.seasons,
+      );
+      const threshold = this.levels[at] ?? 0.5;
       const code = decorSeasonCode(
         snow,
         look.phenology,
-        annual + amplitude * g,
-        annual - amplitude,
-        annual + amplitude,
-        south ? moment.coolingSouth : moment.coolingNorth,
-        1 + rain * g,
+        foliageShares(this.foliage, cell * FOLIAGE_BYTES, phase, transition, rules.foliage),
+        threshold,
         rules,
+        this.lightShown,
       );
       const state = (code & 3) as DecorState;
-      const snowy = code >= 4;
-      const fruit = mask !== 0 && fruitingMask(mask, moment.month, south);
-      // Les seuils de g les plus proches, de part et d'autre, parmi ceux de l'objet (prepare).
-      // Un seuil à moins de INTERVAL_MARGIN de g laisse l'état incertain : l'intervalle est vide,
-      // et l'objet se réévalue jusqu'à s'en écarter.
-      low = Number.NEGATIVE_INFINITY;
-      high = Number.POSITIVE_INFINITY;
-      for (let t = at * THRESHOLDS; t < (at + 1) * THRESHOLDS; t++) {
-        bound(this.thresholds[t] ?? Number.NaN);
-      }
-      this.lows[at] = low + INTERVAL_MARGIN;
-      this.highs[at] = high - INTERVAL_MARGIN;
+      const snowy = (code & 4) !== 0;
+      const lit = (code & 8) !== 0;
+      const fruit = mask !== 0 && fruitingMask(mask, view.month, south);
+      this.bound(at, phase, look.phenology, threshold);
       const biome = snowy ? (this.world.layers.biome[cell] ?? 0) : 0;
-      // Composition de la palette : apparence, état, neige, fruit, biome de la neige, méthode.
+      // Composition de la palette : apparence, état, neige, lumière, fruit, biome de la neige,
+      // méthode.
       const choice =
-        ((((lookIndex * 4 + state) * 2 + (snowy ? 1 : 0)) * 2 + (fruit ? 1 : 0)) * 256 + biome) *
+        (((((lookIndex * 4 + state) * 2 + (snowy ? 1 : 0)) * 2 + (lit ? 1 : 0)) * 2 +
+          (fruit ? 1 : 0)) *
+          256 +
+          biome) *
           4 +
         SHADOW_CODE[this.method];
       if (choice === this.choices[at]) continue;
@@ -734,7 +826,7 @@ export class DecorSource implements ObjectSource {
         decorPalette(
           this.data,
           table,
-          { look: lookIndex, state, snowy, fruit, biome },
+          { look: lookIndex, state, snowy, lit, fruit, biome },
           this.method,
         ),
       );
@@ -755,14 +847,11 @@ export class DecorSource implements ObjectSource {
 }
 
 /**
- * Marge des intervalles de g où la composition d'un objet ne change pas (refreshStates) : près
- * d'un seuil, l'objet se réévalue, si bien que l'arrondi des seuils ne peut rien changer. Un jour
- * déplace g de 2π / 360 au plus, quelque 0,017.
+ * Marge des arcs de jours où la composition d'un objet ne change pas (refreshStates) : près d'une
+ * de ses dates, l'objet se réévalue, si bien que l'arrondi des dates ne peut rien changer. Un jour
+ * de jeu vaut un jour de phase.
  */
-const INTERVAL_MARGIN = 1e-6;
-
-/** Seuils de g par objet : neige, feuillage nu, automne, baisse de l'automne, saison sèche. */
-const THRESHOLDS = 5;
+const DAY_MARGIN = 1e-4;
 
 /** Code de chaque méthode d'ombre, dans la composition des palettes. */
 const SHADOW_CODE: Readonly<Record<ShadowMethod, number>> = {

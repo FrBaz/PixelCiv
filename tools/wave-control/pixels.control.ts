@@ -20,14 +20,17 @@ import { existsSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { loadGameData } from '../../src/core/data';
-import { COVER_RAMPS, seasonFactor } from '../../src/core/seasons';
+import { seasonFactor } from '../../src/core/seasons';
+import { DAYS_PER_MONTH } from '../../src/core/time';
+import { iceAt, worldCalendars } from '../../src/core/snow';
 import { WORLD_SIZES } from '../../src/core/world';
 import { defaultWorldParams } from '../../src/core/worldParams';
 import { bakeBiomes, bakeRegion } from '../../src/render/bake';
 import { seasonTexels } from '../../src/render/seasons';
 import {
-  calm32,
-  monthly32,
+  waterCover32,
+  waterRamp,
+  waveCovers,
   waveNoise,
   wavePixel,
   waveStill,
@@ -89,9 +92,14 @@ describe('contrôle des pixels de la mer animée (ADR 0015)', () => {
     const regionBottom = Math.min(H, top + vh);
     const region = bakeRegion(world, ((left % W) + W) % W, regionTop, vw, regionBottom - regionTop);
     const texels = seasonTexels(size, layers, data.biomes.entries);
+    // Les calendriers de la neige et de la glace, que le worker calcule et envoie (ADR 0019).
+    const calendars = worldCalendars(size, layers, data.biomes.entries, data.seasons);
+    const count = size.width * size.height;
     const season = Math.fround(seasonFactor(meta.month));
+    const day = Math.fround(meta.month * DAYS_PER_MONTH);
+    const covers = waveCovers(data.seasons);
     // Au zoom 1 sur PC, les ruisseaux ne se dessinent pas (STREAMS_SCALE).
-    const view = { season, fine: true, natural: true, streams: false };
+    const view = { season, day, fine: true, natural: true, streams: false, covers };
     const noise = waveNoise();
     const table = waveTable(data.biomes.entries, 1);
     const rest = image(folder, 'rest.png');
@@ -101,7 +109,9 @@ describe('contrôle des pixels de la mer animée (ADR 0015)', () => {
       if (y < 0 || y >= H) return undefined;
       const x = (((left + sx) % W) + W) % W;
       const o = ((y - regionTop) * vw + sx) * 4;
-      const cell = (Math.floor(y / 4) * size.width + Math.floor(x / 4)) * 4;
+      const index = Math.floor(y / 4) * size.width + Math.floor(x / 4);
+      const cell = index * 4;
+      const at = iceAt(index, count);
       return {
         red: region[o] ?? 0,
         green: region[o + 1] ?? 0,
@@ -109,6 +119,7 @@ describe('contrôle des pixels de la mer animée (ADR 0015)', () => {
         temperature: texels[cell] ?? 0,
         amplitude: texels[cell + 1] ?? 0,
         flags: texels[cell + 2] ?? 0,
+        calendar: calendars.subarray(at, at + 4),
       };
     };
     const result: Record<string, unknown> = { seed: meta.seed, month: meta.month, left, top };
@@ -155,15 +166,9 @@ describe('contrôle des pixels de la mer animée (ADR 0015)', () => {
           // Les pixels d'eau animée en calme partiel : la rampe du calme y décide.
           const color = (pixel.red << 16) | (pixel.green << 8) | pixel.blue;
           if ((pixel.red & 1) === 0 && table.biomes.some((b) => b.tones.includes(color))) {
-            const cover = (pixel.flags >> 4) & 3;
-            const waterCell = (pixel.flags >> 6) & 1;
-            const ramp =
-              waterCell === 0 || cover === 2
-                ? COVER_RAMPS.ice
-                : cover === 3
-                  ? COVER_RAMPS['sea-ice']
-                  : undefined;
-            const calm = ramp === undefined ? 0 : calm32(ramp, monthly32(pixel, season));
+            const ramp = waterRamp(pixel, covers);
+            const calm =
+              ramp === undefined ? 0 : waterCover32(pixel, ramp, season, day, covers.calmDays).calm;
             if (calm > 0 && calm < 1) partial++;
           }
           const got = [shot.rgb[i], shot.rgb[i + 1], shot.rgb[i + 2]];

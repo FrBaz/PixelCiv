@@ -3,7 +3,18 @@ import { loadGameData } from '../core/data';
 import { CHUNK_SIZE, riverClass, WORLD_SIZES } from '../core/world';
 import { defaultWorldParams } from '../core/worldParams';
 import { generateWorld } from '../worldgen/generate';
-import { bakeBiomes, bakeChunk, bakeRegion, CHUNK_PX, pixelData, type BakeWorld } from './bake';
+import { Fingerprint } from '../core/hash';
+import {
+  bakeBiomes,
+  bakeChunk,
+  bakeRegion,
+  CHUNK_PX,
+  IDENTITY,
+  pixelData,
+  TINT,
+  toneShares,
+  type BakeWorld,
+} from './bake';
 
 const data = loadGameData();
 const size = WORLD_SIZES.small;
@@ -239,5 +250,133 @@ describe('cuisson des blocs', () => {
     }
     expect(beds).toBeGreaterThan(20);
     expect(mixed / beds).toBeGreaterThan(0.9);
+  });
+});
+
+describe('carte d’identité des tons (tâche 2b.7, ADR 0019, § 2)', () => {
+  const SEEDS = ['pixelciv', 'graine', 'autre'] as const;
+  /** Des blocs du nord au sud, de part et d'autre de la couture. */
+  const CHUNKS = [
+    [0, 0],
+    [3, 1],
+    [7, 1],
+    [5, 2],
+    [2, 3],
+  ] as const;
+  const worldOf = (seed: string): BakeWorld => ({
+    size,
+    layers: generateWorld(
+      { ...defaultWorldParams(data.worldgen.parameters, seed, 'small'), size },
+      data,
+    ),
+    biomes,
+    riverBiome,
+  });
+  const worlds = SEEDS.map(worldOf);
+
+  it('ne change aucun pixel cuit : ceux de 7c893a7, la carte demandée ou non', () => {
+    // La règle de la phase (« ne touche pas aux tuiles ») : les empreintes de la cuisson de
+    // 7c893a7, relevées avant que la cuisson ne sache tenir sa carte d'identité.
+    const expected = ['1f4835ca', 'afa6652c', '42113471'];
+    worlds.forEach((world, index) => {
+      const plain = new Fingerprint();
+      const identified = new Fingerprint();
+      for (const [column, row] of CHUNKS) {
+        plain.typedArray(bakeChunk(world, column, row));
+        identified.typedArray(bakeChunk(world, column, row, new Uint8Array(CHUNK_PX * CHUNK_PX)));
+      }
+      expect(plain.hex(), SEEDS[index]).toBe(expected[index]);
+      expect(identified.hex(), SEEDS[index]).toBe(expected[index]);
+    });
+  });
+
+  it('donne le rang et la case de chaque ton de terre, dont la cuisson se déduit au pixel près', () => {
+    // La critique (requis 2) : deviner le rang d'après la couleur manquait les tons saturés
+    // (glaciers, plages, déserts) et confondait des palettes voisines (forêts pluviales tempérée
+    // et tropicale, marécage et mangrove). La carte le dit : recalculer chaque pixel de terre de
+    // son ton, de son ombrage et de la teinte de la case qui le prête redonne le pixel cuit.
+    const clamp01 = (value: number) => Math.min(1, Math.max(0, value));
+    const byte = (value: number) => Math.min(255, Math.max(0, Math.round(value)));
+    const biomesSeen = new Set<string>();
+    worlds.forEach((world, index) => {
+      let land = 0;
+      let known = 0;
+      let rebuilt = 0;
+      let floor = 0;
+      for (const [column, row] of CHUNKS) {
+        const identity = new Uint8Array(CHUNK_PX * CHUNK_PX);
+        const pixels = bakeChunk(world, column, row, identity);
+        for (let y = 0; y < CHUNK_PX; y++) {
+          for (let x = 0; x < CHUNK_PX; x++) {
+            const at = y * CHUNK_PX + x;
+            const code = identity[at] ?? 0;
+            if (((pixels[at * 4] ?? 0) & 1) === 0) {
+              // L'eau, les rivières comprises, n'a pas de ton de terre.
+              expect(code).toBe(IDENTITY.none);
+              continue;
+            }
+            land++;
+            if (code === IDENTITY.none) continue;
+            known++;
+            expect(code).toBeLessThanOrEqual(IDENTITY.ranks * IDENTITY.slots);
+            const rank = (code - 1) % IDENTITY.ranks;
+            const lender = Math.floor((code - 1) / IDENTITY.ranks);
+            const px = column * CHUNK_PX + x;
+            const py = row * CHUNK_PX + y;
+            const sx = Math.floor((px + 0.5) / 4 - 0.5) + (lender % 2);
+            const sy = Math.floor((py + 0.5) / 4 - 0.5) + Math.floor(lender / 2);
+            const cell =
+              Math.min(size.height - 1, Math.max(0, sy)) * size.width +
+              (((sx % size.width) + size.width) % size.width);
+            const biome = biomes.at(world.layers.biome[cell] ?? 0);
+            if (biome === undefined) throw new Error('biome inconnu');
+            biomesSeen.add(data.biomes.entries.at(world.layers.biome[cell] ?? 0)?.id ?? '');
+            const tone = [biome.shadow, biome.base, biome.light][rank] ?? [0, 0, 0];
+            const shade = (pixels[at * 4 + 3] ?? 0) / 255 + 0.5;
+            // Un ombrage sous 0,5 (une rive) se range à 0,5 : la cuisson n'en garde pas moins.
+            if ((pixels[at * 4 + 3] ?? 0) === 0) floor++;
+            const temperature = (world.layers.temperature[cell] ?? 0) / 10;
+            const warm = clamp01((temperature - TINT.warmFrom) / TINT.warmSpan);
+            const cold = clamp01(-temperature / TINT.coldSpan);
+            const red = byte(tone[0] * shade * (1 + TINT.red * warm - TINT.red * cold));
+            const green = byte(tone[1] * shade * (1 + TINT.green * warm));
+            const blue = byte(tone[2] * shade * (1 - TINT.blue * warm + TINT.blue * cold));
+            const close =
+              Math.abs((red & 0xfe) - ((pixels[at * 4] ?? 0) & 0xfe)) <= 2 &&
+              Math.abs((green & 0xfe) - ((pixels[at * 4 + 1] ?? 0) & 0xfe)) <= 2 &&
+              Math.abs(blue - (pixels[at * 4 + 2] ?? 0)) <= 1;
+            if (close) rebuilt++;
+          }
+        }
+      }
+      const seed = SEEDS[index] ?? '';
+      // Tout pixel de terre a son ton, sauf quelques rives d'un fleuve sans voisine de leur biome.
+      expect(known / land, seed).toBeGreaterThan(0.999);
+      // Tout pixel au ton connu se recalcule, sauf ceux dont l'ombrage a touché son plancher, ou
+      // dont la case prêteuse remplace le lit d'un fleuve (sa teinte est celle de la voisine).
+      expect(known - rebuilt, seed).toBeLessThanOrEqual(floor + known * 0.002);
+    });
+    // Les biomes saturés et les palettes voisines de la critique sont là.
+    for (const id of [
+      'glacier',
+      'beach',
+      'desert',
+      'temperate-rainforest',
+      'rainforest',
+      'swamp',
+    ]) {
+      expect(biomesSeen.has(id), id).toBe(true);
+    }
+  });
+
+  it('pèse les rangs de chaque tuile d’après le motif de la cuisson', () => {
+    for (const biome of biomes) {
+      if (biome.style === 'water') continue;
+      const shares = toneShares(biome);
+      expect(shares.reduce((sum, share) => sum + share, 0)).toBeCloseTo(1, 12);
+      // La base domine, sauf la glace, plus claire, et la roche, plus contrastée.
+      if (biome.style === 'grass') expect(shares[1]).toBeGreaterThan(0.6);
+      if (biome.style === 'ice') expect(shares[2]).toBeGreaterThan(0.5);
+    }
   });
 });

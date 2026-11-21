@@ -86,6 +86,7 @@ function prospect(state: SimState, content: GroupsContent, x: number, y: number)
       state.food,
       state.world,
       size,
+      state.calendars,
       row * size.width + column,
       state.tick,
       content,

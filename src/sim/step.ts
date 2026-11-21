@@ -9,7 +9,15 @@
  * dit qui part, et quand. Le sous-pas quotidien (day.ts) fait le pas mensuel au soir du
  * trentième jour.
  */
-import type { Cultures, FaunaRules, FaunaSpecies, Genetics, Nomads, Species } from '../core/data';
+import type {
+  Cultures,
+  FaunaRules,
+  FaunaSpecies,
+  Genetics,
+  Nomads,
+  Seasons,
+  Species,
+} from '../core/data';
 import type { AltitudeLevel } from '../core/data/schemas';
 import type { Catalog } from '../core/data/catalog';
 import type { Biome } from '../core/data/schemas';
@@ -46,6 +54,8 @@ export interface SimContent {
   /** Le gibier (ADR 0018) : ses espèces et ses règles communes. */
   readonly fauna: Catalog<FaunaSpecies>;
   readonly faunaRules: FaunaRules;
+  /** La neige, la glace et la banquise (data/seasons.json ; ADR 0019). */
+  readonly seasons: Seasons;
 }
 
 /**
@@ -161,9 +171,11 @@ export function monthStep(
   const record = recordGroups(state);
   let members = groupMembers(people);
   locateGroups(state, members);
-  regrowFood(food, world, size, tick, content);
+  const { calendars } = state;
+  regrowFood(food, world, size, calendars, tick, content);
   for (const group of society.groups.values()) {
-    feedGroup(group, members.get(group.id) ?? [], people, food, world, size, tick, content);
+    const fed = members.get(group.id) ?? [];
+    feedGroup(group, fed, people, food, world, size, calendars, tick, content);
   }
   // Le voisinage des groupes, en temps de trajet, depuis leur lieu : mariages et réunions le
   // partagent.
