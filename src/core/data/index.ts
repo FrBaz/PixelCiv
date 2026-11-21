@@ -1,4 +1,5 @@
 /** Contenu du jeu, chargé et validé une fois pour toutes. */
+import activities from '../../../data/activities.json';
 import altitudeLevels from '../../../data/altitude-levels.json';
 import appearance from '../../../data/appearance.json';
 import biomes from '../../../data/biomes.json';
@@ -13,6 +14,7 @@ import resources from '../../../data/resources.json';
 import seasons from '../../../data/seasons.json';
 import species from '../../../data/species.json';
 import worldgen from '../../../data/worldgen.json';
+import { ActivitiesFileSchema } from './activities';
 import { catalogOf, DataError, loadCatalog, loadSettings, type Catalog } from './catalog';
 import { DecorSchema, outlineBelow } from './decor';
 import { FaunaFileSchema } from './fauna';
@@ -68,6 +70,14 @@ export type { Decor, DecorRamp, FloraLook, LandUse, Phenology, ShadowMethod } fr
 export type { FaunaRules, FaunaSpecies } from './fauna';
 export type { Parameter, ParameterName, Worldgen } from './worldgen';
 export type { BodyKind, Humans, Outfit, Piece, Ramp3, Ramp4, Region } from './humans';
+export type {
+  ActivitiesFile,
+  Activity,
+  ActivityPlace,
+  ActivityRules,
+  ActivitySeason,
+  Gesture,
+} from './activities';
 
 /** Charge tout le contenu ; lève une DataError s'il est invalide. */
 export function loadGameData() {
@@ -90,6 +100,8 @@ export function loadGameData() {
     nomads: loadSettings('data/nomads.json', NomadsSchema, nomads),
     appearance: loadSettings('data/appearance.json', AppearanceSchema, appearance),
     humans: loadSettings('data/humans.json', HumansSchema, humans),
+    /** Les activités des individus, leurs gestes et leurs règles (ADR 0021, ADR 0022). */
+    activities: loadSettings('data/activities.json', ActivitiesFileSchema, activities),
   };
   const problems = checkContent(data);
   if (problems.length > 0) throw new DataError(`contenu incohérent\n${problems.join('\n')}`);
@@ -110,6 +122,36 @@ export function checkContent(data: GameData): string[] {
     if (unknown.length > 0) problems.push(`${file} : inconnus : ${unknown.join(', ')}`);
   };
   check('data/worldgen.json (biomes)', classifiedBiomes(data.worldgen.classification), data.biomes);
+  // Les eaux d'une activité au bord de l'eau sont des biomes de l'eau : la rive d'une case de terre
+  // ne vient que de sa rivière (`water.river`).
+  for (const activity of data.activities.activities) {
+    const waters = activity.water?.biomes ?? [];
+    check(`data/activities.json (eaux de ${activity.id})`, waters, data.biomes);
+    const dry = waters.filter((id) => {
+      const index = data.biomes.indexOf(id);
+      return index !== undefined && data.biomes.entries[index]?.family !== 'water';
+    });
+    if (dry.length > 0) {
+      problems.push(
+        `data/activities.json : eaux de ${activity.id} hors de la famille de l'eau : ${dry.join(', ')}`,
+      );
+    }
+  }
+  // Chaque segment d'un geste nomme une animation des planches, et des images qu'elle a.
+  for (const gesture of data.activities.gestures) {
+    for (const segment of gesture.segments) {
+      const animation = data.humans.animations.find((entry) => entry.id === segment.animation);
+      if (animation === undefined) {
+        problems.push(
+          `data/activities.json : geste ${gesture.id} : animation ${segment.animation} inconnue`,
+        );
+      } else if ((segment.frames ?? []).some((frame) => frame >= animation.frames)) {
+        problems.push(
+          `data/activities.json : geste ${gesture.id} : image hors de l'animation ${segment.animation}`,
+        );
+      }
+    }
+  }
   check(
     'data/biomes.json (ressources)',
     data.biomes.entries.flatMap((biome) => biome.resources),

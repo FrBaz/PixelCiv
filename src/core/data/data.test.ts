@@ -13,6 +13,13 @@ import {
   type Species,
 } from './index';
 import { HumansSchema, LEVEL_STEP, MAX_OUTFITS, MAX_SKIN_PALETTES } from './humans';
+import {
+  ActivitiesFileSchema,
+  ActivityRulesSchema,
+  ActivitySchema,
+  GestureSchema,
+  MAX_ACTIVITIES,
+} from './activities';
 import { DecorSchema, FloraLookSchema } from './decor';
 import {
   FaunaFileSchema,
@@ -1556,5 +1563,288 @@ describe('états de la végétation, dans data/biomes.json (ADR 0019, § 2)', ()
       false,
     );
     expect(valid(withStates('cold-forest', { winter: palette }))).toBe(false);
+  });
+});
+
+describe('activités : data/activities.json (ADR 0021, ADR 0022)', () => {
+  const data = loadGameData();
+  const file = data.activities;
+  interface SafeResult {
+    success: boolean;
+    error?: { issues: { path: PropertyKey[]; message: string }[] };
+  }
+  const issues = (schema: { safeParse: (value: unknown) => SafeResult }, value: unknown) => {
+    const parsed = schema.safeParse(value);
+    return parsed.success
+      ? []
+      : (parsed.error?.issues ?? []).map((issue) => `${issue.path.join('.')} : ${issue.message}`);
+  };
+  const activity = (id: string) => {
+    const entry = file.activities.find((candidate) => candidate.id === id);
+    if (entry === undefined) throw new Error(`activité ${id} absente`);
+    return entry;
+  };
+
+  it('décrit les sept activités de la consigne, chacune nommée, un repos et un suivi du groupe', () => {
+    expect(file.activities.map((entry) => entry.id)).toEqual([
+      'rest',
+      'gather',
+      'hunt',
+      'fish',
+      'water',
+      'play',
+      'follow',
+    ]);
+    expect(file.activities.filter((entry) => typeof messages[entry.name] !== 'string')).toEqual([]);
+    expect(file.activities.filter((entry) => entry.place === 'home').map((a) => a.id)).toEqual([
+      'rest',
+    ]);
+    expect(file.activities.filter((entry) => entry.place === 'camp').map((a) => a.id)).toEqual([
+      'follow',
+    ]);
+    // Le suivi du groupe dure son trajet ; les autres disent leurs jours sur place.
+    expect(activity('follow').days).toBeUndefined();
+    for (const entry of file.activities) {
+      if (entry.place !== 'camp') expect(entry.days, entry.id).toBeDefined();
+    }
+    // Aucun goût des cultures ni partage entre les sexes par défaut : ils sont à l'auteur.
+    for (const entry of file.activities) {
+      expect(entry.taste, entry.id).toEqual([1, 1]);
+      expect(entry.sex, entry.id).toEqual([0, 0]);
+    }
+    expect(ActivitiesFileSchema.parse(file)).toEqual(file);
+  });
+
+  it('refuse chaque valeur d’une activité hors de ses bornes', () => {
+    const gather = activity('gather');
+    const fish = activity('fish');
+    const hunt = activity('hunt');
+    expect(issues(ActivitySchema, gather)).toEqual([]);
+    const refused: [object, RegExp][] = [
+      [{ id: 'Gather' }, /^id/],
+      [{ name: 'cueille' }, /^name : clé de traduction/],
+      [{ place: 'field' }, /^place/],
+      [{ reach: [-0.1, 2] }, /^reach\.0/],
+      [{ reach: [0.5, 16.5] }, /^reach\.1/],
+      [{ reach: [3, 2] }, /^reach : bas ≤ haut/],
+      [{ weight: -0.1 }, /^weight/],
+      [{ weight: 100.5 }, /^weight/],
+      [{ season: 'rain' }, /^season/],
+      [{ age: [] }, /^age/],
+      [{ age: Array.from({ length: 13 }, (_, i) => [i, 1]) }, /^age/],
+      [{ age: [[151, 1]] }, /^age\.0\.0/],
+      [{ age: [[-1, 1]] }, /^age\.0\.0/],
+      [{ age: [[5, 10.5]] }, /^age\.0\.1/],
+      [{ age: [[5, -0.5]] }, /^age\.0\.1/],
+      [
+        {
+          age: [
+            [10, 1],
+            [10, 0],
+          ],
+        },
+        /^age : des âges croissants/,
+      ],
+      [{ days: [0, 10] }, /^days\.0/],
+      [{ days: [4, 61] }, /^days\.1/],
+      [{ days: [4, 5.5] }, /^days\.1/],
+      [{ days: [10, 4] }, /^days : bas ≤ haut/],
+      [{ days: undefined }, /chaque activité dit ses jours/],
+      [{ carrying: 10.5 }, /^carrying/],
+      [{ carrying: -1 }, /^carrying/],
+      [{ pregnant: 11 }, /^pregnant/],
+      [{ weak: -0.1 }, /^weak/],
+      [{ taste: [-0.1, 1] }, /^taste\.0/],
+      [{ taste: [1, 4.5] }, /^taste\.1/],
+      [{ taste: [1.2, 1] }, /^taste : bas ≤ haut/],
+      [{ sex: [-1.1, 0] }, /^sex\.0/],
+      [{ sex: [0, 1.1] }, /^sex\.1/],
+      [{ sex: [0.5, 0] }, /^sex : bas ≤ haut/],
+      [{ gait: 'crawl' }, /^gait/],
+      [{ gesture: 'Gather' }, /^gesture/],
+      [
+        { water: { biomes: ['river'], river: true } },
+        /une activité au bord de l’eau, et elle seule/,
+      ],
+      [{ strike: 'strike' }, /seule la chasse a un geste du coup/],
+      [{ colour: 'red' }, /colour/],
+    ];
+    for (const [change, expected] of refused) {
+      const found = issues(ActivitySchema, { ...gather, ...change });
+      expect(found.join(' | '), JSON.stringify(change)).toMatch(expected);
+    }
+    // Au bord de l'eau : ses eaux, 32 au plus ; le suivi du groupe, sans jours.
+    expect(issues(ActivitySchema, { ...fish, water: undefined }).join(' | ')).toMatch(
+      /une activité au bord de l’eau, et elle seule/,
+    );
+    const many = Array.from({ length: 33 }, () => 'lake');
+    expect(issues(ActivitySchema, { ...fish, water: { biomes: many, river: true } })).toEqual([
+      'water.biomes : Too big: expected array to have <=32 items',
+    ]);
+    expect(
+      issues(ActivitySchema, { ...fish, water: { biomes: ['Lake'], river: true } }),
+    ).not.toEqual([]);
+    expect(issues(ActivitySchema, { ...activity('follow'), days: [1, 3] }).join(' | ')).toMatch(
+      /chaque activité dit ses jours, sauf le suivi du groupe/,
+    );
+    expect(issues(ActivitySchema, hunt)).toEqual([]);
+    expect(issues(ActivitySchema, { ...hunt, strike: 'Strike' }).join(' | ')).toMatch(/^strike/);
+  });
+
+  it('refuse chaque segment d’un geste hors de ses bornes', () => {
+    const gesture = file.gestures[1];
+    expect(issues(GestureSchema, gesture)).toEqual([]);
+    const segment = { animation: 'death', frames: [2, 3], frameMs: 320, repeat: 2 };
+    const refused: [object, RegExp][] = [
+      [{ frames: [] }, /^segments\.0\.frames/],
+      [{ frames: [32] }, /^segments\.0\.frames\.0/],
+      [{ frames: [-1] }, /^segments\.0\.frames\.0/],
+      [{ frames: [1.5] }, /^segments\.0\.frames\.0/],
+      [{ frames: Array.from({ length: 17 }, () => 1) }, /^segments\.0\.frames/],
+      [{ frameMs: 39 }, /^segments\.0\.frameMs/],
+      [{ frameMs: 4001 }, /^segments\.0\.frameMs/],
+      [{ repeat: 0 }, /^segments\.0\.repeat/],
+      [{ repeat: 21 }, /^segments\.0\.repeat/],
+      [{ repeat: 1.5 }, /^segments\.0\.repeat/],
+      [{ animation: 'Death' }, /^segments\.0\.animation/],
+      [{ speed: 2 }, /speed/],
+    ];
+    for (const [change, expected] of refused) {
+      const found = issues(GestureSchema, { id: 'kneel', segments: [{ ...segment, ...change }] });
+      expect(found.join(' | '), JSON.stringify(change)).toMatch(expected);
+    }
+    expect(issues(GestureSchema, { id: 'kneel', segments: [] })).not.toEqual([]);
+    expect(
+      issues(GestureSchema, { id: 'kneel', segments: Array.from({ length: 9 }, () => segment) }),
+    ).not.toEqual([]);
+  });
+
+  it('refuse chaque règle commune hors de ses bornes', () => {
+    const rules = file.rules;
+    expect(issues(ActivityRulesSchema, rules)).toEqual([]);
+    const refused: [object, RegExp][] = [
+      [{ weak: -0.1 }, /^weak/],
+      [{ weak: 1.1 }, /^weak/],
+      [{ run: 0.9 }, /^run/],
+      [{ run: 3.1 }, /^run/],
+      [{ draws: 0 }, /^draws/],
+      [{ draws: 17 }, /^draws/],
+      [{ draws: 2.5 }, /^draws/],
+      [{ gregarious: { ...rules.gregarious, reach: [-0.1, 1] } }, /^gregarious\.reach\.0/],
+      [{ gregarious: { ...rules.gregarious, reach: [2.1, 1] } }, /^gregarious\.reach\.0/],
+      [{ gregarious: { ...rules.gregarious, reach: [0.2, 4.1] } }, /^gregarious\.reach\.1/],
+      [{ gregarious: { ...rules.gregarious, rest: -0.1 } }, /^gregarious\.rest/],
+      [{ gregarious: { ...rules.gregarious, rest: 4.1 } }, /^gregarious\.rest/],
+      [{ gregarious: { ...rules.gregarious, kin: 10.5 } }, /^gregarious\.kin/],
+      [{ hunt: { ...rules.hunt, stalk: 0.9 } }, /^hunt\.stalk/],
+      [{ hunt: { ...rules.hunt, stalk: 4.1 } }, /^hunt\.stalk/],
+      [{ hunt: { ...rules.hunt, strike: 5.1 } }, /^hunt\.strike/],
+      [{ hunt: { ...rules.hunt, stalk: 2, strike: 1.5 } }, /^hunt : le coup porte au moins/],
+      [{ hunt: { ...rules.hunt, charge: 0 } }, /^hunt\.charge/],
+      [{ hunt: { ...rules.hunt, charge: 11 } }, /^hunt\.charge/],
+      [{ hunt: { ...rules.hunt, charge: 1.5 } }, /^hunt\.charge/],
+      [{ hunt: { ...rules.hunt, leash: -1 } }, /^hunt\.leash/],
+      [{ hunt: { ...rules.hunt, leash: 8.5 } }, /^hunt\.leash/],
+      [{ hunt: { ...rules.hunt, revise: 4.5 } }, /^hunt\.revise/],
+      [{ shore: { ...rules.shore, inset: 0.2 } }, /^shore\.inset/],
+      [{ shore: { ...rules.shore, inset: 0.6 } }, /^shore\.inset/],
+      [{ shore: { ...rules.shore, spread: 0.9 } }, /^shore\.spread/],
+      [{ shore: { ...rules.shore, choices: 0 } }, /^shore\.choices/],
+      [{ shore: { ...rules.shore, choices: 17 } }, /^shore\.choices/],
+      [{ tempo: 1 }, /tempo/],
+    ];
+    for (const [change, expected] of refused) {
+      const found = issues(ActivityRulesSchema, { ...rules, ...change });
+      expect(found.join(' | '), JSON.stringify(change)).toMatch(expected);
+    }
+  });
+
+  it('veut des activités et des gestes distincts, un seul repos, un seul suivi du groupe, des gestes connus', () => {
+    const parse = (change: object) => issues(ActivitiesFileSchema, { ...file, ...change });
+    expect(parse({})).toEqual([]);
+    const list = file.activities;
+    const rest = activity('rest');
+    expect(parse({ activities: [...list, { ...rest, id: 'nap' }] }).join(' | ')).toMatch(
+      /une activité, et une seule, au lieu « home »/,
+    );
+    expect(parse({ activities: list.filter((a) => a.place !== 'home') }).join(' | ')).toMatch(
+      /une activité, et une seule, au lieu « home »/,
+    );
+    expect(parse({ activities: list.filter((a) => a.place !== 'camp') }).join(' | ')).toMatch(
+      /une activité, et une seule, au lieu « camp »/,
+    );
+    expect(parse({ activities: [...list, activity('gather')] }).join(' | ')).toMatch(
+      /des activités distinctes/,
+    );
+    expect(
+      parse({ activities: list.map((a) => (a.id === 'play' ? { ...a, gesture: 'dance' } : a)) }),
+    ).toEqual(['activities.5 : geste inconnu : dance']);
+    expect(
+      parse({ activities: list.map((a) => (a.id === 'hunt' ? { ...a, strike: 'leap' } : a)) }),
+    ).toEqual(['activities.2 : geste du coup inconnu : leap']);
+    expect(parse({ gestures: [...file.gestures, file.gestures[0]] }).join(' | ')).toMatch(
+      /des gestes distincts/,
+    );
+    // Quinze activités au plus : leur rang tient sur quatre bits, le seizième disant « aucune ».
+    const extra = Array.from({ length: MAX_ACTIVITIES + 1 - list.length }, (_, i) => ({
+      ...activity('gather'),
+      id: `gather-${'abcdefghij'[i] ?? 'z'}`,
+    }));
+    expect(parse({ activities: [...list, ...extra] }).join(' | ')).toMatch(/^activities/);
+    expect(parse({ activities: [...list, ...extra.slice(1)] })).toEqual([]);
+  });
+
+  it('relève une eau inconnue, une eau qui n’est pas de l’eau, une animation ou une image inconnues', () => {
+    const withActivities = (change: Partial<GameData['activities']>) =>
+      checkContent({ ...data, activities: { ...file, ...change } });
+    const waterOf = (biomes: string[]) =>
+      withActivities({
+        activities: file.activities.map((a) =>
+          a.id === 'water' ? { ...a, water: { biomes, river: true } } : a,
+        ),
+      });
+    expect(waterOf(['river', 'lake'])).toEqual([]);
+    expect(waterOf(['river', 'swamp-of-doom'])).toEqual([
+      'data/activities.json (eaux de water) : inconnus : swamp-of-doom',
+    ]);
+    expect(waterOf(['river', 'steppe'])).toEqual([
+      "data/activities.json : eaux de water hors de la famille de l'eau : steppe",
+    ]);
+    const withSegment = (segment: object) =>
+      withActivities({
+        gestures: file.gestures.map((g) =>
+          g.id === 'water' ? { ...g, segments: [{ repeat: 1, ...segment }] } : g,
+        ),
+      } as Partial<GameData['activities']>);
+    expect(withSegment({ animation: 'death', frames: [2, 9] })).toEqual([]);
+    expect(withSegment({ animation: 'swim' })).toEqual([
+      'data/activities.json : geste water : animation swim inconnue',
+    ]);
+    expect(withSegment({ animation: 'death', frames: [2, 10] })).toEqual([
+      "data/activities.json : geste water : image hors de l'animation death",
+    ]);
+    expect(withSegment({ animation: 'idle', frames: [5] })).toEqual([
+      "data/activities.json : geste water : image hors de l'animation idle",
+    ]);
+  });
+
+  it('donne à chaque espèce du gibier sa chance au coup et sa viande, bornées', () => {
+    for (const entry of data.fauna.entries) {
+      expect(entry.hunt.chance, entry.id).toBeGreaterThan(0);
+      expect(entry.hunt.meat, entry.id).toBeGreaterThan(0);
+    }
+    const deer = data.fauna.entries[0];
+    const refused: [object, RegExp][] = [
+      [{ hunt: { chance: -0.01, meat: 1 } }, /^hunt\.chance/],
+      [{ hunt: { chance: 1.01, meat: 1 } }, /^hunt\.chance/],
+      [{ hunt: { chance: 0.1, meat: -0.1 } }, /^hunt\.meat/],
+      [{ hunt: { chance: 0.1, meat: 4.1 } }, /^hunt\.meat/],
+      [{ hunt: { chance: 0.1 } }, /^hunt\.meat/],
+      [{ hunt: undefined }, /^hunt/],
+    ];
+    for (const [change, expected] of refused) {
+      const found = issues(FaunaSpeciesSchema, { ...deer, ...change });
+      expect(found.join(' | '), JSON.stringify(change)).toMatch(expected);
+    }
   });
 });

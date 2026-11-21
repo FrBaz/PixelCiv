@@ -341,6 +341,13 @@
     "masculine": "porté par sa mère",
     "feminine": "portée par sa mère"
   },
+  "activity.rest": "se repose au camp",
+  "activity.gather": "cueille",
+  "activity.hunt": "chasse",
+  "activity.fish": "pêche",
+  "activity.water": "va chercher de l'eau",
+  "activity.play": "joue",
+  "activity.follow": "suit son groupe",
   "person.gregariousness": "Grégarité",
   "person.mother": "Mère",
   "person.mother.none": "inconnue",

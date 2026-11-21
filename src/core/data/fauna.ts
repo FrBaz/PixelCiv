@@ -90,6 +90,11 @@ export const FaunaSpeciesSchema = z
       })
       .strict(),
     /**
+     * La chasse (2b.8, ADR 0021, § 5) : la chance qu'un coup porte, et la viande d'une prise, en
+     * besoins mensuels d'un adulte, ôtée du stock de gibier des cases autour de l'animal.
+     */
+    hunt: z.object({ chance: z.number().min(0).max(1), meat: z.number().min(0).max(4) }).strict(),
+    /**
      * Naissances : mois de la mise bas au nord (au sud, six mois plus tard), croissance
      * mensuelle au plus, sous la cible, et mois passés jeune.
      */
