@@ -24,6 +24,7 @@ import {
   MAP_FRAGMENT_WAVES_SEASONS,
 } from './mapShader';
 import { EXACT_SCALE } from './seasonShader';
+import { foliageTexels, seasonActivity } from './seasons';
 import { SEA_TILE, seaTones, wavePhase, waveTable } from './waves';
 
 // La vue de la carte et la mer animée (ADR 0015), sans GPU ni worker : le répartiteur de la
@@ -87,7 +88,13 @@ const identity = () => new Uint8Array(CHUNK_PX * CHUNK_PX);
  * Une vue de la carte d'un monde Petit, sur un écran de `width` × `height` pixels, aux couches
  * `layers` et au calendrier de la végétation `foliage`.
  */
-function mapView(width = 1280, height = 720, layers = emptyLayers(size), foliage = noFoliage()) {
+function mapView(
+  width = 1280,
+  height = 720,
+  layers = emptyLayers(size),
+  foliage = noFoliage(),
+  before: (map: MapView) => void = () => undefined,
+) {
   const stage = new Container();
   // Ce que chaque rendu hors de l'écran dessine, relevé pendant l'appel : le maillage est
   // détruit aussitôt après.
@@ -102,6 +109,7 @@ function mapView(width = 1280, height = 720, layers = emptyLayers(size), foliage
     stage,
   } as unknown as Application;
   const map = new MapView(app, data.biomes.entries, data.seasons, data.decor.foliage);
+  before(map);
   const info: WorldInfo = {
     params: defaultWorldParams(data.worldgen.parameters, 'essai', 'small'),
     size,
@@ -264,6 +272,31 @@ describe('mer animée sur la carte (ADR 0015)', () => {
       noFoliage(),
       () => new Uint8Array(size.width * size.height * 4),
     );
+    expect(render).toHaveBeenCalledTimes(3);
+  });
+
+  it('ne compile au premier monde que les programmes du réglage courant, puis les autres à son changement', () => {
+    // La relecture de 2b.7 (problème 7) : au cran coupé (la mer immobile, ni saisons), les trois
+    // programmes de l'onde et des saisons se compilaient pour rien au premier monde.
+    const { map, render, compiled } = mapView(1280, 720, emptyLayers(size), noFoliage(), (view) => {
+      view.setWaves(0, 0);
+      view.setSeasonColors('off');
+    });
+    expect(render).not.toHaveBeenCalled();
+    // Les saisons reviennent : leur programme seul, puis celui de l'onde et des saisons avec elle.
+    map.setSeasonColors('states');
+    expect(compiled.map((entry) => entry.fragment)).toEqual([MAP_FRAGMENT_SEASONS]);
+    map.setWaves(1, 0.5);
+    expect(compiled.map((entry) => entry.fragment)).toEqual([
+      MAP_FRAGMENT_SEASONS,
+      MAP_FRAGMENT_WAVES,
+      MAP_FRAGMENT_WAVES_SEASONS,
+    ]);
+    // Rien ne se recompile ensuite, quel que soit le cran.
+    map.setSeasonColors('off');
+    map.setWaves(2, 0);
+    map.setSeasonColors('full');
+    map.setWaves(3, 1);
     expect(render).toHaveBeenCalledTimes(3);
   });
 
@@ -479,6 +512,61 @@ describe('couleurs de la saison sur la carte (ADR 0019, § 2, 3 et 6 ; ADR 0020)
   const north = { x: 1024 + 128, y: 128, zoom: 2 };
   const south = { x: 1024 + 128, y: 1024 - 128, zoom: 2 };
 
+  it('refait, après un coup de pinceau, l’activité des blocs voisins dont l’anneau touche la case repeinte', () => {
+    // La relecture de 2b.7 (problème 10) : Baker.patch recuit les huit voisins d'un bloc
+    // repeint, et l'anneau d'une case de chaque tuile entre dans l'activité des blocs voisins ;
+    // l'activité du seul bloc repeint se refaisait, et le voisin pouvait garder le programme de la
+    // carte. Un désert ; la dernière colonne du bloc (2, 1) devient forêt tempérée, qui roussit.
+    const desert = data.biomes.indexOf('desert') ?? 0;
+    const woods = data.biomes.indexOf('temperate-forest') ?? 0;
+    const layers = emptyLayers(size);
+    layers.biome.fill(desert);
+    layers.temperature.fill(80);
+    layers.amplitude.fill(120);
+    const foliage = worldFoliage(size, layers, {
+      foliage: data.decor.foliage,
+      seasons: data.seasons,
+    });
+    const { map } = mapView(1280, 720, layers, foliage);
+    const blocks = [
+      [2, 1],
+      [3, 1],
+      [1, 1],
+      [2, 0],
+      [3, 2],
+    ] as const;
+    // Leurs activités ont servi avant le coup de pinceau.
+    for (const [column, row] of blocks) expect(map.seasonActivityAt(column, row)).toBeDefined();
+    const biome = new Uint8Array(64 * 64).fill(desert);
+    for (let y = 0; y < 64; y++) biome[y * 64 + 63] = woods;
+    map.updateChunks([{ column: 2, row: 1, biome }]);
+    for (let y = 0; y < 64; y++) {
+      layers.biome.fill(woods, (64 + y) * size.width + 191, (64 + y) * size.width + 192);
+    }
+    const texels = foliageTexels(foliage, layers, data.biomes.entries);
+    const fresh = (column: number, row: number) =>
+      Array.from(
+        seasonActivity(
+          texels,
+          size,
+          64,
+          column,
+          row,
+          data.seasons.minTransition,
+          data.decor.foliage,
+        ).tiles,
+      );
+    const kept = (column: number, row: number) =>
+      Array.from(map.seasonActivityAt(column, row)?.tiles ?? []);
+    for (const [column, row] of blocks) {
+      expect(kept(column, row), `bloc (${String(column)}, ${String(row)})`).toEqual(
+        fresh(column, row),
+      );
+    }
+    // Le voisin de l'est voit la case repeinte dans l'anneau de sa première colonne de tuiles.
+    expect(kept(3, 1).filter((value) => Number.isFinite(value)).length).toBeGreaterThan(0);
+  });
+
   it('lit la carte d’identité pixel à pixel tant que le GPU lit des pixels cuits (EXACT_SCALE)', () => {
     // Au plus proche, le GPU lit le niveau 0 des mipmaps au-dessus de 2^(−1/2) : de 0,75 à 1, les
     // couleurs de la saison restent celles des palettes déclarées (relecture de 2b.7, problème 2).
@@ -521,6 +609,40 @@ describe('couleurs de la saison sur la carte (ADR 0019, § 2, 3 et 6 ; ADR 0020)
     expect([...fragments()]).toEqual([MAP_FRAGMENT]);
     map.draw(north);
     expect(fragments().has(MAP_FRAGMENT_SEASONS)).toBe(true);
+  });
+
+  it('ne donne les saisons qu’en mode naturel, et au cran atténué pas pour la seule lumière d’hiver', () => {
+    // La relecture de 2b.7 (problème 13) : deux gardes que rien ne protégeait. En mode relief,
+    // biomes ou ressources, le shader pâlit la couleur de base : la carte pâlie ne part pas de la
+    // couleur de la saison. Et au cran atténué, la lumière d'hiver n'élargit pas le masque.
+    const { layers, foliage } = forest();
+    const { map, programs } = mapView(1280, 720, layers, foliage);
+    const fragments = () => new Set(programs().map((mesh) => mesh.fragment));
+    map.setSeason(9.5);
+    for (const mode of ['relief', 'biomes', 'resources'] as const) {
+      map.setMode(mode);
+      map.draw(north);
+      expect([...fragments()], mode).toEqual([MAP_FRAGMENT]);
+      expect(map.seasonsShown).toBe(false);
+    }
+    map.setMode('natural');
+    map.draw(north);
+    expect(fragments().has(MAP_FRAGMENT_SEASONS)).toBe(true);
+    // Une taïga, sans état de végétation : à la mi-décembre, seule la lumière d'hiver la change.
+    const taiga = emptyLayers(size);
+    taiga.biome.fill(data.biomes.indexOf('taiga') ?? 0);
+    taiga.temperature.fill(-20);
+    taiga.amplitude.fill(150);
+    const cold = worldFoliage(size, taiga, { foliage: data.decor.foliage, seasons: data.seasons });
+    const evergreen = mapView(1280, 720, taiga, cold);
+    const shown = () => new Set(evergreen.programs().map((mesh) => mesh.fragment));
+    evergreen.map.setSeason(11.5);
+    evergreen.map.draw(north);
+    expect(shown().has(MAP_FRAGMENT_SEASONS)).toBe(true);
+    evergreen.map.setSeasonColors('states');
+    evergreen.map.draw(north);
+    expect([...shown()]).toEqual([MAP_FRAGMENT]);
+    expect(evergreen.map.seasonsShown).toBe(false);
   });
 
   it('au cran coupé, ne donne à aucun bloc ni les saisons ni l’onde', () => {

@@ -627,6 +627,35 @@ describe('collecte du décor (ADR 0017, § 6 à 8)', () => {
     collect.mockRestore();
   });
 
+  it('change sa version quand la lumière d’hiver change, sans refaire la collecte', () => {
+    // La relecture de 2b.7 (problème 9) : le calque des individus ne relit une source que si sa
+    // version change ; en pause, caméra immobile, changer de cran laissait aux objets la lumière
+    // du cran d'avant.
+    const source = new DecorSource(data, layers(), size, 'pixelciv', calendars(), foliage());
+    const slots = new Slots();
+    const view = viewAt(412, 62, 4, MONTH_CENTERS[0] ?? 0.5);
+    const collect = vi.spyOn(source as unknown as { collect: () => void }, 'collect');
+    source.update(view, slots);
+    const start = source.version;
+    source.light = false;
+    expect(source.version).toBe(start);
+    source.light = true;
+    expect(source.version).toBe(start + 1);
+    source.light = true;
+    expect(source.version).toBe(start + 1);
+    source.light = false;
+    expect(source.version).toBe(start + 2);
+    // La même vue : les états se refont, la collecte non.
+    source.update(view, slots);
+    expect(collect.mock.calls.length).toBeLessThanOrEqual(1);
+    // Une autre ombre, ou un bloc repeint, refont la collecte, et changent aussi la version.
+    source.shadow = source.shadow === 'ground' ? 'multiply' : 'ground';
+    expect(source.version).toBe(start + 3);
+    source.invalidate();
+    expect(source.version).toBe(start + 4);
+    collect.mockRestore();
+  });
+
   it('réévalue ses objets aux dates de leur calendrier, et quand la lumière d’hiver change', () => {
     // Un automne qui viendrait dès le mois le plus chaud (autumnDrop nul, sous 40 °C) commence au
     // bord des jours de l'été, que rien ne touche (src/core/foliage.ts) : les caducs virent

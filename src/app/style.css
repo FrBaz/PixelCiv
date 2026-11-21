@@ -230,12 +230,28 @@ button:disabled {
   padding: 0 0.75rem;
 }
 
-/* Réglage des effets (ADR 0020) : un titre, puis trois boutons, comme les modes de carte. */
+/* Réglage des effets (ADR 0020) : un titre, puis trois boutons, comme les modes de carte ; sous
+   eux, ce que montre le cran choisi, en clair (au doigt, rien n'ouvre l'attribut title). */
 .effects-menu {
+  display: flex;
+  flex-direction: column;
+  gap: 0.125rem;
+}
+
+.effects-row {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   gap: 0.25rem;
+}
+
+.effects-hint {
+  margin: 0;
+  padding: 0 0.5rem;
+  max-width: 20rem;
+  font-size: 0.75rem;
+  line-height: 1.2;
+  white-space: normal;
 }
 
 .effects-title {

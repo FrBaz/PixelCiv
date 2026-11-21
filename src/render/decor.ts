@@ -243,7 +243,10 @@ export interface DecorStats {
 /** Le décor d'un monde, source d'objets du calque commun (src/render/objects.ts). */
 export class DecorSource implements ObjectSource {
   readonly atlas = DECOR_ATLAS;
-  version = 0;
+  /** Ce qui refait la collecte : le monde, ses blocs, l'ombre. */
+  private collected = 0;
+  /** Ce qui ne demande qu'une réévaluation des états : la lumière d'hiver. */
+  private relit = 0;
   private method: ShadowMethod;
   private readonly data: Pick<GameData, 'flora' | 'resources' | 'biomes' | 'seasons'> & {
     readonly decor: Decor;
@@ -370,7 +373,16 @@ export class DecorSource implements ObjectSource {
   set shadow(method: ShadowMethod) {
     if (method === this.method) return;
     this.method = method;
-    this.version++;
+    this.collected++;
+  }
+
+  /**
+   * Ce qui change l'image du décor, que lit la signature du calque (src/render/people.ts) : la
+   * collecte, et la lumière d'hiver, qui ne refait que les états (relecture de 2b.7, problème 9 :
+   * en pause, changer de cran laissait aux objets la lumière du cran d'avant).
+   */
+  get version(): number {
+    return this.collected + this.relit;
   }
 
   /**
@@ -382,7 +394,9 @@ export class DecorSource implements ObjectSource {
   }
 
   set light(shown: boolean) {
+    if (shown === this.lightShown) return;
     this.lightShown = shown;
+    this.relit++;
   }
 
   /** Ce que coûte le décor, à la dernière mise à jour. */
@@ -400,7 +414,7 @@ export class DecorSource implements ObjectSource {
    * nommés, ou tous, se reposent, et la prochaine image recollecte.
    */
   invalidate(chunks?: readonly { readonly column: number; readonly row: number }[]): void {
-    this.version++;
+    this.collected++;
     if (chunks === undefined) {
       this.chunks.clear();
       return;
@@ -490,7 +504,7 @@ export class DecorSource implements ObjectSource {
     const r1 = Math.floor((view.bottom + (reach.tall * k) / scale) / TILE_PX);
     const q = COLLECT_CELLS;
     const key = [
-      this.version,
+      this.collected,
       palettes.generation,
       scale,
       level,

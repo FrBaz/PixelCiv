@@ -33,7 +33,7 @@ import {
 } from 'pixi.js';
 import type { Biome, Seasons } from '../core/data/schemas';
 import { seasonFactor } from '../core/seasons';
-import { FOLIAGE_BYTES, type DryRule } from '../core/foliage';
+import { FOLIAGE_BYTES, NO_DATE, type DryRule } from '../core/foliage';
 import { CALENDAR_BYTES, phaseDay } from '../core/snow';
 import { DAYS_PER_MONTH } from '../core/time';
 import type { ChunkPatch, WorldInfo } from '../core/protocol';
@@ -127,8 +127,11 @@ interface ChunkView {
   baked: boolean;
   /** Masque de la mer animée de sa cuisson, un octet par tuile (src/render/waves.ts, seaMask). */
   seaMask: Uint8Array;
-  /** Activité des saisons de ses cases (src/render/seasons.ts, seasonActivity). */
-  activity: SeasonActivity;
+  /**
+   * Activité des saisons de ses cases (src/render/seasons.ts, seasonActivity), calculée au premier
+   * dessin qui la lit : jamais au cran coupé, ni pour les blocs jamais vus.
+   */
+  activity: SeasonActivity | undefined;
 }
 
 /**
@@ -254,6 +257,9 @@ export class MapView {
   /** Calendrier de la végétation des cases (src/core/foliage.ts), et sa version filtrée. */
   private foliageBytes: Uint8Array = new Uint8Array(0);
   private foliage: BufferImageSource | undefined;
+  /** La version filtrée est-elle dans sa texture, et à jour des biomes ? */
+  private foliageFilled = false;
+  private foliageStale = false;
   /** Force de l'onde (0 : pas d'onde), son pas, et sa table à cette force. */
   private waveForce = 1;
   private waveStep = 0;
@@ -261,7 +267,12 @@ export class MapView {
   /** Un bloc a-t-il pris le programme de l'onde à la dernière image (wavesShown) ? */
   private seaShown = false;
   /** Le programme de l'onde a-t-il été compilé, hors de l'écran ? */
-  private warmed = false;
+  /**
+   * Les programmes déjà compilés hors de l'écran : seulement ceux du réglage courant, puis les
+   * autres quand il change (relecture de 2b.7, problème 7 : au cran coupé, les trois programmes
+   * de l'onde et des saisons se compilaient pour rien au premier monde).
+   */
+  private readonly warmed = new Set<string>();
   /**
    * Version de ce que montrent les blocs, hors caméra, saison et onde : augmentée à chaque
    * texture envoyée (bloc cuit, données des saisons, superposition), à chaque mode, à chaque
@@ -408,7 +419,13 @@ export class MapView {
     this.overlays = overlays;
     this.data = dataSource(seasonTexels(size, layers, this.biomes), size.width, size.height);
     this.calendars = dataSource(calendars, size.width, size.height * 2);
-    this.foliage = dataSource(foliageTexels(foliage, layers, this.biomes), size.width, size.height);
+    this.foliage = dataSource(
+      new Uint8Array(foliage.length).fill(NO_DATE),
+      size.width,
+      size.height,
+    );
+    this.foliageFilled = false;
+    this.foliageStale = false;
     this.overlay = dataSource(
       new Uint8Array(size.width * size.height * 4),
       size.width,
@@ -438,6 +455,7 @@ export class MapView {
       this.table = waveTable(this.biomes, strength);
       this.applyWaveTable();
       this.version++;
+      this.warmUp();
     }
     this.waveStep = step;
     const width = this.world?.width ?? CHUNK_PX;
@@ -481,6 +499,7 @@ export class MapView {
     this.seasonColors = colors;
     this.seasonGlobals.uniforms.uLight = colors === 'full' ? 1 : 0;
     this.seasonGlobals.update();
+    this.warmUp();
   }
 
   get currentSeasonColors(): SeasonColors {
@@ -508,10 +527,21 @@ export class MapView {
    */
   private warmUp(): void {
     const chunk = this.chunks.at(0);
-    if (this.warmed || chunk === undefined) return;
-    this.warmed = true;
+    if (chunk === undefined) return;
+    const waves = this.waveForce > 0;
+    const seasons = this.seasonColors !== 'off';
+    const wanted: Shader[] = [];
+    const want = (name: string, shader: Shader) => {
+      if (this.warmed.has(name)) return;
+      this.warmed.add(name);
+      wanted.push(shader);
+    };
+    if (waves) want('waves', chunk.waveShader);
+    if (seasons) want('seasons', chunk.seasonShader);
+    if (waves && seasons) want('waves-seasons', chunk.waveSeasonShader);
+    if (wanted.length === 0) return;
     const target = RenderTexture.create({ width: 1, height: 1 });
-    for (const shader of [chunk.waveShader, chunk.seasonShader, chunk.waveSeasonShader]) {
+    for (const shader of wanted) {
       const mesh: ChunkMesh = new Mesh({ geometry: this.geometry, shader });
       this.app.renderer.render({ container: mesh, target });
       mesh.destroy();
@@ -541,16 +571,63 @@ export class MapView {
     const foliage = this.foliage;
     const grid = this.grid;
     if (foliage !== undefined && grid !== undefined) {
-      const texels = foliageTexels(this.foliageBytes, layers, this.biomes);
-      (foliage.resource as Uint8Array).set(texels);
-      foliage.update();
+      // Le calendrier filtré suit les biomes : refait s'il a déjà servi, à sa demande sinon.
+      if (this.foliageFilled) {
+        this.foliageStale = true;
+        this.fillFoliage();
+      }
+      // L'activité d'un bloc compte l'anneau des cases voisines (seasonActivity) : celle des huit
+      // voisins de chaque bloc repeint, que Baker.patch recuit aussi, x bouclé et y borné
+      // (relecture de 2b.7, problème 10).
+      const touched = new Set<number>();
       for (const patch of patches) {
-        const chunk = this.chunks.at(patch.row * grid.columns + patch.column);
-        if (chunk !== undefined) chunk.activity = this.activityOf(texels, patch.column, patch.row);
+        for (let dy = -1; dy <= 1; dy++) {
+          const row = patch.row + dy;
+          if (row < 0 || row >= grid.rows) continue;
+          for (let dx = -1; dx <= 1; dx++) {
+            const column = (((patch.column + dx) % grid.columns) + grid.columns) % grid.columns;
+            touched.add(row * grid.columns + column);
+          }
+        }
+      }
+      for (const index of touched) {
+        const chunk = this.chunks.at(index);
+        if (chunk !== undefined) chunk.activity = undefined;
       }
     }
     if (this.mode !== 'natural') this.setMode(this.mode);
     this.version++;
+  }
+
+  /**
+   * L'activité des saisons du bloc (column, row), calculée à sa première demande, avec le
+   * calendrier filtré qu'elle lit (relecture de 2b.7, problème 11 : toutes, au chargement du
+   * monde, même au cran coupé).
+   */
+  seasonActivityAt(column: number, row: number): SeasonActivity | undefined {
+    const grid = this.grid;
+    if (grid === undefined) return undefined;
+    const chunk = this.chunks.at(row * grid.columns + column);
+    if (chunk === undefined) return undefined;
+    if (chunk.activity === undefined) {
+      this.fillFoliage();
+      const texels = this.foliage?.resource as Uint8Array | undefined;
+      if (texels === undefined) return undefined;
+      chunk.activity = this.activityOf(texels, column, row);
+    }
+    return chunk.activity;
+  }
+
+  /** Le calendrier filtré (foliageTexels) dans sa texture, la première fois ou après un pinceau. */
+  private fillFoliage(): void {
+    const foliage = this.foliage;
+    const layers = this.layers;
+    if (foliage === undefined || layers === undefined) return;
+    if (this.foliageFilled && !this.foliageStale) return;
+    (foliage.resource as Uint8Array).set(foliageTexels(this.foliageBytes, layers, this.biomes));
+    foliage.update();
+    this.foliageFilled = true;
+    this.foliageStale = false;
   }
 
   /** L'activité des saisons du bloc (column, row), d'après le calendrier filtré `texels`. */
@@ -642,11 +719,12 @@ export class MapView {
         waves &&
         part !== undefined &&
         seaInRect(chunk.seaMask, CHUNK_PX, part.left, part.top, part.right, part.bottom);
+      const activity = seasons ? this.seasonActivityAt(placement.column, placement.row) : undefined;
       const seasonal =
-        seasons &&
+        activity !== undefined &&
         part !== undefined &&
         seasonInRect(
-          chunk.activity,
+          activity,
           SEASON_TILE * TILE_PX,
           part.left,
           part.top,
@@ -713,7 +791,6 @@ export class MapView {
     const mesh: ChunkMesh = new Mesh({ geometry: this.geometry, shader });
     mesh.visible = false;
     this.layer.addChild(mesh);
-    const texels = this.foliage?.resource as Uint8Array | undefined;
     return {
       pixels,
       source,
@@ -726,10 +803,7 @@ export class MapView {
       mesh,
       baked: false,
       seaMask: new Uint8Array(0),
-      activity:
-        texels === undefined
-          ? { tiles: new Float32Array(0), side: 0 }
-          : this.activityOf(texels, column, row),
+      activity: undefined,
     };
   }
 

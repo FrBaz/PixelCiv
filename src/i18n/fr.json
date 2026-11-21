@@ -204,7 +204,7 @@
   "effects.off": "Coupés",
   "effects.full.hint": "Mer animée, couleurs des saisons et lumière d'hiver",
   "effects.reduced.hint": "Mer plus calme, couleurs des saisons sans la lumière d'hiver",
-  "effects.off.hint": "Carte immobile, sans couleurs de saison ; la neige et la glace restent",
+  "effects.off.hint": "Mer immobile, sol aux couleurs de ses tuiles ; la neige, la glace et les saisons du décor restent",
   "inspect.title": "Case inspectée",
   "inspect.close": "Fermer",
   "inspect.coordinates": "Case {x}, {y}",
