@@ -230,6 +230,23 @@ button:disabled {
   padding: 0 0.75rem;
 }
 
+/* Réglage des effets (ADR 0020) : un titre, puis trois boutons, comme les modes de carte. */
+.effects-menu {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.25rem;
+}
+
+.effects-title {
+  padding: 0 0.25rem 0 0.5rem;
+  white-space: nowrap;
+}
+
+.effects-menu button {
+  padding: 0 0.75rem;
+}
+
 /* Colonne de droite : outil d'apparition, fiche, chronique, inspection d'une case et
    légende, de la barre du haut jusqu'en bas de l'écran (U-3, U-4). Chaque panneau prend la
    hauteur de son contenu, et cède quand la place manque, jusqu'à une hauteur où il reste

@@ -364,6 +364,7 @@ describe("réglages de débogage de l'affichage (ADR 0015)", () => {
       waves: true,
       waveStep: undefined,
       month: undefined,
+      effects: undefined,
     });
   });
 
@@ -372,7 +373,12 @@ describe("réglages de débogage de l'affichage (ADR 0015)", () => {
       waves: false,
       waveStep: 42,
       month: 1.3,
+      effects: undefined,
     });
+    // Le cran du réglage des effets, pour les captures (ADR 0020) : un cran connu, ou rien.
+    expect(read('?effects=reduced').effects).toBe('reduced');
+    expect(read('?effects=off').effects).toBe('off');
+    expect(read('?effects=moyen').effects).toBeUndefined();
     expect(read('?waveStep=0&month=0').waveStep).toBe(0);
     expect(read('?waveStep=0&month=0').month).toBe(0);
     expect(read('?waves=on').waves).toBe(true);

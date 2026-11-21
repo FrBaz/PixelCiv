@@ -2,7 +2,7 @@
  * État affiché par l'interface, en signaux : le fil principal y range ce que le
  * worker lui envoie, et les composants se mettent à jour d'eux-mêmes.
  */
-import { signal } from '@preact/signals';
+import { computed, signal } from '@preact/signals';
 import type { Species, Worldgen } from '../core/data';
 import type {
   ChronicleView,
@@ -16,6 +16,7 @@ import type { GameTime } from '../core/time';
 import type { GenerationStage, WorldSizeId } from '../core/world';
 import type { WorldParams } from '../core/worldParams';
 import type { MessageKey } from '../i18n';
+import { effectSettings, type EffectLevel } from './effects';
 import type { SidePanel } from './panels';
 
 /**
@@ -112,11 +113,17 @@ export const determinismOk = signal<boolean | undefined>(undefined);
 export const debugOpen = signal(false);
 
 /**
- * Force de la mer animée, de 0 (immobile) à 1 (par défaut ; ADR 0015) : le point d'entrée du
- * réglage des effets de la tâche 2b.7, qui l'exposera et le gardera dans les préférences. La
- * carte la lit à chaque image ; une demande de mouvement réduit l'emporte sur elle.
+ * Le cran du réglage des effets (tâche 2b.7, ADR 0020 ; src/ui/effects.ts) : pleins, atténués ou
+ * coupés. La carte en tire à chaque image la force de la mer animée et les couleurs de la saison ;
+ * main.ts le lit au démarrage dans les préférences de l'appareil et l'y garde à chaque choix.
  */
-export const seaMotion = signal(1);
+export const effectsLevel = signal<EffectLevel>('full');
+
+/**
+ * Force de la mer animée, de 0 (immobile) à 1 (ADR 0015) : celle du cran du réglage des effets
+ * (effectSettings). Une demande de mouvement réduit l'emporte sur elle (src/app/cadence.ts).
+ */
+export const seaMotion = computed(() => effectSettings(effectsLevel.value, false).sea);
 
 /**
  * Avis passager à montrer au joueur, comme « Partie sauvegardée. ». Chaque avis a son
@@ -138,6 +145,8 @@ export interface UiActions {
   send(message: MainMessage): void;
   /** Change de mode de carte. */
   setMapMode(mode: MapModeId): void;
+  /** Change le cran du réglage des effets, et le garde dans les préférences de l'appareil. */
+  setEffects(level: EffectLevel): void;
   save(): Promise<void>;
   load(): Promise<void>;
   exportFile(): Promise<void>;

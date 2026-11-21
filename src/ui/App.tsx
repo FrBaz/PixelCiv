@@ -16,6 +16,7 @@ import { ChroniclePanel, ChronicleToggle } from './Chronicle';
 import { CreateWorld } from './CreateWorld';
 import { CreatorPanel, CreatorToggle } from './CreatorTools';
 import { DebugPanel, DebugToggle } from './DebugPanel';
+import { EffectsMenu } from './EffectsMenu';
 import { Legend, MapModes } from './MapModes';
 import { Notice } from './Notice';
 import { stackPanels, type OpenPanel, type SidePanel } from './panels';
@@ -134,6 +135,7 @@ export function App({
                 <ChronicleToggle />
               </div>
               <MapModes actions={actions} />
+              <EffectsMenu actions={actions} />
               <SaveMenu actions={actions} />
             </div>
           </div>

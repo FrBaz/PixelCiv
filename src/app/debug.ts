@@ -11,6 +11,7 @@
  * mesures ne dépendent pas du GPU : dans un navigateur qui rend en logiciel, les images par
  * seconde ne disent rien de lui.
  */
+import { parseEffectLevel, type EffectLevel } from '../ui/effects';
 import {
   GROUP_STRIDE,
   type FaunaFrame,
@@ -308,12 +309,15 @@ export class DebugSampler {
  * Réglages de débogage de l'affichage, tirés de l'adresse (ADR 0015) : `?waves=off` éteint la
  * mer animée ; `?waveStep=N` fixe son pas, un entier positif ou nul, pour des captures qui se
  * comparent à son miroir ; `?month=N` fixe le mois continu, de 0 à 12, que montre la carte,
- * saisons et gel de l'onde compris (la date et la simulation n'en savent rien).
+ * saisons et gel de l'onde compris (la date et la simulation n'en savent rien) ;
+ * `?effects=full|reduced|off` fixe le cran du réglage des effets au démarrage, sans le garder
+ * dans les préférences (ADR 0020).
  */
 export interface DisplayOverrides {
   readonly waves: boolean;
   readonly waveStep: number | undefined;
   readonly month: number | undefined;
+  readonly effects: EffectLevel | undefined;
 }
 
 export function displayOverrides(query: URLSearchParams): DisplayOverrides {
@@ -327,7 +331,27 @@ export function displayOverrides(query: URLSearchParams): DisplayOverrides {
     waves: query.get('waves') !== 'off',
     waveStep: Number.isSafeInteger(step) && step >= 0 ? step : undefined,
     month: Number.isFinite(month) && month >= 0 && month <= 12 ? month : undefined,
+    effects: parseEffectLevel(query.get('effects')),
   };
+}
+
+/**
+ * Le nom du moteur de rendu du contexte WebGL `gl` (WEBGL_debug_renderer_info, sinon RENDERER),
+ * ou undefined sans contexte : de quoi reconnaître un rendu logiciel (src/ui/effects.ts).
+ */
+export function rendererName(
+  gl: Pick<WebGLRenderingContext, 'getExtension' | 'getParameter' | 'RENDERER'> | undefined,
+): string | undefined {
+  if (gl === undefined) return undefined;
+  try {
+    const info = gl.getExtension('WEBGL_debug_renderer_info');
+    const name: unknown = gl.getParameter(
+      info === null ? gl.RENDERER : info.UNMASKED_RENDERER_WEBGL,
+    );
+    return typeof name === 'string' ? name : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 /** Mémoire occupée par le tas JavaScript, en mégaoctets, si le navigateur la donne. */
