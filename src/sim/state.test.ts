@@ -284,8 +284,12 @@ describe('pas', () => {
     // mois du gel et du dégel, et le reste en découle (de cd841d8f à 2f85a3da sans le gibier, de
     // 76a3c458 à 8384496a avec lui). La même partie, sa couverture rendue à la rampe de
     // l'instant, redonne les anciennes empreintes (cover.test.ts) : la pêche est la seule cause.
-    expect(fingerprint(state, { fauna: false })).toBe('2f85a3da');
-    expect(fingerprint(state)).toBe('8384496a');
+    // Relecture de 2b.7 : la neige et la glace commencent à fondre avec la rampe et fondent plus
+    // lentement (ADR 0019, § 1) ; la pêche change aux mois du dégel : 2 291 vivants au lieu de
+    // 2 310, 173 groupes au lieu de 177 (de 2f85a3da à 199961c5 sans le gibier, de 8384496a à
+    // f7fb307c avec lui).
+    expect(fingerprint(state, { fauna: false })).toBe('199961c5');
+    expect(fingerprint(state)).toBe('f7fb307c');
   });
 });
 
