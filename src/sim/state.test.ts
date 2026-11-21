@@ -279,9 +279,13 @@ describe('pas', () => {
     // 34 385 buts au lieu de 19 286 (de 81ec46ff à 913d522c). Relecture de 2b.6 : 23 hardes
     // que l'eau séparait de leur domaine en prennent un sur leur rive, 9 recolonisations au lieu
     // de 4, toutes joignables, levrauts chez eux ; 489 animaux en 346 hardes (de 913d522c à
-    // 76a3c458).
-    expect(fingerprint(state, { fauna: false })).toBe('cd841d8f');
-    expect(fingerprint(state)).toBe('76a3c458');
+    // 76a3c458). Tâche 2b.7 : la pêche lit la neige et la glace à inertie (ADR 0019, § 1), qui
+    // prennent plus tard et partent plus tard que la rampe de l'instant ; la pêche change aux
+    // mois du gel et du dégel, et le reste en découle (de cd841d8f à 2f85a3da sans le gibier, de
+    // 76a3c458 à 8384496a avec lui). La même partie, sa couverture rendue à la rampe de
+    // l'instant, redonne les anciennes empreintes (cover.test.ts) : la pêche est la seule cause.
+    expect(fingerprint(state, { fauna: false })).toBe('2f85a3da');
+    expect(fingerprint(state)).toBe('8384496a');
   });
 });
 

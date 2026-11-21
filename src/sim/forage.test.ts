@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { Biome, Catalog } from '../core/data';
 import type { SpawnGroupCommand } from '../core/protocol';
 import { COVER_RAMPS, coverShare, latitude } from '../core/seasons';
+import { RAMP_ONLY } from '../core/snow';
 import { riverClass } from '../core/world';
 import { DEATH_CAUSES } from './population';
 import {
@@ -280,6 +281,45 @@ describe('survie (tâche 2.4)', () => {
     });
     expect(coverShare(COVER_RAMPS['sea-ice'], extremes(state, mild).coldest)).toBe(0);
     expect(fishCap(mild, JANUARY)).toBeCloseTo(fishCap(mild, JULY), 6);
+  });
+
+  it('suit la glace à inertie de la carte : prise en retard, partie en retard (ADR 0019, § 1)', () => {
+    const state = testState();
+    const { capacity } = testData.nomads.stocks.fish;
+    const cells = state.world.biome.length;
+    // Les mêmes cases sans inertie : le calendrier de la rampe seule, partout.
+    const rampOnly = new Uint8Array(state.calendars.length);
+    for (let at = 0; at < rampOnly.length; at += 4) rampOnly.set(RAMP_ONLY, at);
+    const fishOf = (calendars: Uint8Array, cell: number, tick: number) =>
+      cellFood(state.world, state.size, calendars, cell, tick, testData)[5];
+    let lakes = 0;
+    let later = 0;
+    for (let cell = 0; cell < cells / 2; cell++) {
+      const biome = testData.biomes.entries.at(state.world.biome[cell] ?? 0);
+      const { coldest, warmest } = extremes(state, cell);
+      if (biome?.seasons.cover !== 'ice' || coldest > -4.5 || warmest < 2) continue;
+      lakes++;
+      for (let tick = 0; tick < 12; tick++) {
+        const inertia = fishOf(state.calendars, cell, tick);
+        const ramp = fishOf(rampOnly, cell, tick);
+        // Au nord, d'août à décembre la glace prend plus tard, de janvier à juin elle part plus
+        // tard ; au cœur de l'hiver et de l'été, la pêche de la rampe.
+        const cooling = tick >= JULY;
+        if (cooling)
+          expect(inertia, `case ${String(cell)}, mois ${String(tick)}`).toBeGreaterThanOrEqual(
+            ramp - 1e-9,
+          );
+        else
+          expect(inertia, `case ${String(cell)}, mois ${String(tick)}`).toBeLessThanOrEqual(
+            ramp + 1e-9,
+          );
+        if (tick === JANUARY || tick === JULY) expect(inertia).toBeCloseTo(ramp, 9);
+        if (!cooling && inertia < ramp - 0.05 * capacity) later++;
+      }
+    }
+    // Des lacs du nord, dont la glace retient la pêche au printemps, un mois au moins.
+    expect(lakes).toBeGreaterThan(15);
+    expect(later).toBeGreaterThan(lakes / 2);
   });
 
   it('ne compte la pêche du lit d’un fleuve qu’une fois (F-6)', () => {

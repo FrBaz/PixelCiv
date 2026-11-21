@@ -1163,6 +1163,27 @@ describe('deux horloges (ADR 0013)', () => {
     expect(fingerprint(replayed)).toBe(prints[0]);
   });
 
+  it("garde ses calendriers après l'instantané : la pêche de l'hôte est celle du rejeu (ADR 0019)", async () => {
+    // L'instantané transfère une copie des calendriers ; l'état garde les siens, que la pêche
+    // lit à chaque pas mensuel. Quinze mois de soixante groupes, printemps du nord compris :
+    // détachés, ils rendraient à la pêche la rampe de l'instant, et l'état s'écarterait du rejeu.
+    const { env, host } = await startedHost();
+    const sent = env.sent.find((entry) => entry.message.type === 'snapshot');
+    if (sent?.original.type !== 'snapshot') throw new Error('pas d’instantané');
+    expect(sent.original.calendars.byteLength).toBe(0);
+    const commands = spawns(60, 20);
+    host.receive({ type: 'setSpeed', speed: 'faster' });
+    for (const command of commands) host.receive({ type: 'game', command });
+    env.advance(monthDuration('faster') * 15 + WAKE_SLACK_MS);
+    host.receive({ type: 'setPaused', paused: true });
+    const saved = await savedState(env, host, 1);
+    const json = saved.json as { day: number; commandLog: LoggedCommand[] };
+    const until = { tick: saved.meta.tick, day: json.day };
+    expect(until.tick).toBeGreaterThanOrEqual(15);
+    const replayed = replay(testParams(), testWorld(), json.commandLog, until, testData);
+    expect(fingerprint(restoreState(saved, testData))).toBe(fingerprint(replayed));
+  });
+
   it('se rejoue au jour près, commandes reçues en marche et en pause comprises', async () => {
     const { env, host } = await startedHost();
     host.receive({ type: 'setSpeed', speed: 'fast' });
