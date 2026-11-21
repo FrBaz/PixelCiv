@@ -19,7 +19,7 @@
  * (snowShareOn) ; et le shader des objets, le ton d'ombre de chaque case pour l'ombre portée
  * « ground » (shadowTones).
  */
-import type { Biome, Seasons } from '../core/data/schemas';
+import type { Biome, Light, Seasons } from '../core/data/schemas';
 import { SEASON_COVERS, VEGETATION_TYPES } from '../core/data/schemas';
 import { coverShare } from '../core/seasons';
 import {
@@ -34,7 +34,7 @@ import {
   YEAR_DAYS,
 } from '../core/snow';
 import type { WorldLayers, WorldSize } from '../core/world';
-import { parseColor } from './bake';
+import { parseColor, type Rgb } from './bake';
 
 /** Codes de la température annuelle (canal R) et de la demi-amplitude (canal G). */
 export { encodeAmplitude, encodeTemperature } from '../core/snow';
@@ -187,6 +187,52 @@ export function snowThresholdsOn(
   // Au réchauffement, g croît : enneigé tant que la rampe ou la descente le tient.
   const departure = fall >= YEAR_DAYS / 2 ? Math.max(gamma, phaseFactor(fall)) : gamma;
   return [arrival, departure];
+}
+
+/**
+ * Les jours de phase (src/core/snow.ts, phaseDay) où la part de neige de snowShareOn atteint
+ * `share` : à l'arrivée, au refroidissement (enneigé à partir de ce jour), et au départ, au
+ * réchauffement (enneigé jusqu'à ce jour) ; NaN si elle n'y change pas (snowThresholdsOn). Le
+ * décor ne réévalue un objet que lorsque le jour franchit l'une de ses dates (DecorSource).
+ */
+export function snowDaysOn(
+  temperature: number,
+  amplitude: number,
+  flags: number,
+  calendars: ArrayLike<number>,
+  at: number,
+  share: number,
+  seasons: Pick<Seasons, 'snow'>,
+): readonly [number, number] {
+  const [arrival, departure] = snowThresholdsOn(
+    temperature,
+    amplitude,
+    flags,
+    calendars,
+    at,
+    share,
+    seasons,
+  );
+  if (Number.isNaN(arrival)) return [Number.NaN, Number.NaN];
+  // g = cos(2π p / an) décroît au refroidissement et croît au réchauffement.
+  const day = (factor: number) =>
+    (Math.acos(Math.min(1, Math.max(-1, factor))) * YEAR_DAYS) / (2 * Math.PI);
+  return [day(arrival), YEAR_DAYS - day(departure)];
+}
+
+/**
+ * Le ton d'hiver d'un ton : la lumière d'hiver (data/seasons.json, `light` ; ADR 0019, § 3) le
+ * rapproche de `toward` de la part `mix`, puis le multiplie par `scale`, en octets arrondis. La
+ * même règle donne les palettes d'hiver des biomes de terre et celles des objets du décor.
+ */
+export function winterTone(color: readonly [number, number, number], light: Light): Rgb {
+  const toward = parseColor(light.toward);
+  const tone = (value: number, target: number) =>
+    Math.min(
+      255,
+      Math.max(0, Math.round((value * (1 - light.mix) + target * light.mix) * light.scale)),
+    );
+  return [tone(color[0], toward[0]), tone(color[1], toward[1]), tone(color[2], toward[2])];
 }
 
 /**

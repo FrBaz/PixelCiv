@@ -1,0 +1,266 @@
+/**
+ * Calendrier de la végétation (tâche 2b.7 ; C1, D9 et D10 ; REN-10 ; ADR 0019, § 2 et 3) : les
+ * dates où chaque case vire à l'automne, se dénude ou entre en dormance, sèche, et prend la
+ * lumière d'hiver. Une fonction pure du climat de la case, de sa latitude et des données, que la
+ * carte (son shader) et le décor (src/gen/decor.ts, decorFoliage) lisent dans les mêmes octets :
+ * le sol et l'arbre qui s'y dresse changent le même jour.
+ *
+ * Chaque case a FOLIAGE_BYTES octets, un par état : la date où l'état gagne la moitié de la case,
+ * comptée en jours depuis son jour le plus chaud (la phase de src/core/snow.ts), de 0 à 180, en
+ * FOLIAGE_UNIT jours ; NO_DATE s'il ne vient jamais.
+ * - Bois nu et dormance (`bare`) : les jours où la température du mois passe sous `bareBelow`
+ *   (data/decor.json, `foliage`) ; une fenêtre centrée sur le jour le plus froid, symétrique.
+ * - Automne (`autumn`) : en refroidissant, quand le mois passe sous `autumnBelow` et déjà
+ *   `autumnDrop` degrés sous le mois le plus chaud ; il finit avec le bois nu, par la même
+ *   descente, si bien qu'il mène au bois nu ou s'éteint par une rampe, jamais d'un coup. Comme pour
+ *   le décor de 2b.6, l'automne et le bois nu ne viennent que là où le mois le plus froid descend
+ *   sous `bareBelow`.
+ * - Saison sèche (`dry`) : les jours où la pluie du mois tombe sous `dryShare` de sa moyenne
+ *   (rainSeasonality de la latitude) ; symétrique.
+ * - Lumière d'hiver (`light`) : les jours dont le facteur de saison passe sous la borne de la
+ *   latitude de la case (data/seasons.json, `light`) ; symétrique.
+ *
+ * Chaque état monte et descend en `minTransition` jours, centrés sur sa date : sa part de la case,
+ * share(c, d) = borne((d − c) / transition + ½, 0, 1), où d est la distance au jour le plus chaud,
+ * varie d'au plus 1 / transition par jour. Rien ne change dans les `summerDays` jours centrés sur
+ * le jour le plus chaud : au cœur de l'été, la carte est celle de ses tuiles.
+ *
+ * Déterminisme : les cosinus de dmath, tabulés aux jours entiers, sur les températures des couches
+ * du monde, au dixième de degré, celles que lisait le décor de 2b.6 ; aucun tirage. Rien de cela
+ * n'entre dans l'état de la simulation : la végétation ne se voit que sur la carte et le décor.
+ */
+import type { Decor, Seasons } from './data';
+import { cos, TAU } from './dmath';
+import { latitude, rainSeasonality } from './seasons';
+import { COLDEST_PHASE, YEAR_DAYS } from './snow';
+import type { WorldLayers, WorldSize } from './world';
+
+/** Octets du calendrier de la végétation d'une case : automne, nu, sec, lumière. */
+export const FOLIAGE_BYTES = 4;
+
+/** Rang de chaque état dans les octets d'une case. */
+export const FOLIAGE_SLOTS = { autumn: 0, bare: 1, dry: 2, light: 3 } as const;
+export type FoliageSlot = keyof typeof FOLIAGE_SLOTS;
+
+/** L'octet d'un état qui ne vient jamais. */
+export const NO_DATE = 255;
+
+/** Jours d'une unité des dates : la demi-année en 254 unités. */
+export const FOLIAGE_UNIT = COLDEST_PHASE / 254;
+
+/** Ce que le calendrier de la végétation lit des données. */
+export interface FoliageRules {
+  readonly foliage: Decor['foliage'];
+  readonly seasons: Pick<Seasons, 'minTransition' | 'summerDays' | 'light'>;
+}
+
+/** Cosinus des jours entiers de phase, de 0 à COLDEST_PHASE : décroissants, de 1 à −1. */
+const COSINES = Float64Array.from({ length: COLDEST_PHASE + 1 }, (_, day) =>
+  cos((TAU * day) / YEAR_DAYS),
+);
+
+/**
+ * Le jour d de [0, COLDEST_PHASE] où cos(2π d / an) descend à `value`, entre deux jours entiers
+ * interpolé : 0 si `value` vaut 1 ou plus (la condition tient dès le jour le plus chaud), NaN s'il
+ * reste au-dessus (−1 ou moins : elle ne tient jamais).
+ */
+function crossing(value: number): number {
+  if (value >= 1) return 0;
+  if (!(value > -1)) return Number.NaN;
+  // COSINES[low] ≥ value > COSINES[high].
+  let low = 0;
+  let high = COLDEST_PHASE;
+  while (high - low > 1) {
+    const middle = (low + high) >> 1;
+    if ((COSINES[middle] ?? -1) >= value) low = middle;
+    else high = middle;
+  }
+  const above = COSINES[low] ?? 1;
+  const below = COSINES[high] ?? -1;
+  return low + (above - value) / (above - below);
+}
+
+/**
+ * Le jour où la température d'une case de température annuelle `annual` et de demi-amplitude
+ * `amplitude` passe sous `threshold` en refroidissant, ou NaN si elle n'y passe jamais.
+ */
+function below(annual: number, amplitude: number, threshold: number): number {
+  if (amplitude <= 0) return annual < threshold ? 0 : Number.NaN;
+  return crossing((threshold - annual) / amplitude);
+}
+
+/** La date la plus précoce d'un état : il ne touche pas les `summerDays` jours de l'été. */
+function earliest(rules: FoliageRules): number {
+  const { summerDays, minTransition } = rules.seasons;
+  return Math.ceil((summerDays + minTransition) / 2 / FOLIAGE_UNIT);
+}
+
+/** L'octet de la date `day` (NaN : jamais), au plus tôt `first`. */
+function dateByte(day: number, first: number): number {
+  if (Number.isNaN(day) || day > COLDEST_PHASE) return NO_DATE;
+  return Math.min(254, Math.max(first, Math.round(day / FOLIAGE_UNIT)));
+}
+
+/**
+ * Les octets de l'automne et du bois nu d'une case de température annuelle `annual` et de
+ * demi-amplitude `swing` (°C, au dixième de degré des couches du monde), en poids faible
+ * l'automne.
+ */
+export function coldDates(annual: number, swing: number, rules: FoliageRules): number {
+  const { bareBelow, autumnBelow, autumnDrop } = rules.foliage;
+  const first = earliest(rules);
+  const bare = dateByte(below(annual, swing, bareBelow), first);
+  if (bare === NO_DATE) return NO_DATE | (NO_DATE << 8);
+  // L'automne : sous autumnBelow, et autumnDrop degrés sous le mois le plus chaud, en refroidissant.
+  const cool = below(annual, swing, autumnBelow);
+  const drop = swing > 0 ? crossing(1 - autumnDrop / swing) : Number.NaN;
+  const autumn = dateByte(Math.max(cool, drop), first);
+  return autumn | (bare << 8);
+}
+
+/** L'octet de la saison sèche à `rain` de force de la saison des pluies (rainSeasonality). */
+export function dryDate(rain: number, rules: FoliageRules): number {
+  const { dryShare } = rules.foliage;
+  if (rain <= 0) return 1 < dryShare ? earliest(rules) : NO_DATE;
+  return dateByte(crossing((dryShare - 1) / rain), earliest(rules));
+}
+
+/**
+ * L'octet de la lumière d'hiver à la latitude `lat` (0 à l'équateur, 1 aux pôles) : la borne du
+ * facteur de saison va de −1 (aucun jour) à `from` jusqu'à `factor` à `to`.
+ */
+export function lightDate(lat: number, rules: FoliageRules): number {
+  const { from, to, factor } = rules.seasons.light;
+  const open = Math.min(1, Math.max(0, (lat - from) / (to - from)));
+  return dateByte(crossing(-1 + (factor + 1) * open), earliest(rules));
+}
+
+/**
+ * Le calendrier de la végétation de chaque case d'un monde, FOLIAGE_BYTES octets par case : une
+ * fonction du seul climat (température, amplitude, latitude) et des données, que rien ne change en
+ * cours de partie. Les cases d'un même climat partagent leur calcul.
+ */
+export function worldFoliage(
+  size: WorldSize,
+  layers: WorldLayers,
+  rules: FoliageRules,
+): Uint8Array<ArrayBuffer> {
+  const { width, height } = size;
+  const bytes = new Uint8Array(width * height * FOLIAGE_BYTES);
+  const colds = new Map<number, number>();
+  for (let y = 0; y < height; y++) {
+    const lat = latitude(y, height);
+    const dry = dryDate(rainSeasonality(lat), rules);
+    const light = lightDate(lat, rules);
+    for (let x = 0; x < width; x++) {
+      const cell = y * width + x;
+      const temperature = layers.temperature[cell] ?? 0;
+      const amplitude = layers.amplitude[cell] ?? 0;
+      const key = temperature * 65536 + amplitude;
+      let cold = colds.get(key);
+      if (cold === undefined) {
+        cold = coldDates(temperature / 10, amplitude / 10, rules);
+        colds.set(key, cold);
+      }
+      const at = cell * FOLIAGE_BYTES;
+      bytes[at] = cold & 255;
+      bytes[at + 1] = cold >>> 8;
+      bytes[at + 2] = dry;
+      bytes[at + 3] = light;
+    }
+  }
+  return bytes;
+}
+
+/** Part d'un état de date `date` (un octet) à la distance `distance` du jour le plus chaud. */
+export function stateShare(date: number, distance: number, transition: number): number {
+  if (date === NO_DATE) return 0;
+  return Math.min(1, Math.max(0, (distance - date * FOLIAGE_UNIT) / transition + 0.5));
+}
+
+/** Les parts des états d'une case, au jour de phase `phase` (src/core/snow.ts, phaseDay). */
+export interface FoliageShares {
+  readonly autumn: number;
+  readonly bare: number;
+  readonly dry: number;
+  readonly light: number;
+}
+
+/**
+ * Les parts des états de la case dont le calendrier est rangé aux octets [at, at + FOLIAGE_BYTES)
+ * de `bytes`, au jour de phase `phase` : chaque état monte et descend autour de ses dates ;
+ * l'automne monte à la sienne, en refroidissant, et descend avec le bois nu. Le shader de la carte
+ * calcule les mêmes (mapShader.ts, SEASON_GLSL).
+ */
+export function foliageShares(
+  bytes: ArrayLike<number>,
+  at: number,
+  phase: number,
+  transition: number,
+): FoliageShares {
+  const distance = Math.min(phase, YEAR_DAYS - phase);
+  const autumnDate = bytes[at] ?? NO_DATE;
+  const bareDate = bytes[at + 1] ?? NO_DATE;
+  const bare = stateShare(bareDate, distance, transition);
+  let autumn = 0;
+  if (autumnDate !== NO_DATE && bareDate !== NO_DATE) {
+    const rise = (phase - autumnDate * FOLIAGE_UNIT) / transition + 0.5;
+    const fall = (YEAR_DAYS - bareDate * FOLIAGE_UNIT - phase) / transition + 0.5;
+    autumn = Math.min(1, Math.max(0, Math.min(rise, fall)));
+  }
+  return {
+    autumn,
+    bare,
+    dry: stateShare(bytes[at + 2] ?? NO_DATE, distance, transition),
+    light: stateShare(bytes[at + 3] ?? NO_DATE, distance, transition),
+  };
+}
+
+/**
+ * L'état d'un point de seuil `threshold` (de 0 à 1) : le bois nu s'il passe sous sa part, sinon
+ * l'automne, sinon la saison sèche, sinon la lumière d'hiver (`light` : si elle se montre), sinon
+ * l'été (rang −1). `states` : les états que prend la végétation du point.
+ */
+export const FOLIAGE_STATE = { summer: -1, autumn: 0, bare: 1, dry: 2, light: 3 } as const;
+export type FoliageState = (typeof FOLIAGE_STATE)[keyof typeof FOLIAGE_STATE];
+
+export function foliageState(
+  shares: FoliageShares,
+  states: { readonly autumn: boolean; readonly bare: boolean; readonly dry: boolean },
+  threshold: number,
+  light: boolean,
+): FoliageState {
+  if (states.bare && threshold < shares.bare) return FOLIAGE_STATE.bare;
+  if (states.autumn && threshold < shares.autumn) return FOLIAGE_STATE.autumn;
+  if (states.dry && threshold < shares.dry) return FOLIAGE_STATE.dry;
+  if (light && threshold < shares.light) return FOLIAGE_STATE.light;
+  return FOLIAGE_STATE.summer;
+}
+
+/**
+ * Seuil du pixel (x, y) du monde, de 0 à 1 : un hachage sans motif, calculé en entiers, que le
+ * shader de la carte calcule de même en flottants exacts (SEASON_GLSL.threshold) : chaque pixel
+ * passe à l'état quand sa part dépasse son seuil. `x` et `y` sont positifs, x pris modulo la
+ * largeur du monde en pixels.
+ */
+export function leafHash(x: number, y: number): number {
+  return (((x * 97 + y * 61) % 251) * ((x * 31 + y * 173 + 7) % 241) + x + y * 3) % 256;
+}
+
+export function leafThreshold(x: number, y: number): number {
+  return (leafHash(x, y) + 0.5) / 256;
+}
+
+/**
+ * Le seuil médian des 16 pixels de la case (cx, cy) de 4 × 4 pixels : la moyenne de son 8e et de
+ * son 9e seuils. Un état qui couvre la majorité des pixels de la case (9 au moins) couvre ce
+ * seuil, si bien qu'un objet du décor qui le prend pour le sien suit la majorité de son sol.
+ */
+export function cellMedianThreshold(cx: number, cy: number): number {
+  const values: number[] = [];
+  for (let j = 0; j < 4; j++) {
+    for (let i = 0; i < 4; i++) values.push(leafThreshold(cx * 4 + i, cy * 4 + j));
+  }
+  values.sort((a, b) => a - b);
+  return ((values[7] ?? 0.5) + (values[8] ?? 0.5)) / 2;
+}

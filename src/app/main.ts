@@ -10,6 +10,7 @@ import {
   PROTOCOL_VERSION,
   type InspectTarget,
 } from '../core/protocol';
+import { worldFoliage } from '../core/foliage';
 import { dayIndex, SPEED_FACTORS, type GameTime } from '../core/time';
 import { WORLD_SIZES, type WorldLayers, type WorldSizeId } from '../core/world';
 import { defaultWorldParams, type WorldParams } from '../core/worldParams';
@@ -600,6 +601,12 @@ async function main(): Promise<void> {
         worldInfo.value = message.world;
         const layers = message.layers;
         worldLayers = layers;
+        // Le calendrier de la végétation (ADR 0019, § 2) : une fonction du climat, que la carte et
+        // le décor lisent dans les mêmes octets ; rien ne le change en cours de partie.
+        const foliage = worldFoliage(message.world.size, layers, {
+          foliage: data.decor.foliage,
+          seasons: data.seasons,
+        });
         decor = decorOff
           ? undefined
           : new DecorSource(
@@ -608,6 +615,7 @@ async function main(): Promise<void> {
               message.world.size,
               message.world.params.seed,
               message.calendars,
+              foliage,
             );
         if (decor !== undefined && shadowMethod !== undefined) decor.shadow = shadowMethod;
         game = faunaOff ? undefined : new FaunaLayer(data, fauna, message.world.size.width);

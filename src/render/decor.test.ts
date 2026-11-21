@@ -4,6 +4,7 @@ import { SHADOW_METHODS } from '../core/data/decor';
 import { PALETTE_ROLES } from '../core/data/humans';
 import { geneRoles } from '../core/data/people';
 import { MONTH_CENTERS, seasonFactor, southern } from '../core/seasons';
+import { worldFoliage } from '../core/foliage';
 import { snowAt as snowOffset, worldCalendars } from '../core/snow';
 import { DAYS_PER_MONTH } from '../core/time';
 import { CHUNK_SIZE, emptyLayers, WORLD_SIZES, type WorldLayers } from '../core/world';
@@ -57,6 +58,13 @@ let calendarBytes: Uint8Array | undefined;
 function calendars(): Uint8Array {
   calendarBytes ??= worldCalendars(size, layers(), data.biomes.entries, data.seasons);
   return calendarBytes;
+}
+let foliageBytes: Uint8Array | undefined;
+/** Le calendrier de la végétation de ce monde (src/core/foliage.ts), celui de la carte. */
+function foliage(rules = { foliage: data.decor.foliage, seasons: data.seasons }): Uint8Array {
+  if (rules.foliage !== data.decor.foliage) return worldFoliage(size, layers(), rules);
+  foliageBytes ??= worldFoliage(size, layers(), rules);
+  return foliageBytes;
 }
 
 /** Les places des palettes, sans GPU : chaque clé reçoit sa place à sa première demande. */
@@ -407,7 +415,7 @@ describe('collecte du décor (ADR 0017, § 6 à 8)', () => {
 
   it('montre les objets de la pose de chaque case visible, à leurs pieds, au pixel près', () => {
     const world = layers();
-    const source = new DecorSource(data, world, size, 'pixelciv', calendars());
+    const source = new DecorSource(data, world, size, 'pixelciv', calendars(), foliage());
     const forest = findCell(world, [60, 70, 80, 90, 100], (cell) => (world.trees[cell] ?? 0) > 200);
     const scale = 8;
     const list = source.update(viewAt(forest.x, forest.y, scale, july), new Slots());
@@ -446,7 +454,7 @@ describe('collecte du décor (ADR 0017, § 6 à 8)', () => {
 
   it('montre les mêmes objets de part et d’autre de la couture, dans chaque copie du monde', () => {
     const world = layers();
-    const source = new DecorSource(data, world, size, 'pixelciv', calendars());
+    const source = new DecorSource(data, world, size, 'pixelciv', calendars(), foliage());
     const land = findCell(
       world,
       Array.from({ length: 200 }, (_, row) => 30 + row),
@@ -459,7 +467,7 @@ describe('collecte du décor (ADR 0017, § 6 à 8)', () => {
     expect(west.length).toBeGreaterThan(50);
     expect(east.length).toBeGreaterThan(50);
     // La même case, vue dans la copie de l'ouest puis dans celle du monde, a les mêmes objets.
-    const far = new DecorSource(data, world, size, 'pixelciv', calendars());
+    const far = new DecorSource(data, world, size, 'pixelciv', calendars(), foliage());
     const copy = collected(
       far,
       far.update(viewAt(size.width, land.y, 4, july), new Slots()),
@@ -475,7 +483,7 @@ describe('collecte du décor (ADR 0017, § 6 à 8)', () => {
 
   it('garde sa collecte tant que la vue, le niveau, k et le jour ne changent pas', () => {
     const world = layers();
-    const source = new DecorSource(data, world, size, 'pixelciv', calendars());
+    const source = new DecorSource(data, world, size, 'pixelciv', calendars(), foliage());
     const inside = source as unknown as { collect(): void; refreshStates(): void };
     const collect = vi.spyOn(inside, 'collect');
     const refresh = vi.spyOn(inside, 'refreshStates');
@@ -527,7 +535,7 @@ describe('collecte du décor (ADR 0017, § 6 à 8)', () => {
 
   it('reprend chaque palette des données, rangée une fois par composition', () => {
     const world = layers();
-    const source = new DecorSource(data, world, size, 'pixelciv', calendars());
+    const source = new DecorSource(data, world, size, 'pixelciv', calendars(), foliage());
     const slots = new Slots();
     const forest = findCell(world, [70, 80, 90], (cell) => (world.trees[cell] ?? 0) > 200);
     for (const month of [january, july, MONTH_CENTERS[9] ?? 9.5]) {
@@ -561,7 +569,7 @@ describe('collecte du décor (ADR 0017, § 6 à 8)', () => {
         (world.temperature[cell] ?? 0) > 0 &&
         !southern(Math.floor(cell / size.width), size.height),
     );
-    const kept = new DecorSource(data, world, size, 'pixelciv', calendars());
+    const kept = new DecorSource(data, world, size, 'pixelciv', calendars(), foliage());
     const inside = kept as unknown as { collect(): void };
     const collect = vi.spyOn(inside, 'collect');
     const slots = new Slots();
@@ -587,7 +595,7 @@ describe('collecte du décor (ADR 0017, § 6 à 8)', () => {
       const month = ((july * 30 + day + 0.5) / 30) % 12;
       const list = kept.update(viewAt(cold.x, cold.y, 4, month), slots);
       if (day % 5 !== 0) continue;
-      const fresh = new DecorSource(data, world, size, 'pixelciv', calendars());
+      const fresh = new DecorSource(data, world, size, 'pixelciv', calendars(), foliage());
       const freshSlots = new Slots();
       const reference = fresh.update(viewAt(cold.x, cold.y, 4, month), freshSlots);
       expect(shown(list, slots), `mois ${String(month)}`).toEqual(shown(reference, freshSlots));
@@ -619,10 +627,11 @@ describe('collecte du décor (ADR 0017, § 6 à 8)', () => {
     collect.mockRestore();
   });
 
-  it('réévalue ses objets quand la saison change de tendance, sans franchir de seuil', () => {
-    // L'automne tient au refroidissement : avec un automne qui commence dès le mois le plus chaud
-    // (autumnDrop nul, sous 40 °C), les caducs virent quand la saison tourne, mi-juillet, sans
-    // que le facteur de saison franchisse aucun seuil. La source gardée suit la source neuve.
+  it('réévalue ses objets aux dates de leur calendrier, et quand la lumière d’hiver change', () => {
+    // Un automne qui viendrait dès le mois le plus chaud (autumnDrop nul, sous 40 °C) commence au
+    // bord des jours de l'été, que rien ne touche (src/core/foliage.ts) : les caducs virent
+    // ensemble ce jour-là. Jour après jour autour de lui, la source gardée suit la source neuve ;
+    // et la lumière d'hiver, allumée en plein hiver, éclaire ses persistants sur-le-champ.
     const world = layers();
     const cold = findCell(
       world,
@@ -640,28 +649,38 @@ describe('collecte du décor (ADR 0017, § 6 à 8)', () => {
         foliage: { ...data.decor.foliage, autumnDrop: 0, autumnBelow: 40 },
       },
     };
-    const kept = new DecorSource(early, world, size, 'pixelciv', calendars());
+    const calendar = foliage({ foliage: early.decor.foliage, seasons: data.seasons });
+    const kept = new DecorSource(early, world, size, 'pixelciv', calendars(), calendar);
     const slots = new Slots();
     const motifs = (list: ObjectList) => Array.from(list.motif.subarray(0, list.count));
     const palettes = (list: ObjectList, from: Slots) =>
       Array.from({ length: list.count }, (_, at) =>
         (from.palettes.at(list.slot[at] ?? -1) ?? []).map((color) => color?.join(',')).join(' '),
       );
-    const seen = new Set<string>();
-    for (let day = -4; day <= 4; day++) {
-      const month = (july * 30 + day + 0.5) / 30;
+    const check = (month: number, light: boolean) => {
+      kept.light = light;
       const list = kept.update(viewAt(cold.x, cold.y, 4, month), slots);
-      const fresh = new DecorSource(early, world, size, 'pixelciv', calendars());
+      const fresh = new DecorSource(early, world, size, 'pixelciv', calendars(), calendar);
+      fresh.light = light;
       const freshSlots = new Slots();
       const reference = fresh.update(viewAt(cold.x, cold.y, 4, month), freshSlots);
       expect(motifs(list), `mois ${String(month)}`).toEqual(motifs(reference));
       expect(palettes(list, slots), `mois ${String(month)}`).toEqual(
         palettes(reference, freshSlots),
       );
-      seen.add(palettes(list, slots).join('|'));
-    }
+      return palettes(list, slots).join('|');
+    };
+    const seen = new Set<string>();
+    // Le bord de l'été : (summerDays + minTransition) / 2 jours après le jour le plus chaud.
+    const edge = (data.seasons.summerDays + data.seasons.minTransition) / 2;
+    for (let day = -8; day <= 8; day++) seen.add(check((july * 30 + edge + day + 0.5) / 30, false));
     // Les palettes ont changé en chemin : le feuillage a viré.
     expect(seen.size).toBeGreaterThan(1);
+    // Au cœur de l'hiver, la lumière d'hiver paraît puis disparaît : la source gardée suit.
+    const dark = check(january, false);
+    const lit = check(january + 0.01, true);
+    expect(lit).not.toBe(dark);
+    expect(check(january + 0.02, false)).toBe(dark);
   });
 
   it('dénude en janvier les caducs d’un hiver froid du nord, les enneige sur la neige de la carte', () => {
@@ -692,7 +711,7 @@ describe('collecte du décor (ADR 0017, § 6 à 8)', () => {
         !southern(Math.floor(cell / size.width), size.height),
     );
     for (const month of [january, july]) {
-      const source = new DecorSource(data, world, size, 'pixelciv', calendars());
+      const source = new DecorSource(data, world, size, 'pixelciv', calendars(), foliage());
       const slots = new Slots();
       const list = source.update(viewAt(cold.x, cold.y, 4, month), slots);
       const objects = collected(source, list);
@@ -758,6 +777,7 @@ describe('collecte du décor (ADR 0017, § 6 à 8)', () => {
       large,
       'pixelciv',
       worldCalendars(large, world, data.biomes.entries, data.seasons),
+      worldFoliage(large, world, { foliage: data.decor.foliage, seasons: data.seasons }),
     );
     const slots = new Slots();
     const columns = large.width / CHUNK_SIZE;

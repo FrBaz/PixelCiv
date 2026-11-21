@@ -2,7 +2,22 @@ import { describe, expect, it } from 'vitest';
 import { loadGameData, type LandUse } from '../core/data';
 import { floraCode, floraDensity } from '../core/flora';
 import { Fingerprint } from '../core/hash';
-import { latitude, MONTH_CENTERS, rainSeasonality, southern } from '../core/seasons';
+import { VEGETATION_STATES } from '../core/data/schemas';
+import {
+  cellMedianThreshold,
+  coldDates,
+  dryDate,
+  FOLIAGE_BYTES,
+  FOLIAGE_STATE,
+  foliageShares,
+  foliageState,
+  leafThreshold,
+  lightDate,
+  worldFoliage,
+  type FoliageState,
+} from '../core/foliage';
+import { MONTH_CENTERS, rainSeasonality, southern } from '../core/seasons';
+import { phaseDay } from '../core/snow';
 import { CHUNK_SIZE, emptyLayers, riverClass, WORLD_SIZES, type WorldLayers } from '../core/world';
 import { defaultWorldParams } from '../core/worldParams';
 import { generateWorld } from '../worldgen/generate';
@@ -13,10 +28,9 @@ import {
   DECOR_STATE,
   decorKey,
   decorSeason,
-  foliageClimate,
   fruiting,
   pickLook,
-  seasonMoment,
+  PHENOLOGY_STATES,
   variantOf,
   type DecorWorld,
   type Placed,
@@ -370,24 +384,42 @@ describe('pose du décor (ADR 0017, § 1)', () => {
   });
 });
 
-describe('saisons du décor (ADR 0017, § 5)', () => {
+describe('saisons du décor (ADR 0017, § 5 ; ADR 0019, § 2)', () => {
   const rules = data.decor;
+  const foliageRules = { foliage: data.decor.foliage, seasons: data.seasons };
+  const transition = data.seasons.minTransition;
   const { bareBelow, autumnBelow } = rules.foliage;
-  /** L'état d'une espèce sur une case de climat (annuelle, demi-amplitude) au mois `month`. */
+  /** Le calendrier de la végétation d'un climat (°C) à la latitude `lat`. */
+  const bytesOf = (annual: number, amplitude: number, lat: number) => {
+    const cold = coldDates(annual, amplitude, foliageRules);
+    return [
+      cold & 255,
+      cold >>> 8,
+      dryDate(rainSeasonality(lat), foliageRules),
+      lightDate(lat, foliageRules),
+    ];
+  };
+  /**
+   * L'état d'une espèce sur une case de climat (annuelle, demi-amplitude) au mois `month`, au seuil
+   * médian ½, à la latitude `lat`, sous la lumière d'hiver si `light`.
+   */
   const state = (
     phenology: 'evergreen' | 'deciduous' | 'dry',
     annual: number,
     amplitude: number,
     month: number,
     south = false,
-    rain = 0,
+    lat = 0.4,
     snow = 0,
+    light = false,
   ) =>
     decorSeason(
       snow,
       phenology,
-      foliageClimate(annual, amplitude, south, rain, seasonMoment(month)),
+      foliageShares(bytesOf(annual, amplitude, lat), 0, phaseDay(month * 30, south), transition),
+      0.5,
       rules,
+      light,
     );
 
   it('jaunit les caducs en refroidissant, les dénude l’hiver, au nord comme au sud à six mois d’écart', () => {
@@ -416,8 +448,6 @@ describe('saisons du décor (ADR 0017, § 5)', () => {
     expect(state('deciduous', 0, 10, 0.6, true).state).toBe(DECOR_STATE.summer);
     expect(state('deciduous', 0, 10, 8.2).state).toBe(DECOR_STATE.autumn);
     expect(state('deciduous', 0, 10, 2.2, true).state).toBe(DECOR_STATE.autumn);
-    const after = (month: number) => foliageClimate(0, 10, false, 0, seasonMoment(month));
-    expect(after(8.2).monthly).toBeLessThanOrEqual(10 - autumnDrop);
     expect(autumnDrop).toBeGreaterThan(0);
   });
 
@@ -428,41 +458,47 @@ describe('saisons du décor (ADR 0017, § 5)', () => {
     for (const seed of SEEDS) {
       const layers = layersOf(seed);
       const world = worldOf(seed, layers);
-      const deciduous: { cell: number; south: boolean }[] = [];
+      const foliage = worldFoliage(size, layers, foliageRules);
+      const deciduous: { cell: number; south: boolean; level: number }[] = [];
       for (let y = 0; y < size.height; y++) {
         for (let x = 0; x < size.width; x++) {
           for (const placed of objectsAt(world, x, y)) {
             if (lookOf(placed.look)?.phenology !== 'deciduous') continue;
-            deciduous.push({ cell: y * size.width + x, south: southern(y, size.height) });
+            deciduous.push({
+              cell: y * size.width + x,
+              south: southern(y, size.height),
+              level: cellMedianThreshold(x, y),
+            });
           }
         }
       }
       expect(deciduous.length, seed).toBeGreaterThan(5000);
-      const at = (object: { cell: number; south: boolean }, month: number) =>
+      const at = (object: (typeof deciduous)[number], day: number) =>
         decorSeason(
           0,
           'deciduous',
-          foliageClimate(
-            (layers.temperature[object.cell] ?? 0) / 10,
-            (layers.amplitude[object.cell] ?? 0) / 10,
-            object.south,
-            0,
-            seasonMoment(month),
+          foliageShares(
+            foliage,
+            object.cell * FOLIAGE_BYTES,
+            phaseDay(day, object.south),
+            transition,
           ),
+          object.level,
           rules,
+          false,
         ).state;
       for (let day = 180; day <= 225; day++) {
         for (const object of deciduous) {
           const warmest =
             ((layers.temperature[object.cell] ?? 0) + (layers.amplitude[object.cell] ?? 0)) / 10;
           if (object.south || warmest <= bareBelow) continue;
-          expect(at(object, day / 30), `${seed}, jour ${String(day)}`).not.toBe(DECOR_STATE.autumn);
+          expect(at(object, day), `${seed}, jour ${String(day)}`).not.toBe(DECOR_STATE.autumn);
         }
       }
       let previous = deciduous.map((object) => at(object, 0));
       let worst = 0;
       for (let day = 1; day <= 360; day++) {
-        const states = deciduous.map((object) => at(object, day / 30));
+        const states = deciduous.map((object) => at(object, day));
         const changed = states.filter((value, index) => value !== previous[index]).length;
         worst = Math.max(worst, changed / deciduous.length);
         previous = states;
@@ -482,30 +518,116 @@ describe('saisons du décor (ADR 0017, § 5)', () => {
   it('sèche les espèces de la saison sèche, et laisse les persistantes feuillées', () => {
     // Sous les tropiques, vers 18° : la saison sèche est l'hiver de l'hémisphère.
     const lat = 0.2;
-    const rain = rainSeasonality(lat);
-    expect(rain).toBeGreaterThan(0.5);
-    expect(state('dry', 25, 3, 0.5, false, rain).state).toBe(DECOR_STATE.dry);
-    expect(state('dry', 25, 3, 6.5, false, rain).state).toBe(DECOR_STATE.summer);
-    expect(state('dry', 25, 3, 6.5, true, rain).state).toBe(DECOR_STATE.dry);
+    expect(rainSeasonality(lat)).toBeGreaterThan(0.5);
+    expect(state('dry', 25, 3, 0.5, false, lat).state).toBe(DECOR_STATE.dry);
+    expect(state('dry', 25, 3, 6.5, false, lat).state).toBe(DECOR_STATE.summer);
+    expect(state('dry', 25, 3, 6.5, true, lat).state).toBe(DECOR_STATE.dry);
     // À l'équateur, il pleut toute l'année.
     for (const month of MONTH_CENTERS) {
-      expect(state('dry', 25, 3, month, false, rainSeasonality(0)).state).toBe(DECOR_STATE.summer);
+      expect(state('dry', 25, 3, month, false, 0).state).toBe(DECOR_STATE.summer);
       expect(state('evergreen', -20, 20, month).state).toBe(DECOR_STATE.summer);
     }
   });
 
+  it('donne la lumière d’hiver aux objets sans état, et à eux seuls, quand elle se montre', () => {
+    // Un persistant du nord au cœur de l'hiver : éclairé si la lumière se montre (le cran plein),
+    // jamais en été, ni sous les tropiques ; un caduc nu garde ses tons nus.
+    expect(state('evergreen', -2, 18, 0.5, false, 0.6, 0, true).lit).toBe(true);
+    expect(state('evergreen', -2, 18, 0.5, false, 0.6, 0, false).lit).toBe(false);
+    expect(state('evergreen', -2, 18, 6.5, false, 0.6, 0, true).lit).toBe(false);
+    expect(state('evergreen', 25, 2, 0.5, false, 0.1, 0, true).lit).toBe(false);
+    const bare = state('deciduous', -2, 18, 0.5, false, 0.6, 0, true);
+    expect([bare.state, bare.lit]).toEqual([DECOR_STATE.bare, false]);
+    // Un caduc d'hiver doux, feuillé, prend la lumière comme le sol.
+    expect(state('deciduous', 14, 6, 0.5, false, 0.6, 0, true).lit).toBe(true);
+  });
+
   it('enneige un objet quand la part de neige de sa case atteint le seuil des données', () => {
     const { share } = rules.snow;
-    expect(state('evergreen', 0, 10, 0.5, false, 0, share).snowy).toBe(true);
-    expect(state('evergreen', 0, 10, 0.5, false, 0, share - 1e-6).snowy).toBe(false);
-    expect(state('deciduous', 0, 10, 0.5, false, 0, 1).snowy).toBe(true);
-    expect(state('deciduous', 0, 10, 0.5, false, 0, 0).snowy).toBe(false);
+    expect(state('evergreen', 0, 10, 0.5, false, 0.4, share).snowy).toBe(true);
+    expect(state('evergreen', 0, 10, 0.5, false, 0.4, share - 1e-6).snowy).toBe(false);
+    expect(state('deciduous', 0, 10, 0.5, false, 0.4, 1).snowy).toBe(true);
+    expect(state('deciduous', 0, 10, 0.5, false, 0.4, 0).snowy).toBe(false);
+    const shares = foliageShares(bytesOf(0, 0, 0), 0, 0, transition);
     expect(
-      decorSeason(0, 'evergreen', foliageClimate(0, 0, false, 0, seasonMoment(0)), {
-        ...rules,
-        snow: { ...rules.snow, share: 0 },
-      }).snowy,
+      decorSeason(0, 'evergreen', shares, 0.5, { snow: { ...rules.snow, share: 0 } }, false).snowy,
     ).toBe(false);
+  });
+
+  it('prend l’état de la majorité des pixels de son sol, chaque jour, sur chaque case', () => {
+    // La critique (requis 1) : le sol et l'arbre changent le même jour. Sur les trois mondes, pour
+    // chaque case dont la végétation prend les mêmes états que l'espèce (caducs sur un sol caduc
+    // ou de toundra, espèces sèches sur une herbe tropicale) : chaque jour de l'année, l'état de
+    // l'objet est celui de la majorité (9 pixels sur 16 au moins) des pixels de sa case, quand
+    // elle existe, lumière d'hiver comprise.
+    let compared = 0;
+    for (const seed of SEEDS) {
+      const layers = layersOf(seed);
+      const world = worldOf(seed, layers);
+      const foliage = worldFoliage(size, layers, foliageRules);
+      for (let y = 0; y < size.height; y += 3) {
+        const south = southern(y, size.height);
+        for (let x = 0; x < size.width; x += 3) {
+          const cell = y * size.width + x;
+          const biome = data.biomes.entries.at(layers.biome[cell] ?? -1);
+          if (biome === undefined || biome.family === 'water') continue;
+          const ground = new Set(VEGETATION_STATES[biome.vegetation]);
+          const level = cellMedianThreshold(x, y);
+          for (const placed of objectsAt(world, x, y)) {
+            const phenology = lookOf(placed.look)?.phenology;
+            if (phenology === undefined) continue;
+            const own = PHENOLOGY_STATES[phenology];
+            const same =
+              own.autumn === ground.has('autumn') &&
+              own.bare === ground.has('bare') &&
+              own.dry === ground.has('dry');
+            if (!same) continue;
+            const states = {
+              autumn: ground.has('autumn'),
+              bare: ground.has('bare'),
+              dry: ground.has('dry'),
+            };
+            for (let day = 0; day < 360; day += 4) {
+              const shares = foliageShares(
+                foliage,
+                cell * FOLIAGE_BYTES,
+                phaseDay(day + 0.5, south),
+                transition,
+              );
+              const tally = new Map<FoliageState, number>();
+              for (let j = 0; j < 4; j++) {
+                for (let i = 0; i < 4; i++) {
+                  const pixel = foliageState(
+                    shares,
+                    states,
+                    leafThreshold(x * 4 + i, y * 4 + j),
+                    true,
+                  );
+                  tally.set(pixel, (tally.get(pixel) ?? 0) + 1);
+                }
+              }
+              const majority = [...tally].find(([, count]) => count >= 9)?.[0];
+              if (majority === undefined) continue;
+              const object = decorSeason(0, phenology, shares, level, rules, true);
+              const expected =
+                majority === FOLIAGE_STATE.bare
+                  ? DECOR_STATE.bare
+                  : majority === FOLIAGE_STATE.autumn
+                    ? DECOR_STATE.autumn
+                    : majority === FOLIAGE_STATE.dry
+                      ? DECOR_STATE.dry
+                      : DECOR_STATE.summer;
+              expect(
+                [object.state, object.lit],
+                `${seed} (${String(x)}, ${String(y)}), ${String(day)}`,
+              ).toEqual([expected, majority === FOLIAGE_STATE.light]);
+              compared++;
+            }
+          }
+        }
+      }
+    }
+    expect(compared).toBeGreaterThan(20000);
   });
 
   it('montre les fruits à leurs mois, six mois plus tard au sud', () => {
@@ -522,14 +644,14 @@ describe('saisons du décor (ADR 0017, § 5)', () => {
     // Sur trois mondes : chaque buisson caduc d'une case du nord dont le mois le plus froid
     // descend sous le seuil est nu à la mi-janvier, et aucun fruit d'aucune espèce ne se
     // montre hors de ses mois.
-    const moment = seasonMoment(0.5);
+    const month = 0.5;
     let bare = 0;
     for (const seed of SEEDS) {
       const world = worldOf(seed);
       const { layers } = world;
+      const foliage = worldFoliage(size, layers, foliageRules);
       for (let y = 0; y < size.height / 2; y += 2) {
         const south = southern(y, size.height);
-        const rain = rainSeasonality(latitude(y, size.height));
         for (let x = 0; x < size.width; x += 2) {
           const cell = y * size.width + x;
           for (const placed of objectsAt(world, x, y)) {
@@ -537,18 +659,19 @@ describe('saisons du décor (ADR 0017, § 5)', () => {
             if (flora === undefined) continue;
             const fruit = flora.look.fruit;
             if (fruit !== undefined && !fruit.months.includes(0)) {
-              expect(fruiting(fruit.months, moment.month, south)).toBe(false);
+              expect(fruiting(fruit.months, month, south)).toBe(false);
             }
             if (flora.kind !== 'shrub' || flora.look.phenology !== 'deciduous') continue;
-            const climate = foliageClimate(
-              (layers.temperature[cell] ?? 0) / 10,
-              (layers.amplitude[cell] ?? 0) / 10,
-              south,
-              rain,
-              moment,
+            const coldest = ((layers.temperature[cell] ?? 0) - (layers.amplitude[cell] ?? 0)) / 10;
+            if (coldest >= bareBelow) continue;
+            const shares = foliageShares(
+              foliage,
+              cell * FOLIAGE_BYTES,
+              phaseDay(month * 30, south),
+              transition,
             );
-            if (climate.coldest >= bareBelow) continue;
-            expect(decorSeason(0, 'deciduous', climate, rules).state, flora.id).toBe(
+            const level = cellMedianThreshold(x, y);
+            expect(decorSeason(0, 'deciduous', shares, level, rules, false).state, flora.id).toBe(
               DECOR_STATE.bare,
             );
             bare++;
