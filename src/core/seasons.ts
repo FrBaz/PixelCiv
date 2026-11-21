@@ -63,9 +63,16 @@ export function southern(y: number, height: number): boolean {
   return y >= height / 2;
 }
 
+/**
+ * Mois continu où l'été culmine au nord, à la mi-juillet : la phase du facteur de saison. Le sud vit
+ * le sien six mois plus tard, à la mi-janvier. Les calendriers de la neige et de la glace se
+ * comptent depuis ce jour (core/snow.ts, warmestDay).
+ */
+export const WARMEST_MONTH = 6.5;
+
 /** Facteur de saison du mois continu `month` au nord : 1 à la mi-juillet, −1 à la mi-janvier. */
 export function seasonFactor(month: number): number {
-  return cos((TAU * (month - 6.5)) / 12);
+  return cos((TAU * (month - WARMEST_MONTH)) / 12);
 }
 
 /** Milieu de chacun des douze mois, en mois continus (0,5 pour janvier). */
