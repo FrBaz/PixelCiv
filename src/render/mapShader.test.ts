@@ -170,9 +170,10 @@ describe('programmes de la carte et de la mer animée (ADR 0015)', () => {
   // pixels dans Chromium (tools/wave-control/LISEZMOI.md ; ADR 0015, § 10), dont on joint le
   // résultat à la PR. Tâche 2b.7 : le calme suit le calendrier de la glace (ADR 0019, § 1), dont
   // les cases des eaux fictives portent des formes écrites ici (de 01c90fa3 et 5a74a6e6 à
-  // e03ba2a6 et 85d6651b).
+  // e03ba2a6 et 85d6651b) ; puis une eau sans calendrier n'a que le calme de sa rampe (e03ba2a6
+  // à 0e9941c9), que le contrôle des pixels a vu : 0 écart sur 44 236 800 pixels, six vues.
   it('fige le code de l’onde et le motif de son miroir, indépendamment des données', () => {
-    expect(new Fingerprint().string(MAP_FRAGMENT_WAVES).hex()).toBe('e03ba2a6');
+    expect(new Fingerprint().string(MAP_FRAGMENT_WAVES).hex()).toBe('0e9941c9');
     const biomes = BiomesSchema.parse(FICTIVE_WATERS);
     const table = waveTable(biomes, 1);
     expect(table.biomes).toHaveLength(MAX_WAVE_BIOMES);

@@ -244,13 +244,18 @@ const NOISE = f(WAVE_NOISE);
  * Calme du gel, en GLSL, d'après les variables de la couverture du pixel (mapShader.ts,
  * COVER_GLSL : phase, now, calendar) : entier tant que la rampe couvre, ou dans l'intervalle du
  * calendrier, de son début à sa fin (au moins jusqu'au jour le plus froid, où la montée est
- * pleine) ; décroissant sur `uCalmDays` jours de part et d'autre, l'année bouclée.
+ * pleine) ; décroissant sur `uCalmDays` jours de part et d'autre, l'année bouclée. Une eau sans
+ * calendrier (RAMP_ONLY, montée d'un jour : src/core/snow.ts) n'a que le calme de sa rampe :
+ * c'est une glace permanente, que la rampe couvre toute l'année, ou une eau que la rampe touche
+ * à peine au mois le plus froid, au point que `most`, nul pour le worker en flottants de 64 bits,
+ * peut sortir positif du GPU (contrôle des pixels de l'onde, tâche 2b.7) : sans cela, sa mer
+ * restait immobile de l'été à l'hiver sans jamais geler.
  */
 const CALM_START = `calendar.x * ${f(DAYS_PER_UNIT)}`;
 const CALM_END = `max(calendar.y * ${f(DAYS_PER_UNIT)}, ${f(COLDEST_PHASE)})`;
 export const CALM_GLSL = {
   distance: `phase < ${CALM_START} ? min(${CALM_START} - phase, phase + ${f(YEAR_DAYS)} - ${CALM_END}) : (phase > ${CALM_END} ? min(phase - ${CALM_END}, ${CALM_START} + ${f(YEAR_DAYS)} - phase) : 0.0)`,
-  calm: 'now > 0.0 ? 1.0 : clamp(1.0 - distance / uCalmDays, 0.0, 1.0)',
+  calm: 'now > 0.0 ? 1.0 : (calendar.z < 1.5 ? 0.0 : clamp(1.0 - distance / uCalmDays, 0.0, 1.0))',
 } as const;
 
 /**
@@ -548,7 +553,7 @@ export function waterCover32(
       : phase > end
         ? Math.min(f32(phase - end), f32(f32(start + YEAR_DAYS) - phase))
         : 0;
-  const calm = now > 0 ? 1 : clamp01(f32(1 - f32(distance / calmDays)));
+  const calm = now > 0 ? 1 : b2 < 1.5 ? 0 : clamp01(f32(1 - f32(distance / calmDays)));
   return { most, now, phase, coverage, calm };
 }
 

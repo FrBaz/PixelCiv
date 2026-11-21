@@ -2,7 +2,7 @@ import { beforeAll, describe, expect, it } from 'vitest';
 import { loadGameData } from '../core/data';
 import type { Biome } from '../core/data/schemas';
 import { seasonFactor } from '../core/seasons';
-import { DAYS_PER_UNIT, iceAt, warmestDay, worldCalendars } from '../core/snow';
+import { DAYS_PER_UNIT, iceAt, RAMP_ONLY, warmestDay, worldCalendars } from '../core/snow';
 import { bakedWaterTone, MAX_CREST_LENGTH, MAX_CREST_THICKNESS } from '../core/waves';
 import { chunkGrid, WORLD_SIZES, type WorldLayers } from '../core/world';
 import { defaultWorldParams } from '../core/worldParams';
@@ -530,6 +530,33 @@ describe('mer animée : le miroir du shader (ADR 0015)', () => {
     for (let phase = 0; phase < 360; phase += 15) {
       expect(share(64, phase, -40)).toBe(1);
       expect(share(64 | (2 << 4), phase, 9, 9.75)).toBe(1);
+    }
+    // Une eau sans calendrier (RAMP_ONLY), que la rampe touche à peine au mois le plus froid : ni
+    // couverte ni calmée tant que la rampe ne couvre pas (contrôle des pixels de l'onde, 2b.7 :
+    // la banquise de (126, 41) à 1,5 ± 7,5 °C, où le GPU trouvait `most` positif, restait
+    // immobile toute la moitié froide) ; une glace permanente, que la rampe couvre, ne bouge pas.
+    const bare = (flags: number, phase: number, celsius: number, amplitude: number) => {
+      const pixel = {
+        red: coastal.tones[2] >>> 16,
+        green: (coastal.tones[2] >>> 8) & 255,
+        blue: coastal.tones[2] & 255,
+        temperature: Math.round((celsius + 64) * 2),
+        amplitude: Math.round(amplitude * 8),
+        flags,
+        calendar: RAMP_ONLY,
+      };
+      const month = (phase + warmestDay(false)) / 30;
+      return waveStill(viewAt(month % 12), 0, 0, pixel);
+    };
+    for (let phase = 0; phase < 360; phase += 5) {
+      // La rampe de la banquise (−6 °C) à peine touchée : −6,125 °C au plus froid ; hors des jours
+      // où elle couvre, la mer bouge, même dans la moitié froide de l'année.
+      const monthly = 1.5 + 7.625 * Math.cos((2 * Math.PI * phase) / 360);
+      if (monthly > -5.95) {
+        expect(bare(64 | (3 << 4), phase, 1.5, 7.625), String(phase)).toBeUndefined();
+      }
+      // Une glace d'eau douce que la rampe couvre toute l'année.
+      expect(bare(64 | (2 << 4), phase, -20, 2), String(phase)).toBe('covered');
     }
     // Au mois où la banquise couvre le bloc choisi, aucun pixel couvert ni calmé ne bouge,
     // et d'autres, dans des cases en calme partiel, bougent encore.
