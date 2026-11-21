@@ -245,10 +245,14 @@ button:disabled {
   gap: 0.25rem;
 }
 
+/* L'explication du cran choisi : largeur fixe et deux lignes réservées, pour qu'un appui sur un
+   cran ne change ni la largeur du panneau, qui pousserait ses voisins dans la ligne qui défile,
+   ni la hauteur de la barre du bas. */
 .effects-hint {
   margin: 0;
   padding: 0 0.5rem;
-  max-width: 20rem;
+  width: 20rem;
+  min-height: 2.4em;
   font-size: 0.75rem;
   line-height: 1.2;
   white-space: normal;
