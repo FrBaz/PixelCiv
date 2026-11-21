@@ -646,11 +646,16 @@ describe('sauvegarde des deux horloges et des positions (ADR 0013, ADR 0014)', (
       advanceDay(again, [], testData);
     }
     expect(fingerprint(again)).toBe(fingerprint(migrated));
-    let resting = 0;
+    // Arrivés au camp, ils n'en suivent plus le chemin : ils s'y reposent, ou en partent pour leurs
+    // activités (ADR 0021).
+    const follow = testData.activities.activities.findIndex((a) => a.place === 'camp');
+    let arrived = 0;
     migrated.people.forEach((slot) => {
-      if ((migrated.people.get('move', slot) & INTENTION) === REST) resting++;
+      const intention = migrated.people.get('move', slot) & INTENTION;
+      const activity = migrated.people.get('activity', slot) & 0x0f;
+      if (intention !== LEAVE && intention !== CARRIED && activity !== follow) arrived++;
     });
-    expect(resting).toBeGreaterThan(migrated.people.count / 3);
+    expect(arrived).toBeGreaterThan(migrated.people.count / 3);
   });
 
   it('migre une partie de la version 5, qui se poursuit de façon déterministe', async () => {

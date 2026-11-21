@@ -19,8 +19,10 @@
 import { spawnAdultAges } from '../core/data/people';
 import type { SpawnGroupCommand } from '../core/protocol';
 import type { RandomStream } from '../core/rng';
+import { dayIndex } from '../core/time';
 import { inheritGenome, pureAncestry, randomGenome } from './genetics';
 import { drawGregariousness } from './temper';
+import { beginActivity } from './activities';
 import { placeGroup } from './movement';
 import {
   CARRIED,
@@ -312,6 +314,9 @@ export function spawnGroup(state: SimState, command: SpawnGroupCommand, content:
     const slot = slots[index] ?? 0;
     if (entry.partner >= 0) people.set('partner', slot, firstId + entry.partner);
     people.set('lastBirth', slot, entry.lastBirth);
+    // Qui n'est pas porté a une activité dès son apparition : le repos à sa place, ses choix
+    // étalés selon son identifiant (ADR 0021, critique de la conception, requis 7).
+    if (!places.carried[index]) beginActivity(state, content, slot, dayIndex(state));
   });
   // Le meneur : l'aîné du groupe ; à âge égal, le premier dans l'ordre des emplacements.
   const members = slots.sort((a, b) => a - b);

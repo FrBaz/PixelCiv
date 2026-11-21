@@ -393,16 +393,22 @@ describe('groupes nomades (tâche 2.5)', () => {
     expect(travellers).toEqual([]);
   });
 
-  it('ne fait changer personne de terre en un siècle, sur « pixelciv » avec quarante groupes', () => {
-    const { crossings, travellers, homesElsewhere, splits, merges } = playCentury('pixelciv', 40);
-    expect(splits).toBeGreaterThan(60);
-    expect(merges).toBeGreaterThan(10);
-    expect(crossings).toEqual([]);
-    expect(travellers).toEqual([]);
-    // Le centre d'une nouvelle aire est sur la terre de la scission, sauf quand aucune des
-    // huit directions n'y mène : le nouveau groupe garde alors l'aire du groupe d'origine.
-    expect(homesElsewhere).toEqual([]);
-  });
+  // Un siècle de quarante groupes, activités comprises (ADR 0021) : vingt-sept secondes seul, au
+  // lieu de seize sans elles ; d'où un délai propre, au-delà des trente secondes communes.
+  it(
+    'ne fait changer personne de terre en un siècle, sur « pixelciv » avec quarante groupes',
+    { timeout: 120_000 },
+    () => {
+      const { crossings, travellers, homesElsewhere, splits, merges } = playCentury('pixelciv', 40);
+      expect(splits).toBeGreaterThan(60);
+      expect(merges).toBeGreaterThan(10);
+      expect(crossings).toEqual([]);
+      expect(travellers).toEqual([]);
+      // Le centre d'une nouvelle aire est sur la terre de la scission, sauf quand aucune des
+      // huit directions n'y mène : le nouveau groupe garde alors l'aire du groupe d'origine.
+      expect(homesElsewhere).toEqual([]);
+    },
+  );
 
   it('se déplace au fil des saisons, sans trop s’écarter de son aire', () => {
     const state = testState();

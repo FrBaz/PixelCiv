@@ -49,6 +49,20 @@ import {
 import type { Group } from './society';
 import type { SimState } from './state';
 import type { SimContent } from './step';
+import {
+  activitiesDay,
+  activityPace,
+  arrivedAtCamp,
+  beginActivity,
+  describeActivities,
+  followGroup,
+  onActivity,
+  rebuildActivities,
+  spotRoom,
+  syncSpot,
+  tripEnded,
+} from './activities';
+import { ActivityCache } from './activityCache';
 
 /** Tolérance de l'arrivée, sur chaque axe, en unités : 1/128 de case. */
 const ARRIVE = FIXED / 128;
@@ -372,6 +386,11 @@ export class Movement {
   readonly openings = new Map<number, number>();
   /** Étapes commencées, que l'hôte envoie au rendu ; aucune sans hôte. */
   journal: LegJournal | undefined;
+  /**
+   * Caches des activités (ADR 0021) : l'agenda des choix, les lieux d'activité occupés, les
+   * saisons et les rives des camps, le gibier du jour (activityCache.ts).
+   */
+  readonly acts: ActivityCache;
   /** Allure propre de chaque emplacement, gardée le temps d'un mois (ownPace). */
   paceValue = new Float64Array(0);
   paceTick = new Int32Array(0);
@@ -409,6 +428,7 @@ export class Movement {
     const tilesY = (height + TILE_MASK) >> TILE_SHIFT;
     this.restHead = new Int32Array((this.tilesX * tilesY) << (2 * TILE_SHIFT)).fill(NO);
     this.heldInTile = new Uint32Array(this.tilesX * tilesY);
+    this.acts = new ActivityCache(width, height);
   }
 
   /** Rang, dans restHead, de la case (column, row) du monde. */
@@ -456,6 +476,7 @@ export class Movement {
     this.arrivingOn = grownInt32(this.arrivingOn, size, -1);
     this.paceTick = grownInt32(this.paceTick, size, 0);
     this.walkTick = grownInt32(this.walkTick, size, 0);
+    this.acts.ensure(size);
     if (this.paceValue.length < size) {
       const value = new Float64Array(size);
       value.set(this.paceValue);
@@ -1233,7 +1254,10 @@ function roomAt(
   except: number,
   others: { readonly x: number[]; readonly y: number[] } | undefined,
 ): number {
-  let room = state.movement.nearestHeld(x, y, gap, except, true);
+  let room = Math.min(
+    state.movement.nearestHeld(x, y, gap, except, true),
+    spotRoom(state, x, y, gap, except),
+  );
   if (others === undefined) return room;
   const { width } = state.size;
   for (let index = 0; index < others.x.length && room > 0; index++) {
@@ -1257,6 +1281,7 @@ function isFree(
   others: { readonly x: number[]; readonly y: number[] } | undefined,
 ): boolean {
   if (state.movement.nearestHeld(x, y, gap, except, true, gap) < gap) return false;
+  if (spotRoom(state, x, y, gap, except, gap) < gap) return false;
   if (others === undefined) return true;
   const { width } = state.size;
   for (let index = 0; index < others.x.length; index++) {
@@ -1330,15 +1355,17 @@ function placeRadius(state: SimState, content: SimContent, slot: number, anchor:
 // --- Le sous-pas quotidien.
 
 /**
- * Un jour de mouvement (ADR 0014, § 2), de l'instant courant au suivant : les départs du
- * jour, la marche, l'espacement un jour sur `walkers.every`, puis les arrivées. advanceDay
- * l'appelle après les commandes, avant de passer au jour suivant ou au pas mensuel.
+ * Un jour de mouvement (ADR 0014, § 2 ; ADR 0021, § 2), de l'instant courant au suivant : les
+ * départs du jour, les activités (les chasses en cours, puis les choix du jour), la marche,
+ * l'espacement un jour sur `walkers.every`, puis les arrivées. advanceDay l'appelle après les
+ * commandes, avant de passer au jour suivant ou au pas mensuel.
  */
 export function moveDay(state: SimState, content: SimContent): void {
   const movement = state.movement;
   movement.ensure(state.people.columns.id.length);
   const day = dayIndex(state);
   departures(state, content, day);
+  activitiesDay(state, content, day);
   const arrivals = walkDay(state, content, day);
   if ((day + 1) % content.nomads.walkers.every === 0) spaceWalkers(state, content, day);
   arrive(state, content, arrivals);
@@ -1384,9 +1411,20 @@ function depart(
     if ((anchorMove & INTENTION) === LEAVE && columns.depart[anchor] === state.day) {
       depart(state, content, anchor, random, day);
     }
-    const walking = ((columns.move[anchor] ?? 0) & INTENTION) === WALK;
-    ax = walking ? columns.goalX[anchor] : columns.x[anchor];
-    ay = walking ? columns.goalY[anchor] : columns.y[anchor];
+    // La place de l'ancre : celle qu'elle vise en marchant vers le camp, sa position si elle va
+    // partir, sa place au camp sinon, où qu'elle soit pour son activité (ADR 0021).
+    const anchorIntention = (columns.move[anchor] ?? 0) & INTENTION;
+    const toCamp = anchorIntention === WALK && !onActivity(state, content, anchor);
+    ax = toCamp
+      ? columns.goalX[anchor]
+      : anchorIntention === LEAVE
+        ? columns.x[anchor]
+        : columns.homeX[anchor];
+    ay = toCamp
+      ? columns.goalY[anchor]
+      : anchorIntention === LEAVE
+        ? columns.y[anchor]
+        : columns.homeY[anchor];
   }
   const radius = placeRadius(state, content, slot, anchor);
   const { x: gx, y: gy } = pickPlace(
@@ -1407,6 +1445,7 @@ function depart(
   columns.stepDays[slot] = 0;
   movement.hold(slot, gx, gy);
   movement.addActive(slot);
+  syncSpot(state, slot);
 }
 
 /** La marche du jour : chacun avance d'un pas ; renvoie ceux qui arrivent. */
@@ -1464,7 +1503,7 @@ function walkDay(state: SimState, content: SimContent, day: number): number[] {
       arrivals.push(slot);
     }
   }
-  for (const slot of stuck) settle(state, slot);
+  for (const slot of stuck) settle(state, content, slot, day);
   return arrivals.sort((a, b) => a - b);
 }
 
@@ -1493,25 +1532,35 @@ function atGoal(state: SimState, slot: number): boolean {
 }
 
 /**
- * Pose `slot` là où il se tient, au repos : à son arrivée, ou faute de chemin. Sa place tenue
- * devient sa position ; ses bits de marche s'effacent.
+ * Pose `slot` là où il se tient, au repos, le soir du jour `day` : à son arrivée, ou faute de
+ * chemin ; ses bits de marche s'effacent. Au bout d'une marche vers le camp, sa place au camp
+ * devient sa position, et il s'y repose (arrivedAtCamp). Au bout du trajet d'une activité, il
+ * garde sa place au camp, sauf s'il y revenait, et commence son séjour (tripEnded, ADR 0021).
  */
-function settle(state: SimState, slot: number): void {
+function settle(state: SimState, content: SimContent, slot: number, day: number): void {
   const movement = state.movement;
   const { columns } = state.people;
   const x = columns.x[slot] ?? 0;
   const y = columns.y[slot] ?? 0;
   if (!atGoal(state, slot)) movement.counts.stuck++;
+  const trip = onActivity(state, content, slot);
+  const home =
+    columns.goalX[slot] === columns.homeX[slot] && columns.goalY[slot] === columns.homeY[slot];
   columns.move[slot] = REST;
   columns.goalX[slot] = x;
   columns.goalY[slot] = y;
-  columns.homeX[slot] = x;
-  columns.homeY[slot] = y;
   columns.stepX[slot] = 0;
   columns.stepY[slot] = 0;
   columns.stepDays[slot] = 0;
-  movement.hold(slot, x, y);
   movement.removeActive(slot);
+  if (!trip || home) {
+    columns.homeX[slot] = x;
+    columns.homeY[slot] = y;
+  }
+  movement.hold(slot, columns.homeX[slot] ?? x, columns.homeY[slot] ?? y);
+  if (trip) tripEnded(state, slot, day);
+  else arrivedAtCamp(state, content, slot, day);
+  syncSpot(state, slot);
 }
 
 /**
@@ -1538,7 +1587,12 @@ function legTo(
   const dx = (bx - ax) / FIXED;
   const dy = (by - ay) / FIXED;
   const length = Math.sqrt(dx * dx + dy * dy);
-  const speed = walkingPace(state, content, slot) / Math.max(1, path.cost);
+  // Vers une activité, à son allure propre, ou en courant (ADR 0021) ; vers le camp, à l'allure
+  // de la marche de 2b.3.
+  const pace = onActivity(state, content, slot)
+    ? activityPace(state, content, slot)
+    : walkingPace(state, content, slot);
+  const speed = pace / Math.max(1, path.cost);
   const days = Math.min(MAX_LEG_DAYS, Math.max(1, Math.ceil(length / speed - 1e-9)));
   const sx = Math.round((bx - ax) / days);
   const sy = Math.round((by - ay) / days);
@@ -1881,24 +1935,31 @@ function spaceWalkers(state: SimState, content: SimContent, day: number): void {
 
 /**
  * Les arrivées du jour, par emplacements croissants (ADR 0014) : chacun se pose à sa place si
- * personne n'en tient une à moins de `camp.gap` case ; sinon, il en tire une autre autour
- * d'elle, et s'y rend, pour s'y poser quoi qu'il trouve.
+ * personne n'en tient une, ni n'occupe un lieu d'activité, à moins de `camp.gap` case ; sinon, il
+ * en tire une autre autour d'elle, et s'y rend, pour s'y poser quoi qu'il trouve. Qui arrive au
+ * lieu de son activité s'y pose : ce lieu était libre quand il l'a choisi, et personne ne l'a pris
+ * depuis (ADR 0021, § 3).
  */
 function arrive(state: SimState, content: SimContent, arrivals: readonly number[]): void {
   if (arrivals.length === 0) return;
   const movement = state.movement;
   const { columns } = state.people;
   const { gap } = content.nomads.camp;
+  const day = dayIndex(state);
   let random: RandomStream | undefined;
   for (const slot of arrivals) {
     const x = columns.x[slot] ?? 0;
     const y = columns.y[slot] ?? 0;
     const move = columns.move[slot] ?? 0;
     movement.counts.arrivals++;
-    const room = movement.nearestHeld(x, y, gap, slot);
+    if (onActivity(state, content, slot)) {
+      settle(state, content, slot, day);
+      continue;
+    }
+    const room = Math.min(movement.nearestHeld(x, y, gap, slot), spotRoom(state, x, y, gap, slot));
     if ((move & SETTLE) !== 0 || room >= gap) {
       if (room < gap) movement.counts.forced++;
-      settle(state, slot);
+      settle(state, content, slot, day);
       continue;
     }
     // Sa place est prise : une autre, autour d'elle. Deux reprises au plus : la première
@@ -1926,7 +1987,8 @@ function arrive(state: SimState, content: SimContent, arrivals: readonly number[
     columns.move[slot] = (move & RETRY) !== 0 ? move | SETTLE : move | RETRY;
     columns.stepDays[slot] = 0;
     movement.hold(slot, gx, gy);
-    if (near(state, x, y, gx, gy)) settle(state, slot);
+    if (near(state, x, y, gx, gy)) settle(state, content, slot, day);
+    else syncSpot(state, slot);
   }
 }
 
@@ -1969,12 +2031,17 @@ export function rebuildMovement(state: SimState): void {
       }
     }
   }
+  rebuildActivities(state);
 }
 
-/** Vide les champs de distances : le coût d'une case a changé (pinceau). */
+/**
+ * Vide les champs de distances : le coût d'une case a changé (pinceau). Les saisons et les rives
+ * des camps, qui suivent les biomes, se refont aussi.
+ */
 export function clearFields(state: SimState): void {
   state.movement.fields.clear();
   state.movement.openings.clear();
+  state.movement.acts.camps.clear();
 }
 
 /**
@@ -2050,6 +2117,10 @@ export function describeMovement(state: SimState): {
       .map(([g, s]) => `${String(g)}:${String(s)}`)
       .join(' ')}`,
   );
+  // L'agenda des activités et leurs lieux occupés (ADR 0021).
+  const activities = describeActivities(state);
+  parts.push(activities.text);
+  problems.push(...activities.problems);
   return { text: parts.join('\n'), problems };
 }
 
@@ -2164,7 +2235,10 @@ export function planMonth(
       if (intention === CARRIED) continue;
       if (changedGroup(state, record, slot)) plan[slot] = JOINS;
       else if (moved) plan[slot] = MOVE;
-      else if (intention === WALK) move[slot] = (move[slot] ?? 0) | LATE;
+      // Qui marche encore vers le camp presse le pas ; qui va à son activité, non (ADR 0021).
+      else if (intention === WALK && !onActivity(state, content, slot)) {
+        move[slot] = (move[slot] ?? 0) | LATE;
+      }
     }
   }
   // Les sevrages : le nourrisson trop grand, ou sans sa mère dans son groupe.
@@ -2193,6 +2267,8 @@ export function planMonth(
     columns.homeX[slot] = startX;
     columns.homeY[slot] = my;
     columns.stepDays[slot] = 0;
+    // Libre de ses mouvements, il a une activité : le repos, son choix étalé (ADR 0021).
+    beginActivity(state, content, slot, dayIndex(state));
     if (mother < 0) {
       // Orphelin : il se pose là, et part avec son groupe.
       movement.hold(slot, startX, my);
@@ -2257,9 +2333,10 @@ export function planMonth(
     const day = dayOf(slot);
     const before = move[slot] ?? 0;
     if ((before & INTENTION) === WALK) movement.removeActive(slot);
-    const late = (before & INTENTION) === WALK ? LATE : 0;
+    const late = (before & INTENTION) === WALK && !onActivity(state, content, slot) ? LATE : 0;
     const join = plan[slot] === JOINS ? JOIN : before & JOIN;
     move[slot] = LEAVE | late | join;
+    followGroup(state, content, slot);
     columns.depart[slot] = day;
     columns.goalX[slot] = x[slot] ?? 0;
     columns.goalY[slot] = y[slot] ?? 0;
@@ -2267,6 +2344,9 @@ export function planMonth(
     movement.hold(slot, x[slot] ?? 0, y[slot] ?? 0, true);
     movement.leaving[day]?.push(slot);
   }
+  // L'agenda et les lieux d'activité suivent l'état d'après le plan : sevrés, partants, et ceux
+  // que le cycle de vie a emportés.
+  rebuildActivities(state);
 }
 
 // --- Apparitions et relectures.

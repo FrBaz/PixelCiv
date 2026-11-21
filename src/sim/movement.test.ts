@@ -28,6 +28,7 @@ import {
   testHuman,
   testState,
   withHuman,
+  withoutActivities,
 } from './testing';
 import { GENERATOR_VERSION } from '../worldgen/generate';
 
@@ -270,43 +271,50 @@ describe('mouvement des individus : terrain (ADR 0014)', () => {
   });
 
   it('ne pose personne sur l’eau, et aucun segment du jour ne la traverse ni n’en coupe un coin', () => {
-    const state = flatState('lac', lakeWorld);
-    for (const [x, y] of [
-      [100, 124],
-      [100, 136],
-      [92, 116],
-      [84, 128],
-      [112, 132],
-    ] as const) {
-      spawnAt(state, x, y, 26);
-    }
-    const { width } = state.size;
-    let segments = 0;
-    let previous = positions(state);
-    for (let day = 0; day < 24 * DAYS_PER_MONTH; day++) {
-      advanceDay(state, [], testData);
-      const now = positions(state);
-      const { people } = state;
-      people.forEach((slot) => {
-        const id = people.get('id', slot);
-        const [x, y] = now.get(id) ?? [0, 0];
-        expect(
-          state.cost[cellOf(x, y, width)],
-          `${String(id)} au jour ${String(day)}`,
-        ).toBeLessThan(Infinity);
-        const before = previous.get(id);
-        if (before === undefined || intention(state, slot) === CARRIED) return;
-        if (before[0] === x && before[1] === y) return;
-        segments++;
-        expect(segmentClear(state, before[0], before[1], x, y), `segment de ${String(id)}`).toBe(
-          true,
-        );
-      });
-      previous = now;
-    }
-    expect(segments).toBeGreaterThan(2000);
-    expect(state.movement.counts.detours).toBeGreaterThan(0);
-    expect(state.movement.counts.fields).toBeGreaterThan(0);
+    // Avec les activités (ADR 0021), et sans elles, comme en 2b.7 : leurs allées et venues ne
+    // changent pas le tour du lac, que la partie sans activités fait par détours.
+    const run = (content: SimContent) => {
+      const state = flatState('lac', lakeWorld);
+      for (const [x, y] of [
+        [100, 124],
+        [100, 136],
+        [92, 116],
+        [84, 128],
+        [112, 132],
+      ] as const) {
+        spawnAt(state, x, y, 26, content);
+      }
+      const { width } = state.size;
+      let segments = 0;
+      let previous = positions(state);
+      for (let day = 0; day < 24 * DAYS_PER_MONTH; day++) {
+        advanceDay(state, [], content);
+        const now = positions(state);
+        const { people } = state;
+        people.forEach((slot) => {
+          const id = people.get('id', slot);
+          const [x, y] = now.get(id) ?? [0, 0];
+          expect(
+            state.cost[cellOf(x, y, width)],
+            `${String(id)} au jour ${String(day)}`,
+          ).toBeLessThan(Infinity);
+          const before = previous.get(id);
+          if (before === undefined || intention(state, slot) === CARRIED) return;
+          if (before[0] === x && before[1] === y) return;
+          segments++;
+          expect(segmentClear(state, before[0], before[1], x, y), `segment de ${String(id)}`).toBe(
+            true,
+          );
+        });
+        previous = now;
+      }
+      expect(segments).toBeGreaterThan(2000);
+      return state;
+    };
+    run(testData);
+    const plain = run(withoutActivities(testData));
+    expect(plain.movement.counts.detours).toBeGreaterThan(0);
+    expect(plain.movement.counts.fields).toBeGreaterThan(0);
   });
 });
 

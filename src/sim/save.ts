@@ -41,6 +41,7 @@ import { terrainCosts, terrainLands } from './terrain';
 import { Fauna, FAUNA_STREAM, seedFauna, type FaunaContent } from './fauna';
 import { FaunaSaveError, restoreFauna, saveFauna } from './faunaSave';
 import { INTENTION, NO_ACTIVITY, PLACE, Population, WALK } from './population';
+import { deduceActivities } from './activities';
 import { Movement, placeMigrated, rebuildMovement } from './movement';
 import { migrateChronicle, restorePeople, savePeople } from './populationSave';
 import { emptySociety } from './society';
@@ -91,7 +92,7 @@ export interface SaveContent extends ForageContent, FaunaContent {
   readonly genetics: Genetics;
   readonly worldgen: Pick<Worldgen, 'parameters'>;
   /** Les activités (ADR 0021), que la sauvegarde nomme dans l'ordre de leurs rangs. */
-  readonly activities: Pick<ActivitiesFile, 'activities'>;
+  readonly activities: ActivitiesFile;
 }
 
 const uint32 = z.number().int().min(0).max(0xffffffff);
@@ -647,7 +648,11 @@ export function restoreState(save: SaveData, content: SaveContent): SimState {
     world.biome[cell] = biomes[biome] ?? 0;
     if (deposit > 0) world.deposit[cell] = (resources[deposit - 1] ?? 0) + 1;
   }
-  const { people, society } = restorePeople(save, parsed.data.people, content, size, tick, day);
+  const {
+    people,
+    society,
+    derive: deriveActivities,
+  } = restorePeople(save, parsed.data.people, content, size, tick, day);
   const food = restoreFood(save, count);
   const grid = chunkGrid(size);
   // Couches dérivées du monde et du contenu, comme à la création de la partie.
@@ -679,6 +684,9 @@ export function restoreState(save: SaveData, content: SaveContent): SimState {
   // Une partie de la version 7 n'a pas de gibier : il se sème d'après son état, de façon
   // déterministe (migrateFauna).
   if (parsed.data.fauna === null) seedFauna(state, content);
+  // Une partie de la version 8 n'a pas d'activités : elles se déduisent de son état, sans tirage
+  // (migrateActivities).
+  if (deriveActivities) deduceActivities(state, content);
   return state;
 }
 

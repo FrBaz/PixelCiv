@@ -145,8 +145,8 @@ export const ActivityRulesSchema = z
     /**
      * La grégarité dans les activités (ADR 0021, § 3) : anneaux et portées multipliés par
      * reach[0] + reach[1] × (1 − g'), g' la grégarité effective (2b.3) ; le poids du repos par
-     * 1 + rest × g' ; celui de l'activité de son ancre par 1 + kin × g', et, la même, le lieu près
-     * du sien, à la chance g'.
+     * 1 + rest × g' ; celui de l'activité de son ancre, si ce n'est pas le repos, par 1 + kin × g',
+     * et, la même, le lieu près du sien, à la chance g'.
      */
     gregarious: z
       .object({
@@ -174,12 +174,13 @@ export const ActivityRulesSchema = z
     /**
      * Les rives : à `inset` case du bord d'une eau, dans la case de terre voisine ; tirées le long
      * de ce bord, sur `spread` case autour de son milieu ; parmi les `choices` plus proches qui
-     * sont libres.
+     * sont libres. Les bornes les gardent dans la moitié centrale de la case de terre, à un quart
+     * de case au moins de ses voisines, comme tout lieu (src/sim/activities.ts, clearAt).
      */
     shore: z
       .object({
         inset: z.number().min(0.25).max(0.5),
-        spread: z.number().min(0).max(0.8),
+        spread: z.number().min(0).max(0.5),
         choices: z.number().int().min(1).max(16),
       })
       .strict(),

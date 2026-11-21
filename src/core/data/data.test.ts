@@ -1748,7 +1748,7 @@ describe('activités : data/activities.json (ADR 0021, ADR 0022)', () => {
       [{ hunt: { ...rules.hunt, revise: 4.5 } }, /^hunt\.revise/],
       [{ shore: { ...rules.shore, inset: 0.2 } }, /^shore\.inset/],
       [{ shore: { ...rules.shore, inset: 0.6 } }, /^shore\.inset/],
-      [{ shore: { ...rules.shore, spread: 0.9 } }, /^shore\.spread/],
+      [{ shore: { ...rules.shore, spread: 0.6 } }, /^shore\.spread/],
       [{ shore: { ...rules.shore, choices: 0 } }, /^shore\.choices/],
       [{ shore: { ...rules.shore, choices: 17 } }, /^shore\.choices/],
       [{ tempo: 1 }, /tempo/],
