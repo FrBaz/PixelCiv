@@ -12,7 +12,15 @@ import { CARRIED, FEMALE, INTENTION, MALE, NO_ACTIVITY, REST, WALK } from './pop
 import { restoreState, saveState } from './save';
 import type { SimState } from './state';
 import { applyCommands, fingerprint, type SimContent } from './step';
-import { flatState, scatteredGroups, testData, testState, withoutFauna } from './testing';
+import { cellFood, FOOD_STRIDE } from './forage';
+import {
+  flatState,
+  scatteredGroups,
+  testData,
+  testState,
+  withHuntChance,
+  withoutFauna,
+} from './testing';
 
 const activities = testData.activities.activities;
 const rankOf = (id: string) => activities.findIndex((activity) => activity.id === id);
@@ -396,6 +404,85 @@ describe('activités : la chasse et le gibier (ADR 0021, § 5)', () => {
     }
     expect(reserved).toBeGreaterThan(100);
     expect(state.movement.acts.counts.strikes).toBeGreaterThan(5);
+  });
+
+  it('ôte l’animal pris, et verse sa viande, prise au gibier des neuf cases, à la réserve du groupe, le jour même', () => {
+    const content = withHuntChance(testData, 1);
+    const state = populated(content);
+    const acts = state.movement.acts;
+    const reserves = () => {
+      let total = 0;
+      for (const group of state.society.groups.values()) total += group.food;
+      return total;
+    };
+    let kills = 0;
+    let meat = 0;
+    for (let day = 0; day < 2 * DAYS_PER_MONTH; day++) {
+      // Le pas mensuel nourrit les groupes et fait naître le gibier : hors de ces soirs.
+      if (state.day === DAYS_PER_MONTH - 1) {
+        advanceDay(state, [], content);
+        continue;
+      }
+      const before = {
+        kills: acts.counts.kills,
+        meat: acts.counts.meat,
+        animals: state.fauna.count,
+        food: reserves(),
+        stocks: state.food.stocks.slice(),
+        depleted: state.food.depleted.slice(),
+      };
+      state.fauna.changed = false;
+      advanceDay(state, [], content);
+      const killed = acts.counts.kills - before.kills;
+      expect(before.animals - state.fauna.count).toBe(killed);
+      const taken = acts.counts.meat - before.meat;
+      // Le gibier des cases entamées a perdu ce que les réserves ont gagné : depuis son stock
+      // d'hier, ou, entamée ce jour, depuis son plafond du mois.
+      let lost = 0;
+      const { depleted } = state.food;
+      const { world, size, calendars, tick } = state;
+      for (let cell = 0; cell < depleted.length; cell++) {
+        if (depleted[cell] !== 1) continue;
+        const at = cell * FOOD_STRIDE + 1;
+        const was =
+          before.depleted[cell] === 1
+            ? (before.stocks[at] ?? 0)
+            : cellFood(world, size, calendars, cell, tick, content)[4];
+        lost += was - (state.food.stocks[at] ?? 0);
+      }
+      expect(lost).toBeCloseTo(taken, 3);
+      expect(reserves() - before.food).toBeCloseTo(taken, 4);
+      if (killed === 0) continue;
+      expect(state.fauna.changed).toBe(true);
+      expect(taken).toBeGreaterThan(0);
+      kills += killed;
+      meat += taken;
+    }
+    expect(kills).toBeGreaterThan(3);
+    expect(meat).toBeGreaterThan(0.5);
+  });
+
+  it('fait fuir la harde le jour même d’un coup manqué, même au calme', () => {
+    const content = withHuntChance(testData, 0);
+    const state = populated(content);
+    let missed = 0;
+    let fled = 0;
+    for (let day = 0; day < 2 * DAYS_PER_MONTH; day++) {
+      const today = dayIndex(state);
+      // Toutes les hardes au calme pour longtemps : seul un coup manqué les fait fuir.
+      state.fauna.calm.fill(today + 1000);
+      advanceDay(state, [], content);
+      const misses = state.movement.acts.misses;
+      for (let at = 0; at < misses.length; at += 3) {
+        const herd = state.fauna.herd[misses[at] ?? 0] ?? -1;
+        missed++;
+        if (herd >= 0 && (state.fauna.calm[herd] ?? 0) < today + 1000) fled++;
+      }
+    }
+    expect(missed).toBeGreaterThan(3);
+    expect(state.movement.acts.counts.kills).toBe(0);
+    // Acculée, une harde ne fuit pas : presque toujours, elle fuit.
+    expect(fled / missed).toBeGreaterThan(0.8);
   });
 
   it('donne au chasseur un affût hors de la distance de fuite de l’animal, et ne frappe qu’au repos', () => {

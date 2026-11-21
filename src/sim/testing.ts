@@ -68,6 +68,16 @@ export function withoutHunting<T extends SimContent>(content: T): T {
   };
 }
 
+/** Le contenu `content` où chaque coup porte avec la chance `chance`, pour toute espèce du gibier. */
+export function withHuntChance<T extends SimContent>(content: T, chance: number): T {
+  return {
+    ...content,
+    fauna: catalogOf(
+      content.fauna.entries.map((entry) => ({ ...entry, hunt: { ...entry.hunt, chance } })),
+    ),
+  };
+}
+
 /** Température d'un monde plat, en dixièmes de degré : 15 °C, une belle saison sans fin. */
 export const FLAT_TEMPERATURE = 150;
 

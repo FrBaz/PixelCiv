@@ -1264,9 +1264,20 @@ describe('deux horloges (ADR 0013)', () => {
     env.advance(NORMAL_MONTH_MS * 2 + WAKE_SLACK_MS);
     const deltas = env.messages('delta');
     expect(deltas).toHaveLength(2 * DAYS_PER_MONTH);
-    // L'image du gibier : aux seuls pas mensuels, ni à l'apparition des groupes ni les autres jours.
+    // L'image du gibier : aux pas mensuels, et le jour de chaque prise (ADR 0021, § 4), qui ôte des
+    // animaux sans en ajouter ; ni à l'apparition des groupes, ni les autres jours.
     const framed = deltas.flatMap((delta, index) => (delta.fauna === undefined ? [] : [index]));
-    expect(framed).toEqual([DAYS_PER_MONTH - 1, 2 * DAYS_PER_MONTH - 1]);
+    expect(framed).toEqual(expect.arrayContaining([DAYS_PER_MONTH - 1, 2 * DAYS_PER_MONTH - 1]));
+    let known = new Set(env.messages('snapshot').at(-1)?.fauna.ids);
+    expect(known.size).toBeGreaterThan(400);
+    for (const index of framed) {
+      const ids = [...(deltas[index]?.fauna?.ids ?? [])];
+      if ((index + 1) % DAYS_PER_MONTH !== 0) {
+        expect(ids.length, `jour ${String(index)}`).toBeLessThan(known.size);
+        expect(ids.every((id) => known.has(id))).toBe(true);
+      }
+      known = new Set(ids);
+    }
     // Ses étapes, chaque lot, datées de ses jours, chacune avec son allure.
     const legged = deltas.filter((delta) => delta.faunaLegs !== undefined);
     expect(legged.length).toBeGreaterThan(DAYS_PER_MONTH);

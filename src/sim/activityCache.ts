@@ -268,6 +268,8 @@ export interface ActivityCounts {
   hits: number;
   misses: number;
   kills: number;
+  /** Viande des prises, en besoins mensuels d'un adulte, versée aux réserves. */
+  meat: number;
   lost: number;
   stops: number;
   /** Arrivées au camp au bout du suivi du groupe, qui choisissent ensuite. */
@@ -317,8 +319,8 @@ export class ActivityCache {
   /** Chasseurs qui frappent ce jour (ACT_STRIKE de leurs étapes du jour). */
   readonly struck = new Set<number>();
   /**
-   * Coups manqués du jour : l'animal visé, le chasseur et sa position, par emplacements croissants
-   * des chasseurs ; le gibier les entend le jour même (fauna.ts, alarms).
+   * Coups manqués du jour : l'animal visé et la position du chasseur, trois entiers par coup, par
+   * emplacements croissants des chasseurs ; le gibier les entend le jour même (fauna.ts, faunaDay).
    */
   readonly misses: number[] = [];
   /** Emplacements qui choisissent ce jour, repris d'un jour à l'autre. */
@@ -333,6 +335,7 @@ export class ActivityCache {
     hits: 0,
     misses: 0,
     kills: 0,
+    meat: 0,
     lost: 0,
     stops: 0,
     arrivals: 0,

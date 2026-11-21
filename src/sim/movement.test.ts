@@ -141,34 +141,40 @@ describe('mouvement des individus : déterminisme (ADR 0014)', () => {
   });
 
   it('tient ses caches comme l’état les redonne, et se relit en cours de mois, pinceau et détours compris', () => {
-    const state = flatState('caches', lakeWorld);
-    for (const [x, y] of [
-      [100, 124],
-      [100, 138],
-      [86, 128],
-      [70, 110],
-      [120, 150],
-    ] as const) {
-      spawnAt(state, x, y, 24);
-    }
-    let copy: SimState | undefined;
-    for (let day = 0; day < 8 * DAYS_PER_MONTH; day++) {
-      const commands =
-        day === 100 ? [{ type: 'paintBiome' as const, x: 97, y: 125, biome: 'marsh' }] : [];
-      advanceDay(state, commands, testData);
-      if (copy !== undefined) advanceDay(copy, commands, testData);
-      if (day % 3 === 0) expectCachesFromState(state, `jour ${String(day)}`);
-      // Une sauvegarde au jour 7 du troisième mois, relue : la suite est la même.
-      if (day === 2 * DAYS_PER_MONTH + 7) {
-        copy = restoreState(saveState(state, GENERATOR_VERSION, testData), testData);
-        expect(describeMovement(copy).text).toBe(describeMovement(state).text);
+    // Avec les activités (ADR 0021), et sans elles, comme en 2b.7, où le lac demande des détours.
+    const run = (content: typeof testData) => {
+      const state = flatState('caches', lakeWorld);
+      for (const [x, y] of [
+        [100, 124],
+        [100, 138],
+        [86, 128],
+        [70, 110],
+        [120, 150],
+      ] as const) {
+        spawnAt(state, x, y, 24, content);
       }
-    }
-    if (copy === undefined) throw new Error('pas de relecture');
-    expect(fingerprint(copy)).toBe(fingerprint(state));
+      let copy: SimState | undefined;
+      for (let day = 0; day < 8 * DAYS_PER_MONTH; day++) {
+        const commands =
+          day === 100 ? [{ type: 'paintBiome' as const, x: 97, y: 125, biome: 'marsh' }] : [];
+        advanceDay(state, commands, content);
+        if (copy !== undefined) advanceDay(copy, commands, content);
+        if (day % 3 === 0) expectCachesFromState(state, `jour ${String(day)}`);
+        // Une sauvegarde au jour 7 du troisième mois, relue : la suite est la même.
+        if (day === 2 * DAYS_PER_MONTH + 7) {
+          copy = restoreState(saveState(state, GENERATOR_VERSION, content), content);
+          expect(describeMovement(copy).text).toBe(describeMovement(state).text);
+        }
+      }
+      if (copy === undefined) throw new Error('pas de relecture');
+      expect(fingerprint(copy)).toBe(fingerprint(state));
+      return state;
+    };
+    run(testData);
     // Le lac a demandé des détours, par le champ de distances d'un camp.
-    expect(state.movement.counts.detours).toBeGreaterThan(0);
-    expect(state.movement.counts.fields).toBeGreaterThan(0);
+    const plain = run(withoutActivities(testData));
+    expect(plain.movement.counts.detours).toBeGreaterThan(0);
+    expect(plain.movement.counts.fields).toBeGreaterThan(0);
   });
 
   it('compte ses marcheurs sans les arrivés du jour, que sa liste garde jusqu’au lendemain', () => {

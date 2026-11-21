@@ -44,6 +44,7 @@ import {
   testHuman as human,
   testState,
   withHuman,
+  withoutActivities,
 } from './testing';
 
 /** Cases de terre des biomes voulus, espacées. */
@@ -319,12 +320,16 @@ describe('cycle de vie (tâche 2.3)', () => {
 
   it('maintient trois siècles durant une population nourrie, qui croît sans exploser (D-8)', () => {
     // La mesure de docs/BACKLOG.md : seize groupes de trente répartis sur le monde des
-    // tests (scatteredGroups), trois cents ans de nomadisme, d'hivers et de famines.
+    // tests (scatteredGroups), trois cents ans de nomadisme, d'hivers et de famines. Le modèle
+    // mensuel de 2.3 et 2.4, sans les activités (ADR 0021, § 4) : elles ne changent pas la survie
+    // mensuelle, mais déplacent les places au camp, donc la trajectoire, comme une autre graine.
+    // Sur cent ans, de 0 à 0,4 % de croissance par an selon la graine, avec ou sans elles (2b.8).
+    const content = withoutActivities(testData);
     const state = testState();
-    step(state, scatteredGroups(state, 16), testData);
+    step(state, scatteredGroups(state, 16), content);
     const start = state.people.count;
     for (let century = 1; century <= 3; century++) {
-      run(state, 100 * MONTHS_PER_YEAR - (century === 1 ? 1 : 0));
+      run(state, 100 * MONTHS_PER_YEAR - (century === 1 ? 1 : 0), content);
       expect(state.people.count).toBeGreaterThan(start);
     }
     // Croissance annuelle moyenne : de l'ordre de 0,5 % par an (0,1 à 1,5 %).

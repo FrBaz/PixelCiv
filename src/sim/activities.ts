@@ -30,7 +30,7 @@ import { dayIndex } from '../core/time';
 import { flowDirection, riverClass } from '../core/world';
 import { DIRECTIONS } from '../worldgen/grid';
 import { SHORE_STRIDE, type CampSupplies } from './activityCache';
-import { cellCover, cellFood } from './forage';
+import { cellCover, cellFood, deplete, FOOD_STRIDE, stocksInto } from './forage';
 import { anchorOf, curveAt, effectiveGregariousness, ownPace, segmentClear } from './movement';
 import { monthOf, MONTHS_PER_YEAR } from './people';
 import {
@@ -861,6 +861,67 @@ function stalkPoint(
   return [px, py];
 }
 
+/** Les neuf cases autour d'un animal pris, et les stocks de l'une d'elles, repris d'une prise à l'autre. */
+const preyCells = new Int32Array(9);
+const preyStocks = new Float64Array(3);
+
+/**
+ * La prise de l'animal `prey` par `slot` (ADR 0021, § 4) : l'animal meurt, et l'image du gibier
+ * part avec le jour (Fauna.changed) ; sa viande (`hunt.meat`, en besoins mensuels d'un adulte)
+ * s'ôte du stock de gibier des neuf cases autour de lui, dans l'ordre des cases, tant qu'il en
+ * reste, et va à la réserve du groupe du chasseur. Rien ne compte deux fois : le pas mensuel trouve
+ * ces cases entamées et la réserve plus pleine, qu'il borne comme toujours à `reserve.months`
+ * besoins du groupe (forage.ts, feedGroup).
+ */
+function takePrey(state: SimState, content: SimContent, slot: number, prey: number): void {
+  const { fauna, food } = state;
+  const { width, height } = state.size;
+  const acts = state.movement.acts;
+  let meat = content.fauna.entries.at(fauna.species[prey] ?? 0)?.hunt.meat ?? 0;
+  const cx = Math.floor(wrapFixedX(fauna.x[prey] ?? 0, width) / FIXED);
+  const cy = Math.floor((fauna.y[prey] ?? 0) / FIXED);
+  fauna.remove(prey);
+  fauna.changed = true;
+  acts.counts.kills++;
+  const group = state.society.groups.get(state.people.columns.group[slot] ?? NONE);
+  if (group === undefined || !(meat > 0)) return;
+  let count = 0;
+  for (let dy = -1; dy <= 1; dy++) {
+    const row = cy + dy;
+    if (row < 0 || row >= height) continue;
+    for (let dx = -1; dx <= 1; dx++) {
+      preyCells[count++] = row * width + ((((cx + dx) % width) + width) % width);
+    }
+  }
+  let taken = 0;
+  for (const cell of preyCells.subarray(0, count).sort()) {
+    if (!(meat > 0)) break;
+    stocksInto(
+      food,
+      state.world,
+      state.size,
+      state.calendars,
+      cell,
+      state.tick,
+      content,
+      preyStocks,
+      0,
+    );
+    const game = preyStocks[1];
+    if (!(game > 0)) continue;
+    const take = Math.min(game, meat);
+    const at = cell * FOOD_STRIDE;
+    food.stocks[at] = preyStocks[0];
+    food.stocks[at + 1] = game - take;
+    food.stocks[at + 2] = preyStocks[2];
+    deplete(food, cell);
+    meat -= take;
+    taken += take;
+  }
+  group.food += taken;
+  acts.counts.meat += taken;
+}
+
 /** La chasse de `slot` finit : l'animal qu'il visait est libre. */
 function releasePrey(state: SimState, slot: number): void {
   const acts = state.movement.acts;
@@ -978,12 +1039,15 @@ function huntDay(
     releasePrey(state, slot);
     if (hit) {
       acts.counts.hits++;
+      takePrey(state, content, slot, prey);
       // Il reste un jour au lieu du coup, puis choisit.
       state.movement.journal?.push(slot, day, hx, hy, 0, 0, 0);
       setUntil(state, slot, day + 1);
       return true;
     }
     acts.counts.misses++;
+    // La harde l'entend le jour même, même au calme (fauna.ts, faunaDay).
+    acts.misses.push(prey, hx, hy);
     // La charge court là où se tenait l'animal, si l'on peut s'y tenir ; sinon, il reste, et sa
     // chasse finit le lendemain.
     if (clearAt(state, ax, ay)) {
