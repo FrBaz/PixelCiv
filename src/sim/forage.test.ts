@@ -1,8 +1,24 @@
 import { describe, expect, it } from 'vitest';
 import type { Biome, Catalog } from '../core/data';
 import type { SpawnGroupCommand } from '../core/protocol';
-import { coverShare, latitude } from '../core/seasons';
-import { coverRamps, RAMP_ONLY } from '../core/snow';
+import { cos, TAU } from '../core/dmath';
+import { coverShare, latitude, southern } from '../core/seasons';
+import {
+  calendarLevel,
+  codeAmplitude,
+  codeTemperature,
+  composeCover,
+  coverRamps,
+  encodeAmplitude,
+  encodeTemperature,
+  iceAt,
+  phaseDay,
+  RAMP_ONLY,
+  snowAt,
+  YEAR_DAYS,
+  type CalendarCover,
+} from '../core/snow';
+import { DAYS_PER_MONTH } from '../core/time';
 import { riverClass } from '../core/world';
 import { DEATH_CAUSES } from './population';
 import {
@@ -323,6 +339,72 @@ describe('survie (tâche 2.4)', () => {
     // Des lacs du nord, dont la glace retient la pêche au printemps, un mois au moins.
     expect(lakes).toBeGreaterThan(15);
     expect(later).toBeGreaterThan(lakes / 2);
+  });
+
+  it('lit, pour chaque case et chaque mois, la couverture de la carte : nord et sud, rivières à la glace', () => {
+    const state = testState();
+    const { width, height } = state.size;
+    const count = width * height;
+    const { covered, capacity } = testData.nomads.stocks.fish;
+    const ramps = coverRamps(testData.seasons);
+    // La part couverte que montre la carte au milieu du mois : la phase de l'hémisphère de la
+    // case, la température de ce jour, la composition des calendriers (ADR 0019, § 1).
+    const shareOf = (cell: number, cover: CalendarCover, tick: number) => {
+      const south = southern(Math.floor(cell / width), height);
+      const phase = phaseDay(((tick % 12) + 0.5) * DAYS_PER_MONTH, south);
+      const annual = codeTemperature(encodeTemperature((state.world.temperature[cell] ?? 0) / 10));
+      const amplitude = codeAmplitude(encodeAmplitude((state.world.amplitude[cell] ?? 0) / 10));
+      const daily = annual + amplitude * cos((TAU * phase) / YEAR_DAYS);
+      const at = cover === 'snow' ? snowAt(cell) : iceAt(cell, count);
+      return composeCover(
+        ramps[cover],
+        annual,
+        amplitude,
+        daily,
+        phase,
+        calendarLevel(state.calendars, at, phase),
+      );
+    };
+    const seen = { north: 0, south: 0, rivers: 0, moving: 0 };
+    for (let cell = 0; cell < count; cell++) {
+      const biome = testData.biomes.entries.at(state.world.biome[cell] ?? 0);
+      if (biome === undefined) continue;
+      const fish = Math.fround(biome.forage.fish);
+      const water = biome.family === 'water';
+      const stream = water
+        ? 0
+        : (testData.nomads.river[riverClass(state.world.drainage[cell] ?? 0)] ?? 0);
+      const cover = biome.seasons.cover === 'none' ? undefined : biome.seasons.cover;
+      if ((fish <= 0 || cover === undefined) && stream <= 0) continue;
+      let changes = false;
+      for (let tick = 0; tick < 12; tick++) {
+        let expected = 0;
+        if (fish > 0) {
+          const share = cover === undefined ? 0 : shareOf(cell, cover, tick);
+          expected += fish * fishSeason(share, covered);
+          if (share > 0 && share < ramps[cover ?? 'snow'].full) changes = true;
+        }
+        if (stream > 0) {
+          const share = shareOf(cell, 'ice', tick);
+          expected += stream * fishSeason(share, covered);
+          if (share > 0 && share < ramps.ice.full) changes = true;
+        }
+        const fishCap = cellFood(state.world, state.size, state.calendars, cell, tick, testData)[5];
+        if (Math.abs(fishCap - expected * capacity) > 1e-6 * capacity) {
+          throw new Error(`case ${String(cell)}, mois ${String(tick)} : ${String(fishCap)}`);
+        }
+      }
+      if (!changes) continue;
+      seen.moving++;
+      if (stream > 0) seen.rivers++;
+      if (southern(Math.floor(cell / width), height)) seen.south++;
+      else seen.north++;
+    }
+    // Des milliers de cases dont la pêche gèle ou dégèle un mois ou l'autre, aux deux hémisphères,
+    // rivières des terres comprises.
+    expect(seen.north).toBeGreaterThan(500);
+    expect(seen.south).toBeGreaterThan(500);
+    expect(seen.rivers).toBeGreaterThan(500);
   });
 
   it('ne compte la pêche du lit d’un fleuve qu’une fois (F-6)', () => {

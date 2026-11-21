@@ -20,6 +20,7 @@ import {
   encodeTemperature,
   iceAt,
   iceCalendar,
+  MELT_START,
   RAMP_ONLY,
   phaseDay,
   RAIN_STEP,
@@ -120,6 +121,36 @@ const COVERS: readonly (readonly [keyof typeof CLIMATES, CalendarCover])[] = [
   ['seaIce', 'sea-ice'],
   ['tundra', 'ice'],
 ];
+
+/**
+ * La fonte d'une série de parts couvertes, jour de phase par jour de phase (0 au jour le plus
+ * chaud) : du dernier jour où elle tient encore MELT_START de son écart entre l'hiver et l'été,
+ * après le jour le plus froid, au premier où elle n'en tient plus que 1 − MELT_START.
+ */
+function meltSpan(series: ArrayLike<number>): { days: number; end: number } {
+  let most = 0;
+  for (let p = COLDEST_PHASE - 30; p <= COLDEST_PHASE + 30; p++)
+    most = Math.max(most, series[p] ?? 0);
+  let floor = Infinity;
+  for (let p = 0; p < YEAR_DAYS; p++) floor = Math.min(floor, series[p] ?? 0);
+  const high = floor + MELT_START * (most - floor);
+  const low = floor + (1 - MELT_START) * (most - floor);
+  let start = COLDEST_PHASE;
+  for (let p = COLDEST_PHASE; p < YEAR_DAYS; p++) if ((series[p] ?? 0) >= high) start = p;
+  let end = YEAR_DAYS;
+  for (let p = start; p < YEAR_DAYS; p++) {
+    if ((series[p] ?? 0) <= low) {
+      end = p;
+      break;
+    }
+  }
+  return { days: end - start, end };
+}
+
+/** La durée de la fonte d'une série (meltSpan), en jours. */
+function meltDays(series: ArrayLike<number>): number {
+  return meltSpan(series).days;
+}
 
 describe('phase des calendriers', () => {
   it('se compte depuis le jour le plus chaud de la case, tiré du facteur de saison', () => {
@@ -469,6 +500,131 @@ describe('calendriers d’un monde', () => {
     expect(lingering).toBeGreaterThan(1_000);
   });
 
+  it('fond lentement : jamais plus vite que la rampe, par case et par région, sur trois mondes', () => {
+    const size = WORLD_SIZES.small;
+    const count = size.width * size.height;
+    const ramps = coverRamps(SEASONS);
+    // Les régions : chaque hémisphère, et des fenêtres de 41 × 31 cases, une vue de PC au zoom 1.
+    const WINDOW = { width: 41, height: 31 };
+    // La fenêtre de l'été borne la fin de la fonte : là où la rampe fond encore dans le mois qui
+    // la précède, la fin de la fonte régionale ne peut plus reculer, et l'inertie des cases qui
+    // fondent plus tôt la resserre de quelques jours (ADR 0019, § 1).
+    const pinned = YEAR_DAYS - SEASONS.summerDays;
+    let cells = 0;
+    let regions = 0;
+    let excluded = 0;
+    let worstExcluded = 0;
+    const slower: number[] = [];
+    for (const seed of ['pixelciv', 'graine', 'autre']) {
+      const world = testWorld(seed);
+      const bytes = worldCalendars(size, world, testData.biomes.entries, SEASONS);
+      const memo = new Map<string, { ramp: Float64Array; share: Float64Array }>();
+      const sums = new Map<string, { ramp: Float64Array; share: Float64Array }>();
+      for (let cell = 0; cell < count; cell++) {
+        const biome = testData.biomes.entries.at(world.biome[cell] ?? 0);
+        const cover = biome?.seasons.cover ?? 'none';
+        if (cover === 'none') continue;
+        const ramp = ramps[cover];
+        const annual = codeTemperature(encodeTemperature((world.temperature[cell] ?? 0) / 10));
+        const amplitude = codeAmplitude(encodeAmplitude((world.amplitude[cell] ?? 0) / 10));
+        if (coverShare(ramp, annual - amplitude) <= coverShare(ramp, annual + amplitude)) continue;
+        const at = cover === 'snow' ? snowAt(cell) : iceAt(cell, count);
+        const key = `${cover},${String(annual)},${String(amplitude)},${calendarBytes(
+          bytes[at] | (bytes[at + 1] << 8) | (bytes[at + 2] << 16) | (bytes[at + 3] << 24),
+        ).join(',')}`;
+        let series = memo.get(key);
+        if (series === undefined) {
+          const daily = (phase: number) => annual + amplitude * cos((TAU * phase) / YEAR_DAYS);
+          series = {
+            ramp: Float64Array.from({ length: YEAR_DAYS }, (_, p) => coverShare(ramp, daily(p))),
+            share: Float64Array.from({ length: YEAR_DAYS }, (_, p) =>
+              composeCover(ramp, annual, amplitude, daily(p), p, calendarLevel(bytes, at, p)),
+            ),
+          };
+          const before = meltDays(series.ramp);
+          const after = meltDays(series.share);
+          if (after < before) throw new Error(`${seed}, case ${String(cell)} : ${String(after)}`);
+          slower.push(after - before);
+          memo.set(key, series);
+        }
+        cells++;
+        const x = cell % size.width;
+        const y = Math.floor(cell / size.width);
+        const half = y < size.height / 2 ? 'nord' : 'sud';
+        for (const name of [
+          `${cover} ${half}`,
+          `${cover} ${String(Math.floor(x / WINDOW.width))},${String(Math.floor(y / WINDOW.height))}`,
+        ]) {
+          let sum = sums.get(name);
+          if (sum === undefined) {
+            sum = { ramp: new Float64Array(YEAR_DAYS), share: new Float64Array(YEAR_DAYS) };
+            sums.set(name, sum);
+          }
+          for (let p = 0; p < YEAR_DAYS; p++) {
+            sum.ramp[p] = (sum.ramp[p] ?? 0) + (series.ramp[p] ?? 0);
+            sum.share[p] = (sum.share[p] ?? 0) + (series.share[p] ?? 0);
+          }
+        }
+      }
+      for (const [name, sum] of sums) {
+        const before = meltSpan(sum.ramp);
+        const after = meltSpan(sum.share);
+        if (before.end >= pinned) {
+          excluded++;
+          worstExcluded = Math.max(worstExcluded, before.days - after.days);
+          continue;
+        }
+        regions++;
+        expect(after.days, `${seed}, ${name}`).toBeGreaterThanOrEqual(before.days);
+      }
+    }
+    expect(cells).toBeGreaterThan(50_000);
+    expect(regions).toBeGreaterThan(200);
+    // Les régions que borne la fenêtre de l'été, presque toutes polaires : resserrées de 10 jours
+    // au plus (8 sur les trois mondes, pour des fontes de 37 à 143 jours).
+    expect(excluded).toBeGreaterThan(0);
+    expect(worstExcluded).toBeLessThanOrEqual(10);
+    // Plus lentement que la rampe : de deux semaines au moins dans la moitié des climats.
+    slower.sort((a, b) => a - b);
+    expect(slower[Math.floor(slower.length / 2)]).toBeGreaterThanOrEqual(14);
+  });
+
+  it('compte les cases dont la fin de la fonte vient des bornes (retard maximal, été), non du réservoir', () => {
+    // Le même réservoir sans bornes : un retard de 120 jours, aucune fenêtre d'été. Là où la fin
+    // recule de plus de deux jours, ce sont les bornes de data/seasons.json qui la font, non la
+    // fonte du réservoir (ADR 0019, § 1) : un changement de ces réglages se voit ici.
+    const loose = loadSettings('variante de data/seasons.json', SeasonsSchema, {
+      ...SEASONS,
+      summerDays: 0,
+      snow: { ...SEASONS.snow, maxLag: 120 },
+      freshIce: { ...SEASONS.freshIce, maxLag: 120 },
+      seaIce: { ...SEASONS.seaIce, maxLag: 120 },
+    });
+    const world = testWorld('graine');
+    const size = WORLD_SIZES.small;
+    const count = size.width * size.height;
+    const biomes = testData.biomes.entries;
+    const bounded = worldCalendars(size, world, biomes, SEASONS);
+    const free = worldCalendars(size, world, biomes, loose);
+    const ramps = coverRamps(SEASONS);
+    const tally = { snow: [0, 0], ice: [0, 0], 'sea-ice': [0, 0] };
+    for (let cell = 0; cell < count; cell++) {
+      const cover = biomes.at(world.biome[cell] ?? 0)?.seasons.cover ?? 'none';
+      if (cover === 'none') continue;
+      const annual = codeTemperature(encodeTemperature((world.temperature[cell] ?? 0) / 10));
+      const amplitude = codeAmplitude(encodeAmplitude((world.amplitude[cell] ?? 0) / 10));
+      const ramp = ramps[cover];
+      if (coverShare(ramp, annual - amplitude) <= coverShare(ramp, annual + amplitude)) continue;
+      const at = cover === 'snow' ? snowAt(cell) : iceAt(cell, count);
+      const entry = tally[cover];
+      entry[1] = (entry[1] ?? 0) + 1;
+      const lag = ((free[at + 1] ?? 0) - (bounded[at + 1] ?? 0)) * (YEAR_DAYS / 255);
+      if (lag > 2) entry[0] = (entry[0] ?? 0) + 1;
+    }
+    // Sur graine : quatre cases enneigées sur dix, près de la moitié des lacs, sept banquises sur dix.
+    expect(tally).toEqual({ snow: [7263, 18126], ice: [215, 479], 'sea-ice': [939, 1336] });
+  });
+
   it('fige les calendriers de climats écrits ici', () => {
     const fingerprint = new Fingerprint();
     for (let annual = -24; annual <= 12; annual += 2.5) {
@@ -483,6 +639,6 @@ describe('calendriers d’un monde', () => {
         }
       }
     }
-    expect(fingerprint.hex()).toBe('5918874f');
+    expect(fingerprint.hex()).toBe('2c6a83b3');
   });
 });

@@ -14,9 +14,12 @@
  *   perd sa fonte au-dessus de 0 °C ;
  * - glace : son épaisseur, qui croît sous `freezeBelow`, d'autant moins vite qu'elle est épaisse
  *   (loi de Stefan, approchée), et fond au-dessus.
- * La montée passe par les jours où le réservoir devient visible (`min`) et où il s'emplit (`full`),
- * la descente par ceux où il quitte son plein et disparaît ; un réservoir qui ne s'emplit pas les
- * mène par son sommet, à la hauteur de ce sommet.
+ * La montée passe par les jours où le réservoir devient visible (`min`) et où il s'emplit (`full`) ;
+ * un réservoir qui ne s'emplit pas la mène par son sommet, à la hauteur de ce sommet. La descente
+ * part avec la fonte de la rampe (au plus tard du jour où celle-ci quitte sa part de l'hiver, et du
+ * point où elle a perdu 1 − MELT_START de son écart) et finit quand le réservoir n'est plus
+ * visible : la neige commence à fondre comme en 7c893a7, puis plus lentement, d'autant plus que le
+ * réservoir est épais.
  *
  * La part couverte (composeCover) compose ce niveau avec la rampe de l'instant de
  * data/seasons.json, celle que la carte montrait avant 2b.7 : r(p), de part rmin au mois le plus
@@ -25,12 +28,15 @@
  *   tôt que la rampe, plus tard là où il neige peu ; la montée est pleine au plus tard au jour le
  *   plus froid, si bien que l'étendue au cœur de l'hiver est celle de la rampe.
  * - Au réchauffement : max(r(p), most × descente). La couverture ne part jamais plus tôt que la
- *   rampe, et reste après le redoux tant que le réservoir tient, d'autant plus qu'il est épais.
+ *   rampe et commence à fondre avec elle ; elle reste après le redoux tant que le réservoir tient,
+ *   d'autant plus qu'il est épais, et sa fonte (de MELT_START à 1 − MELT_START de son écart) ne
+ *   dure jamais moins que celle de la rampe.
  * La part est continue : au jour le plus froid, les deux moitiés valent `most` ; au jour le plus
  * chaud, rmin, le plancher de l'été de la rampe (nul, sauf là où elle couvre encore au mois le plus
  * chaud). La descente finit au plus `maxLag` jours après la rampe, et jamais dans les `summerDays`
  * jours centrés sur le jour le plus chaud : la carte y est celle de la rampe. Montée et descente
- * durent au moins `minTransition` jours.
+ * durent au moins `minTransition` jours. Là où ces deux bornes coupent le réservoir (il tient
+ * encore), la fin de la fonte vient d'elles, non de la fonte (ADR 0019, § 1).
  *
  * Déterminisme : opérations exactes et cosinus de dmath, tabulés, sur des entrées arrondies à la
  * précision de la texture des saisons (demi-degré, huitième de degré) et la pluie par RAIN_STEP
@@ -212,23 +218,55 @@ function iceStore(climate: CalendarClimate, ice: IceCover, step: number, out: Fl
 }
 
 /**
- * Jour de phase où la rampe cesse de couvrir au réchauffement (sa fin), ou YEAR_DAYS si elle couvre
- * encore au jour le plus chaud : le symétrique du jour où elle commence au refroidissement, que la
- * table des pas encadre et qu'une interpolation de la température situe.
+ * Jour de phase où, au réchauffement, la température repasse au-dessus de `celsius` : YEAR_DAYS si
+ * elle reste dessous au jour le plus chaud, COLDEST_PHASE si elle n'y descend jamais. C'est le
+ * symétrique du jour où elle passe dessous au refroidissement, que la table des pas encadre et
+ * qu'une interpolation de la température situe.
  */
-function rampEnd(ramp: CoverRamp, annual: number, amplitude: number, step: number): number {
+function warmingCross(celsius: number, annual: number, amplitude: number, step: number): number {
   const { edges } = phaseTable(step);
   let before = annual + amplitude * edges[0];
-  if (before < ramp.onset) return YEAR_DAYS;
+  if (before < celsius) return YEAR_DAYS;
   for (let k = 1; k < edges.length; k++) {
     const temperature = annual + amplitude * (edges[k] ?? 1);
-    if (temperature < ramp.onset) {
-      const begin = (k - 1 + (before - ramp.onset) / (before - temperature)) * step;
+    if (temperature < celsius) {
+      const begin = (k - 1 + (before - celsius) / (before - temperature)) * step;
       return YEAR_DAYS - begin;
     }
     before = temperature;
   }
   return COLDEST_PHASE;
+}
+
+/** Jour de phase où la rampe cesse de couvrir au réchauffement (sa fin), ou YEAR_DAYS. */
+function rampEnd(ramp: CoverRamp, annual: number, amplitude: number, step: number): number {
+  return warmingCross(ramp.onset, annual, amplitude, step);
+}
+
+/**
+ * Part de la fonte de la rampe où sa fonte a commencé : la descente d'un calendrier passe au plus
+ * tard par le jour où la part de la rampe tombe sous `floor + MELT_START × (most − floor)`. La neige
+ * commence donc à fondre le même jour que la rampe de 7c893a7, et sa fonte, de MELT_START à
+ * 1 − MELT_START de l'écart entre l'hiver et l'été, ne dure jamais moins que celle de la rampe.
+ */
+export const MELT_START = 0.95;
+
+/**
+ * La fonte de la rampe au réchauffement : `leave`, le jour où elle quitte sa part du jour le plus
+ * froid ; `start`, celui où elle passe sous MELT_START de son écart ; `keep`, le niveau du
+ * calendrier qui donne cette part (MELT_START de l'écart, rapporté à `most`).
+ */
+function rampMelt(ramp: CoverRamp, annual: number, amplitude: number, step: number) {
+  const most = coverShare(ramp, annual - amplitude);
+  const floor = coverShare(ramp, annual + amplitude);
+  const share = floor + MELT_START * (most - floor);
+  // La température où la rampe vaut `share`, puis celle où elle quitte son plein.
+  const celsius = ramp.onset - (share / ramp.full) * ramp.span;
+  const leave =
+    most >= ramp.full
+      ? warmingCross(ramp.onset - ramp.span, annual, amplitude, step)
+      : COLDEST_PHASE;
+  return { leave, start: warmingCross(celsius, annual, amplitude, step), keep: share / most };
 }
 
 /**
@@ -248,20 +286,14 @@ function rising(samples: Float64Array, level: number, step: number, reach: boole
 }
 
 /**
- * Le jour où le réservoir, après l'indice `from`, repasse sous `level` (`reach` : sous le plein)
- * ou l'égale (sinon : il n'est plus visible) ; NaN s'il ne le fait pas dans l'année.
+ * Le jour où le réservoir, après l'indice `from`, repasse sous `level` ou l'égale (il n'est plus
+ * visible) ; NaN s'il ne le fait pas dans l'année.
  */
-function falling(
-  samples: Float64Array,
-  level: number,
-  from: number,
-  step: number,
-  reach: boolean,
-): number {
+function falling(samples: Float64Array, level: number, from: number, step: number): number {
   for (let k = from + 1; k < samples.length; k++) {
     const before = samples[k - 1] ?? 0;
     const after = samples[k] ?? 0;
-    if (reach ? before >= level && after < level : before > level && after <= level) {
+    if (before > level && after <= level) {
       return (k - 1 + (before - level) / (before - after)) * step;
     }
   }
@@ -278,17 +310,22 @@ const RAMP_PACKED = pack(...RAMP_ONLY);
 /**
  * Le calendrier d'un réservoir intégré sur une année (`samples`, aux bornes des pas, unimodal : il
  * croît tant que le jour gagne plus qu'il ne perd, puis décroît), de seuils `min` et `full`, dont la
- * descente finit au plus tard à `latest`.
+ * descente finit au plus tard à `latest`, sur une case dont la rampe fond comme `melt` (rampMelt).
  * - La montée finit au plus tard au jour le plus froid : un réservoir lent, ou qui ne devient
  *   jamais visible, s'y emplit en `minTransition` jours au moins.
- * - Un réservoir qui tient encore à `latest` fond pour y finir ; un réservoir jamais visible n'a
- *   pas de descente, et la rampe seule mène le réchauffement.
+ * - La descente finit quand le réservoir n'est plus visible, ou à `latest` s'il tient encore ; un
+ *   réservoir jamais visible n'a pas de descente, et la rampe seule mène le réchauffement. Elle
+ *   part au plus tard du jour où la rampe quitte sa part du jour le plus froid, et passe au plus
+ *   tard par le point où la rampe a perdu 1 − MELT_START de son écart : la neige commence à fondre
+ *   comme la rampe, puis fond plus lentement, jusqu'à ce que le réservoir soit vide. Un jour de
+ *   plus couvre l'interpolation de la température entre deux pas de la table.
  */
 function encodeStore(
   samples: Float64Array,
   min: number,
   full: number,
   latest: number,
+  melt: ReturnType<typeof rampMelt>,
   rules: Rules,
 ): number {
   const { step, minTransition } = rules;
@@ -318,13 +355,22 @@ function encodeStore(
     Math.floor((COLDEST_PHASE - rise) / DAYS_PER_UNIT),
   );
   if (Number.isNaN(start)) return pack(first, 0, rise, transition);
-  // La descente, finie au plus tard à `latest`.
-  const left = reached ? falling(samples, full, peakAt, step, true) : peakAt * step;
-  const gone = falling(samples, min, peakAt, step, false);
-  const end = Number.isNaN(gone) ? latest : Math.min(gone, latest);
-  const melt = Number.isNaN(left) ? end : Math.min(left, end);
-  const last = Math.min(Math.round(end / DAYS_PER_UNIT), Math.floor(latest / DAYS_PER_UNIT));
-  return pack(first, Math.max(0, last), rise, length((end - melt) / top));
+  // La descente, finie au plus tard à `latest`, qui part avec la fonte de la rampe.
+  const gone = falling(samples, min, peakAt, step);
+  const last = Math.max(
+    0,
+    Math.min(
+      Math.round((Number.isNaN(gone) ? latest : Math.min(gone, latest)) / DAYS_PER_UNIT),
+      Math.floor(latest / DAYS_PER_UNIT),
+    ),
+  );
+  const end = last * DAYS_PER_UNIT;
+  const fall = Math.max(
+    transition,
+    Math.ceil(end - melt.leave),
+    Math.ceil((end - melt.start) / melt.keep) + 1,
+  );
+  return pack(first, last, rise, Math.min(255, fall));
 }
 
 /** Les réservoirs d'une intégration, réutilisés d'un calendrier à l'autre. */
@@ -355,6 +401,11 @@ function latestEnd(
   return Math.min(end + maxLag, YEAR_DAYS - rules.summerDays / 2);
 }
 
+/** Température annuelle et demi-amplitude (°C) d'un climat arrondi. */
+function climateOf(climate: CalendarClimate): [number, number] {
+  return [codeTemperature(climate.temperature), codeAmplitude(climate.amplitude)];
+}
+
 /** Calendrier de la neige d'une case, ses quatre octets en un nombre (le premier en poids faible). */
 export function snowCalendar(climate: CalendarClimate, seasons: Seasons): number {
   const { snow } = seasons;
@@ -362,7 +413,8 @@ export function snowCalendar(climate: CalendarClimate, seasons: Seasons): number
   if (Number.isNaN(latest)) return RAMP_PACKED;
   const out = samplesFor(seasons.step);
   snowStore(climate, snow, seasons.step, out);
-  return encodeStore(out, snow.min, snow.full, latest, seasons);
+  const melt = rampMelt(snow.ramp, ...climateOf(climate), seasons.step);
+  return encodeStore(out, snow.min, snow.full, latest, melt, seasons);
 }
 
 /** Calendrier de la glace d'une eau, glace d'eau douce ou banquise. */
@@ -372,7 +424,8 @@ export function iceCalendar(climate: CalendarClimate, sea: boolean, seasons: Sea
   if (Number.isNaN(latest)) return RAMP_PACKED;
   const out = samplesFor(seasons.step);
   iceStore(climate, ice, seasons.step, out);
-  return encodeStore(out, ice.min, ice.full, latest, seasons);
+  const melt = rampMelt(ice.ramp, ...climateOf(climate), seasons.step);
+  return encodeStore(out, ice.min, ice.full, latest, melt, seasons);
 }
 
 /** Les quatre octets d'un calendrier (snowCalendar, iceCalendar). */

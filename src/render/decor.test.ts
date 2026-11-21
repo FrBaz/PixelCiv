@@ -676,11 +676,13 @@ describe('collecte du décor (ADR 0017, § 6 à 8)', () => {
     for (let day = -8; day <= 8; day++) seen.add(check((july * 30 + edge + day + 0.5) / 30, false));
     // Les palettes ont changé en chemin : le feuillage a viré.
     expect(seen.size).toBeGreaterThan(1);
-    // Au cœur de l'hiver, la lumière d'hiver paraît puis disparaît : la source gardée suit.
-    const dark = check(january, false);
-    const lit = check(january + 0.01, true);
+    // Au cœur de l'hiver, la lumière d'hiver paraît puis disparaît : la source gardée suit. La
+    // veille du jour le plus froid, où la neige ne bouge pas : elle commence à fondre dès le
+    // lendemain là où la rampe fond déjà (src/core/snow.ts).
+    const dark = check(january - 0.02, false);
+    const lit = check(january - 0.015, true);
     expect(lit).not.toBe(dark);
-    expect(check(january + 0.02, false)).toBe(dark);
+    expect(check(january - 0.01, false)).toBe(dark);
   });
 
   it('dénude en janvier les caducs d’un hiver froid du nord, les enneige sur la neige de la carte', () => {
