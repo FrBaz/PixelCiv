@@ -993,37 +993,69 @@ export function locateGroups(state: SimState, members: ReadonlyMap<number, reado
   }
 }
 
-/** Case du membre de `list` le plus proche du barycentre des marcheurs, −1 sans personne. */
+/**
+ * Où compte `slot` pour le lieu de son groupe (ADR 0021) : à sa place au camp, s'il s'y repose ou
+ * s'il est parti à une activité, où qu'il soit (au repos ailleurs qu'à sa place, ou en marche
+ * vers un autre but) ; à sa position, s'il part ou marche vers sa place. Le lieu du groupe ne
+ * suit donc pas les allées et venues du jour. Rend l'abscisse et l'ordonnée dans `placeOf`.
+ */
+const placeOf = { x: 0, y: 0 };
+
+function campPlace(state: SimState, slot: number): typeof placeOf {
+  const { x, y, move, homeX, homeY, goalX, goalY } = state.people.columns;
+  const intention = (move[slot] ?? 0) & INTENTION;
+  const home =
+    intention === REST ||
+    (intention === WALK && (goalX[slot] !== homeX[slot] || goalY[slot] !== homeY[slot]));
+  placeOf.x = home ? (homeX[slot] ?? 0) : (x[slot] ?? 0);
+  placeOf.y = home ? (homeY[slot] ?? 0) : (y[slot] ?? 0);
+  return placeOf;
+}
+
+/**
+ * Case du membre de `list` le plus proche du barycentre de ses membres qui ne sont pas portés,
+ * chacun compté à sa place au camp (campPlace), −1 sans personne.
+ */
 export function centralMember(state: SimState, list: readonly number[]): number {
   const { width } = state.size;
-  const { x, y, move } = state.people.columns;
+  const { move } = state.people.columns;
   let first = NO;
+  let firstX = 0;
+  let firstY = 0;
   let sumX = 0;
   let sumY = 0;
   let count = 0;
   for (const slot of list) {
     if (((move[slot] ?? 0) & INTENTION) === CARRIED) continue;
-    if (first < 0) first = slot;
-    sumX += deltaFixedX(x[first] ?? 0, x[slot] ?? 0, width);
-    sumY += (y[slot] ?? 0) - (y[first] ?? 0);
+    const place = campPlace(state, slot);
+    if (first < 0) {
+      first = slot;
+      firstX = place.x;
+      firstY = place.y;
+    }
+    sumX += deltaFixedX(firstX, place.x, width);
+    sumY += place.y - firstY;
     count++;
   }
   if (first < 0) return NO;
-  const cx = (x[first] ?? 0) + sumX / count;
-  const cy = (y[first] ?? 0) + sumY / count;
-  let best = first;
+  const cx = firstX + sumX / count;
+  const cy = firstY + sumY / count;
+  let bestX = firstX;
+  let bestY = firstY;
   let bestDistance = Number.POSITIVE_INFINITY;
   for (const slot of list) {
     if (((move[slot] ?? 0) & INTENTION) === CARRIED) continue;
-    const dx = deltaFixedX(x[slot] ?? 0, cx, width);
-    const dy = cy - (y[slot] ?? 0);
+    const place = campPlace(state, slot);
+    const dx = deltaFixedX(place.x, cx, width);
+    const dy = cy - place.y;
     const distance = dx * dx + dy * dy;
     if (distance < bestDistance) {
-      best = slot;
+      bestX = place.x;
+      bestY = place.y;
       bestDistance = distance;
     }
   }
-  return cellOf(x[best] ?? 0, y[best] ?? 0, width);
+  return cellOf(bestX, bestY, width);
 }
 
 /** Âge en années de `slot`. */
@@ -1370,6 +1402,8 @@ function depart(
   );
   columns.goalX[slot] = gx;
   columns.goalY[slot] = gy;
+  columns.homeX[slot] = gx;
+  columns.homeY[slot] = gy;
   columns.stepDays[slot] = 0;
   movement.hold(slot, gx, gy);
   movement.addActive(slot);
@@ -1471,6 +1505,8 @@ function settle(state: SimState, slot: number): void {
   columns.move[slot] = REST;
   columns.goalX[slot] = x;
   columns.goalY[slot] = y;
+  columns.homeX[slot] = x;
+  columns.homeY[slot] = y;
   columns.stepX[slot] = 0;
   columns.stepY[slot] = 0;
   columns.stepDays[slot] = 0;
@@ -1885,6 +1921,8 @@ function arrive(state: SimState, content: SimContent, arrivals: readonly number[
     );
     columns.goalX[slot] = gx;
     columns.goalY[slot] = gy;
+    columns.homeX[slot] = gx;
+    columns.homeY[slot] = gy;
     columns.move[slot] = (move & RETRY) !== 0 ? move | SETTLE : move | RETRY;
     columns.stepDays[slot] = 0;
     movement.hold(slot, gx, gy);
@@ -1906,20 +1944,22 @@ export function rebuildMovement(state: SimState): void {
   movement.clear();
   findGuides(state, movement.guides, movement.sizes);
   const { alive, end } = people;
-  const { move, x, y, goalX, goalY, depart, group, mother } = people.columns;
+  const { move, x, y, homeX, homeY, depart, group, mother } = people.columns;
   for (let slot = 0; slot < end; slot++) {
     if (alive[slot] !== 1) continue;
     const intention = (move[slot] ?? 0) & INTENTION;
     switch (intention) {
+      // Qui se repose ou marche tient sa place au camp, où qu'il soit : celle où il se tient au
+      // repos, celle qu'il vise en marchant vers le camp (ADR 0021).
       case REST:
-        movement.hold(slot, x[slot] ?? 0, y[slot] ?? 0);
+        movement.hold(slot, homeX[slot] ?? 0, homeY[slot] ?? 0);
         break;
       case LEAVE:
         movement.hold(slot, x[slot] ?? 0, y[slot] ?? 0, true);
         movement.leaving[depart[slot] ?? 0]?.push(slot);
         break;
       case WALK:
-        movement.hold(slot, goalX[slot] ?? 0, goalY[slot] ?? 0);
+        movement.hold(slot, homeX[slot] ?? 0, homeY[slot] ?? 0);
         movement.addActive(slot);
         break;
       case CARRIED: {
@@ -2150,6 +2190,8 @@ export function planMonth(
     move[slot] = REST;
     columns.goalX[slot] = startX;
     columns.goalY[slot] = my;
+    columns.homeX[slot] = startX;
+    columns.homeY[slot] = my;
     columns.stepDays[slot] = 0;
     if (mother < 0) {
       // Orphelin : il se pose là, et part avec son groupe.
@@ -2174,6 +2216,7 @@ export function planMonth(
     if (passableAt(state, targetX, my) && segmentClear(state, startX, my, targetX, my)) {
       move[slot] = WALK | SETTLE;
       columns.goalX[slot] = targetX;
+      columns.homeX[slot] = targetX;
       movement.hold(slot, targetX, my);
       movement.addActive(slot);
     } else {

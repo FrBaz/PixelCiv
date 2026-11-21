@@ -32,8 +32,10 @@ export const SAVE_MAGIC = 'PXCV';
  * 2b.3 : la position et le mouvement de chacun, sa grégarité, et le camp de chaque groupe ;
  * les marches des groupes disparaissent (ADR 0014). 8, le gibier de la tâche 2b.6 : ses
  * animaux et ses hardes, en colonnes (ADR 0018) ; une partie de la 7 le reçoit à la relecture.
+ * 9, les activités de la tâche 2b.8 : l'activité de chacun, le jour de son prochain choix et sa
+ * place au camp (ADR 0021) ; une partie de la 8 les reçoit, déduites de son état, à la relecture.
  */
-export const SAVE_FORMAT_VERSION = 8;
+export const SAVE_FORMAT_VERSION = 9;
 
 /**
  * Taille maximale d'une sauvegarde, compressée ou non, en octets. Elle borne la mémoire

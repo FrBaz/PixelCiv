@@ -4,6 +4,7 @@ import { altitudeLevelIndex } from '../core/altitude';
 import { cellIndex, createState, takeDirtyChunks } from './state';
 import { step } from './day';
 import { applyCommand, fingerprint, type SimContent } from './step';
+import { ACTIVITY_COLUMNS } from './population';
 import { terrainLands } from './terrain';
 import {
   firstCellOf,
@@ -200,8 +201,11 @@ describe('pas', () => {
     // un an (de f363d517 à 710d1a9b). Relecture de 2b.6 : le levraut prend pour domaine la case
     // où il naît, et un territoire vide se repeuple dès que sa cible admet un animal ; 44
     // naissances au lieu de 43 (de 710d1a9b à 30a730e1).
-    expect(fingerprint(state, { fauna: false })).toBe('f363d517');
-    expect(fingerprint(state)).toBe('30a730e1');
+    // Tâche 2b.8 : quatre colonnes des activités, sans activités encore ; sans elles, l'empreinte
+    // reste celle d'avant.
+    const omit = ACTIVITY_COLUMNS;
+    expect(fingerprint(state, { fauna: false, omit })).toBe('f363d517');
+    expect(fingerprint(state, { omit })).toBe('30a730e1');
   });
 
   it("redonnent l'empreinte de référence de vingt ans d'une population (ADR 0003)", () => {
@@ -243,8 +247,11 @@ describe('pas', () => {
     // encore un but, sans approcher l'humain le plus proche, au lieu d'y rester figée ; les
     // humains ne changent pas (de 54a97017 à 814e6718). Relecture de 2b.6 : levrauts et
     // territoires minces, comme ci-dessus ; 875 animaux au lieu de 872 (de 814e6718 à e064350c).
-    expect(fingerprint(state, { fauna: false })).toBe('567d06a4');
-    expect(fingerprint(state)).toBe('e064350c');
+    // Tâche 2b.8 : quatre colonnes des activités, sans activités encore ; sans elles, l'empreinte
+    // reste celle d'avant.
+    const omit = ACTIVITY_COLUMNS;
+    expect(fingerprint(state, { fauna: false, omit })).toBe('567d06a4');
+    expect(fingerprint(state, { omit })).toBe('e064350c');
   });
 
   it("redonnent l'empreinte de référence de trente mois de trois mille individus (ADR 0011)", () => {
@@ -288,8 +295,11 @@ describe('pas', () => {
     // lentement (ADR 0019, § 1) ; la pêche change aux mois du dégel : 2 291 vivants au lieu de
     // 2 310, 173 groupes au lieu de 177 (de 2f85a3da à 199961c5 sans le gibier, de 8384496a à
     // f7fb307c avec lui).
-    expect(fingerprint(state, { fauna: false })).toBe('199961c5');
-    expect(fingerprint(state)).toBe('f7fb307c');
+    // Tâche 2b.8 : quatre colonnes des activités, sans activités encore ; sans elles, l'empreinte
+    // reste celle d'avant.
+    const omit = ACTIVITY_COLUMNS;
+    expect(fingerprint(state, { fauna: false, omit })).toBe('199961c5');
+    expect(fingerprint(state, { omit })).toBe('f7fb307c');
   });
 });
 

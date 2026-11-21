@@ -186,6 +186,17 @@ export const CHRONICLE_PAGE = 100;
  */
 export const GROUP_STRIDE = 5;
 
+/**
+ * Octet d'activité d'un humain (ADR 0021, ADR 0022) : le rang de son activité dans
+ * data/activities.json sur ses quatre bits de poids faible (ACT_RANK), ACT_NONE pour qui n'en a
+ * pas (un porté, qui prend l'image de sa mère) ; ACT_RUN, il court (le jeu, la charge du
+ * chasseur) ; ACT_STRIKE, sur une étape seulement : le chasseur frappe au départ de cette étape.
+ */
+export const ACT_RANK = 0x0f;
+export const ACT_NONE = 0x0f;
+export const ACT_RUN = 0x10;
+export const ACT_STRIKE = 0x20;
+
 /** Aucun porteur, dans GroupsFrame.carriers. */
 export const NO_CARRIER = 0xffffffff;
 

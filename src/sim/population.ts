@@ -14,6 +14,8 @@
  * dans cet ordre, et la sauvegarde le garde, avec la pile des emplacements libres.
  */
 
+import { ACT_NONE } from '../core/protocol';
+
 /** Mots du génome de chaque individu (ADR 0011). */
 export const GENOME_WORDS = 4;
 /** Parts d'ascendance de chaque individu : une par sous-espèce de son espèce, au plus. */
@@ -55,6 +57,15 @@ export const JOIN = 0x40;
 export const SETTLE = 0x80;
 /** Bits connus de `move`, hors de l'intention. */
 export const MOVE_BITS = RETRY | DETOUR | LATE | JOIN | SETTLE;
+
+/**
+ * Colonne `activity` (ADR 0021) : l'octet d'activité du protocole 9 (core/protocol.ts), le rang
+ * de l'activité dans data/activities.json sur ses quatre bits de poids faible, NO_ACTIVITY (15)
+ * pour un porté ou qui n'en a pas encore, et la charge du chasseur qui court (ACT_RUN).
+ */
+export const NO_ACTIVITY = ACT_NONE;
+/** Colonnes des activités (tâche 2b.8), que l'empreinte des tests peut omettre. */
+export const ACTIVITY_COLUMNS = ['activity', 'until', 'homeX', 'homeY'] as const;
 
 /**
  * Causes de mort (IND-04, SAI-03), dans l'ordre de leur code dans l'archive : une cause
@@ -151,6 +162,20 @@ export const LIVING_COLUMNS = {
   stepX: { type: Int32Array, width: 1 },
   stepY: { type: Int32Array, width: 1 },
   stepDays: { type: Uint16Array, width: 1 },
+  /** Activité (ADR 0021) : l'octet d'activité, rang et charge (NO_ACTIVITY : aucune). */
+  activity: { type: Uint8Array, width: 1 },
+  /**
+   * Jour (dayIndex) où il choisit son activité suivante ; −j en chemin vers le lieu d'une
+   * activité, où il restera j jours, comptés de son arrivée ; 0 sans choix à venir : un porté,
+   * qui suit son groupe vers son camp, ou qui n'a pas d'activité.
+   */
+  until: { type: Int32Array, width: 1 },
+  /**
+   * Sa place au camp, en unités, que tient la grille des places où qu'il soit (ADR 0021) : il s'y
+   * tient au repos, en revient, et part de là vers ses activités.
+   */
+  homeX: { type: Int32Array, width: 1 },
+  homeY: { type: Int32Array, width: 1 },
 } as const satisfies Record<string, ColumnSpec>;
 
 export type LivingColumn = keyof typeof LIVING_COLUMNS;
@@ -357,6 +382,10 @@ export class Population {
     columns.stepX[slot] = 0;
     columns.stepY[slot] = 0;
     columns.stepDays[slot] = 0;
+    columns.activity[slot] = NO_ACTIVITY;
+    columns.until[slot] = 0;
+    columns.homeX[slot] = person.x;
+    columns.homeY[slot] = person.y;
     return slot;
   }
 

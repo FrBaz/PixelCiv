@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { step } from './day';
+import { ACTIVITY_COLUMNS } from './population';
 import { fingerprint } from './step';
 import { scatteredGroups, testData, testState } from './testing';
 
@@ -29,7 +30,8 @@ describe('cause de la troisième empreinte de référence (ADR 0019, § 1)', () 
     const state = testState();
     step(state, scatteredGroups(state, 100), testData);
     for (let tick = 1; tick < 30; tick++) step(state, [], testData);
-    expect(fingerprint(state, { fauna: false })).toBe('cd841d8f');
-    expect(fingerprint(state)).toBe('76a3c458');
+    const omit = ACTIVITY_COLUMNS;
+    expect(fingerprint(state, { fauna: false, omit })).toBe('cd841d8f');
+    expect(fingerprint(state, { omit })).toBe('76a3c458');
   });
 });

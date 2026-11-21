@@ -10,12 +10,23 @@ import { describeMovement } from './movement';
 import { FAUNA_STREAM } from './fauna';
 import { SAVED_FAUNA_SHARE } from './faunaSave';
 import { catalogOf } from '../core/data/catalog';
-import { ANCESTRY_SLOTS, CARRIED, INTENTION, LEAVE, NONE, REST, WALK } from './population';
+import {
+  ACTIVITY_COLUMNS,
+  ANCESTRY_SLOTS,
+  CARRIED,
+  INTENTION,
+  LEAVE,
+  NONE,
+  REST,
+  WALK,
+} from './population';
 import { replay } from './replay';
 import { MIGRATIONS, restoreState, saveState } from './save';
 import type { SimState } from './state';
 import { advanceDay, step } from './day';
 import { applyCommands, fingerprint } from './step';
+import { dayIndex } from '../core/time';
+import { ACT_RUN } from '../core/protocol';
 import {
   cellsOf,
   firstCellOf,
@@ -258,8 +269,9 @@ describe('sauvegarde de la simulation', () => {
   it('refuse les sauvegardes de la phase 0, sans monde à reprendre', async () => {
     // Seules les versions 3, celle de la phase 1, qui reçoit une population vide, 4, celle
     // de la phase 2 avant sa relecture, 5, celle d'avant les deux horloges, 6, celle d'avant
-    // les individus hors de la grille, et 7, celle d'avant le gibier, se migrent.
-    expect(Object.keys(MIGRATIONS)).toEqual(['3', '4', '5', '6', '7']);
+    // les individus hors de la grille, 7, celle d'avant le gibier, et 8, celle d'avant les
+    // activités, se migrent.
+    expect(Object.keys(MIGRATIONS)).toEqual(['3', '4', '5', '6', '7', '8']);
     for (let version = 1; version < 3; version++) {
       const old = encodeSave(save(played(1)), version);
       await expect(readSave(old, MIGRATIONS)).rejects.toMatchObject({ code: 'obsolete' });
@@ -891,12 +903,196 @@ describe('sauvegarde du gibier (version 8, ADR 0018, § 5)', () => {
       await readSave(encodeSave({ ...v7, json: { ...json, rng } }, 7), MIGRATIONS),
     );
     expect(fingerprint(clean)).toBe(fingerprint(migrated));
-    // La migration ne touche pas aux humains ; la partie continue de façon déterministe.
-    expect(fingerprint(migrated, { fauna: false })).toBe(fingerprint(original, { fauna: false }));
+    // La migration ne touche pas aux humains, hors des colonnes des activités, qu'elle déduit ; la
+    // partie continue de façon déterministe.
+    const omit = ACTIVITY_COLUMNS;
+    expect(fingerprint(migrated, { fauna: false, omit })).toBe(
+      fingerprint(original, { fauna: false, omit }),
+    );
     for (let month = 0; month < 2; month++) {
       step(migrated, [], testData);
       step(control, [], testData);
       expect(fingerprint(control), `mois ${String(month)}`).toBe(fingerprint(migrated));
+    }
+  });
+});
+
+describe('sauvegarde des activités (version 9, ADR 0021)', () => {
+  /** Une partie de groupes nomades, arrêtée au jour 6 d'un mois où ils marchent. */
+  function midMonth(): SimState {
+    const state = testState();
+    step(state, scatteredGroups(state, 30, 30), testData);
+    step(state, [], testData);
+    for (let passed = 0; passed < 6; passed++) advanceDay(state, [], testData);
+    return state;
+  }
+  const rankOf = (id: string) => testData.activities.activities.findIndex((a) => a.id === id);
+  /** Un vivant de l'intention `intention`, et un porté. */
+  function slots(state: SimState) {
+    const { people } = state;
+    let rest = -1;
+    let walker = -1;
+    let carried = -1;
+    people.forEach((slot) => {
+      const intention = people.get('move', slot) & INTENTION;
+      if (intention === REST && rest < 0) rest = slot;
+      if (intention === WALK && walker < 0) walker = slot;
+      if (intention === CARRIED && carried < 0) carried = slot;
+    });
+    expect(Math.min(rest, walker, carried)).toBeGreaterThanOrEqual(0);
+    return { rest, walker, carried };
+  }
+
+  it('migre une partie de la version 8 : places au camp déduites de l’état, relue deux fois à l’identique', async () => {
+    const original = midMonth();
+    const current = save(original);
+    const json = current.json as { people: Record<string, unknown> };
+    const { activities: _activities, ...people } = json.people;
+    const v8: SaveData = {
+      meta: current.meta,
+      json: { ...json, people },
+      arrays: Object.fromEntries(
+        Object.entries(current.arrays).filter(
+          ([name]) => !/^people(Activity|Until|HomeX|HomeY)$/.test(name),
+        ),
+      ),
+    };
+    const read = await readSave(encodeSave(v8, 8), MIGRATIONS);
+    expect((read.json as { people: { activities: unknown } }).people.activities).toBeNull();
+    const migrated = restore(read);
+    const control = restore(read);
+    expect(fingerprint(control)).toBe(fingerprint(migrated));
+    // La place au camp : celle que vise qui marche vers son camp, la position des autres.
+    const { columns } = migrated.people;
+    let checked = 0;
+    migrated.people.forEach((slot) => {
+      const walking = ((columns.move[slot] ?? 0) & INTENTION) === WALK;
+      expect(columns.homeX[slot]).toBe(walking ? columns.goalX[slot] : columns.x[slot]);
+      expect(columns.homeY[slot]).toBe(walking ? columns.goalY[slot] : columns.y[slot]);
+      checked++;
+    });
+    expect(checked).toBeGreaterThan(500);
+    // Hors des colonnes des activités, la partie est celle d'avant ; elle se poursuit à
+    // l'identique d'une relecture à l'autre.
+    const omit = ACTIVITY_COLUMNS;
+    expect(fingerprint(migrated, { omit })).toBe(fingerprint(original, { omit }));
+    for (let day = 0; day < 40; day++) {
+      advanceDay(migrated, [], testData);
+      advanceDay(control, [], testData);
+    }
+    expect(fingerprint(control)).toBe(fingerprint(migrated));
+  });
+
+  it('ramène les activités sauvegardées à celles du contenu d’aujourd’hui, par leurs noms', () => {
+    const original = midMonth();
+    const { rest, walker } = slots(original);
+    const now = dayIndex(original);
+    const { columns } = original.people;
+    columns.activity[rest] = rankOf('gather');
+    columns.until[rest] = now + 5;
+    columns.activity[walker] = rankOf('follow');
+    columns.until[walker] = 0;
+    const data = save(original);
+    expect((data.json as { people: { activities: string[] } }).people.activities).toEqual(
+      testData.activities.activities.map((a) => a.id),
+    );
+    // Le même contenu, ses activités dans l'ordre inverse : chacun garde la sienne.
+    const reversed = [...testData.activities.activities].reverse();
+    const content = { ...testData, activities: { ...testData.activities, activities: reversed } };
+    const restored = restoreState(data, content);
+    const idOf = (state: SimState, slot: number) =>
+      reversed[state.people.columns.activity[slot] ?? 15]?.id;
+    expect(idOf(restored, rest)).toBe('gather');
+    expect(idOf(restored, walker)).toBe('follow');
+    expect(restored.people.columns.until[rest]).toBe(now + 5);
+    // Une activité qui a disparu du contenu rend la partie trop ancienne.
+    const fewer = {
+      ...testData,
+      activities: {
+        ...testData.activities,
+        activities: testData.activities.activities.filter((a) => a.id !== 'water'),
+      },
+    };
+    expect(() => restoreState(data, fewer)).toThrow(
+      expect.objectContaining({ code: 'obsolete', message: 'activité inconnue : water' }),
+    );
+  });
+
+  it('refuse une activité, un jour du prochain choix ou une place au camp abîmés', () => {
+    const original = midMonth();
+    const { rest, walker, carried } = slots(original);
+    const now = dayIndex(original);
+    const gather = rankOf('gather');
+    const hunt = rankOf('hunt');
+    const follow = rankOf('follow');
+    const { columns } = original.people;
+    // Un témoin valide : qui cueille, qui chasse en courant, qui part vers le lieu de la sienne.
+    columns.activity[rest] = gather;
+    columns.until[rest] = now;
+    columns.activity[walker] = hunt | ACT_RUN;
+    columns.until[walker] = now + 1000;
+    const data = save(original);
+    expect(fingerprint(restore(data))).toBe(fingerprint(original));
+    const column = (name: string, slot: number, value: number): SaveData => {
+      const key = `people${name.charAt(0).toUpperCase()}${name.slice(1)}`;
+      if (!Object.hasOwn(data.arrays, key)) throw new Error(`colonne ${key} absente`);
+      const copy = data.arrays[key].slice();
+      copy[slot] = value;
+      return { ...data, arrays: { ...data.arrays, [key]: copy } };
+    };
+    const both = (slot: number, activity: number, until: number): SaveData => {
+      const first = column('activity', slot, activity);
+      const key = 'peopleUntil';
+      const copy = first.arrays[key].slice();
+      copy[slot] = until;
+      return { ...first, arrays: { ...first.arrays, [key]: copy } };
+    };
+    const { width, height } = original.size;
+    const json = data.json as { people: Record<string, unknown> };
+    const cases: [string, SaveData, string][] = [
+      ['rang inconnu', column('activity', rest, 9), 'activité inconnue'],
+      ['bit inconnu', column('activity', rest, gather | 0x20), 'activité illisible'],
+      [
+        'course hors de la chasse',
+        column('activity', rest, gather | ACT_RUN),
+        'activité illisible',
+      ],
+      ['porté qui cueille', both(carried, gather, now + 3), 'un porté a une activité'],
+      ['choix sans activité', column('activity', rest, 15), 'jour de la prochaine activité'],
+      ['activité sans choix', column('until', rest, 0), 'jour de la prochaine activité'],
+      ['choix passé', column('until', rest, now - 1), 'jour de la prochaine activité'],
+      ['choix lointain', column('until', walker, now + 1001), 'jour de la prochaine activité'],
+      ['suivi du groupe avec un choix', column('activity', rest, follow), 'jour de la prochaine'],
+      ['séjour sans marche', column('until', rest, -3), 'jour de la prochaine activité'],
+      ['séjour trop long', both(walker, gather, -61), 'jour de la prochaine activité'],
+      [
+        'place au camp à l’est',
+        column('homeX', rest, width * FIXED),
+        'place au camp hors du monde',
+      ],
+      ['place au camp négative', column('homeY', rest, -1), 'place au camp hors du monde'],
+      ['place au camp au pôle', column('homeY', rest, height * FIXED), 'place au camp hors du'],
+      [
+        'trop d’activités nommées',
+        {
+          ...data,
+          json: {
+            ...json,
+            people: { ...json.people, activities: Array.from({ length: 16 }, () => 'rest') },
+          },
+        },
+        'population illisible',
+      ],
+    ];
+    // Le séjour d'un marcheur vers le lieu de son activité, lui, se relit.
+    expect(() => restore(both(walker, gather, -60))).not.toThrow();
+    for (const [label, broken, reason] of cases) {
+      expect(() => restore(broken), label).toThrow(
+        expect.objectContaining({
+          code: 'corrupt',
+          message: expect.stringContaining(reason) as string,
+        }) as Error,
+      );
     }
   });
 });
