@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import type { Biome, Catalog } from '../core/data';
 import type { SpawnGroupCommand } from '../core/protocol';
-import { COVER_RAMPS, coverShare, latitude } from '../core/seasons';
-import { RAMP_ONLY } from '../core/snow';
+import { coverShare, latitude } from '../core/seasons';
+import { coverRamps, RAMP_ONLY } from '../core/snow';
 import { riverClass } from '../core/world';
 import { DEATH_CAUSES } from './population';
 import {
@@ -58,6 +58,9 @@ function nordics(at: { x: number; y: number }, count: number): SpawnGroupCommand
 /** Pas de janvier et de juillet de la première année : le mois le plus froid et le plus chaud au nord. */
 const JANUARY = 0;
 const JULY = 6;
+
+/** Les rampes des couvertures, de data/seasons.json. */
+const COVER_RAMPS = coverRamps(testData.seasons);
 
 /** Températures du mois le plus froid et du plus chaud d'une case, en °C. */
 function extremes(state: SimState, cell: number) {
@@ -235,7 +238,7 @@ describe('survie (tâche 2.4)', () => {
     expect(fishSeason(1, covered)).toBeCloseTo(covered, 12);
     const fishCap = (cell: number, tick: number) =>
       cellFood(state.world, state.size, state.calendars, cell, tick, testData)[5];
-    // Les seuils sont ceux du shader de la carte, qui lit aussi COVER_RAMPS.
+    // Les seuils sont ceux du shader de la carte, qui lit aussi les rampes de data/seasons.json.
     const iceBelow = COVER_RAMPS.ice.onset - COVER_RAMPS.ice.span;
     const seaIceBelow = COVER_RAMPS['sea-ice'].onset - COVER_RAMPS['sea-ice'].span;
     // Une rivière dans une case de terre, l'eau douce qui gèle la première.

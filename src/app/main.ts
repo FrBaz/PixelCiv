@@ -136,7 +136,7 @@ async function main(): Promise<void> {
   const brush = query.get('brush');
   const mapElement = element('map');
   const app = await createRenderer(mapElement);
-  const map = new MapView(app, data.biomes.entries);
+  const map = new MapView(app, data.biomes.entries, data.seasons);
   // L'espèce de référence : la stature de son adulte moyen fixe la densité des individus de
   // la vue, et l'écart de ses nourrissons portés (ADR 0014, § 6).
   const species = data.species.entries.at(0);
@@ -602,7 +602,13 @@ async function main(): Promise<void> {
         worldLayers = layers;
         decor = decorOff
           ? undefined
-          : new DecorSource(data, layers, message.world.size, message.world.params.seed);
+          : new DecorSource(
+              data,
+              layers,
+              message.world.size,
+              message.world.params.seed,
+              message.calendars,
+            );
         if (decor !== undefined && shadowMethod !== undefined) decor.shadow = shadowMethod;
         game = faunaOff ? undefined : new FaunaLayer(data, fauna, message.world.size.width);
         passability = new Uint8Array(layers.biome.length);
@@ -623,7 +629,9 @@ async function main(): Promise<void> {
         chronicleLoading.value = false;
         showFacts(snapshotFacts(message.chronicle));
         const { width } = message.world.size;
-        map.setWorld(message.world, layers, (mode) => overlayTexels(mode, layers, modeData, width));
+        map.setWorld(message.world, layers, message.calendars, (mode) =>
+          overlayTexels(mode, layers, modeData, width),
+        );
         const ground = map.ground;
         if (ground !== undefined) people.setGround(ground);
         actions.setMapMode(mapMode.value);

@@ -15,6 +15,11 @@
  * mêmes textures, et ne prend celui de l'onde que si elle s'y voit (force non nulle, échelle
  * 1 ou plus, mode naturel) et que la partie visible du bloc touche une tuile de mer de sa
  * cuisson (seaMask). L'onde ne recuit rien : seuls ses uniformes changent, à chaque pas.
+ *
+ * La neige et la glace à inertie (tâche 2b.7, ADR 0019) : les calendriers de chaque case, que
+ * l'instantané apporte du worker, forment une texture de W × 2H texels (la neige, puis la glace),
+ * lue au plus proche ; le shader en tire la part du jour continu (uDay). Rien ne se recuit, et
+ * aucun pas ne les change.
  */
 import {
   BufferImageSource,
@@ -26,8 +31,10 @@ import {
   UniformGroup,
   type Application,
 } from 'pixi.js';
-import type { Biome } from '../core/data/schemas';
+import type { Biome, Seasons } from '../core/data/schemas';
 import { seasonFactor } from '../core/seasons';
+import { CALENDAR_BYTES } from '../core/snow';
+import { DAYS_PER_MONTH } from '../core/time';
 import type { ChunkPatch, WorldInfo } from '../core/protocol';
 import {
   CHUNK_SIZE,
@@ -45,7 +52,7 @@ import {
   type ChunkPlacement,
   type Extent,
 } from './camera';
-import { MAP_FRAGMENT, MAP_FRAGMENT_WAVES, MAP_VERTEX } from './mapShader';
+import { coverUniforms, MAP_FRAGMENT, MAP_FRAGMENT_WAVES, MAP_VERTEX } from './mapShader';
 import { seasonPalettes, seasonTexels, shadowTones } from './seasons';
 import type { GroundTextures } from './humanShader';
 import {
@@ -137,13 +144,18 @@ export class MapView {
     uvs: new Float32Array([0, 0, 1, 0, 1, 1, 0, 1]),
     indices: new Uint32Array([0, 1, 2, 0, 2, 3]),
   });
-  /** Réglages communs à tous les blocs : saison, mode, trame, tailles. */
+  /** Réglages communs à tous les blocs : saison, couvertures, mode, trame, tailles. */
   private readonly globals = new UniformGroup({
     uWorldCells: { value: new Float32Array([1, 1]), type: 'vec2<f32>' },
     uBiomes: { value: 1, type: 'f32' },
     uRiver: { value: 0, type: 'f32' },
     uSnow: { value: 0, type: 'f32' },
     uSeason: { value: 0, type: 'f32' },
+    uDay: { value: 0, type: 'f32' },
+    uSnowRamp: { value: new Float32Array(3), type: 'vec3<f32>' },
+    uIceRamp: { value: new Float32Array(3), type: 'vec3<f32>' },
+    uSeaIceRamp: { value: new Float32Array(3), type: 'vec3<f32>' },
+    uForestSnow: { value: 1, type: 'f32' },
     uMode: { value: 0, type: 'f32' },
     uRiverColor: { value: new Float32Array([0, 0, 1]), type: 'vec3<f32>' },
     uFine: { value: 1, type: 'f32' },
@@ -174,6 +186,7 @@ export class MapView {
         type: 'vec4<f32>',
         size: MAX_WAVE_BIOMES,
       },
+      uCalmDays: { value: 1, type: 'f32' },
     },
     { isStatic: true },
   );
@@ -202,13 +215,24 @@ export class MapView {
   private layers: WorldLayers | undefined;
   private chunks: ChunkView[] = [];
   private data: BufferImageSource | undefined;
+  /** Calendriers de la neige et de la glace du monde, W × 2H texels (src/core/snow.ts). */
+  private calendars: BufferImageSource | undefined;
+  /** Les rampes et la part de neige des forêts (data/seasons.json), pour l'ombre « ground ». */
+  private readonly covers: ReturnType<typeof coverUniforms>;
   private overlay: BufferImageSource | undefined;
   private overlays: OverlayBuilder | undefined;
   private mode: MapMode = 'natural';
 
-  constructor(app: Application, biomes: readonly Biome[]) {
+  constructor(app: Application, biomes: readonly Biome[], seasons: Seasons) {
     this.app = app;
     this.biomes = biomes;
+    this.covers = coverUniforms(seasons);
+    const { uniforms } = this.globals;
+    uniforms.uSnowRamp = this.covers.snow;
+    uniforms.uIceRamp = this.covers.ice;
+    uniforms.uSeaIceRamp = this.covers.seaIce;
+    uniforms.uForestSnow = this.covers.forest;
+    this.waveGlobals.uniforms.uCalmDays = seasons.calmDays;
     this.bake = bakeBiomes(biomes);
     this.riverBiome = biomes.findIndex((biome) => biome.id === 'river');
     const river = this.bake.at(this.riverBiome);
@@ -247,16 +271,21 @@ export class MapView {
 
   /**
    * Le sol du monde, que lit l'ombre portée « ground » des objets (people.ts) : la texture des
-   * saisons, une valeur par case, et les tons d'ombre des biomes. Une texture neuve par monde.
+   * saisons et celle des calendriers, une valeur par case, les tons d'ombre des biomes et les
+   * rampes des couvertures. Des textures neuves par monde.
    */
   get ground(): GroundTextures | undefined {
-    if (this.data === undefined || this.size === undefined) return undefined;
+    if (this.data === undefined || this.calendars === undefined || this.size === undefined) {
+      return undefined;
+    }
     return {
       data: this.data,
+      calendars: this.calendars,
       tones: this.tones,
       columns: this.size.width,
       rows: this.size.height,
       biomes: this.biomes.length,
+      covers: this.covers,
     };
   }
 
@@ -265,8 +294,16 @@ export class MapView {
     return this.baker.remaining;
   }
 
-  /** Nouveau monde : textures neuves, cuisson de tous les blocs, visibles d'abord. */
-  setWorld(info: WorldInfo, layers: WorldLayers, overlays: OverlayBuilder): void {
+  /**
+   * Nouveau monde : textures neuves, cuisson de tous les blocs, visibles d'abord. `calendars` :
+   * ceux de l'instantané (protocole 8), huit octets par case, gardés tels quels dans leur texture.
+   */
+  setWorld(
+    info: WorldInfo,
+    layers: WorldLayers,
+    calendars: Uint8Array<ArrayBuffer>,
+    overlays: OverlayBuilder,
+  ): void {
     // Les shaders d'abord : un shader vivant garderait ses textures détruites, et Pixi
     // s'en plaindrait à chaque bloc.
     for (const chunk of this.chunks) {
@@ -278,14 +315,19 @@ export class MapView {
     for (const mesh of this.copies) mesh.destroy();
     this.copies = [];
     this.data?.destroy();
+    this.calendars?.destroy();
     this.overlay?.destroy();
     const { size } = info;
+    if (calendars.length !== size.width * size.height * 2 * CALENDAR_BYTES) {
+      throw new RangeError('calendriers de la neige et de la glace : longueur inattendue');
+    }
     const grid = chunkGrid(size);
     this.grid = grid;
     this.size = size;
     this.layers = layers;
     this.overlays = overlays;
     this.data = dataSource(seasonTexels(size, layers, this.biomes), size.width, size.height);
+    this.calendars = dataSource(calendars, size.width, size.height * 2);
     this.overlay = dataSource(
       new Uint8Array(size.width * size.height * 4),
       size.width,
@@ -333,13 +375,15 @@ export class MapView {
 
   /**
    * Signature de ce que la carte a dessiné à la dernière image, hors caméra et écran : sa
-   * version, la saison, la force de l'onde, et son pas si l'onde se voyait (wavesShown). Le
-   * rendu à la demande ne redessine l'image que si elle change (src/render/frameGate.ts).
+   * version, la saison et le jour, la force de l'onde, et son pas si l'onde se voyait
+   * (wavesShown). Le rendu à la demande ne redessine l'image que si elle change
+   * (src/render/frameGate.ts).
    */
   signature(): readonly number[] {
     return [
       this.version,
       this.globals.uniforms.uSeason,
+      this.globals.uniforms.uDay,
       this.waveForce,
       this.seaShown ? this.waveStep : -1,
     ];
@@ -391,9 +435,13 @@ export class MapView {
     this.version++;
   }
 
-  /** Mois courant, continu : 0 au début de janvier, 11,5 à la mi-décembre. */
+  /**
+   * Mois courant, continu : 0 au début de janvier, 11,5 à la mi-décembre. Il donne le facteur de
+   * saison et le jour continu de l'année, que lisent les calendriers de la neige et de la glace.
+   */
   setSeason(month: number): void {
     this.globals.uniforms.uSeason = seasonFactor(month);
+    this.globals.uniforms.uDay = month * DAYS_PER_MONTH;
   }
 
   /** Mode de carte : sa superposition se calcule à la demande. */
@@ -488,6 +536,7 @@ export class MapView {
     return {
       uChunk: source,
       uData: this.data ?? source,
+      uCalendars: this.calendars ?? source,
       uPalettes: this.palettes,
       uOverlay: this.overlay ?? source,
       globals: this.globals,

@@ -1,7 +1,16 @@
-import { Container, GlProgram, type Application, type Mesh, type Shader } from 'pixi.js';
+import {
+  Container,
+  GlProgram,
+  type Application,
+  type BufferImageSource,
+  type Mesh,
+  type Shader,
+} from 'pixi.js';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { loadGameData } from '../core/data';
 import type { WorldInfo } from '../core/protocol';
+import { seasonFactor } from '../core/seasons';
+import { CALENDAR_BYTES } from '../core/snow';
 import { emptyLayers, WORLD_SIZES } from '../core/world';
 import { defaultWorldParams } from '../core/worldParams';
 import { CHUNK_PX } from './bake';
@@ -60,6 +69,9 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
+/** Des calendriers de la neige et de la glace pour le monde des essais : huit octets par case. */
+const noCalendars = () => new Uint8Array(size.width * size.height * 2 * CALENDAR_BYTES);
+
 /** Une vue de la carte d'un monde Petit, sur un écran de `width` × `height` pixels. */
 function mapView(width = 1280, height = 720) {
   const stage = new Container();
@@ -75,12 +87,17 @@ function mapView(width = 1280, height = 720) {
     screen: { width, height },
     stage,
   } as unknown as Application;
-  const map = new MapView(app, data.biomes.entries);
+  const map = new MapView(app, data.biomes.entries, data.seasons);
   const info: WorldInfo = {
     params: defaultWorldParams(data.worldgen.parameters, 'essai', 'small'),
     size,
   };
-  map.setWorld(info, emptyLayers(size), () => new Uint8Array(size.width * size.height * 4));
+  map.setWorld(
+    info,
+    emptyLayers(size),
+    noCalendars(),
+    () => new Uint8Array(size.width * size.height * 4),
+  );
   // Chaque bloc arrive cuit ; seuls ceux de la première colonne ont de la mer, partout.
   const grid = { columns: size.width / 64, rows: size.height / 64 };
   for (let row = 0; row < grid.rows; row++) {
@@ -98,6 +115,7 @@ function mapView(width = 1280, height = 720) {
         const shader = mesh.shader as Shader;
         return {
           fragment: shader.glProgram.fragment,
+          resources: shader.resources as Record<string, unknown>,
           origin: shader.resources.origin as { uniforms: { uOrigin: Float32Array } },
           waves: shader.resources.waves as
             { uniforms: { uWavePhase: Float32Array; uWorldPx: number } } | undefined,
@@ -107,7 +125,11 @@ function mapView(width = 1280, height = 720) {
   const waveGroup = () => {
     const mesh = (layer.children as Mesh[]).find((child) => child.visible);
     const shader = mesh?.shader as Shader | undefined;
-    return (shader?.resources.waves ?? {}) as { isStatic?: boolean; _dirtyId?: number };
+    return (shader?.resources.waves ?? {}) as {
+      isStatic?: boolean;
+      _dirtyId?: number;
+      uniforms?: Record<string, unknown>;
+    };
   };
   return { map, render, compiled, programs, waveGroup, info };
 }
@@ -210,7 +232,12 @@ describe('mer animée sur la carte (ADR 0015)', () => {
     expect(compiled[0]?.fragment).toBe(MAP_FRAGMENT_WAVES);
     expect(compiled[0]?.target).toBeDefined();
     // Un second monde n'a plus rien à compiler.
-    map.setWorld(info, emptyLayers(size), () => new Uint8Array(size.width * size.height * 4));
+    map.setWorld(
+      info,
+      emptyLayers(size),
+      noCalendars(),
+      () => new Uint8Array(size.width * size.height * 4),
+    );
     expect(render).toHaveBeenCalledTimes(1);
   });
 
@@ -256,7 +283,12 @@ describe('mer animée sur la carte (ADR 0015)', () => {
     map.setWaves(6, 0.5);
     map.draw(camera);
     expectSent(false);
-    map.setWorld(info, emptyLayers(size), () => new Uint8Array(size.width * size.height * 4));
+    map.setWorld(
+      info,
+      emptyLayers(size),
+      noCalendars(),
+      () => new Uint8Array(size.width * size.height * 4),
+    );
     expectSent(true);
   });
 
@@ -274,7 +306,73 @@ describe('mer animée sur la carte (ADR 0015)', () => {
   });
 });
 
+describe('neige et glace à inertie sur la carte (ADR 0019)', () => {
+  it('range les calendriers du monde dans une texture de W × 2H texels, et refuse une autre longueur', () => {
+    const { map, info, programs } = mapView();
+    const calendars = noCalendars();
+    calendars[0] = 17;
+    calendars[calendars.length - 1] = 42;
+    map.setWorld(
+      info,
+      emptyLayers(size),
+      calendars,
+      () => new Uint8Array(size.width * size.height * 4),
+    );
+    for (let row = 0; row < size.height / 64; row++) {
+      for (let column = 0; column < size.width / 64; column++) {
+        baker.listener?.(column, row, new Uint8Array(CHUNK_PX * CHUNK_PX * 4), seaMask());
+      }
+    }
+    map.draw({ x: 128, y: 384, zoom: 2 });
+    const texture = programs().at(0)?.resources.uCalendars as BufferImageSource;
+    expect([texture.width, texture.height]).toEqual([size.width, size.height * 2]);
+    expect(texture.resource).toBe(calendars);
+    expect(map.ground?.calendars).toBe(texture);
+    expect(() => {
+      map.setWorld(info, emptyLayers(size), new Uint8Array(8), () => new Uint8Array(4));
+    }).toThrow(RangeError);
+  });
+
+  it('reçoit les rampes et le calme de data/seasons.json, et le jour continu de l’année', () => {
+    const { map, programs, waveGroup } = mapView();
+    map.setSeason(3.25);
+    map.setWaves(5, 1);
+    map.draw({ x: 128, y: 384, zoom: 2 });
+    const globals = programs().at(0)?.resources.globals as {
+      uniforms: Record<string, number | Float32Array>;
+    };
+    const { uniforms } = globals;
+    const { snow, freshIce, seaIce } = data.seasons;
+    const ramp = (value: number | Float32Array | undefined) => Array.from(value as Float32Array);
+    expect(ramp(uniforms.uSnowRamp)).toEqual([snow.ramp.onset, snow.ramp.span, snow.ramp.full]);
+    expect(ramp(uniforms.uIceRamp)).toEqual(
+      [freshIce.ramp.onset, freshIce.ramp.span, freshIce.ramp.full].map(Math.fround),
+    );
+    expect(ramp(uniforms.uSeaIceRamp)).toEqual(
+      [seaIce.ramp.onset, seaIce.ramp.span, seaIce.ramp.full].map(Math.fround),
+    );
+    expect(uniforms.uForestSnow).toBe(snow.forest);
+    expect(uniforms.uDay).toBe(3.25 * 30);
+    expect(uniforms.uSeason).toBe(seasonFactor(3.25));
+    expect(waveGroup().uniforms?.uCalmDays).toBe(data.seasons.calmDays);
+  });
+});
+
 describe('version et signature de la carte (rendu à la demande, ADR 0010)', () => {
+  it('lit le jour : deux jours de même facteur de saison, de part et d’autre de l’été, diffèrent', () => {
+    // La neige à inertie ne suit pas le seul facteur de saison : la mi-juillet est un sommet, et
+    // deux jours symétriques l'ont égal, l'un en se réchauffant, l'autre en se refroidissant.
+    const { map } = mapView();
+    const camera = { x: 1024, y: 384, zoom: 2 };
+    map.setSeason(6.5 - 0.7);
+    map.draw(camera);
+    const before = map.signature();
+    map.setSeason(6.5 + 0.7);
+    map.draw(camera);
+    expect(seasonFactor(6.5 + 0.7)).toBeCloseTo(seasonFactor(6.5 - 0.7), 12);
+    expect(map.signature()).not.toEqual(before);
+  });
+
   it('change de signature avec ce qu’elle dessine, et seulement avec cela', () => {
     const { map } = mapView();
     const camera = { x: 128, y: 384, zoom: 2 };

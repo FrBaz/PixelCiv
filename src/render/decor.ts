@@ -9,15 +9,17 @@
  * la carte à l'écran : quand la vue défile sans quitter les cases collectées (par carrés de
  * COLLECT_CELLS), rien ne se recollecte ; quand le jour change, seuls les états se refont.
  *
- * Saisons : la part de neige d'une case vient des codes de la texture des saisons, par la formule
- * du shader de la carte (src/render/seasons.ts, snowShare) ; le feuillage, du climat de la case
- * (src/gen/decor.ts, decorSeason). Rien n'est recuit : seules la palette et, pour un caduc nu, le
- * motif changent.
+ * Saisons : la part de neige d'une case vient des codes de la texture des saisons et de son
+ * calendrier de neige, par la composition du shader de la carte (src/render/seasons.ts,
+ * snowShareOn ; ADR 0019) ; le feuillage, du climat de la case (src/gen/decor.ts, decorSeason).
+ * Rien n'est recuit : seules la palette et, pour un caduc nu, le motif changent.
  */
 import decorAtlas from 'virtual:decor-atlas';
 import type { Decor, GameData, LandUse, ShadowMethod } from '../core/data';
 import { PALETTE_ROLES } from '../core/data/humans';
 import { latitude, rainSeasonality, southern } from '../core/seasons';
+import { COLDEST_PHASE, phaseDay, snowAt } from '../core/snow';
+import { DAYS_PER_MONTH } from '../core/time';
 import { CHUNK_SIZE, type WorldLayers, type WorldSize } from '../core/world';
 import {
   cellObjects,
@@ -51,7 +53,7 @@ import {
   type ObjectView,
   type PaletteSlots,
 } from './objects';
-import { biomeCodes, cellSeasonCodes, snowShare, snowThreshold } from './seasons';
+import { biomeCodes, cellSeasonCodes, snowShareOn, snowThresholdsOn } from './seasons';
 
 /** Rôles de l'atlas du décor, un octet par pixel, décodés une fois. */
 function decodeRoles(base64: string): Uint8Array {
@@ -223,9 +225,11 @@ export class DecorSource implements ObjectSource {
   readonly atlas = DECOR_ATLAS;
   version = 0;
   private method: ShadowMethod;
-  private readonly data: Pick<GameData, 'flora' | 'resources' | 'biomes'> & {
+  private readonly data: Pick<GameData, 'flora' | 'resources' | 'biomes' | 'seasons'> & {
     readonly decor: Decor;
   };
+  /** Calendriers de la neige et de la glace du monde (src/core/snow.ts), ceux de la carte. */
+  private readonly calendars: Uint8Array;
   private readonly world: DecorWorld;
   private readonly landUse: LandUse;
   private readonly chunks = new Map<number, ChunkObjects>();
@@ -252,7 +256,10 @@ export class DecorSource implements ObjectSource {
    * pas de seuil), lus de sa case et de son espèce une fois par collecte (prepare).
    */
   private thresholds = new Float64Array(0);
-  /** Ce qu'ont vu les derniers états : refroidissement au nord et au sud, mois du nord. */
+  /**
+   * Ce qu'ont vu les derniers états : refroidissement au nord et au sud, moitié de l'année de la
+   * neige au nord et au sud, mois du nord.
+   */
   private lastCooling = -1;
   private lastMonth = -1;
   private readonly seasonCodes: ReturnType<typeof biomeCodes>;
@@ -282,12 +289,16 @@ export class DecorSource implements ObjectSource {
   private buildMs = 0;
 
   constructor(
-    data: Pick<GameData, 'flora' | 'resources' | 'biomes'> & { readonly decor: Decor },
+    data: Pick<GameData, 'flora' | 'resources' | 'biomes' | 'seasons'> & {
+      readonly decor: Decor;
+    },
     layers: WorldLayers,
     size: WorldSize,
     seed: string,
+    calendars: Uint8Array,
   ) {
     this.data = data;
+    this.calendars = calendars;
     this.method = data.decor.shadow.method;
     this.world = {
       size,
@@ -592,22 +603,28 @@ export class DecorSource implements ObjectSource {
     this.climate[at * 3] = annual;
     this.climate[at * 3 + 1] = amplitude;
     this.climate[at * 3 + 2] = rain;
-    // Les seuils de g (refreshStates) : la neige de la case, puis, selon la saison de l'espèce, le
-    // feuillage nu, l'automne et sa baisse depuis le mois le plus chaud, la saison sèche.
+    // Les seuils de g (refreshStates) : la neige de la case, à son arrivée et à son départ
+    // (src/core/snow.ts), puis, selon la saison de l'espèce, le feuillage nu, l'automne et sa
+    // baisse depuis le mois le plus chaud, la saison sèche.
     const { snow, foliage } = this.data.decor;
     const phenology = this.world.table.looks.at(this.looks[at] ?? 0)?.phenology;
     const deciduous = amplitude > 0 && phenology === 'deciduous';
     const base = at * THRESHOLDS;
-    this.thresholds[base] = snowThreshold(
+    const [arrival, departure] = snowThresholdsOn(
       codes.temperature,
       codes.amplitude,
       codes.flags,
+      this.calendars,
+      snowAt(cell),
       snow.share,
+      this.data.seasons,
     );
-    this.thresholds[base + 1] = deciduous ? (foliage.bareBelow - annual) / amplitude : Number.NaN;
-    this.thresholds[base + 2] = deciduous ? (foliage.autumnBelow - annual) / amplitude : Number.NaN;
-    this.thresholds[base + 3] = deciduous ? 1 - foliage.autumnDrop / amplitude : Number.NaN;
-    this.thresholds[base + 4] =
+    this.thresholds[base] = arrival;
+    this.thresholds[base + 1] = departure;
+    this.thresholds[base + 2] = deciduous ? (foliage.bareBelow - annual) / amplitude : Number.NaN;
+    this.thresholds[base + 3] = deciduous ? (foliage.autumnBelow - annual) / amplitude : Number.NaN;
+    this.thresholds[base + 4] = deciduous ? 1 - foliage.autumnDrop / amplitude : Number.NaN;
+    this.thresholds[base + 5] =
       rain !== 0 && phenology === 'dry' ? (foliage.dryShare - 1) / rain : Number.NaN;
   }
 
@@ -628,7 +645,15 @@ export class DecorSource implements ObjectSource {
     const { motifs } = DECOR_ATLAS;
     const flags = this.method === 'ground' ? OBJECT_FLAG.ground : 0;
     const { factor } = moment;
-    const cooling = (moment.coolingNorth ? 1 : 0) + (moment.coolingSouth ? 2 : 0);
+    // Le refroidissement du feuillage (seasonMoment) tourne trois quarts de jour avant le jour le
+    // plus froid ; la composition de la neige change de moitié au jour le plus froid lui-même
+    // (src/core/snow.ts, COLDEST_PHASE), et au plus chaud : l'un et l'autre réévaluent tout.
+    const day = view.month * DAYS_PER_MONTH;
+    const cooling =
+      (moment.coolingNorth ? 1 : 0) +
+      (moment.coolingSouth ? 2 : 0) +
+      (phaseDay(day, false) < COLDEST_PHASE ? 4 : 0) +
+      (phaseDay(day, true) < COLDEST_PHASE ? 8 : 0);
     const month = Math.floor(moment.month) % 12;
     const previousMonth = this.lastMonth;
     const coolingChanged = cooling !== this.lastCooling;
@@ -677,7 +702,16 @@ export class DecorSource implements ObjectSource {
       const temperatureCode = this.codes[at * 3] ?? 0;
       const amplitudeCode = this.codes[at * 3 + 1] ?? 0;
       const flagCode = this.codes[at * 3 + 2] ?? 0;
-      const snow = snowShare(temperatureCode, amplitudeCode, flagCode, factor);
+      const snow = snowShareOn(
+        temperatureCode,
+        amplitudeCode,
+        flagCode,
+        this.calendars,
+        snowAt(cell),
+        factor,
+        day,
+        this.data.seasons,
+      );
       // Le climat du feuillage (foliageClimate), sans objet.
       const annual = this.climate[at * 3] ?? 0;
       const amplitude = this.climate[at * 3 + 1] ?? 0;
@@ -761,8 +795,11 @@ export class DecorSource implements ObjectSource {
  */
 const INTERVAL_MARGIN = 1e-6;
 
-/** Seuils de g par objet : neige, feuillage nu, automne, baisse de l'automne, saison sèche. */
-const THRESHOLDS = 5;
+/**
+ * Seuils de g par objet : arrivée et départ de la neige, feuillage nu, automne, baisse de
+ * l'automne, saison sèche.
+ */
+const THRESHOLDS = 6;
 
 /** Code de chaque méthode d'ombre, dans la composition des palettes. */
 const SHADOW_CODE: Readonly<Record<ShadowMethod, number>> = {

@@ -70,6 +70,7 @@ import { bannerFabric } from './looks';
 import { TexturePages } from './pages';
 import { displayScale, type Camera, type Extent } from './camera';
 import { seasonFactor } from '../core/seasons';
+import { DAYS_PER_MONTH } from '../core/time';
 import {
   mapOrigin,
   OBJECT_FLAG,
@@ -664,6 +665,7 @@ export class PeopleLayer {
         y: origin.y / resolution,
         scale: scale / resolution,
         season: seasonFactor(scene.month ?? 0),
+        day: (scene.month ?? 0) * DAYS_PER_MONTH,
       });
     }
     this.pages.flush();

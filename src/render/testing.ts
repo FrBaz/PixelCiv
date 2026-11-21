@@ -105,3 +105,52 @@ export function evaluateGlsl(
   if (at !== tokens.length) throw new Error(`expression mal lue : ${expression}`);
   return value;
 }
+
+/** Les entrées d'une évaluation de la couverture d'un pixel, telles que le shader les lit. */
+export interface CoverInputs {
+  /** Rouge, vert et bleu du texel de la case dans la texture des saisons (octets). */
+  readonly texel: readonly [number, number, number];
+  /** Les quatre octets du calendrier de la couverture du pixel. */
+  readonly calendar: ArrayLike<number>;
+  /** La rampe de la couverture du pixel : début, étendue, part pleine. */
+  readonly ramp: readonly [number, number, number];
+  /** Les uniformes uSeason et uDay. */
+  readonly season: number;
+  readonly day: number;
+}
+
+/**
+ * La couverture d'un pixel hors du GPU : les expressions de COVER_GLSL évaluées dans l'ordre où
+ * le shader de la carte les assemble (mapShader.ts, MAP_FRAGMENT), most d'abord, puis, s'il est
+ * positif, le calendrier, summer, now, level et share ; la part couverte avant celle des forêts.
+ */
+export function evaluateCover(
+  glsl: Readonly<Record<string, string>>,
+  inputs: CoverInputs,
+): { readonly share: number; readonly variables: Readonly<Record<string, number>> } {
+  const variables: Record<string, number> = {
+    'data.r': inputs.texel[0] / 255,
+    'data.g': inputs.texel[1] / 255,
+    'data.b': inputs.texel[2] / 255,
+    uSeason: Math.fround(inputs.season),
+    uDay: Math.fround(inputs.day),
+    'ramp.x': Math.fround(inputs.ramp[0]),
+    'ramp.y': Math.fround(inputs.ramp[1]),
+    'ramp.z': Math.fround(inputs.ramp[2]),
+  };
+  const evaluate = (name: string) => {
+    if (!Object.hasOwn(glsl, name)) throw new Error(`expression absente : ${name}`);
+    variables[name] = evaluateGlsl(glsl[name], variables);
+  };
+  for (const name of ['temperature', 'amplitude', 'flags', 'south', 'monthly', 'phase', 'most']) {
+    evaluate(name);
+  }
+  if (!(variables.most > 0)) return { share: 0, variables };
+  ['x', 'y', 'z', 'w'].forEach((axis, index) => {
+    variables[`calendar.${axis}`] = Math.floor(
+      Math.fround(Math.fround((inputs.calendar[index] ?? 0) / 255) * 255) + 0.5,
+    );
+  });
+  for (const name of ['summer', 'now', 'level', 'share']) evaluate(name);
+  return { share: variables.share, variables };
+}

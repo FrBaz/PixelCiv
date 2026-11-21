@@ -1,15 +1,32 @@
 import { describe, expect, it } from 'vitest';
 import { BiomesSchema, type Biome } from '../core/data/schemas';
 import { Fingerprint } from '../core/hash';
-import { COVER_RAMPS, coverShare, seasonFactor } from '../core/seasons';
+import { loadGameData } from '../core/data';
+import { coverShare, seasonFactor } from '../core/seasons';
+import { coverRamps } from '../core/snow';
 import {
   bakedWaterTone,
   MAX_CREST_LENGTH,
   MAX_CREST_THICKNESS,
   MAX_WAVE_BIOMES,
 } from '../core/waves';
-import { glslFloat, MAP_FRAGMENT, MAP_FRAGMENT_WAVES, WAVE_ANCHORS } from './mapShader';
-import { WAVE_GLSL, waveNoise, wavePhase, wavePixel, waveTable } from './waves';
+import {
+  COVER_GLSL,
+  glslFloat,
+  MAP_FRAGMENT,
+  MAP_FRAGMENT_WAVES,
+  SEASON_ANCHORS,
+  WAVE_ANCHORS,
+} from './mapShader';
+import {
+  CALM_GLSL,
+  WAVE_GLSL,
+  waveNoise,
+  wavePhase,
+  wavePixel,
+  waveTable,
+  type WaveCovers,
+} from './waves';
 
 /** Une eau fictive, de tons et de mer animée choisis : le reste n'importe pas à l'onde. */
 const water = (
@@ -68,25 +85,49 @@ describe('shader de la carte', () => {
     expect(glslFloat(-0.5)).toBe('-0.5');
   });
 
-  it('trame la neige, la glace et la banquise selon les rampes que la simulation lit (F-3)', () => {
-    // Les seuils de C1 (D9), inchangés depuis la tâche 1.8 : ceux qui font geler la pêche.
-    expect(MAP_FRAGMENT).toContain('float snow = clamp((0.5 - monthly) / 3.0, 0.0, 1.0) * 1.0;');
-    expect(MAP_FRAGMENT).toContain('float ice = clamp((-1.0 - monthly) / 3.0, 0.0, 1.0) * 0.9;');
-    expect(MAP_FRAGMENT).toContain('coverage = clamp((-6.0 - monthly) / 4.0, 0.0, 1.0) * 0.85;');
+  it('lit les rampes et les calendriers par ses uniformes, sans données dans son code (F-3)', () => {
+    // Les rampes de data/seasons.json, que la simulation lit aussi (src/sim/cover.ts), arrivent
+    // par des uniformes : le programme ne change pas quand on les règle.
+    for (const uniform of [
+      'uniform vec3 uSnowRamp;',
+      'uniform vec3 uIceRamp;',
+      'uniform vec3 uSeaIceRamp;',
+      'uniform float uForestSnow;',
+      'uniform float uDay;',
+      'uniform sampler2D uCalendars;',
+    ]) {
+      expect(MAP_FRAGMENT).toContain(uniform);
+    }
+    for (const name of ['phase', 'most', 'summer', 'now', 'level', 'share'] as const) {
+      expect(MAP_FRAGMENT).toContain(COVER_GLSL[name]);
+    }
     expect(MAP_FRAGMENT).not.toContain('${');
+    expect(MAP_FRAGMENT).not.toContain('0.85');
+    expect(MAP_FRAGMENT).not.toContain('0.7 ');
     // La même rampe, côté simulation : rien au-dessus du seuil, pleine en dessous.
-    for (const ramp of Object.values(COVER_RAMPS)) {
+    for (const ramp of Object.values(coverRamps(loadGameData().seasons))) {
       expect(coverShare(ramp, ramp.onset + 1)).toBe(0);
       expect(coverShare(ramp, ramp.onset - ramp.span / 2)).toBeCloseTo(ramp.full / 2, 12);
       expect(coverShare(ramp, ramp.onset - ramp.span - 1)).toBe(ramp.full);
     }
-    expect(COVER_RAMPS.none.full).toBe(0);
+    expect(coverRamps(loadGameData().seasons).none.full).toBe(0);
   });
 });
 
 describe('programmes de la carte et de la mer animée (ADR 0015)', () => {
-  it('garde le programme de la carte de la tâche 2b.3, à l’octet près', () => {
-    expect(new Fingerprint().string(MAP_FRAGMENT).hex()).toBe('f465afb9');
+  it('fige le programme de la carte : couvertures à calendrier (tâche 2b.7, ADR 0019)', () => {
+    // Celui de la tâche 2b.3 (f465afb9), ses couvertures désormais lues des calendriers.
+    expect(new Fingerprint().string(MAP_FRAGMENT).hex()).toBe('f1e7960c');
+  });
+
+  it('garde aux couleurs de la saison les ancres de l’onde, une fois chacune', () => {
+    expect(SEASON_ANCHORS).toEqual(WAVE_ANCHORS);
+    for (const anchor of Object.values(SEASON_ANCHORS)) {
+      expect(MAP_FRAGMENT_WAVES.split(anchor)).toHaveLength(2);
+    }
+    // Insérées après l'onde, elles la suivent et précèdent les modes de carte.
+    const main = MAP_FRAGMENT_WAVES.indexOf(SEASON_ANCHORS.main);
+    expect(main).toBeGreaterThan(MAP_FRAGMENT_WAVES.indexOf(WAVE_GLSL.main));
   });
 
   it("n'ajoute au programme de la mer que le code de l'onde, avant main() et après la couverture", () => {
@@ -106,15 +147,13 @@ describe('programmes de la carte et de la mer animée (ADR 0015)', () => {
     expect(MAP_FRAGMENT.split(WAVE_ANCHORS.main)).toHaveLength(2);
   });
 
-  it('écrit le code de l’onde depuis les constantes du miroir et les rampes de core/seasons.ts', () => {
+  it('écrit le code de l’onde depuis les constantes du miroir et les calendriers de la glace', () => {
     expect(MAP_FRAGMENT_WAVES).not.toContain('${');
-    // Le calme : les CALM_SPAN degrés qui précèdent la glace des rivières et la banquise.
-    expect(WAVE_GLSL.main).toContain(
-      `calm = clamp((${glslFloat(COVER_RAMPS.ice.onset + 2)} - monthly) / 2.0, 0.0, 1.0);`,
-    );
-    expect(WAVE_GLSL.main).toContain(
-      `calm = clamp((${glslFloat(COVER_RAMPS['sea-ice'].onset + 2)} - monthly) / 2.0, 0.0, 1.0);`,
-    );
+    // Le calme : les calmDays jours (un uniforme) avant et après la glace de son calendrier.
+    expect(WAVE_GLSL.header).toContain('uniform float uCalmDays;');
+    expect(WAVE_GLSL.main).toContain(`float distance = ${CALM_GLSL.distance};`);
+    expect(WAVE_GLSL.main).toContain(`calm = ${CALM_GLSL.calm};`);
+    expect(WAVE_GLSL.main).toContain('if (kind > 1.5 && most > 0.0) {');
     expect(WAVE_GLSL.header).toContain('float tau = imod(uWavePhase.z + floor(h.g / 16.0), 16.0);');
     expect(WAVE_GLSL.header).toContain('if (tau >= 12.0) return false;');
     expect(WAVE_GLSL.header).toContain('vec4 h = waveNoise(vec2(b.x, b.y + 128.0));');
@@ -129,9 +168,11 @@ describe('programmes de la carte et de la mer animée (ADR 0015)', () => {
   // régler la mer animée dans les données ne change ni l'une ni l'autre. On n'en met une à jour
   // que si la logique du shader ou du miroir change, après avoir relancé le contrôle des
   // pixels dans Chromium (tools/wave-control/LISEZMOI.md ; ADR 0015, § 10), dont on joint le
-  // résultat à la PR.
+  // résultat à la PR. Tâche 2b.7 : le calme suit le calendrier de la glace (ADR 0019, § 1), dont
+  // les cases des eaux fictives portent des formes écrites ici (de 01c90fa3 et 5a74a6e6 à
+  // e03ba2a6 et 85d6651b).
   it('fige le code de l’onde et le motif de son miroir, indépendamment des données', () => {
-    expect(new Fingerprint().string(MAP_FRAGMENT_WAVES).hex()).toBe('01c90fa3');
+    expect(new Fingerprint().string(MAP_FRAGMENT_WAVES).hex()).toBe('e03ba2a6');
     const biomes = BiomesSchema.parse(FICTIVE_WATERS);
     const table = waveTable(biomes, 1);
     expect(table.biomes).toHaveLength(MAX_WAVE_BIOMES);
@@ -145,12 +186,28 @@ describe('programmes de la carte et de la mer animée (ADR 0015)', () => {
     expect(new Set(tones).size).toBe(tones.length);
     const colors = [...tones, 0x6b8a3b];
     const temperatures = [-12, -7, -6, -5.5, -5, -4.5, -1, -0.5, 0, 0.5, 1, 4, 22];
+    // Des rampes et un calme écrits ici, non ceux de data/seasons.json.
+    const covers: WaveCovers = {
+      ice: [-1, 3, Math.fround(0.9)],
+      seaIce: [-6, 4, Math.fround(0.85)],
+      calmDays: 12,
+    };
     const view = {
       season: Math.fround(seasonFactor(1.37)),
+      day: Math.fround(1.37 * 30),
       fine: true,
       natural: true,
       streams: true,
+      covers,
     };
+    // Des calendriers de glace de toutes formes, une par case : sans inertie, en cours de prise,
+    // en cours de départ, sans glace avant le jour le plus froid.
+    const shapes = [
+      [0, 0, 1, 1],
+      [20, 200, 12, 12],
+      [40, 120, 40, 30],
+      [10, 250, 12, 60],
+    ];
     // Les uniformes de la table, tels que le shader les lit.
     const fingerprint = new Fingerprint()
       .uint32(table.biomes.length)
@@ -171,6 +228,7 @@ describe('programmes de la carte et de la mer animée (ADR 0015)', () => {
             temperature: Math.round(((temperatures[cell % temperatures.length] ?? 0) + 64) * 2),
             amplitude: (cell * 5) % 120,
             flags: (cell & 1) | (((cell >> 1) % 4) << 4) | (((cell >> 3) & 1) << 6),
+            calendar: shapes[cell % shapes.length] ?? [0, 0, 1, 1],
           };
           // À cheval sur la couture.
           const tone = wavePixel(frame, view, worldPx - 64 + x, y, pixel);
@@ -193,6 +251,6 @@ describe('programmes de la carte et de la mer animée (ADR 0015)', () => {
       'mer-longue clapot',
       'mer-longue crête',
     ]);
-    expect(fingerprint.hex()).toBe('5a74a6e6');
+    expect(fingerprint.hex()).toBe('85d6651b');
   });
 });

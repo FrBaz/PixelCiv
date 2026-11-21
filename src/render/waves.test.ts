@@ -1,18 +1,20 @@
 import { beforeAll, describe, expect, it } from 'vitest';
 import { loadGameData } from '../core/data';
 import type { Biome } from '../core/data/schemas';
-import { COVER_RAMPS, seasonFactor, type CoverRamp } from '../core/seasons';
+import { seasonFactor } from '../core/seasons';
+import { DAYS_PER_UNIT, iceAt, warmestDay, worldCalendars } from '../core/snow';
 import { bakedWaterTone, MAX_CREST_LENGTH, MAX_CREST_THICKNESS } from '../core/waves';
 import { chunkGrid, WORLD_SIZES, type WorldLayers } from '../core/world';
 import { defaultWorldParams } from '../core/worldParams';
 import { generateWorld } from '../worldgen/generate';
 import { bakeBiomes, bakeChunk, bakeRegion, CHUNK_PX, type BakeWorld } from './bake';
 import { bakedReply } from './bakeProtocol';
+import { COVER_GLSL } from './mapShader';
 import { seasonTexels } from './seasons';
+import { evaluateCover, evaluateGlsl } from './testing';
 import {
   bayer,
-  calm32,
-  CALM_SPAN,
+  CALM_GLSL,
   CREST_CYCLE,
   CREST_LIFE,
   CREST_ROW,
@@ -30,6 +32,9 @@ import {
   waveNoise,
   wavePhase,
   wavePixel,
+  waterCover32,
+  waterRamp,
+  waveCovers,
   waveStill,
   waveTable,
   type WaveBiome,
@@ -73,11 +78,14 @@ const frameAt = (step: number, waves: WaveTable = table): WaveFrame => ({
   phase: wavePhase(step, W),
   worldPx: W,
 });
+const covers = waveCovers(data.seasons);
 const viewAt = (month: number): WaveView => ({
   season: Math.fround(seasonFactor(month)),
+  day: Math.fround(month * 30),
   fine: true,
   natural: true,
   streams: true,
+  covers,
 });
 
 /** Luminance d'un ton 0xrrggbb : plus clair, plus sombre. */
@@ -94,6 +102,11 @@ interface Sample {
 
 let layers: WorldLayers;
 let texels: Uint8Array;
+/** Les calendriers de la neige et de la glace du monde (src/core/snow.ts), ceux du worker. */
+let calendars: Uint8Array;
+const count = size.width * size.height;
+/** Les quatre octets du calendrier de glace de la case `cell`. */
+const iceOf = (cell: number) => calendars.subarray(iceAt(cell, count), iceAt(cell, count) + 4);
 let world: BakeWorld;
 const samples = new Map<string, Sample>();
 /** Un mois où le calme de la banquise est partiel dans le bloc de banquise, et un où elle le couvre. */
@@ -108,10 +121,10 @@ function sample(column: number, row: number): Sample {
     pixels,
     at: (lx, ly) => {
       const o = (ly * CHUNK_PX + lx) * 4;
-      const cell =
-        (Math.floor((row * CHUNK_PX + ly) / 4) * size.width +
-          Math.floor((column * CHUNK_PX + lx) / 4)) *
-        4;
+      const index =
+        Math.floor((row * CHUNK_PX + ly) / 4) * size.width +
+        Math.floor((column * CHUNK_PX + lx) / 4);
+      const cell = index * 4;
       return {
         red: pixels[o] ?? 0,
         green: pixels[o + 1] ?? 0,
@@ -119,6 +132,7 @@ function sample(column: number, row: number): Sample {
         temperature: texels[cell] ?? 0,
         amplitude: texels[cell + 1] ?? 0,
         flags: texels[cell + 2] ?? 0,
+        calendar: iceOf(index),
       };
     },
   };
@@ -151,6 +165,7 @@ beforeAll(() => {
     data,
   );
   texels = seasonTexels(size, layers, biomes);
+  calendars = worldCalendars(size, layers, biomes, data.seasons);
   world = { size, layers, biomes: bakeBiomes(biomes), riverBiome: index('river') };
   const grid = chunkGrid(size);
   const counts = (
@@ -189,30 +204,27 @@ beforeAll(() => {
         counts(c, r, (biome, cell) => land(biome) && (layers.drainage[cell] ?? 0) >= 32),
     ),
   };
-  // La banquise : le bloc qui a le plus de mer côtière gelée au mois le plus froid.
-  const frozen = (column: number, row: number, month: number) => {
-    const season = Math.fround(seasonFactor(month));
-    return counts(column, row, (biome, cell) => {
+  // La banquise : le bloc qui a le plus de mer côtière gelée ou calmée au mois le plus froid.
+  const frozen = (column: number, row: number, month: number) =>
+    counts(column, row, (biome, cell) => {
       if (biome !== index('coastal-ocean')) return false;
-      const monthly = monthly32(
-        {
-          red: 0,
-          green: 0,
-          blue: 0,
-          temperature: texels[cell * 4] ?? 0,
-          amplitude: texels[cell * 4 + 1] ?? 0,
-          flags: texels[cell * 4 + 2] ?? 0,
-        },
-        season,
-      );
-      return monthly < COVER_RAMPS['sea-ice'].onset + CALM_SPAN;
+      const pixel = {
+        red: 0,
+        green: 0,
+        blue: 0,
+        temperature: texels[cell * 4] ?? 0,
+        amplitude: texels[cell * 4 + 1] ?? 0,
+        flags: texels[cell * 4 + 2] ?? 0,
+        calendar: iceOf(cell),
+      };
+      const view = viewAt(month);
+      const water = waterCover32(pixel, covers.seaIce, view.season, view.day, covers.calmDays);
+      return water.coverage > 0 || water.calm > 0;
     });
-  };
   const ice = best((c, r) => Math.max(frozen(c, r, 0.5), frozen(c, r, JULY)));
   for (const [name, at] of Object.entries({ ...choices, ice }))
     samples.set(name, sample(at.column, at.row));
   // Les mois du bloc de banquise : calme le plus partiel, couverture la plus grande.
-  const ramp = COVER_RAMPS['sea-ice'];
   let calmBest = -1;
   let coverBest = -1;
   for (let month = 0; month < 12; month += 0.25) {
@@ -225,7 +237,12 @@ beforeAll(() => {
       const still = waveStill(view, x, y, pixel);
       if (still === 'calm') calmed++;
       else if (still === 'covered') covered++;
-      else if (still === undefined && calm32(ramp, monthly32(pixel, view.season)) > 0) moving++;
+      else if (
+        still === undefined &&
+        waterCover32(pixel, covers.seaIce, view.season, view.day, covers.calmDays).calm > 0
+      ) {
+        moving++;
+      }
     }
     if (Math.min(calmed, moving) > calmBest) {
       calmBest = Math.min(calmed, moving);
@@ -347,7 +364,8 @@ describe('mer animée : le miroir du shader (ADR 0015)', () => {
           ) {
             differ++;
           }
-          const cell = (Math.floor(y / 4) * size.width + Math.floor(x / 4)) * 4;
+          const at = Math.floor(y / 4) * size.width + Math.floor(x / 4);
+          const cell = at * 4;
           const pixel = {
             red: across[o] ?? 0,
             green: across[o + 1] ?? 0,
@@ -355,6 +373,7 @@ describe('mer animée : le miroir du shader (ADR 0015)', () => {
             temperature: texels[cell] ?? 0,
             amplitude: texels[cell + 1] ?? 0,
             flags: texels[cell + 2] ?? 0,
+            calendar: iceOf(at),
           };
           const tone = wavePixel(frame, view, x, y, pixel);
           if (tone !== undefined) changed++;
@@ -456,46 +475,62 @@ describe('mer animée : le miroir du shader (ADR 0015)', () => {
     expect(shrunk).toBeGreaterThan(0);
   });
 
-  it('se calme avant la glace, sur les rampes de core/seasons.ts, et seulement là où l’eau gèle', () => {
-    // La part des pixels d'une case qui peuvent bouger, sur une tuile de Bayer de 4 × 4, quand
-    // la température du mois descend : toute au-dessus du seuil + CALM_SPAN, nulle au seuil.
-    const share = (flags: number, celsius: number) => {
+  it('se calme sur les calmDays jours qui précèdent la glace et suivent son départ, et là seulement', () => {
+    // Une eau dont les rampes couvrent au mois le plus froid (0 °C ± 14 °C), et un calendrier de
+    // glace du jour de phase 60,7 au jour 300,7 : la part des pixels d'une case qui peuvent
+    // bouger, sur une tuile de Bayer de 4 × 4, jour après jour, hors des jours où la rampe couvre.
+    const calendar = [43, 213, 20, 20] as const;
+    const start = 43 * DAYS_PER_UNIT;
+    const end = 213 * DAYS_PER_UNIT;
+    const calm = data.seasons.calmDays;
+    const share = (flags: number, phase: number, celsius = 0, amplitude = 14) => {
       const pixel = {
         red: coastal.tones[2] >>> 16,
         green: (coastal.tones[2] >>> 8) & 255,
         blue: coastal.tones[2] & 255,
         temperature: Math.round((celsius + 64) * 2),
-        amplitude: 0,
+        amplitude: Math.round(amplitude * 8),
         flags,
+        calendar,
       };
+      const month = (phase + warmestDay(false)) / 30;
       let moving = 0;
       for (let y = 0; y < 4; y++) {
-        for (let x = 0; x < 4; x++)
-          if (waveStill(viewAt(JULY), x, y, pixel) === undefined) moving++;
+        for (let x = 0; x < 4; x++) {
+          if (waveStill(viewAt(month % 12), x, y, pixel) === undefined) moving++;
+        }
       }
       return moving / 16;
     };
-    const ramps: [string, number, CoverRamp][] = [
-      ['banquise, mer côtière', 64 | (3 << 4), COVER_RAMPS['sea-ice']],
-      ['glace, lac', 64 | (2 << 4), COVER_RAMPS.ice],
-      ["glace, eau d'une case de terre", 1 << 4, COVER_RAMPS.ice],
-      ["glace, eau d'une case de terre sans neige", 0, COVER_RAMPS.ice],
-    ];
-    for (const [, flags, ramp] of ramps) {
-      let previous = -1;
-      let partial = 0;
-      for (let celsius = ramp.onset - 4; celsius <= ramp.onset + CALM_SPAN + 2; celsius += 0.5) {
-        const moving = share(flags, celsius);
-        if (celsius <= ramp.onset) expect(moving).toBe(0);
-        if (celsius >= ramp.onset + CALM_SPAN) expect(moving).toBe(1);
-        if (moving > 0 && moving < 1) partial++;
-        expect(moving).toBeGreaterThanOrEqual(previous);
-        previous = moving;
+    for (const flags of [64 | (3 << 4), 64 | (2 << 4), 1 << 4, 0]) {
+      // Loin de la glace, tout bouge ; dans son calendrier, rien ; entre les deux, une part.
+      expect(share(flags, start - calm - 1)).toBe(1);
+      expect(share(flags, start - calm / 2)).toBeGreaterThan(0);
+      expect(share(flags, start - calm / 2)).toBeLessThan(1);
+      expect(share(flags, start - 0.6)).toBeLessThanOrEqual(1 / 16);
+      expect(share(flags, start + 1)).toBe(0);
+      expect(share(flags, end - 1)).toBe(0);
+      expect(share(flags, end + calm / 2)).toBeGreaterThan(0);
+      expect(share(flags, end + calm / 2)).toBeLessThan(1);
+      expect(share(flags, end + calm + 1)).toBe(1);
+      // La part qui bouge décroît avant la glace et croît après.
+      let previous = 2;
+      for (let phase = start - calm - 2; phase <= start; phase += 0.5) {
+        expect(share(flags, phase)).toBeLessThanOrEqual(previous);
+        previous = share(flags, phase);
       }
-      expect(partial).toBeGreaterThan(0);
+      previous = -1;
+      for (let phase = end; phase <= end + calm + 2; phase += 0.5) {
+        expect(share(flags, phase)).toBeGreaterThanOrEqual(previous);
+        previous = share(flags, phase);
+      }
     }
-    // La haute mer et l'océan ne gèlent pas : ils bougent par le plus grand froid.
-    expect(share(64, -40)).toBe(1);
+    // La haute mer et l'océan ne gèlent pas : ils bougent par le plus grand froid ; une eau dont
+    // la rampe ne couvre jamais (−1 °C au mois le plus froid) bouge toute l'année.
+    for (let phase = 0; phase < 360; phase += 15) {
+      expect(share(64, phase, -40)).toBe(1);
+      expect(share(64 | (2 << 4), phase, 9, 9.75)).toBe(1);
+    }
     // Au mois où la banquise couvre le bloc choisi, aucun pixel couvert ni calmé ne bouge,
     // et d'autres, dans des cases en calme partiel, bougent encore.
     const view = viewAt(calmMonth);
@@ -503,8 +538,8 @@ describe('mer animée : le miroir du shader (ADR 0015)', () => {
     let partialCalm = 0;
     for (const { x, y, pixel } of pixelsOf(chosen('ice'))) {
       if (!coastal.tones.includes(colorOf(pixel))) continue;
-      const calm = calm32(COVER_RAMPS['sea-ice'], monthly32(pixel, view.season));
-      if (calm <= 0 || calm >= 1 || ((pixel.flags >> 4) & 3) !== 3) continue;
+      const water = waterCover32(pixel, covers.seaIce, view.season, view.day, covers.calmDays);
+      if (water.calm <= 0 || water.calm >= 1 || ((pixel.flags >> 4) & 3) !== 3) continue;
       if (waveStill(view, x, y, pixel) === undefined) partialMoving++;
       else partialCalm++;
     }
@@ -512,8 +547,16 @@ describe('mer animée : le miroir du shader (ADR 0015)', () => {
     expect(partialCalm).toBeGreaterThan(0);
   });
 
-  it('compte la température et le calme en flottants de 32 bits, comme le shader', () => {
-    const pixel = { red: 0, green: 0, blue: 0, temperature: 117, amplitude: 133, flags: 1 };
+  it('compte la température, la couverture et le calme en flottants de 32 bits, comme le shader', () => {
+    const pixel = {
+      red: 0,
+      green: 0,
+      blue: 0,
+      temperature: 117,
+      amplitude: 133,
+      flags: 1,
+      calendar: [0, 0, 1, 1],
+    };
     const season = Math.fround(seasonFactor(1.37));
     const f = Math.fround;
     const temperature = f(f(f(f(117 / 255) * 255) / 2) - 64);
@@ -521,11 +564,50 @@ describe('mer animée : le miroir du shader (ADR 0015)', () => {
     const expected = f(temperature + f(f(amplitude * season) * -1));
     expect(monthly32(pixel, season)).toBe(expected);
     expect(Math.fround(monthly32(pixel, season))).toBe(monthly32(pixel, season));
-    // Calme partiel : entre 0 et 1, en flottant de 32 bits.
-    const calm = calm32(COVER_RAMPS.ice, 0.3);
-    expect(calm).toBe(f(f(f(-1 + CALM_SPAN) - 0.3) / CALM_SPAN));
-    expect(calm).toBeGreaterThan(0);
-    expect(calm).toBeLessThan(1);
+    // La couverture et le calme du miroir sont, au bit près, ceux des expressions du shader,
+    // évaluées hors du GPU : des eaux de toutes sortes, des calendriers de toutes formes, sur
+    // l'année.
+    let partial = 0;
+    for (const flags of [64 | (3 << 4), 64 | (2 << 4), 1 << 4, 1 | (64 | (3 << 4))]) {
+      for (const [t, a] of [
+        [110, 90],
+        [100, 140],
+        [117, 133],
+        [90, 40],
+        [125, 200],
+      ] as const) {
+        for (const shape of [
+          [0, 0, 1, 1],
+          [71, 184, 20, 20],
+          [5, 240, 12, 30],
+          [120, 0, 12, 12],
+          // Une fin près du jour le plus chaud : le calme de l'année suivante la rejoint.
+          [21, 254, 12, 12],
+        ]) {
+          const water = { ...pixel, temperature: t, amplitude: a, flags, calendar: shape };
+          const ramp = waterRamp(water, covers);
+          if (ramp === undefined) throw new Error('une eau qui gèle');
+          for (let month = 0; month < 12; month += 0.37) {
+            const view = viewAt(month);
+            const mirror = waterCover32(water, ramp, view.season, view.day, covers.calmDays);
+            const { share, variables } = evaluateCover(COVER_GLSL, {
+              texel: [t, a, flags],
+              calendar: shape,
+              ramp,
+              season: view.season,
+              day: view.day,
+            });
+            expect(mirror.coverage).toBe(share);
+            if (!(variables.most > 0)) continue;
+            const scope: Record<string, number> = { ...variables, uCalmDays: covers.calmDays };
+            scope.distance = evaluateGlsl(CALM_GLSL.distance, scope);
+            expect(mirror.calm).toBe(evaluateGlsl(CALM_GLSL.calm, scope));
+            if (mirror.calm > 0 && mirror.calm < 1) partial++;
+          }
+        }
+      }
+    }
+    expect(partial).toBeGreaterThan(5);
     expect(bayer(0, 0)).toBe(0.5 / 16);
     expect(bayer(W + 1, 3)).toBe(bayer(1, 3));
   });

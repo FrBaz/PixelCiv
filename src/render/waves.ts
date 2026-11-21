@@ -17,11 +17,13 @@
  * - Tons : la crête éclaircit le pixel jusqu'au ton de crête de son biome, le clapot
  *   l'assombrit jusqu'à l'ombre, jamais l'inverse ; seuls des tons cuits de la palette du
  *   biome, que le shader reconnaît à la couleur cuite du pixel.
- * - Gel : sur les CALM_SPAN degrés qui précèdent la glace qui s'applique au pixel, une part
- *   croissante, tramée, cesse de bouger ; au seuil, toute la case est immobile.
+ * - Gel : sur les `calmDays` jours (data/seasons.json) qui précèdent la glace de la case, et sur
+ *   ceux qui suivent son départ, d'après son calendrier (src/core/snow.ts ; ADR 0019, § 1), une
+ *   part croissante, tramée, cesse de bouger ; tant que la glace tient, toute la case est
+ *   immobile. Une mer qui ne gèle jamais bouge toute l'année.
  */
-import type { Biome } from '../core/data/schemas';
-import { COVER_RAMPS, type CoverRamp } from '../core/seasons';
+import type { Biome, Seasons } from '../core/data/schemas';
+import { COLDEST_PHASE, DAYS_PER_UNIT, warmestDay, YEAR_DAYS } from '../core/snow';
 import { bakedWaterTone, CREST_START, MAX_WAVE_BIOMES, WAVE_BLOCK } from '../core/waves';
 import { glslFloat } from './glsl';
 
@@ -43,8 +45,6 @@ export const WAVE_NOISE = 512;
 export const WAVE_SALT = 77;
 export const CREST_ROW = 128;
 export const RIPPLE_ROW = 320;
-/** Écart de température, en °C, sur lequel l'onde se calme avant la glace. */
-export const CALM_SPAN = 2;
 /** Période du cadre des crêtes en y, en pixels : le bruit y boucle tous les WAVE_NOISE blocs. */
 export const WAVE_PERIOD_Y = WAVE_BLOCK * WAVE_NOISE;
 
@@ -240,10 +240,18 @@ const f = glslFloat;
 const BLOCK = f(WAVE_BLOCK);
 const NOISE = f(WAVE_NOISE);
 
-/** Calme du gel, en GLSL, selon la rampe de la couverture qui s'applique au pixel. */
-function calmExpression(ramp: CoverRamp): string {
-  return `clamp((${f(ramp.onset + CALM_SPAN)} - monthly) / ${f(CALM_SPAN)}, 0.0, 1.0)`;
-}
+/**
+ * Calme du gel, en GLSL, d'après les variables de la couverture du pixel (mapShader.ts,
+ * COVER_GLSL : phase, now, calendar) : entier tant que la rampe couvre, ou dans l'intervalle du
+ * calendrier, de son début à sa fin (au moins jusqu'au jour le plus froid, où la montée est
+ * pleine) ; décroissant sur `uCalmDays` jours de part et d'autre, l'année bouclée.
+ */
+const CALM_START = `calendar.x * ${f(DAYS_PER_UNIT)}`;
+const CALM_END = `max(calendar.y * ${f(DAYS_PER_UNIT)}, ${f(COLDEST_PHASE)})`;
+export const CALM_GLSL = {
+  distance: `phase < ${CALM_START} ? min(${CALM_START} - phase, phase + ${f(YEAR_DAYS)} - ${CALM_END}) : (phase > ${CALM_END} ? min(phase - ${CALM_END}, ${CALM_START} + ${f(YEAR_DAYS)} - phase) : 0.0)`,
+  calm: 'now > 0.0 ? 1.0 : clamp(1.0 - distance / uCalmDays, 0.0, 1.0)',
+} as const;
 
 /**
  * Le code de l'onde : `header`, ses uniformes et ses fonctions, avant main() ; `main`, la
@@ -265,6 +273,8 @@ uniform float uWaveCount;
 uniform vec3 uWaveTones[${String(MAX_WAVE_BIOMES * 3)}];
 uniform vec4 uWaveCrests[${String(MAX_WAVE_BIOMES)}];
 uniform vec4 uWaveRipples[${String(MAX_WAVE_BIOMES)}];
+/** Jours où la mer se calme avant la glace, et après elle (data/seasons.json). */
+uniform float uCalmDays;
 
 /** x modulo m, pour des entiers positifs, exact même quand m n'est pas une puissance de deux. */
 float imod(float x, float m) {
@@ -339,14 +349,16 @@ vec3 waveColor(vec3 baked, vec2 p, vec3 color) {
 
 `,
   main: /* glsl */ `  // Mer animée (tâche 2b.4, ADR 0015), de près et en mode naturel, sur un pixel d'eau libre :
-  // ni terre, ni ruisseau, ni couvert. Le gel la calme avant la glace, selon la rampe de la
-  // couverture qui s'applique au pixel : la glace des rivières dans une case de terre ou de
-  // lac, la banquise dans la mer côtière. Une recoloration de saison viendrait après.
+  // ni terre, ni ruisseau, ni couvert. Le gel la calme avant la glace, d'après le calendrier de la
+  // glace qui s'applique au pixel : celle des rivières dans une case de terre ou de lac, la
+  // banquise dans la mer côtière (ADR 0019, § 1). Une recoloration de saison viendrait après.
   float waveDither = bayer(dither);
   if (uFine > 0.5 && uMode < 0.5 && land < 0.5 && stream < 0.5 && coverage <= waveDither) {
     float calm = 0.0;
-    if (waterCell < 0.5 || cover == 2.0) calm = ${calmExpression(COVER_RAMPS.ice)};
-    else if (cover == 3.0) calm = ${calmExpression(COVER_RAMPS['sea-ice'])};
+    if (kind > 1.5 && most > 0.0) {
+      float distance = ${CALM_GLSL.distance};
+      calm = ${CALM_GLSL.calm};
+    }
     if (calm < waveDither) color = waveColor(texel.rgb, dither, color);
   }
 
@@ -427,7 +439,7 @@ function unormBytes(byte: number): number {
   return f32(f32(byte / 255) * 255);
 }
 
-/** Ce que le miroir lit d'un pixel : sa couleur cuite, et le texel de sa case. */
+/** Ce que le miroir lit d'un pixel : sa couleur cuite, le texel de sa case et son calendrier. */
 export interface WavePixel {
   /** Rouge, vert et bleu cuits. */
   readonly red: number;
@@ -437,6 +449,8 @@ export interface WavePixel {
   readonly temperature: number;
   readonly amplitude: number;
   readonly flags: number;
+  /** Les quatre octets du calendrier de la glace de la case (src/core/snow.ts). */
+  readonly calendar: ArrayLike<number>;
 }
 
 /**
@@ -453,14 +467,89 @@ export function monthly32(pixel: WavePixel, season: number): number {
 
 const clamp01 = (value: number) => Math.min(1, Math.max(0, value));
 
-/** Part couverte d'une rampe de core/seasons.ts, en flottants de 32 bits, comme le shader. */
-export function cover32(ramp: CoverRamp, monthly: number): number {
-  return f32(clamp01(f32(f32(ramp.onset - monthly) / ramp.span)) * f32(ramp.full));
+/** Une rampe telle que le shader la reçoit, en flottants de 32 bits : début, étendue, part pleine. */
+export type Ramp32 = readonly [number, number, number];
+
+/** Les uniformes de la couverture de l'eau, tels que le shader les reçoit (coverUniforms). */
+export interface WaveCovers {
+  readonly ice: Ramp32;
+  readonly seaIce: Ramp32;
+  readonly calmDays: number;
 }
 
-/** Calme du gel d'une rampe, en flottants de 32 bits, comme le shader : 0 bouge, 1 immobile. */
-export function calm32(ramp: CoverRamp, monthly: number): number {
-  return clamp01(f32(f32(f32(ramp.onset + CALM_SPAN) - monthly) / CALM_SPAN));
+/** Les uniformes de la couverture de l'eau, tirés de data/seasons.json. */
+export function waveCovers(seasons: Seasons): WaveCovers {
+  const ramp = ({ onset, span, full }: Seasons['freshIce']['ramp']): Ramp32 => [
+    f32(onset),
+    f32(span),
+    f32(full),
+  ];
+  return {
+    ice: ramp(seasons.freshIce.ramp),
+    seaIce: ramp(seasons.seaIce.ramp),
+    calmDays: f32(seasons.calmDays),
+  };
+}
+
+/** Part d'une rampe à la température `celsius`, en flottants de 32 bits, comme le shader. */
+export function ramp32(ramp: Ramp32, celsius: number): number {
+  return f32(clamp01(f32(f32(ramp[0] - celsius) / ramp[1])) * ramp[2]);
+}
+
+/** Ce que le shader calcule de la couverture de l'eau d'un pixel (mapShader.ts, COVER_GLSL). */
+export interface WaterCover {
+  /** La rampe couvre-t-elle jamais la case, et au jour ? */
+  readonly most: number;
+  readonly now: number;
+  /** Jour de phase, part couverte, et calme du gel (0 bouge, 1 immobile). */
+  readonly phase: number;
+  readonly coverage: number;
+  readonly calm: number;
+}
+
+/**
+ * La couverture de l'eau d'un pixel de rampe `ramp`, au facteur de saison `season` et au jour
+ * `day` (les uniformes uSeason et uDay), en flottants de 32 bits, opération par opération comme
+ * le shader : COVER_GLSL (most, summer, now, level, share) puis CALM_GLSL.
+ */
+export function waterCover32(
+  pixel: WavePixel,
+  ramp: Ramp32,
+  season: number,
+  day: number,
+  calmDays: number,
+): WaterCover {
+  const temperature = f32(f32(unormBytes(pixel.temperature) / 2) - 64);
+  const amplitude = f32(unormBytes(pixel.amplitude) / 8);
+  const monthly = monthly32(pixel, season);
+  const south = (pixel.flags & 1) === 1;
+  const offset = f32(day - warmestDay(south));
+  const phase = f32(offset - f32(YEAR_DAYS * Math.floor(f32(offset / YEAR_DAYS))));
+  const most = ramp32(ramp, f32(temperature - amplitude));
+  if (most <= 0) return { most, now: 0, phase, coverage: 0, calm: 0 };
+  const summer = ramp32(ramp, f32(temperature + amplitude));
+  const now = ramp32(ramp, monthly);
+  const [b0 = 0, b1 = 0, b2 = 1, b3 = 1] = Array.from(pixel.calendar);
+  const unit = f32(DAYS_PER_UNIT);
+  const level = clamp01(
+    phase < COLDEST_PHASE
+      ? f32(f32(phase - f32(b0 * unit)) / b2)
+      : f32(f32(f32(b1 * unit) - phase) / b3),
+  );
+  const coverage =
+    phase < COLDEST_PHASE
+      ? Math.max(summer, Math.min(now, f32(most * level)))
+      : Math.max(now, f32(most * level));
+  const start = f32(b0 * unit);
+  const end = Math.max(f32(b1 * unit), COLDEST_PHASE);
+  const distance =
+    phase < start
+      ? Math.min(f32(start - phase), f32(f32(phase + YEAR_DAYS) - end))
+      : phase > end
+        ? Math.min(f32(phase - end), f32(f32(start + YEAR_DAYS) - phase))
+        : 0;
+  const calm = now > 0 ? 1 : clamp01(f32(1 - f32(distance / calmDays)));
+  return { most, now, phase, coverage, calm };
 }
 
 /** Seuil de la matrice de Bayer 4 × 4 au pixel entier (x, y), comme le shader. */
@@ -471,21 +560,37 @@ export function bayer(x: number, y: number): number {
   return (4 * a + b + 0.5) / 16;
 }
 
-/** Réglages de l'image : uSeason (flottant 32 bits), échelle 1 ou plus, mode naturel, ruisseaux. */
+/**
+ * Réglages de l'image : uSeason et uDay (flottants 32 bits), échelle 1 ou plus, mode naturel,
+ * ruisseaux ; et les uniformes de la couverture de l'eau (waveCovers).
+ */
 export interface WaveView {
   readonly season: number;
+  readonly day: number;
   readonly fine: boolean;
   readonly natural: boolean;
   readonly streams: boolean;
+  readonly covers: WaveCovers;
 }
 
 /** Ce qui retient un pixel de bouger, selon le shader. */
 export type WaveStill = 'view' | 'land' | 'stream' | 'covered' | 'calm';
 
+/** La rampe de la glace qui s'applique à un pixel d'eau, ou rien (haute mer, océan). */
+export function waterRamp(pixel: WavePixel, covers: WaveCovers): Ramp32 | undefined {
+  const cover = (pixel.flags >> 4) & 3;
+  const waterCell = (pixel.flags >> 6) & 1;
+  // Comme le shader : la glace des rivières dans une case de terre, puis celle des lacs, puis
+  // la banquise ; la haute mer et l'océan ne gèlent pas.
+  if (waterCell === 0 || cover === 2) return covers.ice;
+  return cover === 3 ? covers.seaIce : undefined;
+}
+
 /**
  * Le pixel du monde (x, y) peut-il bouger ? Sinon, ce qui l'en retient : la vue (sous
  * l'échelle 1, hors du mode naturel), la terre, le ruisseau, la couverture (glace, banquise),
- * ou le calme qui précède la glace. La décision du shader, en flottants de 32 bits.
+ * ou le calme qui précède la glace et suit son départ. La décision du shader, en flottants de
+ * 32 bits.
  */
 export function waveStill(
   view: WaveView,
@@ -496,21 +601,13 @@ export function waveStill(
   if (!view.fine || !view.natural) return 'view';
   if ((pixel.red & 1) === 1) return 'land';
   if (view.streams && (pixel.green & 1) === 1) return 'stream';
-  const cover = (pixel.flags >> 4) & 3;
-  const waterCell = (pixel.flags >> 6) & 1;
-  // Comme le shader : la glace des rivières dans une case de terre, puis celle des lacs, puis
-  // la banquise ; la haute mer et l'océan ne gèlent pas.
-  const ramp =
-    waterCell === 0 || cover === 2
-      ? COVER_RAMPS.ice
-      : cover === 3
-        ? COVER_RAMPS['sea-ice']
-        : undefined;
+  const ramp = waterRamp(pixel, view.covers);
   if (ramp === undefined) return undefined;
-  const monthly = monthly32(pixel, view.season);
+  const water = waterCover32(pixel, ramp, view.season, view.day, view.covers.calmDays);
   const threshold = bayer(x, y);
-  if (cover32(ramp, monthly) > threshold) return 'covered';
-  return calm32(ramp, monthly) < threshold ? undefined : 'calm';
+  if (water.coverage > threshold) return 'covered';
+  if (water.most <= 0) return undefined;
+  return water.calm < threshold ? undefined : 'calm';
 }
 
 /**

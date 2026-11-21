@@ -14,25 +14,30 @@
  * Et une texture de palettes : une ligne par biome, trois texels (ombre, base, lumière)
  * pour la palette de sa couverture.
  *
- * Le décor (tâche 2b.6, ADR 0017) lit ici la part de neige d'une case, depuis les mêmes codes et
- * par la même formule que le shader de la carte (snowShare) ; et le shader des objets, le ton
- * d'ombre de chaque case pour l'ombre portée « ground » (shadowTones).
+ * Le décor (tâche 2b.6, ADR 0017) lit ici la part de neige d'une case, depuis les mêmes codes, les
+ * mêmes calendriers (src/core/snow.ts) et par la même composition que le shader de la carte
+ * (snowShareOn) ; et le shader des objets, le ton d'ombre de chaque case pour l'ombre portée
+ * « ground » (shadowTones).
  */
-import type { Biome } from '../core/data/schemas';
+import type { Biome, Seasons } from '../core/data/schemas';
 import { SEASON_COVERS, VEGETATION_TYPES } from '../core/data/schemas';
-import { COVER_RAMPS, coverShare, FOREST_SNOW_SHARE } from '../core/seasons';
+import { coverShare } from '../core/seasons';
+import {
+  calendarLevel,
+  codeAmplitude,
+  codeTemperature,
+  composeCover,
+  DAYS_PER_UNIT,
+  encodeAmplitude,
+  encodeTemperature,
+  phaseDay,
+  YEAR_DAYS,
+} from '../core/snow';
 import type { WorldLayers, WorldSize } from '../core/world';
 import { parseColor } from './bake';
 
-/** Code de la température annuelle (°C) dans le canal R. */
-export function encodeTemperature(celsius: number): number {
-  return Math.min(255, Math.max(0, Math.round((celsius + 64) * 2)));
-}
-
-/** Code de la demi-amplitude (°C) dans le canal G. */
-export function encodeAmplitude(celsius: number): number {
-  return Math.min(255, Math.max(0, Math.round(celsius * 8)));
-}
+/** Codes de la température annuelle (canal R) et de la demi-amplitude (canal G). */
+export { encodeAmplitude, encodeTemperature } from '../core/snow';
 
 /** Ce que le canal B dit d'une case. */
 export interface CellFlags {
@@ -95,47 +100,93 @@ export function cellSeasonCodes(
 /** Code de la neige, dans la couverture du canal B. */
 const SNOW_COVER = SEASON_COVERS.indexOf('snow');
 
-/**
- * Part de neige d'une case de terre, de 0 à 1, telle que la pose le shader de la carte avant sa
- * trame (mapShader.ts, COVER_GLSL : `forestSnow`) : depuis les codes de la case dans la texture
- * des saisons, au facteur de saison `season` (seasonFactor du mois). Une case d'eau, ou d'un
- * biome sans neige, n'en a pas. Le décor s'enneige d'après elle (src/gen/decor.ts, decorSeason) :
- * 2b.7 y substituera son champ de neige, que le shader lira aussi.
- */
-export function snowShare(
-  temperature: number,
-  amplitude: number,
-  flags: number,
-  season: number,
-): number {
-  if (((flags >> 6) & 1) === 1 || ((flags >> 4) & 3) !== SNOW_COVER) return 0;
-  const south = (flags & 1) === 1;
-  const monthly = temperature / 2 - 64 + (amplitude / 8) * season * (south ? -1 : 1);
-  return coverShare(COVER_RAMPS.snow, monthly) * (flags >> 7 === 1 ? FOREST_SNOW_SHARE : 1);
+/** La case est-elle une terre couverte de neige (ni eau, ni biome sans neige) ? */
+function snowyLand(flags: number): boolean {
+  return ((flags >> 6) & 1) === 0 && ((flags >> 4) & 3) === SNOW_COVER;
 }
 
 /**
- * Le seuil de neige d'une case pour le décor : la valeur de g (le facteur de saison, signé par
- * l'hémisphère : seasonFactor du mois au nord, son opposé au sud) sous laquelle la part de
- * neige de snowShare atteint `share` (decorSeason : enneigé), ou NaN si elle ne change pas avec la
- * saison (une case d'eau, sans neige, sans amplitude, ou qui ne l'atteint jamais). Le décor ne
- * réévalue un objet que lorsque g franchit l'un de ses seuils (DecorSource.refreshStates).
+ * Part de neige d'une case de terre, de 0 à 1, telle que la pose le shader de la carte avant sa
+ * trame (mapShader.ts, COVER_GLSL : share × la part des forêts) : depuis les codes de la case
+ * dans la texture des saisons et son calendrier de neige (aux octets `at` de `calendars`), au
+ * facteur de saison `season` (seasonFactor du mois, au nord) et au jour continu `day` de l'année.
+ * Une case d'eau, ou d'un biome sans neige, n'en a pas. Le décor s'enneige d'après elle
+ * (src/gen/decor.ts, decorSeason).
  */
-export function snowThreshold(
+export function snowShareOn(
   temperature: number,
   amplitude: number,
   flags: number,
-  share: number,
+  calendars: ArrayLike<number>,
+  at: number,
+  season: number,
+  day: number,
+  seasons: Pick<Seasons, 'snow'>,
 ): number {
-  if (((flags >> 6) & 1) === 1 || ((flags >> 4) & 3) !== SNOW_COVER) return Number.NaN;
-  const swing = amplitude / 8;
-  if (swing <= 0) return Number.NaN;
-  const { onset, span, full } = COVER_RAMPS.snow;
-  const most = full * (flags >> 7 === 1 ? FOREST_SNOW_SHARE : 1);
-  if (most <= 0 || share > most) return Number.NaN;
-  // Enneigé quand la part, non nulle, atteint `share` : sous onset − span × share / most degrés.
-  const below = onset - (span * Math.max(0, share)) / most;
-  return (below - (temperature / 2 - 64)) / swing;
+  if (!snowyLand(flags)) return 0;
+  const south = (flags & 1) === 1;
+  const annual = codeTemperature(temperature);
+  const swing = codeAmplitude(amplitude);
+  const daily = annual + swing * season * (south ? -1 : 1);
+  const phase = phaseDay(day, south);
+  const { ramp, forest } = seasons.snow;
+  const share = composeCover(
+    ramp,
+    annual,
+    swing,
+    daily,
+    phase,
+    calendarLevel(calendars, at, phase),
+  );
+  return share * (flags >> 7 === 1 ? forest : 1);
+}
+
+/** Facteur de saison du jour de phase `phase`, comme le donne le mois (seasonFactor, signé). */
+function phaseFactor(phase: number): number {
+  return Math.cos((2 * Math.PI * phase) / YEAR_DAYS);
+}
+
+/**
+ * Les seuils de neige d'une case pour le décor : les valeurs de g (le facteur de saison, signé
+ * par l'hémisphère : seasonFactor du mois au nord, son opposé au sud) où la part de neige de
+ * snowShareOn atteint `share` (decorSeason : enneigé), à l'arrivée, au refroidissement, et au
+ * départ, au réchauffement ; NaN si elle n'y change pas (une case d'eau, sans neige, sans
+ * amplitude, ou toujours, ou jamais, au-dessus). La part croît au refroidissement et décroît au
+ * réchauffement (src/core/snow.ts) : chaque moitié de l'année la franchit une fois au plus. Le
+ * décor ne réévalue un objet que lorsque g franchit l'un de ses seuils, ou que le refroidissement
+ * change (DecorSource.refreshStates).
+ */
+export function snowThresholdsOn(
+  temperature: number,
+  amplitude: number,
+  flags: number,
+  calendars: ArrayLike<number>,
+  at: number,
+  share: number,
+  seasons: Pick<Seasons, 'snow'>,
+): readonly [number, number] {
+  const none = [Number.NaN, Number.NaN] as const;
+  if (!snowyLand(flags) || share <= 0) return none;
+  const keep = flags >> 7 === 1 ? seasons.snow.forest : 1;
+  const { ramp } = seasons.snow;
+  const annual = codeTemperature(temperature);
+  const swing = codeAmplitude(amplitude);
+  const most = coverShare(ramp, annual - swing);
+  const summer = coverShare(ramp, annual + swing);
+  const level = share / keep;
+  if (keep <= 0 || swing <= 0 || level <= summer || level > most) return none;
+  // La rampe atteint `level` au facteur gamma ; la montée du calendrier, au jour rise ; sa
+  // descente le quitte au jour fall.
+  const below = ramp.onset - (ramp.span * level) / ramp.full;
+  const gamma = Math.min(1, Math.max(-1, (below - annual) / swing));
+  const fraction = level / most;
+  const rise = (calendars[at] ?? 0) * DAYS_PER_UNIT + fraction * (calendars[at + 2] ?? 1);
+  const fall = (calendars[at + 1] ?? 0) * DAYS_PER_UNIT - fraction * (calendars[at + 3] ?? 1);
+  // Au refroidissement, g décroît : enneigé sous la rampe et sous la montée.
+  const arrival = Math.min(gamma, phaseFactor(rise));
+  // Au réchauffement, g croît : enneigé tant que la rampe ou la descente le tient.
+  const departure = fall >= YEAR_DAYS / 2 ? Math.max(gamma, phaseFactor(fall)) : gamma;
+  return [arrival, departure];
 }
 
 /**
