@@ -10,14 +10,21 @@ import {
   MAX_CREST_THICKNESS,
   MAX_WAVE_BIOMES,
 } from '../core/waves';
+import { foliageShares, leafThreshold } from '../core/foliage';
+import { TINT } from './bake';
 import {
   COVER_GLSL,
   glslFloat,
   MAP_FRAGMENT,
+  MAP_FRAGMENT_SEASONS,
   MAP_FRAGMENT_WAVES,
+  MAP_FRAGMENT_WAVES_SEASONS,
   SEASON_ANCHORS,
   WAVE_ANCHORS,
 } from './mapShader';
+import { mirrorPhase, mirrorState } from './seasonMirror';
+import { SEASON_EXPR, SEASON_GLSL } from './seasonShader';
+import { evaluateGlsl } from './testing';
 import {
   CALM_GLSL,
   WAVE_GLSL,
@@ -253,5 +260,181 @@ describe('programmes de la carte et de la mer animée (ADR 0015)', () => {
       'mer-longue crête',
     ]);
     expect(fingerprint.hex()).toBe('85d6651b');
+  });
+});
+
+describe('programmes des couleurs de la saison (tâche 2b.7, ADR 0019, § 2, 3 et 6)', () => {
+  it('ajoute le code des saisons après l’onde et la couverture, avant les modes, sans rien changer d’autre', () => {
+    for (const [seasons, source] of [
+      [MAP_FRAGMENT_SEASONS, MAP_FRAGMENT],
+      [MAP_FRAGMENT_WAVES_SEASONS, MAP_FRAGMENT_WAVES],
+    ] as const) {
+      expect(seasons.replace(SEASON_GLSL.header, '').replace(SEASON_GLSL.main, '')).toBe(source);
+      const main = seasons.indexOf(SEASON_GLSL.main);
+      expect(seasons.slice(main + SEASON_GLSL.main.length)).toMatch(/^ {2}if \(uMode > 0\.5\) \{/);
+      expect(main).toBeGreaterThan(seasons.indexOf('if (coverage > bayer(dither)) {'));
+      expect(seasons).not.toContain('${');
+    }
+    // Dans le programme de l'onde, les saisons viennent après elle, qui ne voit que des tons cuits.
+    expect(MAP_FRAGMENT_WAVES_SEASONS.indexOf(SEASON_GLSL.main)).toBeGreaterThan(
+      MAP_FRAGMENT_WAVES_SEASONS.indexOf(WAVE_GLSL.main),
+    );
+    // Les dates et les réglages arrivent par des textures et des uniformes.
+    for (const uniform of [
+      'uniform sampler2D uIdentity;',
+      'uniform sampler2D uFoliage;',
+      'uniform sampler2D uStates;',
+      'uniform float uFoliageDays;',
+      'uniform float uLight;',
+    ]) {
+      expect(SEASON_GLSL.header).toContain(uniform);
+    }
+    for (const [name, expression] of Object.entries(SEASON_EXPR)) {
+      expect(SEASON_GLSL.main, name).toContain(expression);
+    }
+  });
+
+  // Ces empreintes figent le code des saisons. On ne les met à jour que si sa logique change,
+  // après avoir relancé le contrôle des pixels dans Chromium (tools/season-control/LISEZMOI.md),
+  // dont on joint le résultat à la PR.
+  it('fige les programmes des saisons, et laisse ceux de la carte et de l’onde tels quels', () => {
+    expect(new Fingerprint().string(MAP_FRAGMENT).hex()).toBe('f1e7960c');
+    expect(new Fingerprint().string(MAP_FRAGMENT_WAVES).hex()).toBe('0e9941c9');
+    expect(new Fingerprint().string(MAP_FRAGMENT_SEASONS).hex()).toBe('918fbc88');
+    expect(new Fingerprint().string(MAP_FRAGMENT_WAVES_SEASONS).hex()).toBe('e510aea1');
+  });
+
+  it('calcule hors du GPU les seuils, les parts et les états du calendrier de la végétation', () => {
+    const transition = 12;
+    for (const [x, y] of [
+      [0, 0],
+      [3, 7],
+      [4095, 2047],
+      [1023, 511],
+      [2048, 77],
+      [17, 1999],
+    ] as const) {
+      const value = evaluateGlsl(SEASON_EXPR.threshold, { leafX: x, leafY: y });
+      expect(value, `${String(x)}, ${String(y)}`).toBe(leafThreshold(x, y));
+    }
+    // Des calendriers de toutes formes, aux jours de toute l'année, aux seuils de tout l'intervalle.
+    const calendars = [
+      [40, 120, 255, 200],
+      [255, 30, 255, 255],
+      [100, 150, 60, 140],
+      [30, 30, 30, 30],
+      [254, 254, 254, 254],
+      [255, 255, 160, 255],
+    ];
+    let compared = 0;
+    for (const calendar of calendars) {
+      for (let phase = 0; phase < 360; phase += 2.37) {
+        for (const threshold of [0.01, 0.3, 0.5, 0.77, 0.99]) {
+          for (const light of [false, true]) {
+            const variables: Record<string, number> = {
+              leafPhase: Math.fround(phase),
+              'cal.x': calendar[0] ?? 255,
+              'cal.y': calendar[1] ?? 255,
+              'cal.z': calendar[2] ?? 255,
+              'cal.w': calendar[3] ?? 255,
+              uFoliageDays: transition,
+              uLight: light ? 1 : 0,
+              threshold,
+            };
+            for (const name of [
+              'leafDistance',
+              'bare',
+              'autumn',
+              'dry',
+              'light',
+              'state',
+            ] as const) {
+              variables[name] = evaluateGlsl(SEASON_EXPR[name], variables);
+            }
+            const uniforms = { day: 0, transition, light };
+            expect(variables.state).toBe(
+              mirrorState(calendar, 0, Math.fround(phase), threshold, uniforms),
+            );
+            // Les parts du décor (en flottants de 64 bits), à l'arrondi près.
+            const shares = foliageShares(calendar, 0, Math.fround(phase), transition);
+            expect(variables.bare).toBeCloseTo(shares.bare, 5);
+            expect(variables.autumn).toBeCloseTo(shares.autumn, 5);
+            expect(variables.dry).toBeCloseTo(shares.dry, 5);
+            expect(variables.light).toBeCloseTo(light ? shares.light : 0, 5);
+            compared++;
+          }
+        }
+      }
+    }
+    expect(compared).toBeGreaterThan(9000);
+  });
+
+  it('retrouve hors du GPU la case qui prête le ton, sa phase et sa teinte', () => {
+    for (const [ox, oy, px, py, code] of [
+      [0, 0, 0, 0, 1],
+      [0, 0, 1, 3, 12],
+      [448, 192, 255, 255, 7],
+      [448, 0, 254, 2, 5],
+      [64, 192, 2, 253, 10],
+    ] as const) {
+      const variables: Record<string, number> = {
+        'uOrigin.x': ox,
+        'uOrigin.y': oy,
+        'pixel.x': px,
+        'pixel.y': py,
+        code,
+        'uWorldCells.x': 512,
+        'uWorldCells.y': 256,
+      };
+      for (const name of [
+        'wx',
+        'wy',
+        'lane',
+        'rank',
+        'lender',
+        'cornerX',
+        'cornerY',
+        'sourceX',
+        'sourceY',
+      ] as const) {
+        variables[name] = evaluateGlsl(SEASON_EXPR[name], variables);
+      }
+      const wx = ox * 4 + px;
+      const wy = oy * 4 + py;
+      expect([variables.wx, variables.wy, variables.lane]).toEqual([wx, wy, px % 4]);
+      expect([variables.rank, variables.lender]).toEqual([
+        (code - 1) % 3,
+        Math.floor((code - 1) / 3),
+      ]);
+      const lender = Math.floor((code - 1) / 3);
+      const sx = (((Math.floor((wx + 0.5) / 4 - 0.5) + (lender % 2)) % 512) + 512) % 512;
+      const sy = Math.min(
+        255,
+        Math.max(0, Math.floor((wy + 0.5) / 4 - 0.5) + Math.floor(lender / 2)),
+      );
+      expect([variables.sourceX, variables.sourceY]).toEqual([sx, sy]);
+    }
+    for (const day of [0, 14.9, 15, 15.1, 194.9, 195, 359.99]) {
+      for (const south of [0, 1]) {
+        const phase = evaluateGlsl(SEASON_EXPR.leafPhase, {
+          uDay: Math.fround(day),
+          sourceSouth: south,
+        });
+        expect(phase).toBe(mirrorPhase(day, south === 1));
+        expect(phase).toBeGreaterThanOrEqual(0);
+        expect(phase).toBeLessThan(360);
+      }
+    }
+    for (const temperature of [-30, -10, 0, 12, 18, 24, 30, 40]) {
+      const variables: Record<string, number> = { sourceT: temperature };
+      for (const name of ['warm', 'cold', 'tintRed', 'tintGreen', 'tintBlue'] as const) {
+        variables[name] = evaluateGlsl(SEASON_EXPR[name], variables);
+      }
+      const warm = Math.min(1, Math.max(0, (temperature - TINT.warmFrom) / TINT.warmSpan));
+      const cold = Math.min(1, Math.max(0, -temperature / TINT.coldSpan));
+      expect(variables.tintRed).toBeCloseTo(1 + TINT.red * warm - TINT.red * cold, 6);
+      expect(variables.tintGreen).toBeCloseTo(1 + TINT.green * warm, 6);
+      expect(variables.tintBlue).toBeCloseTo(1 - TINT.blue * warm + TINT.blue * cold, 6);
+    }
   });
 });

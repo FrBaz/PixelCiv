@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { loadGameData } from '../core/data';
-import { SEASON_COVERS, VEGETATION_TYPES } from '../core/data/schemas';
+import { SEASON_COVERS, SEASON_STATES, VEGETATION_TYPES } from '../core/data/schemas';
+import { FOLIAGE_BYTES, foliageShares, NO_DATE, worldFoliage } from '../core/foliage';
 import { coverShare, seasonFactor, southern } from '../core/seasons';
 import {
   coverRamps,
@@ -16,7 +17,13 @@ import { testWorld } from '../sim/testing';
 import { parseColor } from './bake';
 import { HUMAN_FRAGMENT } from './humanShader';
 import { COVER_GLSL, MAP_FRAGMENT } from './mapShader';
+import { MEAN_COLUMN, STATE_COLUMNS } from './seasonShader';
 import {
+  foliageTexels,
+  seasonActivity,
+  seasonInRect,
+  statePalettes,
+  winterTone,
   biomeCodes,
   cellSeasonCodes,
   encodeAmplitude,
@@ -371,5 +378,114 @@ describe('neige du décor et ombre « ground » (ADR 0017, § 4 et 5 ; ADR 0019)
       expect(at(0), biome.id).toEqual([...parseColor(biome.palette.shadow), 255]);
       expect(at(1), biome.id).toEqual([...parseColor(cover), 255]);
     });
+  });
+});
+
+describe('couleurs de la saison : tons, calendrier filtré, activité (ADR 0019, § 2, 3 et 6)', () => {
+  const rules = { foliage: data.decor.foliage, seasons };
+  const layers = testWorld('pixelciv');
+  const size = WORLD_SIZES.small;
+  const foliage = worldFoliage(size, layers, rules);
+  const texels = foliageTexels(foliage, layers, biomes.entries);
+
+  it('range les tons des états de chaque biome, l’hiver de sa palette d’été, puis les tons moyens', () => {
+    const states = statePalettes(biomes.entries, seasons.light);
+    const at = (row: number, column: number) => {
+      const offset = (row * STATE_COLUMNS + column) * 4;
+      return Array.from(states.subarray(offset, offset + 3));
+    };
+    biomes.entries.forEach((biome, row) => {
+      const ranks = ['shadow', 'base', 'light'] as const;
+      SEASON_STATES.forEach((state, index) => {
+        const palette = biome.seasons.states?.[state];
+        ranks.forEach((rank, column) => {
+          expect(at(row, index * 3 + column), `${biome.id} ${state}`).toEqual(
+            palette === undefined ? [0, 0, 0] : [...parseColor(palette[rank])],
+          );
+        });
+      });
+      ranks.forEach((rank, column) => {
+        expect(at(row, 9 + column), `${biome.id} hiver`).toEqual(
+          biome.family === 'water'
+            ? [0, 0, 0]
+            : [...winterTone(parseColor(biome.palette[rank]), seasons.light)],
+        );
+      });
+      // Le ton moyen de l'été est entre l'ombre et la lumière de sa palette.
+      const mean = at(row, MEAN_COLUMN);
+      const shadow = parseColor(biome.palette.shadow);
+      const light = parseColor(biome.palette.light);
+      mean.forEach((value, channel) => {
+        const low = Math.min(shadow[channel], light[channel]);
+        const high = Math.max(shadow[channel], light[channel]);
+        expect(value).toBeGreaterThanOrEqual(low - 1);
+        expect(value).toBeLessThanOrEqual(high + 1);
+      });
+    });
+    // La lumière d'hiver : un quart vers le ton visé, puis × 0,94 (les réglages livrés).
+    expect(winterTone([76, 150, 60], seasons.light)).toEqual([75, 131, 74]);
+  });
+
+  it('efface du calendrier du shader les états que le biome de la case ne prend pas', () => {
+    const lake = biomes.indexOf('lake') ?? -1;
+    const taiga = biomes.indexOf('taiga') ?? -1;
+    const grassland = biomes.indexOf('grassland') ?? -1;
+    let checked = 0;
+    for (let cell = 0; cell < layers.biome.length; cell++) {
+      const biome = biomes.entries.at(layers.biome[cell] ?? 0);
+      if (biome === undefined) continue;
+      const raw = Array.from(foliage.subarray(cell * FOLIAGE_BYTES, (cell + 1) * FOLIAGE_BYTES));
+      const kept = Array.from(texels.subarray(cell * FOLIAGE_BYTES, (cell + 1) * FOLIAGE_BYTES));
+      const states = biome.seasons.states ?? {};
+      expect(kept).toEqual([
+        states.autumn === undefined ? NO_DATE : raw[0],
+        states.bare === undefined ? NO_DATE : raw[1],
+        states.dry === undefined ? NO_DATE : raw[2],
+        biome.family === 'water' ? NO_DATE : raw[3],
+      ]);
+      if ([lake, taiga, grassland].includes(layers.biome[cell] ?? -1)) checked++;
+    }
+    expect(checked).toBeGreaterThan(1000);
+  });
+
+  it('ne laisse sans programme des saisons aucun bloc dont un pixel changerait, ni ne le donne à tort l’été', () => {
+    const transition = seasons.minTransition;
+    let active = 0;
+    let idle = 0;
+    for (let row = 0; row < size.height / 64; row++) {
+      for (let column = 0; column < size.width / 64; column++) {
+        const activity = seasonActivity(texels, size, 64, column, row, transition);
+        for (let day = 0; day < 360; day += 6) {
+          for (const light of [false, true]) {
+            const north = phaseDay(day, false);
+            const southPhase = phaseDay(day, true);
+            const shown = seasonInRect(activity, 16, 0, 0, 256, 256, north, southPhase, light);
+            let changes = false;
+            for (let y = 0; y < 64 && !changes; y++) {
+              const cy = row * 64 + y;
+              const phase = southern(cy, size.height) ? southPhase : north;
+              for (let x = 0; x < 64 && !changes; x++) {
+                const cell = cy * size.width + column * 64 + x;
+                const shares = foliageShares(texels, cell * FOLIAGE_BYTES, phase, transition);
+                changes =
+                  shares.autumn > 0 ||
+                  shares.bare > 0 ||
+                  shares.dry > 0 ||
+                  (light && shares.light > 0);
+              }
+            }
+            if (changes)
+              expect(shown, `bloc (${String(column)}, ${String(row)}), jour ${String(day)}`).toBe(
+                true,
+              );
+            if (shown) active++;
+            else idle++;
+          }
+        }
+      }
+    }
+    // Les blocs sans rien qui change à cette date gardent le programme de la carte.
+    expect(idle).toBeGreaterThan(active / 4);
+    expect(active).toBeGreaterThan(0);
   });
 });

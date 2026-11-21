@@ -228,6 +228,14 @@ export const BiomeSchema = z
       });
     }
     const states = biome.seasons.states ?? {};
+    // L'automne finit avec le bois nu (src/core/foliage.ts) : un biome qui vire se dénude aussi.
+    if (states.autumn !== undefined && states.bare === undefined) {
+      context.addIssue({
+        code: 'custom',
+        message: "un biome qui vire à l'automne a aussi sa palette du bois nu",
+        path: ['seasons', 'states', 'bare'],
+      });
+    }
     for (const state of SEASON_STATES) {
       const palette = states[state];
       if (palette === undefined) continue;

@@ -1474,16 +1474,19 @@ describe('états de la végétation, dans data/biomes.json (ADR 0019, § 2)', ()
   });
 
   it('refuse un état d’une eau, ou que la végétation du biome ne prend pas', () => {
-    expect(valid(withStates('temperate-forest', { autumn: palette }))).toBe(true);
+    expect(valid(withStates('temperate-forest', { autumn: palette, bare: palette }))).toBe(true);
+    // L'automne mène au bois nu : un biome qui vire a sa palette nue.
+    expect(valid(withStates('temperate-forest', { autumn: palette }))).toBe(false);
+    expect(valid(withStates('temperate-forest', { bare: palette }))).toBe(true);
     expect(valid(withStates('lake', { bare: palette }))).toBe(false);
     // Une eau n'a pas d'état, quelle que soit sa végétation.
     expect(valid({ ...withStates('lake', { bare: palette }), vegetation: 'deciduous' })).toBe(
       false,
     );
     expect(valid({ ...withStates('lake', undefined), vegetation: 'deciduous' })).toBe(true);
-    expect(valid(withStates('taiga', { autumn: palette }))).toBe(false);
+    expect(valid(withStates('taiga', { autumn: palette, bare: palette }))).toBe(false);
     expect(valid(withStates('desert', { dry: palette }))).toBe(false);
-    expect(valid(withStates('grassland', { autumn: palette }))).toBe(false);
+    expect(valid(withStates('grassland', { autumn: palette, bare: palette }))).toBe(false);
     expect(valid(withStates('grassland', { dry: palette }))).toBe(false);
     expect(valid(withStates('savanna', { bare: palette }))).toBe(false);
     expect(valid(withStates('tundra', { dry: palette }))).toBe(false);
@@ -1497,7 +1500,7 @@ describe('états de la végétation, dans data/biomes.json (ADR 0019, § 2)', ()
 
   it('refuse une palette d’état hors de l’ombre à la lumière, mal écrite ou incomplète', () => {
     const autumn = (change: Partial<typeof palette>) =>
-      valid(withStates('cold-forest', { autumn: { ...palette, ...change } }));
+      valid(withStates('cold-forest', { autumn: { ...palette, ...change }, bare: palette }));
     expect(autumn({})).toBe(true);
     expect(autumn({ shadow: '#9a6a20', base: '#5c3c16' })).toBe(false);
     expect(autumn({ light: '#9a6a20' })).toBe(false);

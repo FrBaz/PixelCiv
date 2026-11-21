@@ -637,7 +637,7 @@ async function main(): Promise<void> {
         chronicleLoading.value = false;
         showFacts(snapshotFacts(message.chronicle));
         const { width } = message.world.size;
-        map.setWorld(message.world, layers, message.calendars, (mode) =>
+        map.setWorld(message.world, layers, message.calendars, foliage, (mode) =>
           overlayTexels(mode, layers, modeData, width),
         );
         const ground = map.ground;

@@ -833,19 +833,21 @@ describe('mer animée : le miroir du shader (ADR 0015)', () => {
     expect(seaInRect(mask, CHUNK_PX, x, y, x, y + 1)).toBe(false);
   });
 
-  it('renvoie de chaque bloc cuit ses pixels et le masque de sa mer, transférés', () => {
+  it('renvoie de chaque bloc cuit ses pixels, le masque de sa mer et sa carte d’identité, transférés', () => {
     const request = { type: 'bake', generation: 3, column: 2, row: 1, version: 7 } as const;
     const tones = seaTones(table);
     for (const name of ['deep', 'coast', 'fresh']) {
       const pixels = Uint8Array.from(chosen(name).pixels);
-      const { reply, transfer } = bakedReply(request, 3, pixels, tones);
+      const identity = new Uint8Array(CHUNK_PX * CHUNK_PX).fill(5);
+      const { reply, transfer } = bakedReply(request, 3, pixels, tones, identity);
       if (reply.type !== 'baked') throw new Error('réponse inattendue');
       expect(reply).toMatchObject({ generation: 3, column: 2, row: 1, version: 7, pixels });
       expect(reply.seaMask).toEqual(seaMask(pixels, tones, CHUNK_PX));
-      expect(transfer).toEqual([pixels.buffer, reply.seaMask.buffer]);
+      expect(reply.identity).toBe(identity);
+      expect(transfer).toEqual([pixels.buffer, reply.seaMask.buffer, identity.buffer]);
     }
     const land = new Uint8Array(CHUNK_PX * CHUNK_PX * 4).fill(1);
-    const { reply } = bakedReply(request, 3, land, tones);
+    const { reply } = bakedReply(request, 3, land, tones, new Uint8Array(CHUNK_PX * CHUNK_PX));
     expect(reply.type === 'baked' && reply.seaMask.every((tile) => tile === 0)).toBe(true);
   });
 });

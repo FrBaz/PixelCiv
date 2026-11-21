@@ -13,12 +13,16 @@ import type { BakeReply, BakeRequest } from './bakeProtocol';
 /** Blocs confiés en même temps à chaque worker : un en cours, un d'avance. */
 const IN_FLIGHT = 2;
 
-/** Un bloc cuit : ses pixels, et le masque de sa mer animée (src/render/waves.ts, seaMask). */
+/**
+ * Un bloc cuit : ses pixels, le masque de sa mer animée (src/render/waves.ts, seaMask) et la
+ * carte d'identité de ses tons (src/render/bake.ts, IDENTITY).
+ */
 export type BakedListener = (
   column: number,
   row: number,
   pixels: Uint8Array<ArrayBuffer>,
   seaMask: Uint8Array<ArrayBuffer>,
+  identity: Uint8Array<ArrayBuffer>,
 ) => void;
 
 interface BakeWorker {
@@ -163,7 +167,7 @@ export class Baker {
     else this.inFlight.delete(index);
     // Une cuisson d'avant une modification du bloc : la suivante, en attente, la remplace.
     if (reply.type === 'baked' && reply.version === this.versions[index]) {
-      this.onBaked(reply.column, reply.row, reply.pixels, reply.seaMask);
+      this.onBaked(reply.column, reply.row, reply.pixels, reply.seaMask, reply.identity);
     }
     this.pump();
   }

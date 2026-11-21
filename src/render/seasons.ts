@@ -20,7 +20,8 @@
  * « ground » (shadowTones).
  */
 import type { Biome, Light, Seasons } from '../core/data/schemas';
-import { SEASON_COVERS, VEGETATION_TYPES } from '../core/data/schemas';
+import { SEASON_COVERS, SEASON_STATES, VEGETATION_TYPES } from '../core/data/schemas';
+import { FOLIAGE_BYTES, FOLIAGE_UNIT, NO_DATE } from '../core/foliage';
 import { coverShare } from '../core/seasons';
 import {
   calendarLevel,
@@ -34,7 +35,8 @@ import {
   YEAR_DAYS,
 } from '../core/snow';
 import type { WorldLayers, WorldSize } from '../core/world';
-import { parseColor, type Rgb } from './bake';
+import { bakeBiomes, parseColor, toneShares, type Rgb } from './bake';
+import { MEAN_COLUMN, STATE_COLUMNS } from './seasonShader';
 
 /** Codes de la température annuelle (canal R) et de la demi-amplitude (canal G). */
 export { encodeAmplitude, encodeTemperature } from '../core/snow';
@@ -304,4 +306,178 @@ export function seasonPalettes(biomes: readonly Biome[]): Uint8Array<ArrayBuffer
     });
   });
   return texels;
+}
+
+/**
+ * Texture des tons des états (seasonShader.ts, uStates) : une ligne par biome, STATE_COLUMNS
+ * texels : l'automne, le bois nu et la saison sèche (data/biomes.json, `seasons.states`), puis la
+ * lumière d'hiver (winterTone de sa palette d'été, aux terres seules), chacun ombre, base et
+ * lumière ; enfin les tons moyens de l'été et de ces quatre états, chaque rang pesant sa part dans
+ * la tuile du biome (toneShares), que la carte prend de loin. Un état sans palette reste noir :
+ * le calendrier filtré (foliageTexels) ne le donne jamais.
+ */
+export function statePalettes(biomes: readonly Biome[], light: Light): Uint8Array<ArrayBuffer> {
+  const texels = new Uint8Array(biomes.length * STATE_COLUMNS * 4);
+  const baked = bakeBiomes(biomes);
+  biomes.forEach((biome, row) => {
+    const put = (column: number, color: readonly number[]) => {
+      const offset = (row * STATE_COLUMNS + column) * 4;
+      texels[offset] = color[0] ?? 0;
+      texels[offset + 1] = color[1] ?? 0;
+      texels[offset + 2] = color[2] ?? 0;
+      texels[offset + 3] = 255;
+    };
+    const summer = [biome.palette.shadow, biome.palette.base, biome.palette.light].map(parseColor);
+    const tones: (readonly Rgb[] | undefined)[] = SEASON_STATES.map((state) => {
+      const palette = biome.seasons.states?.[state];
+      return palette === undefined
+        ? undefined
+        : [palette.shadow, palette.base, palette.light].map(parseColor);
+    });
+    tones.push(
+      biome.family === 'water' ? undefined : summer.map((tone) => winterTone(tone, light)),
+    );
+    tones.forEach((palette, state) => {
+      palette?.forEach((tone, rank) => {
+        put(state * 3 + rank, tone);
+      });
+    });
+    const style = baked.at(row);
+    const weights = style === undefined || style.style === 'water' ? [0, 1, 0] : toneShares(style);
+    const mean = (palette: readonly Rgb[]) =>
+      [0, 1, 2].map((channel) =>
+        Math.round(
+          palette.reduce((sum, tone, rank) => sum + (tone[channel] ?? 0) * (weights[rank] ?? 0), 0),
+        ),
+      );
+    put(MEAN_COLUMN, mean(summer));
+    tones.forEach((palette, state) => {
+      if (palette !== undefined) put(MEAN_COLUMN + 1 + state, mean(palette));
+    });
+  });
+  return texels;
+}
+
+/**
+ * Le calendrier de la végétation que lit le shader (seasonShader.ts, uFoliage) : celui des cases
+ * (src/core/foliage.ts), dont chaque état que le biome de la case ne prend pas (sans palette) est
+ * effacé, et la lumière d'hiver aux seules terres. Le décor lit, lui, le calendrier entier : un
+ * arbre caduc vire sur une prairie qui ne vire pas.
+ */
+export function foliageTexels(
+  foliage: Uint8Array,
+  layers: WorldLayers,
+  biomes: readonly Biome[],
+): Uint8Array<ArrayBuffer> {
+  const keep = biomes.map((biome) => [
+    biome.seasons.states?.autumn !== undefined,
+    biome.seasons.states?.bare !== undefined,
+    biome.seasons.states?.dry !== undefined,
+    biome.family !== 'water',
+  ]);
+  const texels = new Uint8Array(foliage.length);
+  for (let cell = 0; cell < layers.biome.length; cell++) {
+    const states = keep.at(layers.biome[cell] ?? 0);
+    for (let slot = 0; slot < FOLIAGE_BYTES; slot++) {
+      const at = cell * FOLIAGE_BYTES + slot;
+      texels[at] = states?.[slot] === true ? (foliage[at] ?? NO_DATE) : NO_DATE;
+    }
+  }
+  return texels;
+}
+
+/** Côté d'une tuile de l'activité des saisons, en cases : 16 pixels, comme la mer animée. */
+export const SEASON_TILE = 4;
+
+/**
+ * Activité des saisons d'un bloc (ADR 0019, § 6) : pour chaque tuile de SEASON_TILE × SEASON_TILE
+ * cases, la distance au jour le plus chaud (en jours) à partir de laquelle un de ses états, ou la
+ * lumière d'hiver, gagne un premier pixel, par hémisphère et par moitié de l'année (refroidissement,
+ * réchauffement : l'automne ne vient qu'au refroidissement) ; Infinity si rien n'y change. La carte
+ * ne donne le programme des saisons qu'aux blocs dont la partie visible porte une tuile active.
+ */
+export interface SeasonActivity {
+  /** Par tuile, rangée par rangée : [nord refroidissement, nord réchauffement, sud ×2] × 2. */
+  readonly tiles: Float32Array;
+  /** Tuiles par côté de bloc. */
+  readonly side: number;
+}
+
+/**
+ * L'activité du bloc (column, row) de `chunkCells` cases de côté, d'après le calendrier filtré
+ * `texels` (foliageTexels), avec ou sans la lumière d'hiver : les quatre valeurs sans lumière,
+ * puis les quatre avec.
+ */
+export function seasonActivity(
+  texels: Uint8Array,
+  size: WorldSize,
+  chunkCells: number,
+  column: number,
+  row: number,
+  transition: number,
+): SeasonActivity {
+  const side = chunkCells / SEASON_TILE;
+  const tiles = new Float32Array(side * side * 8).fill(Number.POSITIVE_INFINITY);
+  const half = transition / 2;
+  for (let y = 0; y < chunkCells; y++) {
+    const cy = row * chunkCells + y;
+    const south = cy >= size.height / 2;
+    for (let x = 0; x < chunkCells; x++) {
+      const cell = cy * size.width + column * chunkCells + x;
+      const at = cell * FOLIAGE_BYTES;
+      const day = (slot: number) => {
+        const date = texels[at + slot] ?? NO_DATE;
+        return date === NO_DATE ? Number.POSITIVE_INFINITY : date * FOLIAGE_UNIT - half;
+      };
+      const autumn = (texels[at + 1] ?? NO_DATE) === NO_DATE ? Number.POSITIVE_INFINITY : day(0);
+      const warming = Math.min(day(1), day(2));
+      const cooling = Math.min(warming, autumn);
+      const tile = (Math.floor(y / SEASON_TILE) * side + Math.floor(x / SEASON_TILE)) * 8;
+      const base = tile + (south ? 2 : 0);
+      const values = [cooling, warming, Math.min(cooling, day(3)), Math.min(warming, day(3))];
+      tiles[base] = Math.min(tiles[base] ?? Infinity, values[0] ?? Infinity);
+      tiles[base + 1] = Math.min(tiles[base + 1] ?? Infinity, values[1] ?? Infinity);
+      tiles[base + 4] = Math.min(tiles[base + 4] ?? Infinity, values[2] ?? Infinity);
+      tiles[base + 5] = Math.min(tiles[base + 5] ?? Infinity, values[3] ?? Infinity);
+    }
+  }
+  return { tiles, side };
+}
+
+/**
+ * La partie [left, right[ × [top, bottom[ (pixels du bloc) du bloc d'activité `activity`
+ * porte-t-elle une case qui change au jour de phase du nord `north` et du sud `south`, avec ou
+ * sans la lumière d'hiver ?
+ */
+export function seasonInRect(
+  activity: SeasonActivity,
+  tilePx: number,
+  left: number,
+  top: number,
+  right: number,
+  bottom: number,
+  north: number,
+  south: number,
+  light: boolean,
+): boolean {
+  if (right <= left || bottom <= top) return false;
+  const { tiles, side } = activity;
+  const distance = (phase: number) => Math.min(phase, YEAR_DAYS - phase);
+  const index = (phase: number) => (phase < YEAR_DAYS / 2 ? 0 : 1);
+  const northAt = index(north) + (light ? 4 : 0);
+  const southAt = 2 + index(south) + (light ? 4 : 0);
+  const dNorth = distance(north);
+  const dSouth = distance(south);
+  const c0 = Math.max(0, Math.floor(left / tilePx));
+  const c1 = Math.min(side - 1, Math.floor((right - 1) / tilePx));
+  const r0 = Math.max(0, Math.floor(top / tilePx));
+  const r1 = Math.min(side - 1, Math.floor((bottom - 1) / tilePx));
+  for (let r = r0; r <= r1; r++) {
+    for (let c = c0; c <= c1; c++) {
+      const tile = (r * side + c) * 8;
+      if (dNorth > (tiles[tile + northAt] ?? Infinity)) return true;
+      if (dSouth > (tiles[tile + southAt] ?? Infinity)) return true;
+    }
+  }
+  return false;
 }

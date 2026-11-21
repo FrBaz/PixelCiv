@@ -29,13 +29,15 @@
  * La mer animée (tâche 2b.4, ADR 0015) a son propre programme, `MAP_FRAGMENT_WAVES` : le même,
  * augmenté du code de src/render/waves.ts, inséré avant main() et après la couverture. La
  * carte ne le donne qu'aux blocs où l'onde se voit ; partout ailleurs, `MAP_FRAGMENT` suffit.
- * Les couleurs de la saison (second temps de 2b.7) s'inséreront aux mêmes ancres, après l'onde
- * (SEASON_ANCHORS).
+ * Les couleurs de la saison (tâche 2b.7, ADR 0019) s'insèrent aux mêmes ancres, après l'onde
+ * (SEASON_ANCHORS ; src/render/seasonShader.ts) : quatre programmes, aux mêmes textures, la base,
+ * l'onde, les saisons, l'onde et les saisons.
  */
 import type { Seasons } from '../core/data/schemas';
 import type { CoverRamp } from '../core/seasons';
 import { COLDEST_PHASE, DAYS_PER_UNIT, warmestDay, YEAR_DAYS } from '../core/snow';
 import { glslFloat } from './glsl';
+import { SEASON_GLSL } from './seasonShader';
 import { WAVE_GLSL } from './waves';
 
 export { glslFloat } from './glsl';
@@ -286,3 +288,19 @@ export const MAP_FRAGMENT_WAVES = insertBefore(
   WAVE_ANCHORS.main,
   WAVE_GLSL.main,
 );
+
+/** `source` augmenté du code des couleurs de la saison, après tout ce qu'il calcule déjà. */
+const withSeasons = (source: string) =>
+  insertBefore(
+    insertBefore(source, SEASON_ANCHORS.header, SEASON_GLSL.header),
+    SEASON_ANCHORS.main,
+    SEASON_GLSL.main,
+  );
+
+/**
+ * Programmes des blocs où les couleurs de la saison se voient (ADR 0019, § 2, 3 et 6) : la carte
+ * et le code des saisons ; la carte, l'onde, puis le code des saisons, qui traite la sortie de
+ * l'onde comme un pixel cuit, et ne touche de toute façon que les terres.
+ */
+export const MAP_FRAGMENT_SEASONS = withSeasons(MAP_FRAGMENT);
+export const MAP_FRAGMENT_WAVES_SEASONS = withSeasons(MAP_FRAGMENT_WAVES);

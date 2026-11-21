@@ -33,7 +33,8 @@ import {
 } from 'pixi.js';
 import type { Biome, Seasons } from '../core/data/schemas';
 import { seasonFactor } from '../core/seasons';
-import { CALENDAR_BYTES } from '../core/snow';
+import { FOLIAGE_BYTES } from '../core/foliage';
+import { CALENDAR_BYTES, phaseDay } from '../core/snow';
 import { DAYS_PER_MONTH } from '../core/time';
 import type { ChunkPatch, WorldInfo } from '../core/protocol';
 import {
@@ -44,6 +45,7 @@ import {
   type WorldSize,
 } from '../core/world';
 import { bakeBiomes, CHUNK_PX, type BakeBiome } from './bake';
+import { TILE_PX } from './camera';
 import { Baker } from './baker';
 import {
   displayScale,
@@ -52,8 +54,26 @@ import {
   type ChunkPlacement,
   type Extent,
 } from './camera';
-import { coverUniforms, MAP_FRAGMENT, MAP_FRAGMENT_WAVES, MAP_VERTEX } from './mapShader';
-import { seasonPalettes, seasonTexels, shadowTones } from './seasons';
+import {
+  coverUniforms,
+  MAP_FRAGMENT,
+  MAP_FRAGMENT_SEASONS,
+  MAP_FRAGMENT_WAVES,
+  MAP_FRAGMENT_WAVES_SEASONS,
+  MAP_VERTEX,
+} from './mapShader';
+import { IDENTITY_HEIGHT, IDENTITY_WIDTH, STATE_COLUMNS } from './seasonShader';
+import {
+  foliageTexels,
+  SEASON_TILE,
+  seasonActivity,
+  seasonInRect,
+  seasonPalettes,
+  seasonTexels,
+  shadowTones,
+  statePalettes,
+  type SeasonActivity,
+} from './seasons';
 import type { GroundTextures } from './humanShader';
 import {
   MAX_WAVE_BIOMES,
@@ -76,6 +96,13 @@ export const STREAMS_SCALE = 2;
 export const MAP_MODES = ['natural', 'relief', 'biomes', 'resources'] as const;
 export type MapMode = (typeof MAP_MODES)[number];
 
+/**
+ * Ce que montrent les couleurs de la saison (le réglage des effets, ADR 0020) : rien (les tuiles
+ * de la cuisson, la neige et la glace), les états de la végétation, ou ces états et la lumière
+ * d'hiver.
+ */
+export type SeasonColors = 'off' | 'states' | 'full';
+
 /** Couleurs de superposition d'un mode : un texel RGBA par case. */
 export type OverlayBuilder = (mode: Exclude<MapMode, 'natural'>) => Uint8Array<ArrayBuffer>;
 
@@ -85,13 +112,23 @@ type ChunkMesh = Mesh<MeshGeometry, Shader>;
 interface ChunkView {
   readonly pixels: Uint8Array<ArrayBuffer>;
   readonly source: BufferImageSource;
-  /** Le shader de la carte, et celui de la mer animée, aux mêmes textures. */
+  /** Carte d'identité des tons de sa cuisson (bake.ts, IDENTITY), et sa texture. */
+  readonly identity: Uint8Array<ArrayBuffer>;
+  readonly identitySource: BufferImageSource;
+  /**
+   * Le shader de la carte, celui de la mer animée, celui des couleurs de la saison, et celui de
+   * l'onde et des saisons, aux mêmes textures.
+   */
   readonly shader: Shader;
   readonly waveShader: Shader;
+  readonly seasonShader: Shader;
+  readonly waveSeasonShader: Shader;
   readonly mesh: ChunkMesh;
   baked: boolean;
   /** Masque de la mer animée de sa cuisson, un octet par tuile (src/render/waves.ts, seaMask). */
   seaMask: Uint8Array;
+  /** Activité des saisons de ses cases (src/render/seasons.ts, seasonActivity). */
+  activity: SeasonActivity;
 }
 
 /**
@@ -192,6 +229,26 @@ export class MapView {
   );
   /** Bruit fixe de l'onde, lu au plus proche. */
   private readonly waveNoise = dataSource(waveNoise(), WAVE_NOISE, WAVE_NOISE);
+  /**
+   * Réglages des couleurs de la saison, que seuls leurs programmes lisent (seasonShader.ts) :
+   * la durée d'une transition et la lumière d'hiver. Statiques, renvoyés au GPU quand ils changent.
+   */
+  private readonly seasonGlobals = new UniformGroup(
+    {
+      uFoliageDays: { value: 1, type: 'f32' },
+      uLight: { value: 0, type: 'f32' },
+    },
+    { isStatic: true },
+  );
+  /** Tons des états de chaque biome (statePalettes). */
+  private readonly states: BufferImageSource;
+  /** Ce que montrent les couleurs de la saison (le réglage des effets). */
+  private seasonColors: SeasonColors = 'full';
+  /** Un bloc a-t-il pris un programme des saisons à la dernière image ? */
+  private seasonShown = false;
+  /** Calendrier de la végétation des cases (src/core/foliage.ts), et sa version filtrée. */
+  private foliageBytes: Uint8Array = new Uint8Array(0);
+  private foliage: BufferImageSource | undefined;
   /** Force de l'onde (0 : pas d'onde), son pas, et sa table à cette force. */
   private waveForce = 1;
   private waveStep = 0;
@@ -239,6 +296,10 @@ export class MapView {
     if (river === undefined) throw new Error('biome « rivière » absent de data/biomes.json');
     this.globals.uniforms.uRiverColor = new Float32Array(river.base.map((value) => value / 255));
     this.palettes = dataSource(seasonPalettes(biomes), 3, biomes.length);
+    this.states = dataSource(statePalettes(biomes, seasons.light), STATE_COLUMNS, biomes.length);
+    this.seasonGlobals.uniforms.uFoliageDays = seasons.minTransition;
+    this.seasonGlobals.uniforms.uLight = 1;
+    this.seasonGlobals.update();
     this.tones = dataSource(shadowTones(biomes), 2, biomes.length);
     this.globals.uniforms.uBiomes = biomes.length;
     this.globals.uniforms.uRiver = this.riverBiome;
@@ -248,8 +309,8 @@ export class MapView {
     );
     this.table = waveTable(biomes, this.waveForce);
     this.applyWaveTable();
-    this.baker = new Baker((column, row, pixels, seaMask) => {
-      this.baked(column, row, pixels, seaMask);
+    this.baker = new Baker((column, row, pixels, seaMask, identity) => {
+      this.baked(column, row, pixels, seaMask, identity);
     });
     app.stage.addChild(this.layer);
   }
@@ -296,12 +357,15 @@ export class MapView {
 
   /**
    * Nouveau monde : textures neuves, cuisson de tous les blocs, visibles d'abord. `calendars` :
-   * ceux de l'instantané (protocole 8), huit octets par case, gardés tels quels dans leur texture.
+   * ceux de l'instantané (protocole 8), huit octets par case, gardés tels quels dans leur texture ;
+   * `foliage` : le calendrier de la végétation (src/core/foliage.ts), quatre octets par case, que
+   * lit aussi le décor.
    */
   setWorld(
     info: WorldInfo,
     layers: WorldLayers,
     calendars: Uint8Array<ArrayBuffer>,
+    foliage: Uint8Array,
     overlays: OverlayBuilder,
   ): void {
     // Les shaders d'abord : un shader vivant garderait ses textures détruites, et Pixi
@@ -310,17 +374,25 @@ export class MapView {
       chunk.mesh.destroy();
       chunk.shader.destroy();
       chunk.waveShader.destroy();
+      chunk.seasonShader.destroy();
+      chunk.waveSeasonShader.destroy();
       chunk.source.destroy();
+      chunk.identitySource.destroy();
     }
     for (const mesh of this.copies) mesh.destroy();
     this.copies = [];
     this.data?.destroy();
     this.calendars?.destroy();
+    this.foliage?.destroy();
     this.overlay?.destroy();
     const { size } = info;
     if (calendars.length !== size.width * size.height * 2 * CALENDAR_BYTES) {
       throw new RangeError('calendriers de la neige et de la glace : longueur inattendue');
     }
+    if (foliage.length !== size.width * size.height * FOLIAGE_BYTES) {
+      throw new RangeError('calendrier de la végétation : longueur inattendue');
+    }
+    this.foliageBytes = foliage;
     const grid = chunkGrid(size);
     this.grid = grid;
     this.size = size;
@@ -328,6 +400,7 @@ export class MapView {
     this.overlays = overlays;
     this.data = dataSource(seasonTexels(size, layers, this.biomes), size.width, size.height);
     this.calendars = dataSource(calendars, size.width, size.height * 2);
+    this.foliage = dataSource(foliageTexels(foliage, layers, this.biomes), size.width, size.height);
     this.overlay = dataSource(
       new Uint8Array(size.width * size.height * 4),
       size.width,
@@ -376,8 +449,8 @@ export class MapView {
   /**
    * Signature de ce que la carte a dessiné à la dernière image, hors caméra et écran : sa
    * version, la saison et le jour, la force de l'onde, et son pas si l'onde se voyait
-   * (wavesShown). Le rendu à la demande ne redessine l'image que si elle change
-   * (src/render/frameGate.ts).
+   * (wavesShown), ce que montrent les couleurs de la saison. Le rendu à la demande ne redessine
+   * l'image que si elle change (src/render/frameGate.ts).
    */
   signature(): readonly number[] {
     return [
@@ -386,7 +459,29 @@ export class MapView {
       this.globals.uniforms.uDay,
       this.waveForce,
       this.seaShown ? this.waveStep : -1,
+      SEASON_COLOR_CODES[this.seasonColors],
     ];
+  }
+
+  /**
+   * Ce que montrent les couleurs de la saison (le réglage des effets, ADR 0020) : 'off' rend à
+   * chaque bloc le programme de la carte seul (la neige et la glace restent), 'states' les états
+   * de la végétation, 'full' ces états et la lumière d'hiver. Rien ne se recuit.
+   */
+  setSeasonColors(colors: SeasonColors): void {
+    if (colors === this.seasonColors) return;
+    this.seasonColors = colors;
+    this.seasonGlobals.uniforms.uLight = colors === 'full' ? 1 : 0;
+    this.seasonGlobals.update();
+  }
+
+  get currentSeasonColors(): SeasonColors {
+    return this.seasonColors;
+  }
+
+  /** Un programme des saisons se voyait-il à la dernière image (essais, débogage) ? */
+  get seasonsShown(): boolean {
+    return this.seasonShown;
   }
 
   /** Les uniformes de la table de l'onde, renvoyés au GPU à la prochaine image. */
@@ -400,17 +495,19 @@ export class MapView {
   }
 
   /**
-   * Compile le programme de l'onde dès le premier monde, en dessinant un bloc hors de
-   * l'écran : PixiJS ne le compilerait qu'à son premier usage, au milieu d'une image.
+   * Compile les programmes de l'onde et des saisons dès le premier monde, en dessinant un bloc
+   * hors de l'écran : PixiJS ne les compilerait qu'à leur premier usage, au milieu d'une image.
    */
   private warmUp(): void {
     const chunk = this.chunks.at(0);
     if (this.warmed || chunk === undefined) return;
     this.warmed = true;
-    const mesh: ChunkMesh = new Mesh({ geometry: this.geometry, shader: chunk.waveShader });
     const target = RenderTexture.create({ width: 1, height: 1 });
-    this.app.renderer.render({ container: mesh, target });
-    mesh.destroy();
+    for (const shader of [chunk.waveShader, chunk.seasonShader, chunk.waveSeasonShader]) {
+      const mesh: ChunkMesh = new Mesh({ geometry: this.geometry, shader });
+      this.app.renderer.render({ container: mesh, target });
+      mesh.destroy();
+    }
     target.destroy(true);
   }
 
@@ -431,8 +528,34 @@ export class MapView {
       (data.resource as Uint8Array).set(seasonTexels(size, layers, this.biomes));
       data.update();
     }
+    // Le calendrier de la végétation ne dépend que du climat, que le pinceau ne change pas ; ses
+    // états effacés, du biome de chaque case.
+    const foliage = this.foliage;
+    const grid = this.grid;
+    if (foliage !== undefined && grid !== undefined) {
+      const texels = foliageTexels(this.foliageBytes, layers, this.biomes);
+      (foliage.resource as Uint8Array).set(texels);
+      foliage.update();
+      for (const patch of patches) {
+        const chunk = this.chunks.at(patch.row * grid.columns + patch.column);
+        if (chunk !== undefined) chunk.activity = this.activityOf(texels, patch.column, patch.row);
+      }
+    }
     if (this.mode !== 'natural') this.setMode(this.mode);
     this.version++;
+  }
+
+  /** L'activité des saisons du bloc (column, row), d'après le calendrier filtré `texels`. */
+  private activityOf(texels: Uint8Array, column: number, row: number): SeasonActivity {
+    const size = this.size ?? { width: CHUNK_SIZE, height: CHUNK_SIZE };
+    return seasonActivity(
+      texels,
+      size,
+      CHUNK_SIZE,
+      column,
+      row,
+      this.seasonGlobals.uniforms.uFoliageDays,
+    );
   }
 
   /**
@@ -474,7 +597,16 @@ export class MapView {
     // L'onde se voit de près, en mode naturel, à une force non nulle, là où la partie visible
     // d'un bloc touche une tuile de mer : ailleurs, elle ne changerait aucun pixel de l'écran.
     const waves = this.waveForce > 0 && scale >= 1 && this.mode === 'natural';
+    // Les couleurs de la saison, en mode naturel, là où la partie visible d'un bloc porte une
+    // case qui change à cette date (src/render/seasons.ts, seasonInRect) : ailleurs, elles ne
+    // changeraient aucun pixel (ADR 0019, § 6).
+    const seasons = this.seasonColors !== 'off' && this.mode === 'natural';
+    const day = this.globals.uniforms.uDay;
+    const north = phaseDay(day, false);
+    const south = phaseDay(day, true);
+    const light = this.seasonColors === 'full';
     let seaShown = false;
+    let seasonShown = false;
     for (const chunk of this.chunks) chunk.mesh.visible = false;
     const shown = new Set<ChunkMesh>();
     const order: { column: number; row: number; distance: number }[] = [];
@@ -495,12 +627,34 @@ export class MapView {
       const mesh = shown.has(chunk.mesh) ? this.copyOf(chunk) : chunk.mesh;
       shown.add(mesh);
       mesh.visible = true;
-      const part = waves ? visiblePart(placement, viewport) : undefined;
+      const part = waves || seasons ? visiblePart(placement, viewport) : undefined;
       const wavy =
+        waves &&
         part !== undefined &&
         seaInRect(chunk.seaMask, CHUNK_PX, part.left, part.top, part.right, part.bottom);
-      mesh.shader = wavy ? chunk.waveShader : chunk.shader;
+      const seasonal =
+        seasons &&
+        part !== undefined &&
+        seasonInRect(
+          chunk.activity,
+          SEASON_TILE * TILE_PX,
+          part.left,
+          part.top,
+          part.right,
+          part.bottom,
+          north,
+          south,
+          light,
+        );
+      mesh.shader = wavy
+        ? seasonal
+          ? chunk.waveSeasonShader
+          : chunk.waveShader
+        : seasonal
+          ? chunk.seasonShader
+          : chunk.shader;
       seaShown ||= wavy;
+      seasonShown ||= seasonal;
       mesh.position.set(placement.left / resolution, placement.top / resolution);
       mesh.scale.set(
         placement.width / resolution / CHUNK_PX,
@@ -509,6 +663,7 @@ export class MapView {
     }
     this.releaseCopies(shown);
     this.seaShown = seaShown;
+    this.seasonShown = seasonShown;
     this.globals.update();
     order.sort((a, b) => a.distance - b.distance);
     this.baker.prioritize(order);
@@ -517,21 +672,58 @@ export class MapView {
   private chunkView(column: number, row: number): ChunkView {
     const pixels = new Uint8Array(CHUNK_PX * CHUNK_PX * 4);
     const source = dataSource(pixels, CHUNK_PX, CHUNK_PX, true);
+    // La carte d'identité des tons : un octet par pixel, quatre pixels par texel.
+    const identity = new Uint8Array(CHUNK_PX * CHUNK_PX);
+    const identitySource = dataSource(identity, IDENTITY_WIDTH, IDENTITY_HEIGHT);
     const origin = new UniformGroup({
       uOrigin: {
         value: new Float32Array([column * CHUNK_SIZE, row * CHUNK_SIZE]),
         type: 'vec2<f32>',
       },
     });
-    const shader = this.shaderFor(source, origin);
-    const waveShader = this.waveShaderFor(source, origin);
+    const base = this.resourcesFor(source, origin);
+    const shader = this.shaderFor(MAP_FRAGMENT, 'pixelciv-map', base);
+    const waves = { ...base, uWaveNoise: this.waveNoise, waves: this.waveGlobals };
+    const waveShader = this.shaderFor(MAP_FRAGMENT_WAVES, 'pixelciv-map-waves', waves);
+    const seasons = {
+      uIdentity: identitySource,
+      uFoliage: this.foliage ?? source,
+      uStates: this.states,
+      seasons: this.seasonGlobals,
+    };
+    const seasonShader = this.shaderFor(MAP_FRAGMENT_SEASONS, 'pixelciv-map-seasons', {
+      ...base,
+      ...seasons,
+    });
+    const waveSeasonShader = this.shaderFor(
+      MAP_FRAGMENT_WAVES_SEASONS,
+      'pixelciv-map-waves-seasons',
+      { ...waves, ...seasons },
+    );
     const mesh: ChunkMesh = new Mesh({ geometry: this.geometry, shader });
     mesh.visible = false;
     this.layer.addChild(mesh);
-    return { pixels, source, shader, waveShader, mesh, baked: false, seaMask: new Uint8Array(0) };
+    const texels = this.foliage?.resource as Uint8Array | undefined;
+    return {
+      pixels,
+      source,
+      identity,
+      identitySource,
+      shader,
+      waveShader,
+      seasonShader,
+      waveSeasonShader,
+      mesh,
+      baked: false,
+      seaMask: new Uint8Array(0),
+      activity:
+        texels === undefined
+          ? { tiles: new Float32Array(0), side: 0 }
+          : this.activityOf(texels, column, row),
+    };
   }
 
-  /** Textures et réglages d'un bloc, communs à ses deux programmes. */
+  /** Textures et réglages d'un bloc, communs à ses quatre programmes. */
   private resourcesFor(source: BufferImageSource, origin: UniformGroup) {
     return {
       uChunk: source,
@@ -544,23 +736,17 @@ export class MapView {
     };
   }
 
-  private shaderFor(source: BufferImageSource, origin: UniformGroup): Shader {
-    return Shader.from({
-      gl: { vertex: MAP_VERTEX, fragment: MAP_FRAGMENT, name: 'pixelciv-map' },
-      resources: this.resourcesFor(source, origin),
-    });
-  }
-
-  /** Le shader de la mer animée : les mêmes ressources, plus le bruit et les réglages de l'onde. */
-  private waveShaderFor(source: BufferImageSource, origin: UniformGroup): Shader {
-    return Shader.from({
-      gl: { vertex: MAP_VERTEX, fragment: MAP_FRAGMENT_WAVES, name: 'pixelciv-map-waves' },
-      resources: {
-        ...this.resourcesFor(source, origin),
-        uWaveNoise: this.waveNoise,
-        waves: this.waveGlobals,
-      },
-    });
+  /**
+   * Un shader de bloc : le programme `fragment`, et ses ressources (celles de la carte, plus, pour
+   * l'onde, le bruit et ses réglages, et pour les saisons, la carte d'identité du bloc, le
+   * calendrier de la végétation, les tons des états et leurs réglages).
+   */
+  private shaderFor(
+    fragment: string,
+    name: string,
+    resources: ReturnType<MapView['resourcesFor']> & Record<string, unknown>,
+  ): Shader {
+    return Shader.from({ gl: { vertex: MAP_VERTEX, fragment, name }, resources });
   }
 
   /** Copies des maillages d'un bloc qui paraît plusieurs fois à l'écran. */
@@ -590,6 +776,7 @@ export class MapView {
     row: number,
     pixels: Uint8Array<ArrayBuffer>,
     seaMask: Uint8Array<ArrayBuffer>,
+    identity: Uint8Array<ArrayBuffer>,
   ): void {
     const grid = this.grid;
     if (grid === undefined) return;
@@ -597,8 +784,13 @@ export class MapView {
     if (chunk === undefined) return;
     chunk.pixels.set(pixels);
     chunk.source.update();
+    chunk.identity.set(identity);
+    chunk.identitySource.update();
     chunk.baked = true;
     chunk.seaMask = seaMask;
     this.version++;
   }
 }
+
+/** Code de chaque réglage des couleurs de la saison, dans la signature de l'image. */
+const SEASON_COLOR_CODES: Readonly<Record<SeasonColors, number>> = { off: 0, states: 1, full: 2 };
