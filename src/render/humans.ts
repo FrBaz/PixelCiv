@@ -181,14 +181,20 @@ export const MOTIF_LIFT = Uint8Array.from({ length: MOTIF_COUNT }, (_, m) =>
   Math.max(0, (atlas.motifs[m * 6 + 5] ?? 1) - (atlas.motifs[m * 6 + 3] ?? 1)),
 );
 
-/** Corps de chaque motif. */
+/**
+ * Corps de chaque motif, et son animation (rang dans l'atlas), que le contrôle des pixels relit
+ * pour compter les gestes qu'il compare (tools/human-control).
+ */
 export const MOTIF_BODY = new Uint8Array(MOTIF_COUNT);
+export const MOTIF_ANIMATION = new Uint8Array(MOTIF_COUNT);
 for (let body = 0; body < atlas.bodies.length; body++) {
   for (let level = 0; level < atlas.levels.length; level++) {
     for (let variant = 0; variant < VARIANTS; variant++) {
       atlas.animations.forEach((animation, a) => {
         const first = firstMotif(body, level, variant, a);
-        if (first >= 0) MOTIF_BODY.fill(body, first, first + animation.frames);
+        if (first < 0) return;
+        MOTIF_BODY.fill(body, first, first + animation.frames);
+        MOTIF_ANIMATION.fill(a, first, first + animation.frames);
       });
     }
   }

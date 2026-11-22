@@ -662,9 +662,12 @@ describe('individus à leur position (ADR 0014, ADR 0016)', () => {
     people.draw(scene(crowd), aimedAt(110, 50, 8), viewport, world);
     expect(people.stats.drawn).toBe(200);
     expect(people.shown.particles).toHaveLength(200);
-    // Loin de la foule : plus aucune particule à dessiner.
+    // Une position et une pose par individu à l'écran, pour le panneau (ADR 0022, § 1).
+    expect([people.stats.placed, people.stats.posed]).toEqual([200, 200]);
+    // Loin de la foule : plus aucune particule à dessiner, ni pose à calculer.
     people.draw(scene(crowd), aimedAt(400, 200, 8), viewport, world);
     expect(people.stats.drawn).toBe(0);
+    expect(people.stats.posed).toBe(0);
     expect(people.shown.particles).toHaveLength(0);
     // La réserve se défait de la foule passée en quelques secondes d'images.
     for (let image = 0; image < 400; image++) {

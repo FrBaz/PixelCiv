@@ -195,6 +195,73 @@ function facingOf(mirror: PositionMirror, t: number): number[] {
   return Array.from(facing);
 }
 
+describe('activité de chacun au fil principal (protocole 9, ADR 0021 § 6, ADR 0022 § 6)', () => {
+  /** Rang d'une activité des données de test. */
+  const rank = (id: string) => {
+    const found = testData.activities.activities.findIndex((activity) => activity.id === id);
+    if (found < 0) throw new Error(`activité ${id} absente`);
+    return found;
+  };
+
+  it('tient l’octet de l’image, puis celui de chaque étape à son jour ; une étape de zéro jour le change sur place ; le porté n’en a pas', () => {
+    const [rest, gather, hunt, fish, play] = ['rest', 'gather', 'hunt', 'fish', 'play'].map(rank);
+    const x = 10 * FIXED;
+    // Une cueilleuse à l'arrêt, un enfant qui court jouer, et le nourrisson que porte la première.
+    const members: [number, number, number, number][] = [
+      [1, x, FIXED, NO_CARRIER],
+      [2, x, 2 * FIXED, NO_CARRIER],
+      [3, x, FIXED, 1],
+    ];
+    const image = group(members, legs([2, 0, x, 2 * FIXED, FIXED / 4, 0, 4, play | ACT_RUN]));
+    image.activities.set([gather, play | ACT_RUN, ACT_NONE]);
+    const timeline = new CrowdTimeline({ carry: 0.2, passable: anywhere });
+    timeline.reset(image, time(0, 0), 64);
+    const at = (t: number) => {
+      timeline.show(t);
+      return positionsOf(timeline.shown, t);
+    };
+    let seen = at(1);
+    expect(Array.from(seen.acts)).toEqual([gather, play | ACT_RUN, ACT_NONE]);
+    expect(Array.from(seen.moving)).toEqual([0, 1, 0]);
+    // Au jour 3, la cueilleuse se repose là où elle est (une étape de zéro jour) ; au jour 5,
+    // elle part pêcher.
+    timeline.receive(
+      time(0, 6),
+      legs([1, 3, x, FIXED, 0, 0, 0, rest], [1, 5, x, FIXED, FIXED / 4, 0, 4, fish]),
+      undefined,
+    );
+    // Avant son jour, une étape ne change rien.
+    expect(at(2.5).acts[0]).toBe(gather);
+    seen = at(3);
+    expect(seen.acts[0]).toBe(rest);
+    expect(seen.moving[0]).toBe(0);
+    expect([seen.xs[0], seen.ys[0]]).toEqual([x, FIXED]);
+    seen = at(5.5);
+    expect(seen.acts[0]).toBe(fish);
+    expect(seen.moving[0]).toBe(1);
+    // Le joueur arrivé garde son octet à l'arrêt : la pose en tire le geste du jeu.
+    expect(seen.acts[1]).toBe(play | ACT_RUN);
+    expect(seen.moving[1]).toBe(0);
+    // Le jour du coup : son étape d'arrêt porte ACT_STRIKE, que rien ne change tant que
+    // l'instant affiché ne change pas (pause).
+    timeline.receive(
+      time(0, 12),
+      legs([2, 10, x + FIXED, 2 * FIXED, 0, 0, 0, hunt | ACT_STRIKE]),
+      undefined,
+    );
+    seen = at(10);
+    expect(seen.acts[1]).toBe(hunt | ACT_STRIKE);
+    expect(Array.from(at(10).acts)).toEqual(Array.from(seen.acts));
+    // L'image du pas mensuel refait l'octet de chacun, sans étape en cours.
+    const month = group(members);
+    month.activities.set([rest, gather, ACT_NONE]);
+    timeline.receive(time(1, 0), undefined, month);
+    seen = at(30);
+    expect(Array.from(seen.acts)).toEqual([rest, gather, ACT_NONE]);
+    expect(Array.from(seen.moving)).toEqual([0, 0, 0]);
+  });
+});
+
 describe('sens de chacun, d’une image des groupes à l’autre (ADR 0016, § 6)', () => {
   it('donne à chacun le sens de son pas, et le lui garde à l’arrêt, au pas mensuel comme d’une étape à l’autre', () => {
     const mirror = new PositionMirror({ carry: 0.2, passable: anywhere });
