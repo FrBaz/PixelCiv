@@ -466,15 +466,20 @@ describe('poses des activités (ADR 0022, § 1, § 2)', () => {
     }
   });
 
-  it('frappe le jour du coup, puis revient à l’affût au bout de la charge', () => {
+  it('frappe le jour du coup, avec ou sans la charge du lendemain, puis revient à l’affût', () => {
     const hunt = rank('hunt');
-    // L'étape d'arrêt du coup : le lancer entier, à 150 ms, une fois par cycle.
-    expect(
-      [0, 150, 300, 450, 600, 750, 900].map((clock) => named(at(hunt | ACT_STRIKE, false, clock))),
-    ).toEqual(['throw 0', 'throw 1', 'throw 2', 'throw 3', 'throw 4', 'throw 5', 'throw 0']);
-    // Au bout de la charge (l'octet de la course et du coup), l'affût, et non le coup.
+    // L'étape d'arrêt du coup : le lancer entier, à 150 ms, une fois par cycle ; de même quand
+    // elle porte la course de la charge qui partira le lendemain (relecture de 2b.8, problème 2).
+    for (const act of [hunt | ACT_STRIKE, hunt | ACT_STRIKE | ACT_RUN]) {
+      expect(
+        [0, 150, 300, 450, 600, 750, 900].map((clock) => named(at(act, false, clock))),
+      ).toEqual(['throw 0', 'throw 1', 'throw 2', 'throw 3', 'throw 4', 'throw 5', 'throw 0']);
+    }
+    // En chemin, la charge court ; au bout de la charge (la course, sans le coup), l'affût.
+    expect(Math.floor(at(hunt | ACT_STRIKE | ACT_RUN, true, 0) / POSE_FRAMES)).toBe(
+      Math.floor(at(hunt | ACT_RUN, true, 0) / POSE_FRAMES),
+    );
     for (const clock of [0, 1500, 2100, 3300]) {
-      expect(at(hunt | ACT_STRIKE | ACT_RUN, false, clock)).toBe(at(hunt, false, clock));
       expect(at(hunt | ACT_RUN, false, clock)).toBe(at(hunt, false, clock));
     }
     // Une activité sans geste du coup garde le sien.

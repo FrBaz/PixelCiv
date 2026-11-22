@@ -369,8 +369,8 @@ export function poseTable(
  * Pose d'un individu (ADR 0022, § 1), animation × POSE_FRAMES + image rangée. Sur une étape
  * (`moving`), la marche, ou la course si son octet d'activité le dit (ACT_RUN), jamais d'après
  * sa vitesse apparente. À l'arrêt, le geste de son activité (ACT_RANK), ou celui du coup le jour
- * où le chasseur frappe (ACT_STRIKE, sur l'étape d'arrêt du coup, sans la course : au bout d'une
- * charge, l'affût revient) ; sans activité ni geste, le repos. L'image du geste est celle de son
+ * où le chasseur frappe (ACT_STRIKE, que porte la seule étape d'arrêt du coup, avec la course quand
+ * il charge le lendemain) ; sans activité ni geste, le repos. L'image du geste est celle de son
  * cycle à l'instant (horloge + phase × période) modulo la période : fonction pure de l'octet, de
  * l'horloge de la marche du rendu, figée en pause, et de la phase tirée de l'identifiant.
  */
@@ -388,7 +388,7 @@ export function poseOf(
   }
   const rank = act & ACT_RANK;
   let gesture = rank === ACT_NONE ? -1 : (table.gesture[rank] ?? -1);
-  if ((act & ACT_STRIKE) !== 0 && (act & ACT_RUN) === 0) {
+  if ((act & ACT_STRIKE) !== 0) {
     gesture = (table.strike[rank] ?? -1) >= 0 ? (table.strike[rank] ?? -1) : gesture;
   }
   const period = gesture < 0 ? 0 : (table.period[gesture] ?? 0);

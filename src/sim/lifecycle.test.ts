@@ -321,9 +321,9 @@ describe('cycle de vie (tâche 2.3)', () => {
     // La mesure de docs/BACKLOG.md : seize groupes de trente répartis sur le monde des
     // tests (scatteredGroups), trois cents ans de nomadisme, d'hivers et de famines, avec le
     // contenu du jeu, activités comprises (ADR 0021) : elles déplacent les places au camp, donc
-    // la trajectoire, et la viande des prises va aux réserves. Relecture de 2b.8 : de 479 à 960
-    // vivants en trois siècles (0,23 % par an), jamais sous l'effectif de départ ; sans les
-    // activités, de 479 à 1 068 (0,27 % par an).
+    // la trajectoire, et la viande des prises va aux réserves. Relecture de 2b.8 : de 479 à 929
+    // vivants en trois siècles (0,22 % par an), sous l'effectif de départ à la première décennie
+    // seulement (445) ; sans les activités, de 479 à 1 068 (0,27 % par an).
     const content = testData;
     const state = testState();
     step(state, scatteredGroups(state, 16), content);

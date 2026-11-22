@@ -873,34 +873,45 @@ function fleeOf(state: SimState, content: SimContent, slot: number): number {
 }
 
 /**
- * Point d'affût de qui chasse l'animal `prey` depuis (hx, hy) : sur le segment de l'animal vers
- * lui, à `hunt.stalk` distances de fuite de l'animal, hors de l'alarme ; sa propre position s'il
- * en est déjà plus près. undefined sur une case où l'on ne se tient pas, ou hors de vue de lui.
+ * Point d'affût de `slot`, qui chasse l'animal `prey` depuis (hx, hy) : sur le segment de l'animal
+ * vers lui, à `hunt.stalk` distances de fuite de l'animal, hors de l'alarme, ou, si ce point est
+ * pris, glissé vers le chasseur de `camp.gap` en `camp.gap`, sans dépasser la portée du coup
+ * (`hunt.strike`) : un lieu où l'on se tient, libre (free, à `camp.gap` des places tenues et des
+ * lieux pris, comme tout lieu d'activité : relecture de 2b.8, problème 12), en vue de lui. Sa
+ * propre position, s'il est déjà plus près, si elle est libre. undefined sinon.
  */
 function stalkPoint(
   state: SimState,
   content: SimContent,
+  slot: number,
   prey: number,
   hx: number,
   hy: number,
 ): readonly [number, number] | undefined {
   const fauna = state.fauna;
   const { width } = state.size;
+  const { hunt } = content.activities.rules;
   const ax = fauna.x[prey] ?? 0;
   const ay = fauna.y[prey] ?? 0;
   const dx = deltaFixedX(ax, hx, width) / FIXED;
   const dy = (hy - ay) / FIXED;
   const length = Math.sqrt(dx * dx + dy * dy);
-  const reach = content.activities.rules.hunt.stalk * fleeOf(state, content, prey);
+  const flee = fleeOf(state, content, prey);
+  const reach = hunt.stalk * flee;
   if (length <= reach) {
     // Déjà assez près : il reste là, s'il peut s'y tenir.
-    return clearAt(state, hx, hy) ? [hx, hy] : undefined;
+    return clearAt(state, hx, hy) && free(state, content, slot, hx, hy) ? [hx, hy] : undefined;
   }
-  const px = wrapFixedX(ax + Math.round((dx / length) * reach * FIXED), width);
-  const py = ay + Math.round((dy / length) * reach * FIXED);
-  if (!clearAt(state, px, py)) return undefined;
-  if (!segmentClear(state, hx, hy, px, py)) return undefined;
-  return [px, py];
+  const { gap } = content.nomads.camp;
+  const farthest = Math.min(length, hunt.strike * flee);
+  for (let along = reach; along <= farthest; along += gap) {
+    const px = wrapFixedX(ax + Math.round((dx / length) * along * FIXED), width);
+    const py = ay + Math.round((dy / length) * along * FIXED);
+    if (!clearAt(state, px, py) || !free(state, content, slot, px, py)) continue;
+    if (!segmentClear(state, hx, hy, px, py)) continue;
+    return [px, py];
+  }
+  return undefined;
 }
 
 /** Les neuf cases autour d'un animal pris, et les stocks de l'une d'elles, repris d'une prise à l'autre. */
@@ -1082,21 +1093,37 @@ function huntDay(
     return false;
   }
   const walking = ((columns.move[slot] ?? 0) & INTENTION) === WALK;
+  if (!walking && ((columns.activity[slot] ?? NO_ACTIVITY) & ACT_RUN) !== 0) {
+    // La charge décidée la veille, au coup manqué (relecture de 2b.8, problème 2) : il court vers
+    // l'animal, qui a fui, là où il est, s'il peut s'y tenir, et sa chasse finit (un coup par
+    // chasse). Sinon il reste, et choisit le lendemain ; son étape d'arrêt ôte la course.
+    releasePrey(state, slot);
+    if (clearAt(state, ax, ay)) {
+      walkTo(state, content, slot, ax, ay, day);
+      setUntil(state, slot, day + rules.hunt.charge);
+    } else {
+      columns.activity[slot] = (columns.activity[slot] ?? NO_ACTIVITY) & ~ACT_RUN;
+      stopLeg(state, content, slot, day);
+      setUntil(state, slot, day + 1);
+    }
+    syncSpot(state, slot);
+    return true;
+  }
   const dx = deltaFixedX(hx, ax, width) / FIXED;
   const dy = (ay - hy) / FIXED;
   const flee = fleeOf(state, content, prey);
   const strike = rules.hunt.strike * flee;
   if (!walking && dx * dx + dy * dy <= strike * strike) {
-    // Le coup : la chance de l'espèce fait la prise ; manqué, il charge en courant.
+    // Le coup : la chance de l'espèce fait la prise ; manqué, il charge en courant, le lendemain.
     acts.counts.strikes++;
     acts.struck.add(slot);
-    // Son étape d'arrêt dit le coup au rendu (ACT_STRIKE), quoi qu'il advienne.
-    stopLeg(state, content, slot, day);
     const chance = content.fauna.entries.at(fauna.species[prey] ?? 0)?.hunt.chance ?? 0;
     const hit = random.nextFloat() < chance;
-    releasePrey(state, slot);
     if (hit) {
       acts.counts.hits++;
+      // Son étape d'arrêt dit le coup au rendu (ACT_STRIKE) : le lancer, le jour du coup.
+      stopLeg(state, content, slot, day);
+      releasePrey(state, slot);
       takePrey(state, content, slot, prey);
       // Il reste un jour au lieu du coup, puis choisit.
       setUntil(state, slot, day + 1);
@@ -1105,19 +1132,24 @@ function huntDay(
     acts.counts.misses++;
     // La harde l'entend le jour même, même au calme (fauna.ts, faunaDay).
     acts.misses.push(prey, hx, hy);
-    // La charge court là où se tenait l'animal, si l'on peut s'y tenir, et sa première étape dit
-    // aussi le coup ; sinon, il reste, et sa chasse finit le lendemain.
     if (clearAt(state, ax, ay)) {
+      // La charge, si l'on peut se tenir là où se tenait l'animal : décidée ce jour (la course,
+      // ACT_RUN, dans l'octet et sur l'étape du coup), elle part le lendemain, vers l'animal où il
+      // aura fui. Ce jour, le chasseur reste à son lieu, et son étape d'arrêt montre le lancer :
+      // une seule étape du jour porte ACT_STRIKE. L'animal lui reste réservé jusqu'au départ.
       columns.activity[slot] = (columns.activity[slot] ?? NO_ACTIVITY) | ACT_RUN;
-      walkTo(state, content, slot, ax, ay, day);
-      setUntil(state, slot, day + rules.hunt.charge);
+      stopLeg(state, content, slot, day);
+      setUntil(state, slot, day + 1 + rules.hunt.charge);
     } else {
+      // Sinon, il reste, et sa chasse finit le lendemain.
+      stopLeg(state, content, slot, day);
+      releasePrey(state, slot);
       setUntil(state, slot, day + 1);
     }
     syncSpot(state, slot);
     return true;
   }
-  const point = stalkPoint(state, content, prey, hx, hy);
+  const point = stalkPoint(state, content, slot, prey, hx, hy);
   if (point === undefined) return true;
   const [px, py] = point;
   // L'affût ne se revise que si l'animal s'est assez déplacé : depuis le but de qui y marche, la
@@ -1317,7 +1349,7 @@ function spotOf(
         return undefined;
       }
       for (const prey of found) {
-        const point = stalkPoint(state, content, prey, x, y);
+        const point = stalkPoint(state, content, slot, prey, x, y);
         if (point === undefined) continue;
         state.fauna.hunter[prey] = columns.id[slot] ?? 0;
         state.movement.acts.prey.set(slot, prey);
@@ -1334,12 +1366,36 @@ function spotOf(
 let weights = new Float64Array(16);
 
 /**
+ * L'une des rives `shores` (CampSupplies.shores) est-elle à `reach` cases au plus de (ox, oy), au
+ * plus court à travers la couture ?
+ */
+function shoreWithin(
+  state: SimState,
+  shores: Int32Array | undefined,
+  ox: number,
+  oy: number,
+  reach: number,
+): boolean {
+  if (shores === undefined) return false;
+  const { width } = state.size;
+  for (let at = 0; at + 1 < shores.length; at += SHORE_STRIDE) {
+    const ex = deltaFixedX(ox, shores[at] ?? 0, width) / FIXED;
+    const ey = ((shores[at + 1] ?? 0) - oy) / FIXED;
+    if (ex * ex + ey * ey <= reach * reach) return true;
+  }
+  return false;
+}
+
+/**
  * Poids de chaque activité pour le choix de `slot`, par rang, dans `out` ; rend leur somme (ADR
  * 0021, § 1) : le poids des données, fois le facteur de son âge, de ce qu'il porte, de sa grossesse
  * et de sa faim, la saison au camp de son groupe, le goût de sa culture et le partage entre les
  * sexes ; fois 1 + rest × g' pour le repos et 1 + kin × g' pour l'activité de son ancre, si ce n'est
- * pas le repos (on cueille près d'un parent), g' sa grégarité effective. Nul pour le suivi du groupe, que seul le plan du mois donne, et pour une
- * activité au bord de l'eau sans rive au camp. Sans tirage.
+ * pas le repos (on cueille près d'un parent), g' sa grégarité effective. Nul pour le suivi du groupe,
+ * que seul le plan du mois donne ; nul aussi pour une activité que son lieu ne permet pas, au même
+ * test que spotOf (relecture de 2b.8, problème 5) : au bord de l'eau, sans rive du camp à sa portée
+ * de sa place (ni d'ancre partie à la même activité) ; à la chasse, sans animal libre à sa portée.
+ * Sans tirage.
  */
 export function activityWeights(
   state: SimState,
@@ -1364,6 +1420,9 @@ export function activityWeights(
   const g = effectiveGregariousness(state, content, slot);
   const anchor = anchorOf(state, content, slot);
   const anchorRank = anchor >= 0 && people.alive[anchor] === 1 ? rankOf(state, anchor) : ACT_NONE;
+  const factor = rules.gregarious.reach[0] + rules.gregarious.reach[1] * (1 - g);
+  const homeX = columns.homeX[slot] ?? 0;
+  const homeY = columns.homeY[slot] ?? 0;
   let total = 0;
   for (let rank = 0; rank < table.count; rank++) {
     out[rank] = 0;
@@ -1377,7 +1436,16 @@ export function activityWeights(
     weight *= tastes[rank] ?? 1;
     const share = tastes[table.count + rank] ?? 0;
     weight *= female ? 1 - share : 1 + share;
-    if (table.place[rank] === PLACE.water && (supplies?.shores[rank]?.length ?? 0) === 0) continue;
+    const reach = (table.reach1[rank] ?? 0) * factor;
+    if (table.place[rank] === PLACE.water) {
+      // Une rive à sa portée de sa place, ou son ancre partie à cette activité (spotOf, kin).
+      const kin = rank === anchorRank && movement.acts.spots.has(anchor);
+      if (!kin && !shoreWithin(state, supplies?.shores[rank], homeX, homeY, reach)) continue;
+    } else if (table.place[rank] === PLACE.prey) {
+      // Un animal libre à sa portée de sa place (spotOf, faunaNear).
+      if (faunaNear(state, dayIndex(state), homeX, homeY, reach, 1, preyList).length === 0)
+        continue;
+    }
     if (rank === table.home) weight *= 1 + rules.gregarious.rest * g;
     else if (rank === anchorRank) weight *= 1 + rules.gregarious.kin * g;
     if (!(weight > 0)) continue;
@@ -1388,8 +1456,27 @@ export function activityWeights(
 }
 
 /**
+ * Rang tiré selon les poids du choix en cours (`weights`), de somme `total` : un tirage sur
+ * `random` ; le repos, sans poids.
+ */
+function drawRank(table: ActivityTable, total: number, random: RandomStream): number {
+  let rank = table.home;
+  if (!(total > 0)) return rank;
+  let u = random.nextFloat() * total;
+  for (let index = 0; index < table.count; index++) {
+    const weight = weights[index] ?? 0;
+    if (weight <= 0) continue;
+    rank = index;
+    u -= weight;
+    if (u < 0) break;
+  }
+  return rank;
+}
+
+/**
  * Le choix de `slot`, le jour `day` (ADR 0021, § 2) : son activité, tirée selon ses poids
- * (activityWeights) ; son lieu (spotOf), faute duquel il se repose à sa place ; ses jours sur
+ * (activityWeights) ; son lieu (spotOf), faute duquel il tire parmi les autres, jusqu'au repos à
+ * sa place ; ses jours sur
  * place, comptés de son arrivée, ou, pour la chasse, de ce jour. Une marche coupée, ou une activité
  * qui change sur place, note son étape d'arrêt.
  */
@@ -1413,20 +1500,21 @@ function decide(
   const g = effectiveGregariousness(state, content, slot);
   const anchor = anchorOf(state, content, slot);
   const anchorRank = anchor >= 0 && people.alive[anchor] === 1 ? rankOf(state, anchor) : ACT_NONE;
-  let rank = table.home;
-  if (total > 0) {
-    let u = random.nextFloat() * total;
-    for (let index = 0; index < table.count; index++) {
-      const weight = weights[index] ?? 0;
-      if (weight <= 0) continue;
-      rank = index;
-      u -= weight;
-      if (u < 0) break;
-    }
-  }
+  // Son activité, tirée selon les poids ; faute de lieu libre, il tire de nouveau parmi les autres,
+  // jusqu'au repos, qui a toujours le sien (relecture de 2b.8, problème 5 : un échec ne vaut plus
+  // un repos de tout un séjour).
+  let remaining = total;
+  let rank = drawRank(table, remaining, random);
   let spot = spotOf(state, content, slot, rank, day, random, g, anchor, anchorRank);
+  while (spot === undefined && rank !== table.home) {
+    acts.counts.nospot++;
+    remaining = 0;
+    weights[rank] = 0;
+    for (let index = 0; index < table.count; index++) remaining += weights[index] ?? 0;
+    rank = drawRank(table, remaining, random);
+    spot = spotOf(state, content, slot, rank, day, random, g, anchor, anchorRank);
+  }
   if (spot === undefined) {
-    if (rank !== table.home) acts.counts.nospot++;
     rank = table.home;
     spot = [columns.homeX[slot] ?? 0, columns.homeY[slot] ?? 0];
   }

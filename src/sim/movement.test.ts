@@ -534,8 +534,14 @@ describe('mouvement des individus : vie, mort et changements de groupe (ADR 0014
     }
     expect(changed).toBeGreaterThan(50);
     expect(durations.length).toBeGreaterThan(50);
-    // Le groupe attend qui le rejoint : chacun arrive en moins de quatre mois.
-    expect(Math.max(...durations)).toBeLessThan(120);
+    // Le groupe attend qui le rejoint, tant qu'il se tient à plus de `camp.wait` cases du camp :
+    // presque tous arrivent en moins de trois mois. Un jeune enfant, lent, qui n'a pas atteint sa
+    // place au pas mensuel mais se tient déjà près du centre du camp, suit le groupe jusqu'au
+    // suivant : un ou deux mois de plus (relecture de 2b.8 : deux arrivées sur 445 en cinq mois sur
+    // cette graine, une sur 565 en quatre sur `graine`, aucune au-delà de trois mois avant elle).
+    const quick = durations.filter((duration) => duration <= 90).length;
+    expect(quick / durations.length).toBeGreaterThan(0.99);
+    expect(Math.max(...durations)).toBeLessThan(180);
   });
 
   it('porte le nouveau-né à la position de sa mère, puis le sèvre à 0,3 case d’elle au plus', () => {

@@ -20,6 +20,12 @@ import {
   type SpeedId,
 } from '../core/time';
 import { actByte } from '../sim/activities';
+import { advanceDay } from '../sim/day';
+import { HumanJournal } from '../sim/movement';
+import { applyCommands } from '../sim/step';
+import { groupsFrame } from '../sim/views';
+import { humanAtlas, poseOf, poseTable } from '../render/humans';
+import { POSE_FRAMES } from '../render/crowd';
 import type { SimState } from '../sim/state';
 import { carriedOffset } from '../render/crowd';
 import { scatteredGroups, testData, testHuman, testState } from '../sim/testing';
@@ -259,6 +265,100 @@ describe('activité de chacun au fil principal (protocole 9, ADR 0021 § 6, ADR 
     seen = at(30);
     expect(Array.from(seen.acts)).toEqual([rest, gather, ACT_NONE]);
     expect(Array.from(seen.moving)).toEqual([0, 0, 0]);
+  });
+});
+
+describe('le coup, de la simulation à la pose (ADR 0021 § 11, ADR 0022 § 6 ; relecture de 2b.8)', () => {
+  it('montre le lancer de chaque coup, réussi ou manqué, tout le jour du coup ; la charge court le lendemain', () => {
+    // De bout en bout : les étapes du journal de la simulation, le miroir du fil principal qui les
+    // applique (la dernière d'un jour l'emporte), puis la pose (poseOf) à chaque instant du jour.
+    // Le lancer se reconnaît à ses images 4 et 5, que l'affût ne montre jamais.
+    const content = testData;
+    const state = testState('graine');
+    const journal = new HumanJournal();
+    state.movement.journal = journal;
+    applyCommands(state, scatteredGroups(state, 60, 25), content);
+    journal.take();
+    const timeline = new CrowdTimeline({ carry: testHuman.display.carry, passable: anywhere });
+    timeline.reset(groupsFrame(state, content), time(state.tick, state.day), state.size.width);
+    const table = poseTable(content.activities);
+    const throwing = humanAtlas.animations.findIndex((animation) => animation.id === 'throw');
+    const running = humanAtlas.animations.findIndex((animation) => animation.id === 'run');
+    const kinds = { charge: { n: 0, shown: 0 }, stay: { n: 0, shown: 0 } };
+    let charges = 0;
+    let pending = new Set<number>();
+    const memberOf = (slot: number) => {
+      const frame = timeline.shown.frame;
+      return frame === undefined ? -1 : frame.slots.indexOf(slot);
+    };
+    for (let day = 0; day < 240; day++) {
+      const today = dayIndex(state);
+      const members = advanceDay(state, [], content);
+      const legs = journal.count > 0 ? journal.take() : undefined;
+      timeline.receive(
+        time(state.tick, state.day),
+        legs,
+        members === undefined ? undefined : groupsFrame(state, content, members),
+      );
+      // Les chasseurs qui frappent ce jour, et ceux dont la charge, décidée la veille, part.
+      const struck = new Map<number, boolean>();
+      const started = new Set<number>();
+      for (let at = 0; at < (legs?.slots.length ?? 0); at++) {
+        const act = legs?.acts[at] ?? 0;
+        const slot = legs?.slots[at] ?? 0;
+        if ((act & ACT_STRIKE) !== 0) struck.set(slot, (act & ACT_RUN) !== 0);
+        if (pending.has(slot) && (act & ACT_RUN) !== 0 && (legs?.count[at] ?? 0) > 0) {
+          started.add(slot);
+        }
+      }
+      for (const slot of started) {
+        // La veille, le lancer ; ce jour, la course, au milieu du jour.
+        timeline.show(today + 0.5);
+        const member = memberOf(slot);
+        if (member < 0) continue;
+        const seen = positionsOf(timeline.shown, today + 0.5);
+        const pose = poseOf(
+          table,
+          seen.acts[member] ?? ACT_NONE,
+          seen.moving[member] === 1,
+          0,
+          420,
+          0.3,
+        );
+        expect(Math.floor(pose / POSE_FRAMES), `jour ${String(today)}, ${String(slot)}`).toBe(
+          running,
+        );
+        charges++;
+      }
+      for (const [slot, charging] of struck) {
+        const kind = charging ? kinds.charge : kinds.stay;
+        kind.n++;
+        let shown = 0;
+        for (let k = 0; k < 20; k++) {
+          const t = today + k / 20;
+          timeline.show(t);
+          const member = memberOf(slot);
+          if (member < 0) break;
+          const seen = positionsOf(timeline.shown, t);
+          expect(seen.moving[member], `jour ${String(today)}, ${String(slot)}`).toBe(0);
+          const act = seen.acts[member] ?? ACT_NONE;
+          for (let clock = 0; clock < 900; clock += 50) {
+            const pose = poseOf(table, act, false, clock, 420, 0.3);
+            if (Math.floor(pose / POSE_FRAMES) === throwing && pose % POSE_FRAMES >= 4) shown++;
+          }
+        }
+        // À chaque instant du jour du coup, le lancer passe : 20 instants, une image sur six.
+        expect(shown, `jour ${String(today)}, ${String(slot)}`).toBeGreaterThan(20);
+        kind.shown++;
+      }
+      pending = new Set([...struck].filter(([, charging]) => charging).map(([slot]) => slot));
+    }
+    // Des coups suivis d'une charge, d'autres non : tous montrent le lancer.
+    expect(kinds.charge.n).toBeGreaterThan(10);
+    expect(kinds.stay.n).toBeGreaterThan(10);
+    expect(kinds.charge.shown).toBe(kinds.charge.n);
+    expect(kinds.stay.shown).toBe(kinds.stay.n);
+    expect(charges).toBeGreaterThan(5);
   });
 });
 

@@ -58,6 +58,22 @@ function spawnAt(state: SimState, x: number, y: number, count: number, content: 
   );
 }
 
+/**
+ * Fait apparaître `count` humains des plaines sur la case d'un animal du gibier, le premier vivant :
+ * la chasse n'a de poids qu'avec un animal libre à portée (relecture de 2b.8, problème 5). Rend la
+ * case.
+ */
+function spawnNearGame(state: SimState, count: number, content: SimContent) {
+  const { fauna } = state;
+  let animal = 0;
+  while (animal < fauna.end && fauna.alive[animal] !== 1) animal++;
+  if (animal >= fauna.end) throw new Error('pas de gibier');
+  const x = Math.floor((fauna.x[animal] ?? 0) / FIXED);
+  const y = Math.floor((fauna.y[animal] ?? 0) / FIXED);
+  spawnAt(state, x, y, count, content);
+  return { x, y };
+}
+
 /** Cent groupes de trente sur le monde « graine », comme la référence de state.test.ts. */
 function populated(content: SimContent = testData, seed = 'graine'): SimState {
   const state = testState(seed, content);
@@ -117,9 +133,9 @@ describe('activités : qui fait quoi (ADR 0021, § 1)', () => {
   });
 
   it('ne fait chasser ni un enfant ni une mère qui porte ; la faim mène au repos ; l’hiver sans plantes, personne ne cueille', () => {
-    const content = withoutFauna(testData);
+    const content = testData;
     const state = flatState('qui');
-    spawnAt(state, 100, 100, 30, content);
+    spawnNearGame(state, 30, content);
     const slot = adultOf(state);
     const { columns } = state.people;
     const base = weightsOf(state, content, slot);
@@ -534,12 +550,13 @@ describe('activités : la chasse et le gibier (ADR 0021, § 5)', () => {
     expect(fled / missed).toBeGreaterThan(0.8);
   });
 
-  it('note l’octet d’activité de chaque étape, et le coup le jour où le chasseur frappe (protocole 9)', () => {
+  it('note l’octet d’activité de chaque étape, et le coup le jour où le chasseur frappe, sur sa seule étape d’arrêt ; la charge part le lendemain (protocole 9)', () => {
     const state = populated();
     const journal = new HumanJournal();
     state.movement.journal = journal;
     let strikes = 0;
     let charges = 0;
+    let pending = new Set<number>();
     const counts = state.movement.acts.counts;
     for (let day = 0; day < 2 * DAYS_PER_MONTH; day++) {
       const before = counts.strikes;
@@ -547,18 +564,26 @@ describe('activités : la chasse et le gibier (ADR 0021, § 5)', () => {
       const legs = journal.take();
       expect(legs.acts.length).toBe(legs.slots.length);
       const flagged = new Set<number>();
+      const decided = new Set<number>();
       for (let at = 0; at < legs.slots.length; at++) {
         const act = legs.acts[at] ?? 0;
         const rank = act & ACT_RANK;
+        const slot = legs.slots[at] ?? 0;
         expect(rank < activities.length || rank === ACT_NONE).toBe(true);
+        // La charge décidée la veille part ce jour, en courant (relecture de 2b.8, problème 2).
+        if (pending.has(slot) && (act & ACT_RUN) !== 0 && (legs.count[at] ?? 0) > 0) charges++;
         if ((act & ACT_STRIKE) === 0) continue;
-        flagged.add(legs.slots[at] ?? 0);
+        expect(flagged.has(slot), `jour ${String(day)}, emplacement ${String(slot)}`).toBe(false);
+        flagged.add(slot);
         expect(rank).toBe(HUNT);
-        if ((legs.count[at] ?? 0) > 0) charges++;
+        // Seule l'étape d'arrêt du coup le porte : le lancer se voit tout le jour du coup.
+        expect(legs.count[at], `jour ${String(day)}, emplacement ${String(slot)}`).toBe(0);
+        if ((act & ACT_RUN) !== 0) decided.add(slot);
       }
       // Chaque chasseur qui frappe ce jour, une fois au plus, a une étape qui le dit, et lui seul.
       expect(flagged.size, `jour ${String(day)}`).toBe(counts.strikes - before);
       strikes += flagged.size;
+      pending = decided;
     }
     expect(strikes).toBeGreaterThan(5);
     expect(charges).toBeGreaterThan(0);
@@ -693,9 +718,9 @@ describe('activités : les règles, chacune spécifiée (relecture de 2b.8, prob
   });
 
   it('réduit la chasse d’une femme enceinte, du facteur de ses données', () => {
-    const content = withoutFauna(testData);
+    const content = testData;
     const state = flatState('enceinte');
-    spawnAt(state, 100, 100, 30, content);
+    spawnNearGame(state, 30, content);
     // Une adulte qui ne porte pas de nourrisson : qui porte ne chasse pas.
     let slot = -1;
     state.people.forEach((other) => {
