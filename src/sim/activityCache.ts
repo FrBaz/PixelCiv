@@ -325,6 +325,12 @@ export class ActivityCache {
   readonly misses: number[] = [];
   /** Emplacements qui choisissent ce jour, repris d'un jour à l'autre. */
   readonly due: number[] = [];
+  /**
+   * Arrivés au camp ce soir, que l'arrivée fait passer du suivi du groupe au repos : leur étape
+   * part à la fin du jour (eveningLegs), après toutes celles du jour, pour que le fil principal
+   * ait leur activité aux jours entiers. Tenu seulement quand un hôte lit les étapes (journal).
+   */
+  readonly settled: number[] = [];
   readonly counts: ActivityCounts = {
     decisions: 0,
     trips: 0,
@@ -357,6 +363,7 @@ export class ActivityCache {
     this.prey.clear();
     this.struck.clear();
     this.misses.length = 0;
+    this.settled.length = 0;
     this.preyDay = NO;
   }
 }

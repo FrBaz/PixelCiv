@@ -55,6 +55,7 @@ import {
   arrivedAtCamp,
   beginActivity,
   describeActivities,
+  eveningLegs,
   followGroup,
   legAct,
   onActivity,
@@ -1411,6 +1412,7 @@ export function moveDay(state: SimState, content: SimContent): void {
   const arrivals = walkDay(state, content, day);
   if ((day + 1) % content.nomads.walkers.every === 0) spaceWalkers(state, content, day);
   arrive(state, content, arrivals);
+  eveningLegs(state, content, day);
 }
 
 /** Les départs du jour, par emplacements croissants : chacun prend sa place et se met en route. */

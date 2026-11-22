@@ -1,10 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { ACT_NONE, ACT_RANK, ACT_STRIKE } from '../core/protocol';
+import { ACT_NONE, ACT_RANK, ACT_STRIKE, type SpawnGroupCommand } from '../core/protocol';
 import { deltaFixedX, FIXED } from '../core/position';
 import { dayIndex, DAYS_PER_MONTH } from '../core/time';
 import { encodeDrainage, riverClass } from '../core/world';
 import { GENERATOR_VERSION } from '../worldgen/generate';
-import { activityWeights, shoresOf, standsClear } from './activities';
+import { activityWeights, actByte, shoresOf, standsClear } from './activities';
 import { SHORE_STRIDE } from './activityCache';
 import { advanceDay, step } from './day';
 import { describeMovement, HumanJournal, rebuildMovement } from './movement';
@@ -517,6 +517,58 @@ describe('activités : la chasse et le gibier (ADR 0021, § 5)', () => {
     }
     expect(strikes).toBeGreaterThan(5);
     expect(charges).toBeGreaterThan(0);
+  });
+
+  it('dit par une étape chaque changement de l’octet d’activité, à chaque jour entier : l’arrivée au camp, le rechoix au bout d’une charge (protocole 9)', () => {
+    // Les groupes du miroir avec le vrai hôte (src/app/frames.test.ts) : nombreux, qui changent
+    // de camp et chassent, et d'autres au bord de la couture.
+    const state = testState();
+    const { width, height } = state.size;
+    const seam: SpawnGroupCommand[] = [];
+    for (let y = 0; y < height; y++) {
+      for (const x of [width - 1, 0]) {
+        if (!Number.isFinite(state.cost[y * width + x] ?? Number.NaN) || (y * 7 + x) % 20 !== 0) {
+          continue;
+        }
+        seam.push({ type: 'spawnGroup', x, y, species: 'human', subspecies: 'plains', count: 30 });
+      }
+    }
+    const journal = new HumanJournal();
+    state.movement.journal = journal;
+    // Ce que sait le fil principal : l'octet de chacun dans l'image des groupes, refaite au pas
+    // mensuel, puis celui de sa dernière étape, le coup ôté (ACT_STRIKE ne vaut que son jour).
+    let known = new Uint8Array(0);
+    const resync = () => {
+      known = Uint8Array.from({ length: state.people.end }, (_, slot) =>
+        actByte(state, testData, slot),
+      );
+    };
+    let commands = [...scatteredGroups(state, 40, 34), ...seam];
+    let compared = 0;
+    for (let day = 0; day < 4 * DAYS_PER_MONTH; day++) {
+      const month = advanceDay(state, commands, testData) !== undefined;
+      if (commands.length > 0) resync();
+      commands = [];
+      const legs = journal.take();
+      for (let at = 0; at < legs.slots.length; at++) {
+        known[legs.slots[at] ?? 0] = (legs.acts[at] ?? ACT_NONE) & ~ACT_STRIKE;
+      }
+      if (month) {
+        resync();
+        continue;
+      }
+      for (let slot = 0; slot < state.people.end; slot++) {
+        if (state.people.alive[slot] !== 1 || (state.movement.carrier[slot] ?? -1) >= 0) continue;
+        if (known[slot] !== actByte(state, testData, slot)) {
+          throw new Error(
+            `jour ${String(day)}, emplacement ${String(slot)} : ${String(known[slot])} au lieu de ${String(actByte(state, testData, slot))}`,
+          );
+        }
+        compared++;
+      }
+    }
+    expect(compared).toBeGreaterThan(100_000);
+    expect(state.movement.acts.counts.arrivals).toBeGreaterThan(500);
   });
 
   it('donne au chasseur un affût hors de la distance de fuite de l’animal, et ne frappe qu’au repos', () => {

@@ -366,8 +366,9 @@ export function followGroup(state: SimState, content: SimContent, slot: number):
 }
 
 /**
- * L'arrivée de `slot` à sa place au nouveau camp, au bout du suivi du groupe : il s'y repose, et
- * choisit le lendemain.
+ * L'arrivée de `slot` à sa place au nouveau camp, au bout du suivi du groupe, le soir du jour
+ * `day` : il s'y repose, et choisit le lendemain. Son activité change : une étape le dira au
+ * rendu, à la fin du jour (eveningLegs).
  */
 export function arrivedAtCamp(state: SimState, content: SimContent, slot: number, day: number) {
   const table = tableOf(content);
@@ -375,6 +376,38 @@ export function arrivedAtCamp(state: SimState, content: SimContent, slot: number
   state.movement.acts.counts.arrivals++;
   state.people.columns.activity[slot] = table.home;
   setUntil(state, slot, day + 1);
+  if (state.movement.journal !== undefined) state.movement.acts.settled.push(slot);
+}
+
+/**
+ * Les étapes des arrivés du soir du jour `day` (arrivedAtCamp), à la fin du jour de moveDay, après
+ * toutes les autres du jour (le fil principal les applique dans l'ordre de leurs jours) : le
+ * dernier pas du jour, redit avec l'activité nouvelle, de leur position du matin (Movement.prevX,
+ * s'ils ont marché ce jour) à celle du soir ; une étape d'arrêt pour qui n'a pas bougé (arrivé au
+ * matin, ou sans chemin). Datée du jour, elle redonne au fil principal les positions de l'étape
+ * qu'elle remplace, et l'activité du worker aux jours entiers : celle du suivi du groupe au matin,
+ * le repos au soir ; une image des groupes du lendemain (le pas mensuel, une commande) la fait
+ * oublier, elle qui porte déjà l'activité. Rien sans hôte.
+ */
+export function eveningLegs(state: SimState, content: SimContent, day: number): void {
+  const { movement, people } = state;
+  const settled = movement.acts.settled;
+  if (settled.length === 0) return;
+  const { columns } = people;
+  const { width } = state.size;
+  for (const slot of settled) {
+    if (people.alive[slot] !== 1) continue;
+    const x = columns.x[slot] ?? 0;
+    const y = columns.y[slot] ?? 0;
+    const walked = movement.arriving(slot, day);
+    const fromX = walked ? (movement.prevX[slot] ?? x) : x;
+    const fromY = walked ? (movement.prevY[slot] ?? y) : y;
+    const sx = deltaFixedX(fromX, x, width);
+    const sy = y - fromY;
+    const days = sx === 0 && sy === 0 ? 0 : 1;
+    movement.journal?.push(slot, day, fromX, fromY, sx, sy, days, actByte(state, content, slot));
+  }
+  settled.length = 0;
 }
 
 /**
@@ -1373,7 +1406,8 @@ function decide(
   const acts = movement.acts;
   acts.counts.decisions++;
   releasePrey(state, slot);
-  const before = rankOf(state, slot);
+  // L'octet entier : au bout d'une charge, la colonne garde la course (ACT_RUN) de la chasse.
+  const before = columns.activity[slot] ?? NO_ACTIVITY;
   if (weights.length < table.count) weights = new Float64Array(table.count);
   const total = activityWeights(state, content, slot, weights);
   const g = effectiveGregariousness(state, content, slot);
