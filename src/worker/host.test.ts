@@ -1,6 +1,8 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { GameData } from '../core/data';
 import {
+  ACT_NONE,
+  ACT_RANK,
   CHRONICLE_PAGE,
   CHRONICLE_RECENT,
   FAUNA_GAIT,
@@ -9,7 +11,7 @@ import {
   faunaLegBuffers,
   frameBuffers,
   GROUP_STRIDE,
-  legBuffers,
+  humanLegBuffers,
   PROTOCOL_VERSION,
   type ChronicleView,
   type GameCommand,
@@ -183,10 +185,10 @@ describe('partie', () => {
       worldCalendars(size, testWorld(), testData.biomes.entries, testData.seasons),
     );
     const entry = env.sent.find((sent) => sent.message.type === 'snapshot');
-    // Les couches du monde et les calendriers, plus les sept tableaux de l'image des groupes et
-    // les cinq des étapes en cours (ADR 0014), puis les quatre de l'image du gibier et les cinq
-    // de ses étapes en cours (protocole 7, ADR 0018).
-    expect(entry?.transfer).toHaveLength(LAYER_NAMES.length + 1 + 21);
+    // Les couches du monde et les calendriers, plus les huit tableaux de l'image des groupes et
+    // les six des étapes en cours (ADR 0014, octets d'activité du protocole 9 compris), puis les
+    // quatre de l'image du gibier et les cinq de ses étapes en cours (protocole 7, ADR 0018).
+    expect(entry?.transfer).toHaveLength(LAYER_NAMES.length + 1 + 23);
     if (entry?.original.type === 'snapshot') {
       expect(entry.transfer).toContain(entry.original.calendars.buffer);
     }
@@ -1249,9 +1251,21 @@ describe('deux horloges (ADR 0013)', () => {
       members += frame.groups[at + 3] ?? 0;
     expect(frame.positions.length).toBe(2 * members);
     expect(frame.legs.slots.length).toBe(frame.legs.count.length);
-    // Les tampons de l'image et des étapes voyagent sans copie.
+    // Protocole 9 : l'octet d'activité de chaque membre, de chaque étape en cours et de chaque
+    // étape des lots, d'une activité des données ou d'aucune (ADR 0021, § 6).
+    const known = (act: number) =>
+      (act & ACT_RANK) < testData.activities.activities.length || (act & ACT_RANK) === ACT_NONE;
+    expect(frame.activities.length).toBe(members);
+    expect(frame.legs.acts.length).toBe(frame.legs.slots.length);
+    expect([...frame.activities].every(known)).toBe(true);
+    for (const delta of legs) {
+      expect(delta.legs?.acts.length).toBe(delta.legs?.slots.length);
+      expect([...(delta.legs?.acts ?? [])].every(known)).toBe(true);
+    }
+    // Les tampons de l'image et des étapes voyagent sans copie, octets d'activité compris.
     const entry = env.sent.findLast((sent) => sent.message.type === 'delta');
-    expect(entry?.transfer.length).toBeGreaterThanOrEqual(12);
+    expect(entry?.transfer.length).toBeGreaterThanOrEqual(14);
+    expect(entry?.transfer).toEqual(expect.arrayContaining(frameBuffers(frame)));
     // Les statistiques comptent les marcheurs et les étapes du lot.
     const stats = env.messages('stats');
     expect(stats.some((message) => message.stats.walkers > 0)).toBe(true);
@@ -1342,7 +1356,7 @@ describe('deux horloges (ADR 0013)', () => {
       .messages('delta')
       .flatMap((delta) => [
         ...(delta.frame === undefined ? [] : frameBuffers(delta.frame)),
-        ...(delta.legs === undefined ? [] : legBuffers(delta.legs)),
+        ...(delta.legs === undefined ? [] : humanLegBuffers(delta.legs)),
         ...(delta.fauna === undefined ? [] : faunaBuffers(delta.fauna)),
         ...(delta.faunaLegs === undefined ? [] : faunaLegBuffers(delta.faunaLegs)),
       ])

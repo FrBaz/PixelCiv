@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { ACT_RANK } from '../core/protocol';
+import { ACT_NONE, ACT_RANK, ACT_STRIKE } from '../core/protocol';
 import { deltaFixedX, FIXED } from '../core/position';
 import { dayIndex, DAYS_PER_MONTH } from '../core/time';
 import { encodeDrainage, riverClass } from '../core/world';
@@ -7,7 +7,7 @@ import { GENERATOR_VERSION } from '../worldgen/generate';
 import { activityWeights, shoresOf, standsClear } from './activities';
 import { SHORE_STRIDE } from './activityCache';
 import { advanceDay, step } from './day';
-import { describeMovement, rebuildMovement } from './movement';
+import { describeMovement, HumanJournal, rebuildMovement } from './movement';
 import { CARRIED, FEMALE, INTENTION, MALE, NO_ACTIVITY, REST, WALK } from './population';
 import { restoreState, saveState } from './save';
 import type { SimState } from './state';
@@ -483,6 +483,36 @@ describe('activités : la chasse et le gibier (ADR 0021, § 5)', () => {
     expect(state.movement.acts.counts.kills).toBe(0);
     // Acculée, une harde ne fuit pas : presque toujours, elle fuit.
     expect(fled / missed).toBeGreaterThan(0.8);
+  });
+
+  it('note l’octet d’activité de chaque étape, et le coup le jour où le chasseur frappe (protocole 9)', () => {
+    const state = populated();
+    const journal = new HumanJournal();
+    state.movement.journal = journal;
+    let strikes = 0;
+    let charges = 0;
+    const counts = state.movement.acts.counts;
+    for (let day = 0; day < 2 * DAYS_PER_MONTH; day++) {
+      const before = counts.strikes;
+      advanceDay(state, [], testData);
+      const legs = journal.take();
+      expect(legs.acts.length).toBe(legs.slots.length);
+      const flagged = new Set<number>();
+      for (let at = 0; at < legs.slots.length; at++) {
+        const act = legs.acts[at] ?? 0;
+        const rank = act & ACT_RANK;
+        expect(rank < activities.length || rank === ACT_NONE).toBe(true);
+        if ((act & ACT_STRIKE) === 0) continue;
+        flagged.add(legs.slots[at] ?? 0);
+        expect(rank).toBe(HUNT);
+        if ((legs.count[at] ?? 0) > 0) charges++;
+      }
+      // Chaque chasseur qui frappe ce jour, une fois au plus, a une étape qui le dit, et lui seul.
+      expect(flagged.size, `jour ${String(day)}`).toBe(counts.strikes - before);
+      strikes += flagged.size;
+    }
+    expect(strikes).toBeGreaterThan(5);
+    expect(charges).toBeGreaterThan(0);
   });
 
   it('donne au chasseur un affût hors de la distance de fuite de l’animal, et ne frappe qu’au repos', () => {

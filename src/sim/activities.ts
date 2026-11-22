@@ -22,7 +22,7 @@
 import type { ActivitiesFile, Biome, Catalog } from '../core/data';
 import { ACTIVITY_PLACES, ACTIVITY_SEASONS } from '../core/data/activities';
 import { Fingerprint } from '../core/hash';
-import { ACT_NONE, ACT_RANK, ACT_RUN } from '../core/protocol';
+import { ACT_NONE, ACT_RANK, ACT_RUN, ACT_STRIKE } from '../core/protocol';
 import { deltaFixedX, FIXED, wrapFixedX } from '../core/position';
 import { splitmix32, type RandomStream } from '../core/rng';
 import type { CalendarCover } from '../core/snow';
@@ -202,6 +202,15 @@ export function actByte(state: SimState, content: SimContent, slot: number): num
   const rank = byte & ACT_RANK;
   if (rank === ACT_NONE) return ACT_NONE;
   return tableOf(content).run[rank] === 1 ? byte | ACT_RUN : byte;
+}
+
+/**
+ * Octet d'activité d'une étape de `slot` qui part ce jour (protocole 9) : actByte, et ACT_STRIKE
+ * le jour où il frappe (ActivityCache.struck).
+ */
+export function legAct(state: SimState, content: SimContent, slot: number): number {
+  const byte = actByte(state, content, slot);
+  return state.movement.acts.struck.has(slot) ? byte | ACT_STRIKE : byte;
 }
 
 /** Allure d'une étape d'activité : la propre de `slot`, fois `rules.run` s'il court. */
@@ -956,21 +965,28 @@ function huntsOf(state: SimState, content: SimContent): number[] {
   return hunters.sort((a, b) => a - b);
 }
 
+/** Pose une étape d'arrêt de `slot` dans le journal, là où il est, avec son octet d'activité. */
+function stopLeg(state: SimState, content: SimContent, slot: number, day: number): void {
+  const { columns } = state.people;
+  const act = legAct(state, content, slot);
+  state.movement.journal?.push(slot, day, columns.x[slot] ?? 0, columns.y[slot] ?? 0, 0, 0, 0, act);
+}
+
 /** Pose une étape d'arrêt dans le journal, si `slot` marche : il s'arrête là où il est. */
-function cutWalk(state: SimState, slot: number, day: number): void {
+function cutWalk(state: SimState, content: SimContent, slot: number, day: number): void {
   const { columns } = state.people;
   if (((columns.move[slot] ?? 0) & INTENTION) !== WALK || (columns.stepDays[slot] ?? 0) === 0) {
     return;
   }
-  state.movement.journal?.push(slot, day, columns.x[slot] ?? 0, columns.y[slot] ?? 0, 0, 0, 0);
+  stopLeg(state, content, slot, day);
   columns.stepDays[slot] = 0;
 }
 
 /** `slot` s'arrête là où il est, au repos, son étape d'arrêt notée s'il marchait. */
-function stopHere(state: SimState, slot: number, day: number): void {
+function stopHere(state: SimState, content: SimContent, slot: number, day: number): void {
   const { columns } = state.people;
   if (((columns.move[slot] ?? 0) & INTENTION) !== WALK) return;
-  cutWalk(state, slot, day);
+  cutWalk(state, content, slot, day);
   columns.move[slot] = REST;
   columns.goalX[slot] = columns.x[slot] ?? 0;
   columns.goalY[slot] = columns.y[slot] ?? 0;
@@ -982,9 +998,16 @@ function stopHere(state: SimState, slot: number, day: number): void {
 }
 
 /** `slot` se met en marche vers (gx, gy), sa marche en cours coupée s'il en avait une. */
-function walkTo(state: SimState, slot: number, gx: number, gy: number, day: number): void {
+function walkTo(
+  state: SimState,
+  content: SimContent,
+  slot: number,
+  gx: number,
+  gy: number,
+  day: number,
+): void {
   const { columns } = state.people;
-  cutWalk(state, slot, day);
+  cutWalk(state, content, slot, day);
   columns.goalX[slot] = gx;
   columns.goalY[slot] = gy;
   columns.move[slot] = WALK;
@@ -1034,6 +1057,8 @@ function huntDay(
     // Le coup : la chance de l'espèce fait la prise ; manqué, il charge en courant.
     acts.counts.strikes++;
     acts.struck.add(slot);
+    // Son étape d'arrêt dit le coup au rendu (ACT_STRIKE), quoi qu'il advienne.
+    stopLeg(state, content, slot, day);
     const chance = content.fauna.entries.at(fauna.species[prey] ?? 0)?.hunt.chance ?? 0;
     const hit = random.nextFloat() < chance;
     releasePrey(state, slot);
@@ -1041,18 +1066,17 @@ function huntDay(
       acts.counts.hits++;
       takePrey(state, content, slot, prey);
       // Il reste un jour au lieu du coup, puis choisit.
-      state.movement.journal?.push(slot, day, hx, hy, 0, 0, 0);
       setUntil(state, slot, day + 1);
       return true;
     }
     acts.counts.misses++;
     // La harde l'entend le jour même, même au calme (fauna.ts, faunaDay).
     acts.misses.push(prey, hx, hy);
-    // La charge court là où se tenait l'animal, si l'on peut s'y tenir ; sinon, il reste, et sa
-    // chasse finit le lendemain.
+    // La charge court là où se tenait l'animal, si l'on peut s'y tenir, et sa première étape dit
+    // aussi le coup ; sinon, il reste, et sa chasse finit le lendemain.
     if (clearAt(state, ax, ay)) {
       columns.activity[slot] = (columns.activity[slot] ?? NO_ACTIVITY) | ACT_RUN;
-      walkTo(state, slot, ax, ay, day);
+      walkTo(state, content, slot, ax, ay, day);
       setUntil(state, slot, day + rules.hunt.charge);
     } else {
       setUntil(state, slot, day + 1);
@@ -1073,9 +1097,9 @@ function huntDay(
   if (mx * mx + my * my < revise * revise) return true;
   if (Math.abs(deltaFixedX(hx, px, width)) <= ARRIVE && Math.abs(py - hy) <= ARRIVE) {
     // L'affût est là où il se tient (stalkPoint l'a voulu sur une case où l'on se tient).
-    stopHere(state, slot, day);
+    stopHere(state, content, slot, day);
   } else {
-    walkTo(state, slot, px, py, day);
+    walkTo(state, content, slot, px, py, day);
   }
   syncSpot(state, slot);
   return true;
@@ -1383,14 +1407,14 @@ function decide(
     // Il y est déjà : il y reste ; une marche coupée, ou une autre activité sur place, le dit au
     // rendu par une étape d'arrêt.
     const walking = ((columns.move[slot] ?? 0) & INTENTION) === WALK;
-    if (walking) stopHere(state, slot, day);
-    else if (before !== rank) movement.journal?.push(slot, day, x, y, 0, 0, 0);
+    if (walking) stopHere(state, content, slot, day);
+    else if (before !== rank) stopLeg(state, content, slot, day);
     setUntil(state, slot, day + stay);
     syncSpot(state, slot);
     return;
   }
   acts.counts.trips++;
-  walkTo(state, slot, sx, sy, day);
+  walkTo(state, content, slot, sx, sy, day);
   setUntil(state, slot, table.place[rank] === PLACE.prey ? day + stay : -stay);
   syncSpot(state, slot);
 }

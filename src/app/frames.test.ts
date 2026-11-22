@@ -3,7 +3,7 @@ import {
   GROUP_STRIDE,
   NO_CARRIER,
   type GroupsFrame,
-  type LegArrays,
+  type HumanLegArrays,
   type MainMessage,
   type SpawnGroupCommand,
 } from '../core/protocol';
@@ -33,22 +33,24 @@ import { PAUSE_CATCH_UP_MS } from './gameClock';
 import { FRAME_MS, HostedGame } from './testing';
 
 /** Aucune étape. */
-const noLegs = (): LegArrays => ({
+const noLegs = (): HumanLegArrays => ({
   slots: new Uint32Array(0),
   days: new Uint32Array(0),
   start: new Int32Array(0),
   step: new Int32Array(0),
   count: new Uint16Array(0),
+  acts: new Uint8Array(0),
 });
 
 /** Des étapes : [emplacement, jour, x, y, pas x, pas y, jours], en unités. */
-function legs(...list: [number, number, number, number, number, number, number][]): LegArrays {
+function legs(...list: [number, number, number, number, number, number, number][]): HumanLegArrays {
   return {
     slots: Uint32Array.from(list, (leg) => leg[0]),
     days: Uint32Array.from(list, (leg) => leg[1]),
     start: Int32Array.from(list.flatMap((leg) => [leg[2], leg[3]])),
     step: Int32Array.from(list.flatMap((leg) => [leg[4], leg[5]])),
     count: Uint16Array.from(list, (leg) => leg[6]),
+    acts: new Uint8Array(list.length),
   };
 }
 
@@ -65,6 +67,7 @@ function frame(...ids: number[]): GroupsFrame {
       ids.flatMap((id) => [id * FIXED + FIXED / 2, 10 * FIXED + FIXED / 2]),
     ),
     carriers: new Uint32Array(count).fill(NO_CARRIER),
+    activities: new Uint8Array(count),
     legs: noLegs(),
   };
 }
@@ -83,6 +86,7 @@ function group(members: [number, number, number, number][], current = noLegs()):
     statures: new Uint8Array(count).fill(96),
     positions: Int32Array.from(members.flatMap((member) => [member[1], member[2]])),
     carriers: Uint32Array.from(members, (member) => member[3]),
+    activities: new Uint8Array(count),
     legs: current,
   };
 }

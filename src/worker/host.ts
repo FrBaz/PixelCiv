@@ -66,7 +66,7 @@ import { GameCommandSchema } from '../sim/commands';
 import { MIGRATIONS, restoreState, saveState } from '../sim/save';
 import { cellIndex, createState, takeDirtyChunks, type SimState } from '../sim/state';
 import { advanceDay } from '../sim/day';
-import { LegJournal } from '../sim/movement';
+import { HumanJournal } from '../sim/movement';
 import { applyCommands, type RejectedCommand } from '../sim/step';
 import { chroniclePage, chronicleViews, groupsFrame, inspect } from '../sim/views';
 import { FaunaJournal, faunaFrame } from '../sim/fauna';
@@ -504,7 +504,7 @@ export class SimulationHost {
     const calendars = state.calendars.slice();
     const frame = groupsFrame(state, this.data, undefined, this.pool);
     // Les étapes qui commencent désormais partent avec les deltas ; l'image dit celles en cours.
-    state.movement.journal = new LegJournal();
+    state.movement.journal = new HumanJournal();
     // De même pour le gibier (protocole 7, ADR 0018).
     const fauna = faunaFrame(state, this.data, this.pool);
     state.fauna.journal = new FaunaJournal();

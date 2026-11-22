@@ -21,7 +21,13 @@
  * Les tampons lus retournent au worker (message `recycle`) : ceux d'une image quand la carte
  * ne la montre plus, ceux des étapes dès qu'elles sont toutes appliquées ou dépassées.
  */
-import { GROUP_STRIDE, NO_CARRIER, type GroupsFrame, type LegArrays } from '../core/protocol';
+import {
+  GROUP_STRIDE,
+  NO_CARRIER,
+  type GroupsFrame,
+  type HumanLegArrays,
+  type LegArrays,
+} from '../core/protocol';
 import { cellOf, deltaFixedX, FIXED, wrapFixedX } from '../core/position';
 import { dayIndex, type GameTime } from '../core/time';
 import type { WorldSize } from '../core/world';
@@ -598,8 +604,8 @@ export class PositionMirror implements CrowdSource {
 export interface TimelineOptions extends MirrorOptions {
   /** Une image que la carte ne montre plus : ses tampons retournent au worker. */
   readonly recycleFrame?: (frame: GroupsFrame) => void;
-  /** Des étapes lues ou dépassées : leurs tampons retournent au worker. */
-  readonly recycleLegs?: (legs: LegArrays) => void;
+  /** Des étapes lues ou dépassées : leurs tampons retournent au worker, octets d'activité compris. */
+  readonly recycleLegs?: (legs: HumanLegArrays) => void;
 }
 
 /**
@@ -610,7 +616,7 @@ export interface TimelineOptions extends MirrorOptions {
  */
 export class CrowdTimeline {
   readonly frames: FrameQueue;
-  readonly legs: LegQueue;
+  readonly legs: LegQueue<HumanLegArrays>;
   /** Positions à l'instant affiché. */
   readonly shown: PositionMirror;
   /**
@@ -631,7 +637,7 @@ export class CrowdTimeline {
       if (frame === this.shown.frame) this.held.push(frame);
       else this.recycleFrame(frame);
     });
-    this.legs = new LegQueue(options.recycleLegs);
+    this.legs = new LegQueue<HumanLegArrays>(options.recycleLegs);
     this.shown = new PositionMirror(options);
     this.latest = new PositionMirror(options);
   }
@@ -649,7 +655,7 @@ export class CrowdTimeline {
    * Un delta de l'instant `time` : les étapes commencées pendant ses jours, et son image s'il
    * en porte une, qui vaut à partir de cet instant.
    */
-  receive(time: GameTime, legs: LegArrays | undefined, frame: GroupsFrame | undefined): void {
+  receive(time: GameTime, legs: HumanLegArrays | undefined, frame: GroupsFrame | undefined): void {
     if (legs !== undefined) this.legs.push(legs);
     if (frame !== undefined && this.frames.push(frame, time)) {
       // La file, pleine, a oublié des images que la carte n'a pas montrées : elle ne se

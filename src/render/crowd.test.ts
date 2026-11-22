@@ -91,12 +91,14 @@ function crowdFrame(...groups: [number, number, Member[]][]): GroupsFrame {
       members.flatMap((member) => [Math.round(member.x * FIXED), Math.round(member.y * FIXED)]),
     ),
     carriers: Uint32Array.from(members, (member) => member.carrier ?? NO_CARRIER),
+    activities: new Uint8Array(total),
     legs: {
       slots: new Uint32Array(0),
       days: new Uint32Array(0),
       start: new Int32Array(0),
       step: new Int32Array(0),
       count: new Uint16Array(0),
+      acts: new Uint8Array(0),
     },
   };
 }

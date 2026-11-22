@@ -6,7 +6,12 @@
  * ses messages attendent alors l'image de leur instant. Les tampons lus retournent à l'hôte,
  * comme le fait main.ts (message `recycle`).
  */
-import { frameBuffers, legBuffers, PROTOCOL_VERSION, type WorkerMessage } from '../core/protocol';
+import {
+  frameBuffers,
+  humanLegBuffers,
+  PROTOCOL_VERSION,
+  type WorkerMessage,
+} from '../core/protocol';
 import { CHUNK_SIZE, type WorldLayers } from '../core/world';
 import { walkCost } from '../sim/terrain';
 import { testData, testParams } from '../sim/testing';
@@ -40,7 +45,7 @@ export class HostedGame {
     },
     recycleLegs: (legs) => {
       this.recycledLegs++;
-      this.recycle(legBuffers(legs));
+      this.recycle(humanLegBuffers(legs));
     },
   });
   readonly frames: FrameQueue = this.crowd.frames;

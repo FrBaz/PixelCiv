@@ -163,12 +163,14 @@ describe("outil d'apparition (CRE-03)", () => {
       statures: new Uint8Array(2).fill(96),
       positions: Int32Array.from(members.flat().map((value) => Math.round(value * FIXED))),
       carriers: new Uint32Array(2).fill(NO_CARRIER),
+      activities: new Uint8Array(2),
       legs: {
         slots: new Uint32Array(0),
         days: new Uint32Array(0),
         start: new Int32Array(0),
         step: new Int32Array(0),
         count: new Uint16Array(0),
+        acts: new Uint8Array(0),
       },
     };
     const timeline = new CrowdTimeline({ carry: 0.2, passable: () => true });
@@ -181,6 +183,7 @@ describe("outil d'apparition (CRE-03)", () => {
         start: Int32Array.of(3.5 * FIXED, 2.5 * FIXED),
         step: Int32Array.of(0, FIXED),
         count: Uint16Array.of(1),
+        acts: Uint8Array.of(0),
       },
       undefined,
     );

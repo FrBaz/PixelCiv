@@ -21,7 +21,7 @@
 import { freshArrays, type Allocator } from '../core/buffers';
 import type { Species } from '../core/data';
 import { geneRoles } from '../core/data/people';
-import type { LegArrays } from '../core/protocol';
+import type { HumanLegArrays, LegArrays } from '../core/protocol';
 import { carriedSide, cellOf, deltaFixedX, FIXED, wrapFixedX } from '../core/position';
 import type { RandomStream } from '../core/rng';
 import { dayIndex, DAYS_PER_MONTH } from '../core/time';
@@ -56,6 +56,7 @@ import {
   beginActivity,
   describeActivities,
   followGroup,
+  legAct,
   onActivity,
   rebuildActivities,
   spotRoom,
@@ -169,6 +170,47 @@ export class LegJournal {
     this.start = start;
     this.step = step;
     this.lengths = lengths;
+  }
+}
+
+/**
+ * Étapes des humains commencées (protocole 9) : celles de LegJournal, et l'octet d'activité de
+ * chacune (activities.ts, legAct), que le rendu lit pour la pose (ADR 0022). Ce n'est pas l'état.
+ */
+export class HumanJournal {
+  private readonly legs = new LegJournal();
+  private acts = new Uint8Array(256);
+
+  get count(): number {
+    return this.legs.count;
+  }
+
+  push(
+    slot: number,
+    day: number,
+    x: number,
+    y: number,
+    sx: number,
+    sy: number,
+    days: number,
+    act: number,
+  ): void {
+    const at = this.legs.count;
+    if (at >= this.acts.length) {
+      const acts = new Uint8Array(this.acts.length * 2);
+      acts.set(this.acts);
+      this.acts = acts;
+    }
+    this.acts[at] = act;
+    this.legs.push(slot, day, x, y, sx, sy, days);
+  }
+
+  /** Les étapes notées, dans des tableaux au plus juste, pris de `arrays` ; le journal se vide. */
+  take(arrays: Allocator = freshArrays): HumanLegArrays {
+    const n = this.legs.count;
+    const acts = arrays.uint8(n);
+    acts.set(this.acts.subarray(0, n));
+    return { ...this.legs.take(arrays), acts };
   }
 }
 
@@ -384,8 +426,8 @@ export class Movement {
   readonly fields = new Map<number, CampField>();
   /** Disques franchissables autour des centres des camps (clearRadius), vidés comme eux. */
   readonly openings = new Map<number, number>();
-  /** Étapes commencées, que l'hôte envoie au rendu ; aucune sans hôte. */
-  journal: LegJournal | undefined;
+  /** Étapes commencées, avec leur octet d'activité, que l'hôte envoie au rendu ; aucune sans hôte. */
+  journal: HumanJournal | undefined;
   /**
    * Caches des activités (ADR 0021) : l'agenda des choix, les lieux d'activité occupés, les
    * saisons et les rives des camps, le gibier du jour (activityCache.ts).
@@ -1483,6 +1525,7 @@ function walkDay(state: SimState, content: SimContent, day: number): number[] {
         stepX[slot] ?? 0,
         stepY[slot] ?? 0,
         stepDays[slot] ?? 0,
+        legAct(state, content, slot),
       );
     }
     const px = x[slot] ?? 0;
@@ -1929,7 +1972,16 @@ function spaceWalkers(state: SimState, content: SimContent, day: number): void {
     movement.counts.asides++;
     movement.counts.legs++;
     // Un écart de côté est une étape d'un jour, partie de la position de la veille.
-    movement.journal?.push(slot, day, fromX, fromY, deltaFixedX(fromX, qx, width), qy - fromY, 1);
+    movement.journal?.push(
+      slot,
+      day,
+      fromX,
+      fromY,
+      deltaFixedX(fromX, qx, width),
+      qy - fromY,
+      1,
+      legAct(state, content, slot),
+    );
   }
 }
 

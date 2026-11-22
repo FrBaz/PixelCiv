@@ -137,8 +137,13 @@ export interface FrameCost {
 
 /** Octets d'une étape dans un message (ADR 0014) : emplacement, jour, départ, pas, jours. */
 export const LEG_BYTES = 4 + 4 + 8 + 8 + 2;
-/** Octets d'un membre dans l'image des groupes : emplacement, identifiant, apparence, stature, position, porteur. */
-export const MEMBER_BYTES = 4 + 4 + 2 + 1 + 8 + 4;
+/** Octets d'une étape des humains (protocole 9) : celles du mouvement, et l'octet d'activité. */
+export const HUMAN_LEG_BYTES = LEG_BYTES + 1;
+/**
+ * Octets d'un membre dans l'image des groupes : emplacement, identifiant, apparence, stature,
+ * position, porteur, octet d'activité.
+ */
+export const MEMBER_BYTES = 4 + 4 + 2 + 1 + 8 + 4 + 1;
 
 /** Octets d'une étape du gibier : celles des individus, et son allure (FaunaLegArrays). */
 export const FAUNA_LEG_BYTES = LEG_BYTES + 1;
@@ -164,7 +169,9 @@ export function faunaBytes(
 export function positionBytes(legs: LegArrays | undefined, frame: GroupsFrame | undefined): number {
   const legCount = (legs?.slots.length ?? 0) + (frame?.legs.slots.length ?? 0);
   const groups = frame === undefined ? 0 : frame.groups.length / GROUP_STRIDE;
-  return legCount * LEG_BYTES + (frame?.ids.length ?? 0) * MEMBER_BYTES + groups * GROUP_STRIDE * 4;
+  return (
+    legCount * HUMAN_LEG_BYTES + (frame?.ids.length ?? 0) * MEMBER_BYTES + groups * GROUP_STRIDE * 4
+  );
 }
 
 /**

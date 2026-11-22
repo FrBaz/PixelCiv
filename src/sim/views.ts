@@ -9,6 +9,7 @@
  * pour la fiche et pour le mini-sprite.
  */
 import {
+  ACT_RANK,
   CHRONICLE_PAGE,
   GROUP_STRIDE,
   NO_CARRIER,
@@ -16,9 +17,9 @@ import {
   type GroupsFrame,
   type GroupSummary,
   type GroupView,
+  type HumanLegArrays,
   type InspectTarget,
   type Intention,
-  type LegArrays,
   type PersonSummary,
   type PersonView,
 } from '../core/protocol';
@@ -27,6 +28,7 @@ import { dayIndex } from '../core/time';
 import { geneRoles } from '../core/data/people';
 import { ageClass, greyLevel, lifeTable, type LifeAges } from '../core/life';
 import { AGE_CODE, skinCode, visualCode, type AgeClass } from '../core/visual';
+import { actByte } from './activities';
 import { expressed, trait } from './genetics';
 import { groupMembers } from './groups';
 import { centralMember, curveAt } from './movement';
@@ -37,6 +39,7 @@ import {
   INTENTION,
   LEAVE,
   NEVER,
+  NO_ACTIVITY,
   NONE,
   WALK,
   type Population,
@@ -184,6 +187,7 @@ export function personView(
     nutrition: record.alive ? people.get('nutrition', record.index) / 255 : 0,
     pregnant: record.alive && people.get('conceived', record.index) !== NEVER,
     ...(record.alive ? { intention: intentionOf(state, record.index) } : {}),
+    ...optional('activity', record.alive ? activityKey(state, content, record.index) : undefined),
     ...optional('mother', summary(state, content, mother)),
     ...optional('father', summary(state, content, father)),
     ...optional('partner', summary(state, content, field(people, record, 'partner'))),
@@ -191,6 +195,17 @@ export function personView(
     siblings: list(siblings),
     ...optional('group', record.alive ? groupSummary(state, groupId, groupList) : undefined),
   };
+}
+
+/**
+ * Clé du nom de l'activité de `slot` (ADR 0021, § 6) : celle de qui le porte pour un porté, qui
+ * n'en a pas lui-même (point 13 de la conception) ; aucune sans activité.
+ */
+function activityKey(state: SimState, content: SimContent, slot: number): string | undefined {
+  const carrier = state.movement.carrier[slot] ?? -1;
+  const who = carrier >= 0 ? carrier : slot;
+  const rank = (state.people.columns.activity[who] ?? NO_ACTIVITY) & ACT_RANK;
+  return content.activities.activities.at(rank)?.name;
 }
 
 function optional<K extends string, V>(key: K, value: V | undefined): Partial<Record<K, V>> {
@@ -354,6 +369,7 @@ export function groupsFrame(
   const statures = arrays.uint8(total);
   const positions = arrays.int32(2 * total);
   const carriers = arrays.uint32(total).fill(NO_CARRIER);
+  const activities = arrays.uint8(total);
   const { genetics } = content;
   const roles = geneRoles(genetics);
   const hairLocus = roles.loci.hair;
@@ -397,6 +413,7 @@ export function groupsFrame(
       positions[2 * member + 1] = y[slot] ?? 0;
       const carrier = movement.carrier[slot] ?? -1;
       if (carrier >= 0) carriers[member] = carrier;
+      activities[member] = actByte(state, content, slot);
       member++;
     }
   }
@@ -408,12 +425,17 @@ export function groupsFrame(
     statures,
     positions,
     carriers,
-    legs: currentLegs(state, arrays),
+    activities,
+    legs: currentLegs(state, content, arrays),
   };
 }
 
-/** Étape en cours de chaque marcheur, repartie de l'instant courant. */
-export function currentLegs(state: SimState, arrays: Allocator = freshArrays): LegArrays {
+/** Étape en cours de chaque marcheur, repartie de l'instant courant, avec son octet d'activité. */
+export function currentLegs(
+  state: SimState,
+  content: SimContent,
+  arrays: Allocator = freshArrays,
+): HumanLegArrays {
   const movement = state.movement;
   const { x, y, stepX, stepY, stepDays } = state.people.columns;
   // Dans l'ordre des emplacements : l'image ne dépend pas de l'ordre des marcheurs.
@@ -421,12 +443,13 @@ export function currentLegs(state: SimState, arrays: Allocator = freshArrays): L
     .filter((slot) => movement.isActive(slot) && (stepDays[slot] ?? 0) > 0)
     .sort((a, b) => a - b);
   const count = walkers.length;
-  const legs: LegArrays = {
+  const legs: HumanLegArrays = {
     slots: arrays.uint32(count),
     days: arrays.uint32(count),
     start: arrays.int32(2 * count),
     step: arrays.int32(2 * count),
     count: arrays.uint16(count),
+    acts: arrays.uint8(count),
   };
   const day = dayIndex(state);
   let at = 0;
@@ -439,6 +462,7 @@ export function currentLegs(state: SimState, arrays: Allocator = freshArrays): L
     legs.step[2 * at] = stepX[slot] ?? 0;
     legs.step[2 * at + 1] = stepY[slot] ?? 0;
     legs.count[at] = days;
+    legs.acts[at] = actByte(state, content, slot);
     at++;
   }
   return legs;

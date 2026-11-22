@@ -13,7 +13,7 @@ import {
 import { describe, expect, it, vi } from 'vitest';
 import { PositionMirror } from '../app/frames';
 import { loadGameData, type Appearance } from '../core/data';
-import { FAUNA_GAIT, NO_CARRIER, type GroupsFrame, type LegArrays } from '../core/protocol';
+import { FAUNA_GAIT, NO_CARRIER, type GroupsFrame, type HumanLegArrays } from '../core/protocol';
 import { FIXED } from '../core/position';
 import { RandomStream, streamSeed } from '../core/rng';
 import { visualCode } from '../core/visual';
@@ -75,12 +75,13 @@ const insides = (people: PeopleLayer) =>
   people as unknown as { humans: ParticleContainer; palettes: PaletteTexture };
 
 /** Aucune étape. */
-const noLegs = (): LegArrays => ({
+const noLegs = (): HumanLegArrays => ({
   slots: new Uint32Array(0),
   days: new Uint32Array(0),
   start: new Int32Array(0),
   step: new Int32Array(0),
   count: new Uint16Array(0),
+  acts: new Uint8Array(0),
 });
 
 /**
@@ -105,6 +106,7 @@ function frame(size: number, ...groups: [number, number, number, number][]): Gro
     statures: new Uint8Array(total).fill(Math.round(reference * 128)),
     positions,
     carriers: new Uint32Array(total).fill(NO_CARRIER),
+    activities: new Uint8Array(total),
     legs: noLegs(),
   };
 }
@@ -445,6 +447,7 @@ describe('individus à leur position (ADR 0014, ADR 0016)', () => {
         start: Int32Array.of(groups.positions[0], groups.positions[1]),
         step: Int32Array.of(FIXED / 8, 0),
         count: Uint16Array.of(10),
+        acts: Uint8Array.of(0),
       },
     };
     const look = (walkMs: number, t: number) => {
