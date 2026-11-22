@@ -227,7 +227,10 @@ export interface LegArrays {
 /**
  * Étapes des humains (protocole 9, ADR 0021 § 6) : celles de LegArrays, et l'octet d'activité de
  * chacune (ACT_RANK, ACT_RUN, ACT_STRIKE), celui de l'humain au départ de l'étape. Une étape de
- * zéro jour l'arrête à son départ, ou y change son activité sur place.
+ * zéro jour l'arrête à son départ, ou y change son activité sur place. Une étape de zéro jour au
+ * pas horizontal d'une unité le tourne sur place, sans le déplacer : le pêcheur ou le porteur
+ * d'eau vers son eau, datée de l'instant où il s'arrête, celui qui suit le jour de son arrivée,
+ * et donc, au bout d'un lot, de l'instant du delta (ADR 0022, § 6).
  */
 export interface HumanLegArrays extends LegArrays {
   readonly acts: Uint8Array<ArrayBuffer>;

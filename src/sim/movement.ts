@@ -1603,7 +1603,7 @@ function settle(state: SimState, content: SimContent, slot: number, day: number)
     columns.homeY[slot] = y;
   }
   movement.hold(slot, columns.homeX[slot] ?? x, columns.homeY[slot] ?? y);
-  if (trip) tripEnded(state, slot, day);
+  if (trip) tripEnded(state, content, slot, day);
   else arrivedAtCamp(state, content, slot, day);
   syncSpot(state, slot);
 }

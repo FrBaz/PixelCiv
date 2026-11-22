@@ -1233,14 +1233,22 @@ describe('deux horloges (ADR 0013)', () => {
     // Le premier jour, qui fait apparaître les groupes, puis les deux pas mensuels ; ni les
     // coups de pinceau ni les jours ordinaires.
     expect(framed).toEqual([0, DAYS_PER_MONTH - 1, 2 * DAYS_PER_MONTH - 1]);
-    // Les étapes de chaque lot sont datées de ses jours.
+    // Les étapes de chaque lot sont datées de ses jours ; celles qui tournent vers l'eau qui vient
+    // d'y arriver, de l'instant qui suit, où il s'arrête : zéro jour, un pas horizontal d'une
+    // unité (activities.ts, shoreLegs ; relecture de 2b.8).
     const legs = deltas.flatMap((delta) => (delta.legs === undefined ? [] : [delta]));
     expect(legs.length).toBeGreaterThan(DAYS_PER_MONTH / 2);
     for (const delta of legs) {
       const end = dayIndex(delta.time);
-      for (const day of delta.legs?.days ?? []) {
-        expect(day).toBeLessThan(end);
+      const started = delta.legs;
+      for (let at = 0; at < (started?.days.length ?? 0); at++) {
+        const day = started?.days[at] ?? 0;
         expect(day).toBeGreaterThanOrEqual(end - delta.days);
+        if (day < end) continue;
+        expect(day).toBe(end);
+        expect(started?.count[at]).toBe(0);
+        expect(Math.abs(started?.step[2 * at] ?? 0)).toBe(1);
+        expect(started?.step[2 * at + 1]).toBe(0);
       }
     }
     // L'image porte chaque membre, et l'étape en cours de chaque marcheur.

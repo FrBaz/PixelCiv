@@ -340,6 +340,13 @@ export class ActivityCache {
    * ait leur activité aux jours entiers. Tenu seulement quand un hôte lit les étapes (journal).
    */
   readonly settled: number[] = [];
+  /**
+   * Arrivés ce soir au lieu d'une activité au bord de l'eau : une étape de zéro jour, à l'instant
+   * qui suit (activities.ts, shoreLegs), les tourne vers l'eau, pour le seul fil principal. Tenu
+   * seulement quand un hôte lit les étapes ; vidé par shoreLegs, à la fin du jour, et non par
+   * clear(), que le pas mensuel appelle avant elle.
+   */
+  readonly shoreArrivals: number[] = [];
   readonly counts: ActivityCounts = {
     decisions: 0,
     trips: 0,

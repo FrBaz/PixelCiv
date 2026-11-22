@@ -13,7 +13,8 @@
  * L'état ne dépend donc ni de la vitesse ni du regroupement des jours en lots.
  */
 import type { GameCommand } from '../core/protocol';
-import { DAYS_PER_MONTH } from '../core/time';
+import { dayIndex, DAYS_PER_MONTH } from '../core/time';
+import { shoreLegs } from './activities';
 import { faunaDay, rebuildFauna } from './fauna';
 import { moveDay, rebuildMovement } from './movement';
 import type { SimState } from './state';
@@ -52,12 +53,14 @@ export function advanceDay(
   }
   if (state.day < DAYS_PER_MONTH - 1) {
     state.day++;
+    shoreLegs(state, content, dayIndex(state));
     return undefined;
   }
   // Le soir du trentième jour vient le pas mensuel.
   try {
     const members = monthStep(state, content);
     state.day = 0;
+    shoreLegs(state, content, dayIndex(state));
     return members;
   } catch (error) {
     rebuildMovement(state);

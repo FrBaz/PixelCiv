@@ -412,11 +412,64 @@ export function eveningLegs(state: SimState, content: SimContent, day: number): 
 
 /**
  * La fin du trajet d'une activité, au soir du jour `day` : il y passera les jours que son choix a
- * tirés (until négatif), comptés du lendemain.
+ * tirés (until négatif), comptés du lendemain. Au bord de l'eau, une étape le tournera vers elle,
+ * à la fin du jour (shoreLegs), si un hôte lit les étapes.
  */
-export function tripEnded(state: SimState, slot: number, day: number): void {
+export function tripEnded(state: SimState, content: SimContent, slot: number, day: number): void {
   const until = state.people.columns.until[slot] ?? 0;
   if (until < 0) setUntil(state, slot, day + 1 - until);
+  if (state.movement.journal === undefined) return;
+  const rank = rankOf(state, slot);
+  const table = tableOf(content);
+  if (rank < table.count && table.place[rank] === PLACE.water) {
+    state.movement.acts.shoreArrivals.push(slot);
+  }
+}
+
+/**
+ * Le sens de l'eau de l'activité de rang `rank` qui borde le point (x, y), en unités : −1 si la
+ * case voisine à l'ouest en est une et le point dans la moitié ouest de sa case, 1 de même à l'est,
+ * 0 sinon (une rive d'un bord nord ou sud, ou loin de l'eau).
+ */
+function waterSide(state: SimState, rank: number, x: number, y: number): number {
+  const { width, height } = state.size;
+  const wx = wrapFixedX(x, width);
+  const cx = Math.floor(wx / FIXED);
+  const cy = Math.floor(y / FIXED);
+  if (cy < 0 || cy >= height) return 0;
+  const fx = wx - cx * FIXED;
+  if (fx < FIXED / 2 && waterOf(state, rank, cy * width + ((cx + width - 1) % width))) return -1;
+  if (fx >= FIXED / 2 && waterOf(state, rank, cy * width + ((cx + 1) % width))) return 1;
+  return 0;
+}
+
+/**
+ * Les étapes qui tournent vers l'eau ceux qui sont arrivés ce jour au bord de la leur (tripEnded),
+ * datées de `day`, l'instant qui suit : une étape de zéro jour, là où ils se tiennent, au pas
+ * horizontal d'une unité, vers l'eau. Le fil principal tire le sens de chacun de son dernier pas
+ * horizontal (ADR 0016, § 6) : sans elle, le pêcheur et le porteur d'eau gardaient celui de leur
+ * marche, dos à l'eau une fois sur trois (relecture de 2b.8, problème 1). Rien ne bouge, l'état ne
+ * change pas : seul le journal. Appelée à la fin du jour, après le pas mensuel, qui peut les mettre
+ * en partance : seul qui se tient encore au repos à sa rive, à la même activité, se tourne.
+ */
+export function shoreLegs(state: SimState, content: SimContent, day: number): void {
+  const list = state.movement.acts.shoreArrivals;
+  if (list.length === 0) return;
+  const journal = state.movement.journal;
+  const { people } = state;
+  const { columns } = people;
+  const table = tableOf(content);
+  for (const slot of list) {
+    if (journal === undefined || people.alive[slot] !== 1) continue;
+    if (((columns.move[slot] ?? 0) & INTENTION) !== REST) continue;
+    const rank = rankOf(state, slot);
+    if (rank >= table.count || table.place[rank] !== PLACE.water) continue;
+    const x = columns.x[slot] ?? 0;
+    const y = columns.y[slot] ?? 0;
+    const side = waterSide(state, rank, x, y);
+    if (side !== 0) journal.push(slot, day, x, y, side, 0, 0, actByte(state, content, slot));
+  }
+  list.length = 0;
 }
 
 /**

@@ -11,6 +11,7 @@ import {
   type SpawnGroupCommand,
 } from '../core/protocol';
 import { carriedSide, cellOf, FIXED, wrapFixedX } from '../core/position';
+import { riverClass } from '../core/world';
 import {
   dayDuration,
   dayIndex,
@@ -362,6 +363,89 @@ describe('le coup, de la simulation à la pose (ADR 0021 § 11, ADR 0022 § 6 ; 
   });
 });
 
+describe('le sens des gestes au bord de l’eau, de la simulation au miroir (ADR 0022 § 6 ; relecture de 2b.8)', () => {
+  it('tourne vers l’eau qui pêche ou puise à une rive d’un bord vertical', () => {
+    // De bout en bout : les étapes de la simulation, puis le sens que le miroir en tire (celui du
+    // dernier pas horizontal). Une rive d'un bord vertical est rentrée de `shore.inset` de la case
+    // d'eau voisine, à l'ouest ou à l'est : à l'arrêt, le pêcheur et le porteur d'eau la regardent.
+    const content = testData;
+    const fishing = new Set(
+      content.activities.activities.flatMap((activity, rank) =>
+        activity.place === 'water' ? [rank] : [],
+      ),
+    );
+    const inset = Math.round(content.activities.rules.shore.inset * FIXED);
+    let checked = 0;
+    for (const seed of ['pixelciv', 'graine']) {
+      const state = testState(seed);
+      const { width } = state.size;
+      const journal = new HumanJournal();
+      state.movement.journal = journal;
+      applyCommands(state, scatteredGroups(state, 60, 25), content);
+      journal.take();
+      const timeline = new CrowdTimeline({ carry: testHuman.display.carry, passable: anywhere });
+      timeline.reset(groupsFrame(state, content), time(state.tick, state.day), width);
+      // L'eau de chaque case, pour chaque activité au bord de l'eau (comme les masques de la
+      // simulation : les biomes de ses eaux, et la rivière d'une case de terre).
+      const waterOf = (rank: number, cell: number) => {
+        const water = content.activities.activities[rank]?.water;
+        const biome = content.biomes.entries.at(state.world.biome[cell] ?? 0);
+        if (water === undefined || biome === undefined) return false;
+        if (water.biomes.includes(biome.id)) return true;
+        const land = Number.isFinite(state.cost[cell] ?? Number.NaN);
+        return water.river && land && riverClass(state.world.drainage[cell] ?? 0) > 0;
+      };
+      for (let day = 0; day < 150; day++) {
+        const members = advanceDay(state, [], content);
+        const legs = journal.count > 0 ? journal.take() : undefined;
+        timeline.receive(
+          time(state.tick, state.day),
+          legs,
+          members === undefined ? undefined : groupsFrame(state, content, members),
+        );
+        const now = dayIndex(state);
+        timeline.show(now);
+        const mirror = timeline.shown;
+        const frame = mirror.frame;
+        if (frame === undefined) continue;
+        const count = frame.ids.length;
+        const xs = new Float64Array(count);
+        const ys = new Float64Array(count);
+        const moving = new Uint8Array(count);
+        const facing = new Int8Array(count);
+        const acts = new Uint8Array(count).fill(ACT_NONE);
+        for (let rank = 0; rank < mirror.groupCount; rank++) {
+          mirror.positions(rank, now, xs, ys, moving, facing, acts);
+        }
+        for (let member = 0; member < count; member++) {
+          const rank = (acts[member] ?? ACT_NONE) & 0x0f;
+          if (moving[member] === 1 || !fishing.has(rank)) continue;
+          const x = xs[member] ?? 0;
+          const column = Math.floor(x / FIXED);
+          const row = Math.floor((ys[member] ?? 0) / FIXED);
+          const fx = x - column * FIXED;
+          // Une rive d'un bord vertical : à `inset` du bord ouest, l'eau à l'ouest ; du bord est,
+          // à l'est. Les rives d'un bord horizontal, nord ou sud, n'ont pas de sens à donner.
+          const west = row * width + ((column + width - 1) % width);
+          const east = row * width + ((column + 1) % width);
+          const side =
+            Math.abs(fx - inset) <= 2 && waterOf(rank, west)
+              ? -1
+              : Math.abs(fx - (FIXED - inset)) <= 2 && waterOf(rank, east)
+                ? 1
+                : 0;
+          if (side === 0) continue;
+          expect(facing[member], `${seed}, jour ${String(now)}, membre ${String(member)}`).toBe(
+            side,
+          );
+          checked++;
+        }
+      }
+    }
+    expect(checked).toBeGreaterThan(500);
+  });
+});
+
 describe('sens de chacun, d’une image des groupes à l’autre (ADR 0016, § 6)', () => {
   it('donne à chacun le sens de son pas, et le lui garde à l’arrêt, au pas mensuel comme d’une étape à l’autre', () => {
     const mirror = new PositionMirror({ carry: 0.2, passable: anywhere });
@@ -397,6 +481,30 @@ describe('sens de chacun, d’une image des groupes à l’autre (ADR 0016, § 6
     // La même image remise ne perd rien.
     mirror.reset({ at: 60, tick: 2, frame: reborn }, 64);
     expect(facingOf(mirror, 60)).toEqual([0, 0, -1]);
+  });
+
+  it('tourne sur place qui reçoit une étape de zéro jour au pas d’une unité, sans le déplacer (relecture de 2b.8)', () => {
+    // L'étape du soir qui tourne un pêcheur vers l'eau (activities.ts, shoreLegs) : zéro jour,
+    // un pas horizontal d'une unité ; elle change le sens, et rien d'autre.
+    const mirror = new PositionMirror({ carry: 0.2, passable: anywhere });
+    const x = 10 * FIXED + Math.round(0.3 * FIXED);
+    const members: [number, number, number, number][] = [
+      [1, x, FIXED, NO_CARRIER],
+      [2, x, 2 * FIXED, NO_CARRIER],
+    ];
+    // Arrivés en marchant vers l'est, au jour 4 ; l'eau est à l'ouest du premier.
+    const walking = legs(
+      [1, 0, x - FIXED, FIXED, FIXED / 4, 0, 4],
+      [2, 0, x - FIXED, 2 * FIXED, FIXED / 4, 0, 4],
+    );
+    mirror.reset({ at: 0, tick: 0, frame: group(members, walking) }, 64);
+    expect(facingOf(mirror, 4)).toEqual([1, 1]);
+    applyLeg(mirror, [1, 4, x, FIXED, -1, 0, 0]);
+    for (const t of [4, 4.5, 9]) {
+      expect(facingOf(mirror, t), String(t)).toEqual([-1, 1]);
+      const seen = positionsOf(mirror, t);
+      expect([seen.xs[0], seen.ys[0], seen.moving[0]]).toEqual([x, FIXED, 0]);
+    }
   });
 
   it('ne retourne aucun immobile au fil des pas mensuels', () => {
