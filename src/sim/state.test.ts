@@ -261,9 +261,12 @@ describe('pas', () => {
     // humains lisent le gibier, et l'empreinte sans lui le suit donc aussi (46 vivants,
     // 102 prises en vingt ans ; de 567d06a4 à 39e32af6 sans le gibier, de e064350c à
     // 7d74f1b1 avec lui). Sans activités, la partie est celle de 2b.7 : les quatre colonnes
-    // ôtées, elle redonne les empreintes d'avant.
-    expect(fingerprint(state, { fauna: false })).toBe('39e32af6');
-    expect(fingerprint(state)).toBe('7d74f1b1');
+    // ôtées, elle redonne les empreintes d'avant. Relecture de 2b.8 : la charge part le lendemain
+    // du coup, le poids d'une activité suit le test de son lieu et un choix sans lieu tire de
+    // nouveau, l'affût se tient à l'écart des autres ; 47 vivants, 90 prises (de 39e32af6 à
+    // 4ddeeba3 sans le gibier, de 7d74f1b1 à 4f07557a avec lui).
+    expect(fingerprint(state, { fauna: false })).toBe('4ddeeba3');
+    expect(fingerprint(state)).toBe('4f07557a');
     const plain = run(withoutActivities(testData));
     const omit = ACTIVITY_COLUMNS;
     expect(fingerprint(plain, { fauna: false, omit })).toBe('567d06a4');
@@ -315,8 +318,11 @@ describe('pas', () => {
     // vivants, 172 groupes et 96 prises au bout de trente mois (de 199961c5 à
     // 65e68e71 sans le gibier, de f7fb307c à 6caf37be avec lui). Sans activités, la partie
     // redonne les empreintes d'avant, comme les vingt ans de trois groupes le vérifient.
-    expect(fingerprint(state, { fauna: false })).toBe('65e68e71');
-    expect(fingerprint(state)).toBe('6caf37be');
+    // Relecture de 2b.8 : la charge du lendemain, les poids qui suivent les lieux et l'affût à
+    // l'écart, comme ci-dessus ; 2 327 vivants, 168 groupes et 134 prises (de 65e68e71 à b5045e06
+    // sans le gibier, de 6caf37be à 0d9cf24b avec lui).
+    expect(fingerprint(state, { fauna: false })).toBe('b5045e06');
+    expect(fingerprint(state)).toBe('0d9cf24b');
   });
 });
 
