@@ -157,6 +157,7 @@ async function main(): Promise<void> {
   const people = new PeopleLayer(app, {
     genetics: data.genetics,
     appearance: data.appearance,
+    activities: data.activities,
     reference: species.display.stature,
     objects: [DECOR_ATLAS, FAUNA_ATLAS],
   });

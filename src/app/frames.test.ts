@@ -1,5 +1,8 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
+  ACT_NONE,
+  ACT_RUN,
+  ACT_STRIKE,
   GROUP_STRIDE,
   NO_CARRIER,
   type GroupsFrame,
@@ -16,9 +19,10 @@ import {
   type GameTime,
   type SpeedId,
 } from '../core/time';
+import { actByte } from '../sim/activities';
 import type { SimState } from '../sim/state';
 import { carriedOffset } from '../render/crowd';
-import { scatteredGroups, testHuman, testState } from '../sim/testing';
+import { scatteredGroups, testData, testHuman, testState } from '../sim/testing';
 import type { SimulationHost } from '../worker/host';
 import {
   CrowdTimeline,
@@ -42,16 +46,24 @@ const noLegs = (): HumanLegArrays => ({
   acts: new Uint8Array(0),
 });
 
-/** Des étapes : [emplacement, jour, x, y, pas x, pas y, jours], en unités. */
-function legs(...list: [number, number, number, number, number, number, number][]): HumanLegArrays {
+/** Une étape : [emplacement, jour, x, y, pas x, pas y, jours], en unités, et son octet d'activité. */
+type Leg = [number, number, number, number, number, number, number, number?];
+
+/** Des étapes ; l'octet d'activité de chacune, le repos (0) s'il manque. */
+function legs(...list: Leg[]): HumanLegArrays {
   return {
     slots: Uint32Array.from(list, (leg) => leg[0]),
     days: Uint32Array.from(list, (leg) => leg[1]),
     start: Int32Array.from(list.flatMap((leg) => [leg[2], leg[3]])),
     step: Int32Array.from(list.flatMap((leg) => [leg[4], leg[5]])),
     count: Uint16Array.from(list, (leg) => leg[6]),
-    acts: new Uint8Array(list.length),
+    acts: Uint8Array.from(list, (leg) => leg[7] ?? 0),
   };
+}
+
+/** Applique au miroir une seule étape. */
+function applyLeg(mirror: PositionMirror, leg: Leg): void {
+  mirror.apply(leg[0], leg[1], leg[2], leg[3], leg[4], leg[5], leg[6], legs(leg), 0);
 }
 
 /** Une image de groupes d'un membre chacun, d'identifiants `ids`, sur la ligne 10. */
@@ -103,14 +115,21 @@ const ids = (dated: DatedFrame | undefined) => (dated === undefined ? [] : group
 /** Toute case se franchit. */
 const anywhere = () => true;
 
-/** Positions de tous les membres d'un miroir à l'instant `t`, en unités, par rang. */
+/**
+ * Positions de tous les membres d'un miroir à l'instant `t`, en unités, par rang, qui marche, et
+ * l'octet d'activité de chacun (ACT_NONE pour un porté, que positions() n'écrit pas).
+ */
 function positionsOf(mirror: PositionMirror, t: number) {
   const count = mirror.frame?.ids.length ?? 0;
   const xs = new Float64Array(count);
   const ys = new Float64Array(count);
   const moving = new Uint8Array(count);
-  for (let rank = 0; rank < mirror.groupCount; rank++) mirror.positions(rank, t, xs, ys, moving);
-  return { xs, ys, moving };
+  const acts = new Uint8Array(count).fill(ACT_NONE);
+  const facing = new Int8Array(count);
+  for (let rank = 0; rank < mirror.groupCount; rank++) {
+    mirror.positions(rank, t, xs, ys, moving, facing, acts);
+  }
+  return { xs, ys, moving, acts };
 }
 
 describe('images des groupes datées (ADR 0013, ADR 0014)', () => {
@@ -192,7 +211,7 @@ describe('sens de chacun, d’une image des groupes à l’autre (ADR 0016, § 6
     // Arrivés, ils gardent leur sens.
     expect(facingOf(mirror, 10)).toEqual([1, -1, 0]);
     // Une étape verticale ne retourne personne.
-    mirror.apply(1, 10, x + FIXED, FIXED, 0, FIXED / 4, 2);
+    applyLeg(mirror, [1, 10, x + FIXED, FIXED, 0, FIXED / 4, 2]);
     expect(facingOf(mirror, 11)).toEqual([1, -1, 0]);
     // Le pas mensuel : une nouvelle image, sans étape en cours ; chacun, reconnu à son
     // emplacement et à son identifiant, garde son sens.
@@ -403,15 +422,17 @@ describe('positions du fil principal avec le vrai hôte (ADR 0013, ADR 0014)', (
       }
       if (message.type !== 'delta') return;
       const started = message.legs;
-      for (let index = 0; index < (started?.slots.length ?? 0); index++) {
+      for (let index = 0; started !== undefined && index < started.slots.length; index++) {
         eager.apply(
-          started?.slots[index] ?? 0,
-          started?.days[index] ?? 0,
-          started?.start[2 * index] ?? 0,
-          started?.start[2 * index + 1] ?? 0,
-          started?.step[2 * index] ?? 0,
-          started?.step[2 * index + 1] ?? 0,
-          started?.count[index] ?? 0,
+          started.slots[index] ?? 0,
+          started.days[index] ?? 0,
+          started.start[2 * index] ?? 0,
+          started.start[2 * index + 1] ?? 0,
+          started.step[2 * index] ?? 0,
+          started.step[2 * index + 1] ?? 0,
+          started.count[index] ?? 0,
+          started,
+          index,
         );
       }
       if (message.frame !== undefined) {
@@ -508,13 +529,21 @@ describe('positions du fil principal avec le vrai hôte (ADR 0013, ADR 0014)', (
     for (const command of commands) host.receive({ type: 'game', command });
     // Les positions du worker à l'instant de chaque delta et de chaque instantané, relevées
     // à leur envoi, par emplacement.
-    const recorded = new Map<number, { x: ArrayLike<number>; y: ArrayLike<number> }>();
+    // Avec l'octet d'activité de chacun (protocole 9, ADR 0021 § 6), que le miroir tient de
+    // l'image puis des étapes : le même aux jours entiers, au coup près.
+    const recorded = new Map<
+      number,
+      { x: ArrayLike<number>; y: ArrayLike<number>; act: ArrayLike<number> }
+    >();
     const post = env.post.bind(env);
     env.post = (message, transfer) => {
       const current = hostState(host);
       if ((message.type === 'delta' || message.type === 'snapshot') && current !== undefined) {
         const { x, y } = current.people.columns;
-        recorded.set(dayIndex(message.time), { x: x.slice(), y: y.slice() });
+        const act = Uint8Array.from({ length: x.length }, (_, slot) =>
+          actByte(current, testData, slot),
+        );
+        recorded.set(dayIndex(message.time), { x: x.slice(), y: y.slice(), act });
       }
       post(message, transfer);
     };
@@ -526,6 +555,9 @@ describe('positions du fil principal avec le vrai hôte (ADR 0013, ADR 0014)', (
     exact.reset(copy(snapshot.frame), snapshot.time, width);
     let checked = dayIndex(snapshot.time);
     let compared = 0;
+    let struck = 0;
+    let running = 0;
+    const kinds = new Set<number>();
     let fastest = 0;
     const compare = (latest: number) => {
       for (let day = checked + 1; day <= latest; day++) {
@@ -535,13 +567,22 @@ describe('positions du fil principal avec le vrai hôte (ADR 0013, ADR 0014)', (
         const shown = exact.shown;
         const frame = shown.frame;
         if (frame === undefined) continue;
-        const { xs, ys } = positionsOf(shown, day);
+        const { xs, ys, acts } = positionsOf(shown, day);
         for (let member = 0; member < frame.ids.length; member++) {
           if ((shown.carrierOf[member] ?? -1) >= 0) continue;
           const slot = frame.slots[member] ?? 0;
           if (xs[member] !== worker.x[slot] || ys[member] !== worker.y[slot]) {
             throw new Error(`jour ${String(day)}, emplacement ${String(slot)} : écart au worker`);
           }
+          const act = (acts[member] ?? ACT_NONE) & ~ACT_STRIKE;
+          if (act !== worker.act[slot]) {
+            throw new Error(
+              `jour ${String(day)}, emplacement ${String(slot)} : activité ${String(act)} au lieu de ${String(worker.act[slot])}`,
+            );
+          }
+          if ((acts[member] ?? 0) & ACT_STRIKE) struck++;
+          if (act & ACT_RUN) running++;
+          kinds.add(act & 0x0f);
           compared++;
         }
       }
@@ -718,6 +759,10 @@ describe('positions du fil principal avec le vrai hôte (ADR 0013, ADR 0014)', (
     expect(moves).toBeGreaterThan(1000);
     expect(between).toBeGreaterThan(100);
     expect(compared).toBeGreaterThan(100_000);
+    // Des activités de chaque sorte, leurs courses, et des coups, à l'activité du worker.
+    expect(kinds.size).toBeGreaterThanOrEqual(5);
+    expect(running).toBeGreaterThan(0);
+    expect(struck).toBeGreaterThan(0);
     expect(fastest).toBeGreaterThan(0.5);
     expect(fastest).toBeLessThan(4);
     // Les tampons lus sont rendus à l'hôte.

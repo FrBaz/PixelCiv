@@ -74,6 +74,12 @@ export interface DebugInfo {
   readonly timeline: { readonly show: number; readonly receive: number };
   readonly crowd: { readonly positions: number; readonly sort: number; readonly sprites: number };
   readonly drawn: number | undefined;
+  /**
+   * Positions et poses calculées à la dernière image : des seuls individus des groupes visibles,
+   * et des seuls qui peuvent se voir (ADR 0022, § 1).
+   */
+  readonly placed: number | undefined;
+  readonly posed: number | undefined;
   readonly textures: number | undefined;
   readonly cachedTextures: number | undefined;
   readonly pages: number | undefined;

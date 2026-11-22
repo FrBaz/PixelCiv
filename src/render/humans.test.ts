@@ -2,12 +2,12 @@ import { describe, expect, it } from 'vitest';
 import { loadGameData } from '../core/data';
 import { BODY_KINDS, LOOK_BITS } from '../core/data/humans';
 import { geneRoles } from '../core/data/people';
+import { ACT_NONE, ACT_RUN, ACT_STRIKE } from '../core/protocol';
 import { AGE_CODE, GREY_LEVELS } from '../core/visual';
 import { KEPT, RECOLOR, roleParts } from '../gen/humans';
 import {
   ANIMATION,
   animationFrame,
-  animationOf,
   ATLAS_ROLES,
   BODY_FEMALE,
   BODY_MALE,
@@ -21,6 +21,9 @@ import {
   lookCode,
   lookParts,
   MOTIF_COUNT,
+  POSE_FRAMES,
+  poseOf,
+  poseTable,
   recolorHuman,
   variantOf,
   type HumanLook,
@@ -326,8 +329,6 @@ describe('corps, variantes et animations (ADR 0016, § 5, § 6)', () => {
   it('tire l’image d’une animation de l’horloge de la marche : pure, déphasée, figée quand l’horloge l’est', () => {
     const walk = ANIMATION.walk ?? -1;
     const idle = ANIMATION.idle ?? -1;
-    expect(animationOf(true)).toBe(walk);
-    expect(animationOf(false)).toBe(idle);
     // La marche : huit images en deux pas.
     const frames = Array.from({ length: 8 }, (_, i) => animationFrame(walk, i * 105, 420, 0));
     expect(frames).toEqual([0, 1, 2, 3, 4, 5, 6, 7]);
@@ -361,5 +362,160 @@ describe('corps, variantes et animations (ADR 0016, § 5, § 6)', () => {
     expect(cultureOutfit(appearance, 1)).toBe(0);
     expect(cultureOutfit(appearance, appearance.cultureOutfits.length + 1)).toBe(0);
     expect(skinPaletteOf(appearance, 15)).toBe(appearance.skinPalettes.length - 1);
+  });
+});
+
+describe('poses des activités (ADR 0022, § 1, § 2)', () => {
+  const file = data.activities;
+  const table = poseTable(file);
+  const rank = (id: string) => file.activities.findIndex((activity) => activity.id === id);
+  const at = (act: number, moving: boolean, clockMs: number, phase = 0) =>
+    poseOf(table, act, moving, clockMs, 420, phase);
+  /** Une pose lue : son animation et le rang de son image dans la planche. */
+  const named = (pose: number) => {
+    const animation = atlas.animations.at(Math.floor(pose / POSE_FRAMES));
+    return `${animation?.id ?? '?'} ${String(animation?.ranks[pose % POSE_FRAMES] ?? -1)}`;
+  };
+  const periodOf = (id: string) => table.period[table.gesture[rank(id)] ?? -1] ?? 0;
+  const walk = ANIMATION.walk ?? -1;
+  const run = ANIMATION.run ?? -1;
+  const idle = ANIMATION.idle ?? -1;
+
+  it('marche sur une étape, et court si l’octet le dit, quelle que soit l’activité', () => {
+    for (let act = 0; act < file.activities.length; act++) {
+      for (const clock of [0, 105, 777, 4321]) {
+        const walking = walk * POSE_FRAMES + animationFrame(walk, clock, 420, 0.4);
+        const running = run * POSE_FRAMES + animationFrame(run, clock, 420, 0.4);
+        expect(at(act, true, clock, 0.4)).toBe(walking);
+        expect(at(act | ACT_RUN, true, clock, 0.4)).toBe(running);
+        expect(at(act | ACT_RUN | ACT_STRIKE, true, clock, 0.4)).toBe(running);
+      }
+    }
+    expect(at(ACT_NONE, true, 210)).toBe(walk * POSE_FRAMES + animationFrame(walk, 210, 420, 0));
+  });
+
+  it('montre à l’arrêt chaque geste aux instants voulus de son cycle, sur les images de la planche', () => {
+    // Les périodes du tableau de l'ADR 0022 (§ 2), en millisecondes.
+    expect(
+      ['rest', 'gather', 'hunt', 'fish', 'water', 'play', 'follow'].map((id) => periodOf(id)),
+    ).toEqual([1300, 3860, 3500, 2700, 1040, 3060, 1300]);
+    const cycle = (id: string, times: number[]) =>
+      times.map((clock) => named(at(rank(id), false, clock)));
+    // La cueillette : à genoux (la mort, 2-3-4-3, à 320 ms), deux fois, puis debout.
+    expect(cycle('gather', [0, 320, 640, 960, 1280, 2559, 2560, 2820, 3859, 3860])).toEqual([
+      'death 2',
+      'death 3',
+      'death 4',
+      'death 3',
+      'death 2',
+      'death 3',
+      'idle 0',
+      'idle 1',
+      'idle 4',
+      'death 2',
+    ]);
+    // La chasse, à l'affût : debout, puis le bras levé (le lancer, 1-2-3), tenu, et rabaissé.
+    expect(cycle('hunt', [0, 1299, 1300, 1560, 1820, 2979, 2980, 3240, 3500])).toEqual([
+      'idle 0',
+      'idle 4',
+      'throw 1',
+      'throw 2',
+      'throw 3',
+      'throw 3',
+      'throw 2',
+      'throw 1',
+      'idle 0',
+    ]);
+    // La pêche : à genoux 1,8 s, puis le lancer entier ; l'eau : à genoux, 2 et 3.
+    expect(cycle('fish', [0, 1799, 1800, 2550, 2699])).toEqual([
+      'death 3',
+      'death 3',
+      'throw 0',
+      'throw 5',
+      'throw 5',
+    ]);
+    expect(cycle('water', [0, 519, 520, 1039, 1040])).toEqual([
+      'death 2',
+      'death 2',
+      'death 3',
+      'death 3',
+      'death 2',
+    ]);
+    // Le jeu : saut, chute, saut, chute, à 110 ms, puis le repos.
+    expect(cycle('play', [0, 330, 440, 880, 1320, 1759, 1760, 3059])).toEqual([
+      'jump 0',
+      'jump 3',
+      'fall 0',
+      'jump 0',
+      'fall 0',
+      'fall 3',
+      'idle 0',
+      'idle 4',
+    ]);
+  });
+
+  it('montre au repos et au suivi du groupe l’image du repos de 2b.5, à toute horloge et toute phase', () => {
+    for (const id of ['rest', 'follow']) {
+      for (const phase of [0, 0.13, 0.5, 0.99]) {
+        for (let clock = -1000; clock < 6000; clock += 37) {
+          expect(at(rank(id), false, clock, phase)).toBe(
+            idle * POSE_FRAMES + animationFrame(idle, clock, 420, phase),
+          );
+        }
+      }
+    }
+  });
+
+  it('frappe le jour du coup, puis revient à l’affût au bout de la charge', () => {
+    const hunt = rank('hunt');
+    // L'étape d'arrêt du coup : le lancer entier, à 150 ms, une fois par cycle.
+    expect(
+      [0, 150, 300, 450, 600, 750, 900].map((clock) => named(at(hunt | ACT_STRIKE, false, clock))),
+    ).toEqual(['throw 0', 'throw 1', 'throw 2', 'throw 3', 'throw 4', 'throw 5', 'throw 0']);
+    // Au bout de la charge (l'octet de la course et du coup), l'affût, et non le coup.
+    for (const clock of [0, 1500, 2100, 3300]) {
+      expect(at(hunt | ACT_STRIKE | ACT_RUN, false, clock)).toBe(at(hunt, false, clock));
+      expect(at(hunt | ACT_RUN, false, clock)).toBe(at(hunt, false, clock));
+    }
+    // Une activité sans geste du coup garde le sien.
+    expect(at(rank('gather') | ACT_STRIKE, false, 700)).toBe(at(rank('gather'), false, 700));
+  });
+
+  it('décale le cycle par la phase, et donne la même image à la même horloge, figée en pause', () => {
+    for (let act = 0; act < file.activities.length; act++) {
+      const period = table.period[table.gesture[act] ?? -1] ?? 0;
+      for (const clock of [0, 333, 2500, 99_999]) {
+        expect(at(act, false, clock, 0.3)).toBe(at(act, false, clock + 0.3 * period, 0));
+        // En pause, l'horloge ne bouge pas : mille fois la même image.
+        const pose = at(act, false, clock, 0.7);
+        for (let again = 0; again < 1000; again++) expect(at(act, false, clock, 0.7)).toBe(pose);
+      }
+    }
+    // Deux individus de phases différentes ne font pas le même geste au même instant.
+    const phases = Array.from({ length: 20 }, (_, i) => i / 20);
+    expect(new Set(phases.map((phase) => at(rank('gather'), false, 1000, phase))).size).toBe(8);
+  });
+
+  it('prend le repos sans activité, pour une activité inconnue ou dont le geste manque à l’atlas', () => {
+    for (const act of [ACT_NONE, ACT_NONE | ACT_STRIKE, 14]) {
+      for (const clock of [0, 400, 1234]) {
+        expect(at(act, false, clock, 0.2)).toBe(
+          idle * POSE_FRAMES + animationFrame(idle, clock, 420, 0.2),
+        );
+      }
+    }
+    // Un geste fait d'une animation que l'atlas ne range pas : le repos.
+    const absent = poseTable({
+      ...file,
+      gestures: file.gestures.map((gesture) =>
+        gesture.id === 'gather'
+          ? { ...gesture, segments: [{ animation: 'swim', repeat: 1 }] }
+          : gesture,
+      ),
+    });
+    expect(poseOf(absent, rank('gather'), false, 500, 420, 0)).toBe(
+      idle * POSE_FRAMES + animationFrame(idle, 500, 420, 0),
+    );
+    expect(poseOf(absent, rank('fish'), false, 500, 420, 0)).toBe(at(rank('fish'), false, 500));
   });
 });

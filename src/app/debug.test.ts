@@ -246,6 +246,8 @@ describe('DebugSampler', () => {
         sortMs: 0.5,
         spritesMs: 2,
         drawn: 1200 + frameIndex,
+        placed: 1500,
+        posed: 1100 + frameIndex,
         textures: 300,
         cached: 400,
         pages: 2,
@@ -268,6 +270,8 @@ describe('DebugSampler', () => {
     expect(sample.timeline).toEqual({ show: 0, receive: 0 });
     expect(sample).toMatchObject({
       drawn: 1289,
+      placed: 1500,
+      posed: 1189,
       textures: 300,
       cachedTextures: 400,
       pages: 2,

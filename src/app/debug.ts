@@ -80,6 +80,9 @@ export interface DebugSample {
    * des textures du calque des individus (ADR 0016).
    */
   readonly drawn: number | undefined;
+  /** Positions et poses calculées à la dernière image (FrameCost). */
+  readonly placed: number | undefined;
+  readonly posed: number | undefined;
   readonly textures: number | undefined;
   readonly cachedTextures: number | undefined;
   readonly pages: number | undefined;
@@ -108,6 +111,12 @@ export interface FrameCost {
   readonly sortMs: number;
   readonly spritesMs: number;
   readonly drawn: number;
+  /**
+   * Membres dont la position a été calculée, et poses calculées, des seuls individus qui peuvent
+   * se voir (ADR 0022, § 1).
+   */
+  readonly placed?: number;
+  readonly posed?: number;
   readonly textures: number;
   readonly cached: number;
   /** Pages de l'atlas dynamique des textures des bannières (render/pages.ts). */
@@ -298,6 +307,8 @@ export class DebugSampler {
         sprites: average((cost) => cost.spritesMs),
       },
       drawn: last?.drawn,
+      placed: last?.placed,
+      posed: last?.posed,
       textures: last?.textures,
       cachedTextures: last?.cached,
       pages: last?.pages,

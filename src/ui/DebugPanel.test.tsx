@@ -40,6 +40,8 @@ describe('panneau de débogage (ADR 0013, ADR 0014, ADR 0015)', () => {
       timeline: { show: 0.31, receive: 0.058 },
       crowd: { positions: 1.234, sort: 0.5, sprites: 2.25 },
       drawn: 1987,
+      placed: 2400,
+      posed: 1900,
       textures: 140,
       cachedTextures: 412,
       pages: 1,
@@ -75,6 +77,8 @@ describe('panneau de débogage (ADR 0013, ADR 0014, ADR 0015)', () => {
     expect(shown.get('Positions reçues')).toBe('1\u202f234 étapes/s · 64 Kio/s');
     expect(shown.get('Positions, tri, sprites')).toBe('1,23 + 0,5 + 2,25 ms');
     expect(shown.get('Sprites dessinés')).toBe('1\u202f987');
+    // Les poses ne se calculent que pour les individus qui peuvent se voir (ADR 0022, § 1).
+    expect(shown.get('Positions et poses calculées')).toBe('2\u202f400 et 1\u202f900');
     expect(shown.get('Apparences')).toBe("140 dans l'image, 412 gardées");
     expect(shown.get('Pages des bannières')).toBe('1');
     // Le niveau de motifs des humains et leur densité, et ce que pèsent leurs textures.
@@ -106,8 +110,10 @@ describe('panneau de débogage (ADR 0013, ADR 0014, ADR 0015)', () => {
       level: -1,
       decorObjects: undefined,
       animals: undefined,
+      posed: undefined,
     };
     expect(rows().get('Individus : niveau, densité')).toBe('bannières');
+    expect(rows().get('Positions et poses calculées')).toBe('indisponible');
     expect(rows().get('Marcheurs')).toBe('indisponible');
     expect(rows().get('Positions reçues')).toBe('indisponible');
     expect(rows().get('Appels de dessin')).toBe('indisponible');

@@ -64,7 +64,12 @@ function setup(resolution: number, appearance: Appearance = data.appearance, gl 
   const renderer: { resolution: number; gl?: object } = { resolution };
   if (gl) renderer.gl = {};
   const app = { renderer, stage } as unknown as Application;
-  const people = new PeopleLayer(app, { genetics: data.genetics, appearance, reference });
+  const people = new PeopleLayer(app, {
+    genetics: data.genetics,
+    appearance,
+    activities: data.activities,
+    reference,
+  });
   const layer = stage.children.at(0);
   if (!(layer instanceof Container)) throw new Error('calque introuvable');
   return { people, layer, renderer };
@@ -802,6 +807,7 @@ function setupWithObjects(resolution: number, gl = false, ...atlases: ObjectAtla
   const people = new PeopleLayer(app, {
     genetics: data.genetics,
     appearance: data.appearance,
+    activities: data.activities,
     reference,
     objects: atlases.length === 0 ? [FAKE_ATLAS] : atlases,
   });
@@ -989,6 +995,7 @@ describe('calque commun : décor et humains (ADR 0017, § 7)', () => {
         new PeopleLayer(app, {
           genetics: data.genetics,
           appearance: data.appearance,
+          activities: data.activities,
           reference,
           objects: [narrow],
         }),

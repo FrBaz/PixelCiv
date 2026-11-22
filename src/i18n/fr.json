@@ -155,6 +155,8 @@
   "debug.crowdTime": "Positions, tri, sprites",
   "debug.crowdTimeValue": "{positions} + {sort} + {sprites} ms",
   "debug.drawn": "Sprites dessinés",
+  "debug.posed": "Positions et poses calculées",
+  "debug.posedValue": "{placed} et {posed}",
   "debug.textures": "Apparences",
   "debug.texturesValue": "{used} dans l'image, {cached} gardées",
   "debug.pages": "Pages des bannières",

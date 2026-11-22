@@ -113,6 +113,12 @@ export function DebugPanel() {
     ],
     ['debug.drawn', number(info?.drawn, 0)],
     [
+      'debug.posed',
+      info?.placed === undefined || info.posed === undefined
+        ? t('debug.unavailable')
+        : t('debug.posedValue', { placed: info.placed, posed: info.posed }),
+    ],
+    [
       'debug.textures',
       info?.textures === undefined || info.cachedTextures === undefined
         ? t('debug.unavailable')

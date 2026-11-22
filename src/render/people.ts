@@ -41,6 +41,7 @@ import {
   type Shader,
 } from 'pixi.js';
 import type { Appearance, Genetics } from '../core/data';
+import type { ActivitiesFile } from '../core/data/activities';
 import { geneRoles } from '../core/data/people';
 import { GROUP_STRIDE } from '../core/protocol';
 import { decodeVisual } from '../core/visual';
@@ -119,6 +120,8 @@ export function stepDuration(factor: number): number {
 export interface PeopleData {
   readonly genetics: Genetics;
   readonly appearance: Appearance;
+  /** Les activités et leurs gestes (data/activities.json), dont se tire la pose de chacun. */
+  readonly activities: Pick<ActivitiesFile, 'activities' | 'gestures'>;
   /** Stature de l'adulte de référence, en cases (display.stature de data/species.json). */
   readonly reference: number;
   /**
@@ -134,10 +137,14 @@ export interface PeopleStats {
   readonly positionsMs: number;
   readonly sortMs: number;
   readonly spritesMs: number;
-  /** Dessins (individus ou bannières), membres dont la position a été calculée, groupes visibles. */
+  /**
+   * Dessins (individus ou bannières), membres dont la position a été calculée, groupes visibles,
+   * et poses calculées : une par individu qui marche et peut se voir (ADR 0022, § 1).
+   */
   readonly drawn: number;
   readonly placed: number;
   readonly groups: number;
+  readonly posed: number;
   /**
    * Apparences distinctes de l'image (palettes des humains, textures des bannières), apparences
    * gardées, et pages de l'atlas dynamique des bannières.
@@ -276,6 +283,7 @@ export class PeopleLayer {
     drawn: 0,
     placed: 0,
     groups: 0,
+    posed: 0,
     textures: 0,
     cached: 0,
     pages: 0,
@@ -295,7 +303,7 @@ export class PeopleLayer {
       (allele) => allele.id,
     );
     this.clothOf = bannerCloth(appearance);
-    this.table = humanTable(appearance);
+    this.table = humanTable(appearance, data.activities);
     // Une seule texture des rôles : l'atlas des humains, puis chaque atlas d'objets, de même
     // largeur, pour que tous soient les particules d'un même conteneur (ADR 0017, § 7).
     const atlases = data.objects ?? [];
@@ -558,10 +566,7 @@ export class PeopleLayer {
         }
       });
       const humanDrawn = human < layout.count ? layout.drawn(human) : -1;
-      const humanFeet =
-        humanDrawn < 0
-          ? Number.POSITIVE_INFINITY
-          : (layout.top[humanDrawn] ?? 0) + (layout.height[humanDrawn] ?? 0);
+      const humanFeet = humanDrawn < 0 ? Number.POSITIVE_INFINITY : (layout.feet[humanDrawn] ?? 0);
       if (source < 0 && humanDrawn < 0) break;
       if (source >= 0 && feet <= humanFeet) {
         const list = lists.at(source);
@@ -677,6 +682,7 @@ export class PeopleLayer {
       drawn: layout.count,
       placed: layout.placed,
       groups: layout.visibleGroups,
+      posed: layout.posed,
       textures: seen === undefined ? this.stats.textures : seen.size,
       cached: this.palettes.count + this.bannerTextures.size,
       pages: this.pages.count,
