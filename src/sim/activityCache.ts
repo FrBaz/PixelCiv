@@ -296,7 +296,8 @@ export class ActivityCache {
   readonly spots: SpotGrid;
   /**
    * Saisons et rives de chaque camp, par case du camp et mois de l'année, pour le contenu
-   * `campsFor` : elles ne suivent que le monde, le contenu et le mois.
+   * `campsFor` : elles ne suivent que le monde, le contenu et le mois. Vidées chaque mois par le
+   * plan du mois, et au pinceau (clearFields).
    */
   readonly camps = new Map<number, CampSupplies>();
   campsFor: object | undefined;

@@ -14,7 +14,7 @@ import resources from '../../../data/resources.json';
 import seasons from '../../../data/seasons.json';
 import species from '../../../data/species.json';
 import worldgen from '../../../data/worldgen.json';
-import { ActivitiesFileSchema } from './activities';
+import { ActivitiesFileSchema, MAX_REACH } from './activities';
 import { catalogOf, DataError, loadCatalog, loadSettings, type Catalog } from './catalog';
 import { DecorSchema, outlineBelow } from './decor';
 import { FaunaFileSchema } from './fauna';
@@ -134,6 +134,19 @@ export function checkContent(data: GameData): string[] {
     if (dry.length > 0) {
       problems.push(
         `data/activities.json : eaux de ${activity.id} hors de la famille de l'eau : ${dry.join(', ')}`,
+      );
+    }
+  }
+  // La portée d'une activité, multipliée par le facteur de la grégarité au plus grand (la
+  // grégarité effective au plus bas, la cohésion du camp), tient sous MAX_REACH : anneaux, rives
+  // et gibier ne se cherchent pas au-delà (src/sim/activities.ts, reachFactor).
+  const { reach: gregarious } = data.activities.rules.gregarious;
+  const widest = gregarious[0] + gregarious[1] * (1 - data.nomads.camp.cohesion);
+  for (const activity of data.activities.activities) {
+    const farthest = activity.reach[1] * widest;
+    if (farthest > MAX_REACH) {
+      problems.push(
+        `data/activities.json : portée de ${activity.id} jusqu'à ${String(farthest)} cases avec la grégarité, au-delà de ${String(MAX_REACH)}`,
       );
     }
   }

@@ -746,8 +746,9 @@ function waterCover(state: SimState, content: SimContent, cell: number): Calenda
  */
 function campSupplies(state: SimState, content: SimContent, cx: number, cy: number): CampSupplies {
   const acts = state.movement.acts;
-  // Une fonction du monde, de la case et du mois de l'année : gardée d'une année à l'autre, pour
-  // le contenu de `campsFor` ; vidée au pinceau, qui change les biomes (clearFields).
+  // Un cache du mois, pour le contenu de `campsFor` : le plan du mois le vide chaque mois, comme le
+  // pinceau, qui change les biomes (clearFields). La clé porte aussi le mois de l'année, par
+  // prudence : sans lui, le cache ne changerait pas (relecture de 2b.8, problème 14).
   if (acts.campsFor !== content || acts.camps.size >= MAX_SHORE_CAMPS) {
     acts.camps.clear();
     acts.campsFor = content;

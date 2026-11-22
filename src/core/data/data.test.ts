@@ -312,6 +312,25 @@ describe('cohérence du contenu', () => {
     ]);
   });
 
+  it('relève une portée qui, multipliée par le facteur de la grégarité, dépasse MAX_REACH', () => {
+    // Relecture de 2b.8, problème 21 : le schéma admet un facteur de la grégarité de 4 (et de 6
+    // sans cohésion) ; avec lui, la chasse (portée 8) chercherait jusqu'à 32 cases.
+    const rules = data.activities.rules;
+    const wide: GameData = {
+      ...data,
+      activities: {
+        ...data.activities,
+        rules: { ...rules, gregarious: { ...rules.gregarious, reach: [2, 4] } },
+      },
+    };
+    expect(checkContent(wide)).toEqual([
+      "data/activities.json : portée de hunt jusqu'à 32 cases avec la grégarité, au-delà de 16",
+      "data/activities.json : portée de fish jusqu'à 20 cases avec la grégarité, au-delà de 16",
+    ]);
+    // Le facteur des données, au plus 1,5 : la chasse cherche jusqu'à 12 cases.
+    expect(checkContent(data)).toEqual([]);
+  });
+
   it('relève un identifiant inconnu', () => {
     const unknown = withBiome('marsh', (biome) => ({ ...biome, resources: ['unobtainium'] }));
     expect(checkContent(unknown)).toEqual([

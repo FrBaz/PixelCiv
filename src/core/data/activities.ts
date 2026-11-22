@@ -21,7 +21,12 @@ export const MAX_ACTIVITIES = 15;
 /** Gestes, au plus. */
 export const MAX_GESTURES = 32;
 
-/** Portée d'une activité, au plus, en cases : anneaux, rives et gibier se cherchent jusque-là. */
+/**
+ * Portée d'une activité, au plus, en cases, une fois multipliée par le facteur de la grégarité
+ * (`rules.gregarious.reach`, au plus grand pour la grégarité effective la plus faible, la
+ * cohésion du camp de data/nomads.json) : anneaux, rives et gibier se cherchent jusque-là, ce que
+ * checkContent vérifie (relecture de 2b.8, problème 21).
+ */
 export const MAX_REACH = 16;
 
 /** Jours passés sur place, au plus : une activité, comme la sauvegarde, en compte 60 au plus. */
