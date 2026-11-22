@@ -25,6 +25,9 @@ import type { SimState } from './state';
 import { step } from './day';
 import { fingerprint } from './step';
 import { flatState, testData, testHuman, testState, withHuman } from './testing';
+import { beginActivity } from './activities';
+import { ACT_NONE, ACT_RANK } from '../core/protocol';
+import { dayIndex } from '../core/time';
 import { personView } from './views';
 
 const random = new RandomStream(streamSeed('population', 'tests'));
@@ -95,6 +98,18 @@ function populated(): SimState {
   people.add(person({ group: 1, mother: 1, father: 2, birth: -12 }));
   people.add(person({ sex: MALE, group: 1, mother: 1, father: 2, birth: -2 }));
   people.remove(people.slotOf(4) ?? -1, 0, 'disease');
+  return settled(state);
+}
+
+/**
+ * Chaque vivant de `state` qui n'a pas d'activité reçoit le repos, comme à son apparition dans
+ * une partie (ADR 0021) : la relecture refuse un vivant libre de ses mouvements sans activité.
+ */
+function settled(state: SimState): SimState {
+  state.people.forEach((slot) => {
+    if ((state.people.get('activity', slot) & ACT_RANK) !== ACT_NONE) return;
+    beginActivity(state, testData, slot, dayIndex(state));
+  });
   return state;
 }
 
@@ -339,7 +354,7 @@ function lineages(): SimState {
   people.add(person({ group: 1, sex: MALE, ancestry: pureAncestry(2) }));
   people.add(person({ group: 1, ancestry: [128, 0, 127, 0] }));
   people.remove(people.add(person({ group: 1, sex: MALE, ancestry: pureAncestry(0) })), 0, 'cold');
-  return state;
+  return settled(state);
 }
 
 /** Les identifiants de lineages(), vivants et morts. */
@@ -620,6 +635,7 @@ describe('sauvegarde : génomes et espèces (ADR 0006)', () => {
     // Des géants, un vivant et un mort, à côté des humains.
     state.people.add(person({ group: 1, species: 1 }));
     state.people.remove(state.people.add(person({ group: 1, sex: MALE, species: 1 })), 0, 'cold');
+    settled(state);
     const data = saveState(state, GENERATOR_VERSION, { ...testData, species: both });
     const restored = restoreState(data, { ...testData, species: swapped });
     const kind = (people: Population, catalog: typeof both, id: number) => {

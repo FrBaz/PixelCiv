@@ -381,7 +381,8 @@ export const MAX_UNTIL_AHEAD = 1000;
 /**
  * Activité d'un vivant (version 9, ADR 0021), vérifiée, puis ramenée au rang du contenu
  * d'aujourd'hui (`ranks`) : un rang connu, ou aucun ; pour seul autre bit, la charge, et pour la
- * seule chasse ; un porté sans activité ; un jour du prochain choix qui suit l'activité : nul sans
+ * seule chasse ; un porté sans activité, et tout autre vivant avec une, si la partie en a ; un jour
+ * du prochain choix qui suit l'activité : nul sans
  * activité ou pour qui suit son groupe, de l'instant `now` à MAX_UNTIL_AHEAD jours après lui pour
  * les autres, ou, pour qui marche vers le lieu de son activité, les jours qu'il y passera
  * (−MAX_ACTIVITY_DAYS à −1) ; une place au camp dans le monde. Une partie de la version 8 n'en a
@@ -432,6 +433,12 @@ function checkActivity(
         ? !idle && day >= now && day <= now + MAX_UNTIL_AHEAD
         : !idle && day >= -MAX_ACTIVITY_DAYS && intention === WALK;
   if (!valid) throw new SaveError('corrupt', 'jour de la prochaine activité incohérent');
+  // Dans une partie qui a des activités, chaque vivant libre de ses mouvements en a une, dès son
+  // apparition ou son sevrage ; seul le porté n'en a pas (ADR 0021, § 11). Sans elle, il ne
+  // choisirait plus rien avant que son groupe change de camp.
+  if (rank === ACT_NONE && intention !== CARRIED && ranks.length > 0) {
+    throw new SaveError('corrupt', 'un vivant sans activité');
+  }
   activity[slot] = rank | flags;
 }
 

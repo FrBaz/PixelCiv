@@ -16,6 +16,7 @@ import {
   CARRIED,
   INTENTION,
   LEAVE,
+  NO_ACTIVITY,
   NONE,
   REST,
   WALK,
@@ -977,6 +978,38 @@ describe('sauvegarde des activités (version 9, ADR 0021)', () => {
       checked++;
     });
     expect(checked).toBeGreaterThan(500);
+    // Les activités déduites (ADR 0021, § 7) : le repos pour qui se repose, son choix étalé de
+    // l'instant de la partie à la fin d'un repos ; le suivi du groupe, sans choix, pour qui part ou
+    // marche vers son camp ; aucune pour un porté.
+    const now = dayIndex(migrated);
+    const restMax = testData.activities.activities[rankOf('rest')]?.days?.[1] ?? 1;
+    const deduced = { rest: 0, follow: 0, carried: 0 };
+    const restDays = new Set<number>();
+    migrated.people.forEach((slot) => {
+      const intention = (columns.move[slot] ?? 0) & INTENTION;
+      const activity = columns.activity[slot];
+      const until = columns.until[slot] ?? 0;
+      const label = `emplacement ${String(slot)}, intention ${String(intention)}`;
+      if (intention === REST) {
+        expect(activity, label).toBe(rankOf('rest'));
+        expect(until, label).toBeGreaterThanOrEqual(now);
+        expect(until, label).toBeLessThan(now + restMax);
+        restDays.add(until);
+        deduced.rest++;
+      } else if (intention === LEAVE || intention === WALK) {
+        expect(activity, label).toBe(rankOf('follow'));
+        expect(until, label).toBe(0);
+        deduced.follow++;
+      } else {
+        expect(intention, label).toBe(CARRIED);
+        expect(activity, label).toBe(NO_ACTIVITY);
+        expect(until, label).toBe(0);
+        deduced.carried++;
+      }
+    });
+    expect(Math.min(deduced.rest, deduced.follow, deduced.carried)).toBeGreaterThan(10);
+    // Les choix de la reprise s'étalent sur l'empan d'un repos, sans tomber tous le même jour.
+    expect(restDays.size).toBeGreaterThan(restMax / 2);
     // Hors des colonnes des activités, la partie est celle d'avant ; elle se poursuit à
     // l'identique d'une relecture à l'autre.
     const omit = ACTIVITY_COLUMNS;
@@ -1064,6 +1097,8 @@ describe('sauvegarde des activités (version 9, ADR 0021)', () => {
       ],
       ['porté qui cueille', both(carried, gather, now + 3), 'un porté a une activité'],
       ['choix sans activité', column('activity', rest, 15), 'jour de la prochaine activité'],
+      ['vivant libre sans activité', both(rest, 15, 0), 'un vivant sans activité'],
+      ['marcheur sans activité', both(walker, 15, 0), 'un vivant sans activité'],
       ['activité sans choix', column('until', rest, 0), 'jour de la prochaine activité'],
       ['choix passé', column('until', rest, now - 1), 'jour de la prochaine activité'],
       ['choix lointain', column('until', walker, now + 1001), 'jour de la prochaine activité'],

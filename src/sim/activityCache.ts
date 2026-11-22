@@ -46,8 +46,13 @@ export class Agenda {
     this.day = grown(this.day, capacity, NO);
   }
 
-  /** `slot` choisit le jour `until`, s'il est positif ; sinon, il sort de l'agenda. */
+  /**
+   * `slot` choisit le jour `until`, s'il est positif ; sinon, il sort de l'agenda. Un emplacement
+   * au-delà de la capacité l'agrandit : un vivant apparu avant le prochain ensure (spawnGroup appelé
+   * hors d'applyCommands) ne décroche pas la liste de son jour.
+   */
   set(slot: number, until: number): void {
+    if (slot >= this.day.length) this.ensure(slot + 1);
     this.remove(slot);
     if (until <= 0) return;
     const bucket = until & AGENDA_MASK;
@@ -139,8 +144,12 @@ export class SpotGrid {
     this.cell = grown(this.cell, capacity, NO);
   }
 
-  /** Le lieu de `slot` est (x, y), en unités, x dans le monde. */
+  /**
+   * Le lieu de `slot` est (x, y), en unités, x dans le monde. Un emplacement au-delà de la capacité
+   * l'agrandit, comme Agenda.set.
+   */
   set(slot: number, x: number, y: number): void {
+    if (slot >= this.cell.length) this.ensure(slot + 1);
     this.release(slot);
     const row = Math.min(this.height - 1, Math.max(0, Math.floor(y / FIXED)));
     const column = Math.min(this.width - 1, Math.max(0, Math.floor(x / FIXED)));

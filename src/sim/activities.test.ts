@@ -1,14 +1,28 @@
 import { describe, expect, it } from 'vitest';
-import { ACT_NONE, ACT_RANK, ACT_STRIKE, type SpawnGroupCommand } from '../core/protocol';
+import { ACT_NONE, ACT_RANK, ACT_RUN, ACT_STRIKE, type SpawnGroupCommand } from '../core/protocol';
 import { deltaFixedX, FIXED } from '../core/position';
 import { dayIndex, DAYS_PER_MONTH } from '../core/time';
 import { encodeDrainage, riverClass } from '../core/world';
 import { GENERATOR_VERSION } from '../worldgen/generate';
-import { activityWeights, actByte, shoresOf, standsClear } from './activities';
+import {
+  activityPace,
+  activityWeights,
+  actByte,
+  faunaNear,
+  shoresOf,
+  standsClear,
+} from './activities';
 import { SHORE_STRIDE } from './activityCache';
 import { advanceDay, step } from './day';
-import { describeMovement, HumanJournal, rebuildMovement } from './movement';
+import {
+  centralMember,
+  describeMovement,
+  HumanJournal,
+  ownPace,
+  rebuildMovement,
+} from './movement';
 import { CARRIED, FEMALE, INTENTION, MALE, NO_ACTIVITY, REST, WALK } from './population';
+import { catalogOf } from '../core/data/catalog';
 import { restoreState, saveState } from './save';
 import type { SimState } from './state';
 import { applyCommands, fingerprint, type SimContent } from './step';
@@ -388,6 +402,7 @@ describe('activités : la chasse et le gibier (ADR 0021, § 5)', () => {
   it('ne fait jamais viser un animal par deux chasseurs, et libère ceux des chasseurs qui ne chassent plus', () => {
     const state = populated();
     let reserved = 0;
+    let shared = 0;
     for (let day = 0; day < 3 * DAYS_PER_MONTH; day++) {
       advanceDay(state, [], testData);
       const { fauna, people } = state;
@@ -405,9 +420,39 @@ describe('activités : la chasse et le gibier (ADR 0021, § 5)', () => {
         // Au soir d'un pas mensuel, qui part vers un autre camp peut la garder jusqu'au lendemain.
         expect([HUNT, FOLLOW]).toContain(people.get('activity', slot) & ACT_RANK);
       }
+      // La proie de chaque chasseur ce jour (relecture de 2b.8, problème 11) : un animal qu'il est
+      // seul à viser, et que sa colonne `hunter` lui réserve. Un second chasseur qui viserait le
+      // même animal en écraserait la réservation, et le premier attendrait sans proie.
+      const prey = new Map<number, number>();
+      for (const [slot, animal] of state.movement.acts.prey) {
+        if (prey.has(animal)) shared++;
+        prey.set(animal, slot);
+        if (fauna.alive[animal] !== 1) continue;
+        expect(fauna.hunter[animal], `jour ${String(day)}, chasseur ${String(slot)}`).toBe(
+          people.get('id', slot),
+        );
+      }
     }
+    expect(shared).toBe(0);
     expect(reserved).toBeGreaterThan(100);
     expect(state.movement.acts.counts.strikes).toBeGreaterThan(5);
+  });
+
+  it('ne donne à faunaNear que les animaux libres : un animal réservé ne se vise plus', () => {
+    const state = populated();
+    const { fauna } = state;
+    let animal = -1;
+    for (let slot = 0; slot < fauna.end && animal < 0; slot++) {
+      if (fauna.alive[slot] === 1 && (fauna.hunter[slot] ?? 0) === 0) animal = slot;
+    }
+    expect(animal).toBeGreaterThanOrEqual(0);
+    const day = dayIndex(state);
+    const x = fauna.x[animal] ?? 0;
+    const y = fauna.y[animal] ?? 0;
+    expect(faunaNear(state, day, x, y, 0.5, 4, [])).toContain(animal);
+    fauna.hunter[animal] = 123_456;
+    expect(faunaNear(state, day, x, y, 0.5, 4, [])).not.toContain(animal);
+    fauna.hunter[animal] = 0;
   });
 
   it('ôte l’animal pris, et verse sa viande, prise au gibier des neuf cases, à la réserve du groupe, le jour même', () => {
@@ -599,5 +644,156 @@ describe('activités : la chasse et le gibier (ADR 0021, § 5)', () => {
     expect(stalking).toBeGreaterThan(20);
     // L'animal s'approche parfois de l'affût depuis que le chasseur l'a visé : rarement.
     expect(close / stalking).toBeLessThan(0.1);
+  });
+});
+
+describe('activités : les règles, chacune spécifiée (relecture de 2b.8, problème 11)', () => {
+  /** Un monde plat, un lac en colonne à trois cases à l'est du camp (100, 100). */
+  const lakeside = (seed: string, cold = false) =>
+    flatState(seed, (world) => {
+      const lake = testData.biomes.indexOf('lake') ?? 0;
+      for (let row = 80; row < 120; row++) world.biome[row * FLAT.width + 103] = lake;
+      if (cold) world.temperature.fill(-200);
+    });
+
+  it('pèse la pêche par le poisson : au bord d’un lac sans poisson, riche en plantes, personne ne pêche', () => {
+    const content = withoutFauna(testData);
+    const fishless = {
+      ...content,
+      biomes: catalogOf(
+        content.biomes.entries.map((biome) =>
+          biome.id === 'lake' ? { ...biome, forage: { ...biome.forage, fish: 0 } } : biome,
+        ),
+      ),
+    };
+    const state = lakeside('sans poisson');
+    spawnAt(state, 100, 100, 30, content);
+    const slot = adultOf(state);
+    const fishing = weightsOf(state, content, slot);
+    expect(fishing[FISH]).toBeGreaterThan(0);
+    const without = weightsOf(state, fishless, slot);
+    // Les mêmes rives, les mêmes plantes : la cueillette reste, la pêche n'a plus de poids.
+    expect(shoresOf(state, fishless, 100, 100, FISH).length).toBeGreaterThan(0);
+    expect(without[GATHER]).toBeGreaterThan(0);
+    expect(without[FISH]).toBe(0);
+    for (let month = 0; month < 2; month++) step(state, [], fishless);
+    expect(state.movement.acts.counts.chosen[FISH]).toBe(0);
+  });
+
+  it('pèse la corvée d’eau par le dégel : sous la neige et la glace, personne ne puise', () => {
+    const content = withoutFauna(testData);
+    const mild = lakeside('doux');
+    spawnAt(mild, 100, 100, 30, content);
+    expect(weightsOf(mild, content, adultOf(mild))[WATER]).toBeGreaterThan(0);
+    // À −20 °C toute l'année, la neige couvre le camp et la glace le lac.
+    const frozen = lakeside('gelé', true);
+    spawnAt(frozen, 100, 100, 30, content);
+    expect(shoresOf(frozen, content, 100, 100, WATER).length).toBeGreaterThan(0);
+    expect(weightsOf(frozen, content, adultOf(frozen))[WATER]).toBe(0);
+  });
+
+  it('réduit la chasse d’une femme enceinte, du facteur de ses données', () => {
+    const content = withoutFauna(testData);
+    const state = flatState('enceinte');
+    spawnAt(state, 100, 100, 30, content);
+    // Une adulte qui ne porte pas de nourrisson : qui porte ne chasse pas.
+    let slot = -1;
+    state.people.forEach((other) => {
+      const years = (state.tick - state.people.get('birth', other)) / 12;
+      if (slot >= 0 || years < 20 || years > 40 || state.people.get('sex', other) !== FEMALE)
+        return;
+      const intention = state.people.get('move', other) & INTENTION;
+      if (intention !== CARRIED && (state.movement.childHead[other] ?? -1) < 0) slot = other;
+    });
+    expect(slot).toBeGreaterThanOrEqual(0);
+    const base = weightsOf(state, content, slot);
+    expect(base[HUNT]).toBeGreaterThan(0);
+    state.people.set('conceived', slot, state.tick - 1);
+    const pregnant = weightsOf(state, content, slot);
+    const factor = activities[HUNT]?.pregnant ?? 1;
+    expect(factor).toBeLessThan(1);
+    expect(pregnant[HUNT]).toBeCloseTo(factor * (base[HUNT] ?? 0), 9);
+    expect(pregnant[GATHER]).toBeCloseTo(
+      (activities[GATHER]?.pregnant ?? 1) * (base[GATHER] ?? 0),
+      9,
+    );
+  });
+
+  it('libère la réservation du chasseur dont l’animal passe au-delà de sa portée et de la laisse', () => {
+    const state = populated();
+    const { fauna, people } = state;
+    const { width } = state.size;
+    let hunter = -1;
+    let animal = -1;
+    for (let day = 0; day < 2 * DAYS_PER_MONTH && hunter < 0; day++) {
+      advanceDay(state, [], testData);
+      for (let slot = 0; slot < fauna.end && hunter < 0; slot++) {
+        const id = fauna.hunter[slot] ?? 0;
+        if (id === 0 || fauna.alive[slot] !== 1) continue;
+        const owner = people.slotOf(id);
+        if (owner === undefined || (people.get('activity', owner) & ACT_RANK) !== HUNT) continue;
+        if (people.get('until', owner) <= dayIndex(state) + 1) continue;
+        hunter = owner;
+        animal = slot;
+      }
+    }
+    expect(hunter).toBeGreaterThanOrEqual(0);
+    // Sa place au camp à quarante cases de là : la plus longue portée de la chasse, laisse
+    // comprise, en fait moins de quinze.
+    const { columns } = people;
+    columns.homeX[hunter] = (((columns.homeX[hunter] ?? 0) + 40 * FIXED) % (width * FIXED)) | 0;
+    rebuildMovement(state);
+    const lost = state.movement.acts.counts.lost;
+    advanceDay(state, [], testData);
+    expect(state.movement.acts.counts.lost).toBe(lost + 1);
+    expect(fauna.hunter[animal]).not.toBe(people.get('id', hunter));
+  });
+
+  it('se tient près de la couture comme ailleurs : clearAt lit la colonne de l’autre bord', () => {
+    const lake = testData.biomes.indexOf('lake') ?? 0;
+    const { width } = FLAT;
+    const state = flatState('couture des lieux', (world) => {
+      world.biome[100 * width + width - 1] = lake;
+    });
+    const at = (x: number, y: number) => standsClear(state, testData, x * FIXED, y * FIXED);
+    // Dans le quart de case de la couture, de part et d'autre : la terre se tient.
+    expect(at(0.1, 60.5)).toBe(true);
+    expect(at(width - 0.1, 60.5)).toBe(true);
+    // Le lac de la dernière colonne, lu de l'autre bord : on ne se tient pas à son bord.
+    expect(at(0.1, 100.5)).toBe(false);
+    expect(at(0.5, 100.5)).toBe(true);
+  });
+
+  it('compte le lieu du groupe aux places au camp de qui est à son activité, non à sa position', () => {
+    const content = withoutFauna(testData);
+    const state = flatState('lieu du groupe');
+    spawnAt(state, 100, 100, 20, content);
+    const { columns } = state.people;
+    const list: number[] = [];
+    state.people.forEach((slot) => {
+      list.push(slot);
+      // Chacun au repos à dix cases à l'est de sa place : à son activité.
+      if (((columns.move[slot] ?? 0) & INTENTION) === CARRIED) return;
+      columns.x[slot] = (columns.homeX[slot] ?? 0) + 10 * FIXED;
+    });
+    const cell = centralMember(state, list);
+    const column = cell % state.size.width;
+    expect(Math.abs(column - 100)).toBeLessThanOrEqual(3);
+  });
+
+  it('court au jeu : l’octet de ses étapes porte la course, et son allure est celle de la course', () => {
+    const content = withoutFauna(testData);
+    const state = flatState('jeu');
+    spawnAt(state, 100, 100, 30, content);
+    const slot = adultOf(state);
+    state.people.set('activity', slot, PLAY);
+    expect(actByte(state, content, slot) & ACT_RUN).toBe(ACT_RUN);
+    expect(activityPace(state, content, slot)).toBeCloseTo(
+      ownPace(state, content, slot) * content.activities.rules.run,
+      12,
+    );
+    state.people.set('activity', slot, GATHER);
+    expect(actByte(state, content, slot) & ACT_RUN).toBe(0);
+    expect(activityPace(state, content, slot)).toBeCloseTo(ownPace(state, content, slot), 12);
   });
 });
