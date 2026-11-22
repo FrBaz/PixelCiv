@@ -367,7 +367,9 @@ describe('activités : agenda, relecture, lots de jours (ADR 0021, § 2 et § 8)
     const free = state.people.count;
     const perDay: number[] = [];
     let before = state.movement.acts.counts.decisions;
-    for (let day = 0; day < restMax; day++) {
+    // Jusqu'au pas mensuel, dont les départs et les arrivées font choisir d'autres gens.
+    const window = Math.min(restMax, DAYS_PER_MONTH - 1);
+    for (let day = 0; day < window; day++) {
       advanceDay(state, [], content);
       perDay.push(state.movement.acts.counts.decisions - before);
       before = state.movement.acts.counts.decisions;
@@ -375,8 +377,10 @@ describe('activités : agenda, relecture, lots de jours (ADR 0021, § 2 et § 8)
     // Personne ne choisit le jour de l'apparition ; ensuite, au plus trois fois la part d'un jour.
     expect(perDay[0]).toBe(0);
     expect(Math.max(...perDay)).toBeLessThanOrEqual(Math.ceil((3 * free) / restMax));
-    expect(perDay.reduce((sum, count) => sum + count, 0)).toBeGreaterThan(free / 2);
-    expect(dayIndex(state)).toBe(restMax);
+    expect(perDay.reduce((sum, count) => sum + count, 0)).toBeGreaterThan(
+      (free * (window - 1)) / restMax / 2,
+    );
+    expect(dayIndex(state)).toBe(window);
   });
 });
 
