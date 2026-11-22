@@ -367,14 +367,41 @@ export function bannerBox(x: number, y: number, banner: Size, pixel: number): Bo
   };
 }
 
+/** Un rectangle que l'on récrit, sans en allouer : celui de chaque individu que dispose layoutCrowd. */
+interface MutableBox {
+  left: number;
+  top: number;
+  width: number;
+  height: number;
+}
+
 /**
- * Rectangle d'un individu dont les pieds se tiennent au point (x, y) de l'écran : un motif de
- * `width` × `rows` pixels, dont les pieds sont à `foot` pixels de son bord gauche et `lift`
- * pixels sous son bord bas (en l'air, au saut), à `k` pixels physiques par pixel de motif, posé
- * sur ce point arrondi au pixel physique. Retourné vers l'est (`east`), le motif se lit en
+ * Rectangle d'un individu dont les pieds se tiennent au point (x, y) de l'écran, écrit dans `out` :
+ * un motif de `width` × `rows` pixels, dont les pieds sont à `foot` pixels de son bord gauche et
+ * `lift` pixels sous son bord bas (en l'air, au saut), à `k` pixels physiques par pixel de motif,
+ * posé sur ce point arrondi au pixel physique. Retourné vers l'est (`east`), le motif se lit en
  * miroir : ses pieds sont à `foot` pixels de son bord droit. Sa taille ne dépend que de son motif
- * et de la densité de la vue, jamais de la case.
+ * et de la densité de la vue, jamais de la case. Sans allocation ni paramètre par défaut : le
+ * chemin de chaque membre dessiné (relecture de 2b.8, problème 15).
  */
+function placeBox(
+  out: MutableBox,
+  x: number,
+  y: number,
+  width: number,
+  rows: number,
+  foot: number,
+  k: number,
+  east: boolean,
+  lift: number,
+): void {
+  out.left = Math.round(x) - (east ? width - foot : foot) * k;
+  out.top = Math.round(y) - (rows + lift) * k;
+  out.width = width * k;
+  out.height = rows * k;
+}
+
+/** Le rectangle d'un individu (placeBox), dans un objet neuf : pour les tests et les outils. */
 export function personBox(
   x: number,
   y: number,
@@ -385,12 +412,40 @@ export function personBox(
   east: boolean,
   lift = 0,
 ): Box {
-  return {
-    left: Math.round(x) - (east ? width - foot : foot) * k,
-    top: Math.round(y) - (rows + lift) * k,
-    width: width * k,
-    height: rows * k,
-  };
+  const box = { left: 0, top: 0, width: 0, height: 0 };
+  placeBox(box, x, y, width, rows, foot, k, east, lift);
+  return box;
+}
+
+/** Le rectangle de chaque membre que dispose layoutCrowd, récrit d'un membre à l'autre. */
+const memberBox: MutableBox = { left: 0, top: 0, width: 0, height: 0 };
+
+/**
+ * Motif d'un membre de corps `body` et de stature `ratio` au niveau `level`, dans la pose `pose`
+ * (animation × POSE_FRAMES + image rangée) : le premier motif de son animation plus son image ; le
+ * repos, à l'image que donne l'horloge, si l'atlas ne range pas pour son corps l'animation de la
+ * pose (le nourrisson ne court ni ne saute). Une petite fonction aux arguments toujours de mêmes
+ * types, sortie de la boucle des membres (relecture de 2b.8, problème 15).
+ */
+function motifOf(
+  humans: HumanTable,
+  body: number,
+  ratio: number,
+  level: number,
+  pose: number,
+  walkMs: number,
+  stepMs: number,
+  pace: number,
+): number {
+  const variant = humans.variantOf(body, level, ratio);
+  const animation = Math.floor(pose / POSE_FRAMES);
+  const start = humans.firstMotif(body, level, variant, animation);
+  if (start >= 0) return start + (pose % POSE_FRAMES);
+  const idle = humans.idle;
+  return (
+    Math.max(0, humans.firstMotif(body, level, variant, idle)) +
+    humans.frame(idle, walkMs, stepMs, pace)
+  );
 }
 
 /** Ce que voit la carte : la caméra, l'écran (pixels physiques), le monde (pixels de carte). */
@@ -900,24 +955,30 @@ export function layoutCrowd(
           }
           // Son corps, sa variante au niveau de la vue, et l'image de sa pose à l'horloge de la
           // marche du rendu, figée en pause ; le repos, si l'atlas ne range pas pour son corps
-          // l'animation de la pose (le nourrisson ne court ni ne saute).
-          const body = looks.body[member] ?? 0;
-          const ratio = looks.ratio[member] ?? 1;
-          const variant = humans.variantOf(body, level, ratio);
-          let animation = Math.floor(pose / POSE_FRAMES);
-          let image = pose % POSE_FRAMES;
-          let start = humans.firstMotif(body, level, variant, animation);
-          if (start < 0) {
-            animation = humans.idle;
-            start = Math.max(0, humans.firstMotif(body, level, variant, animation));
-            image = humans.frame(animation, walkMs, stepMs, pace);
-          }
-          const motif = start + image;
-          const motifWidth = humans.width[motif] ?? 1;
-          const rows = humans.height[motif] ?? 1;
+          // l'animation de la pose (motifOf).
+          const motif = motifOf(
+            humans,
+            looks.body[member] ?? 0,
+            looks.ratio[member] ?? 1,
+            level,
+            pose,
+            walkMs,
+            stepMs,
+            pace,
+          );
           const lift = humans.lift[motif] ?? 0;
-          const foot = humans.anchor[motif] ?? 0;
-          const box = personBox(x, y, motifWidth, rows, foot, k, east, lift);
+          const box = memberBox;
+          placeBox(
+            box,
+            x,
+            y,
+            humans.width[motif] ?? 1,
+            humans.height[motif] ?? 1,
+            humans.anchor[motif] ?? 0,
+            k,
+            east,
+            lift,
+          );
           const right = box.left + box.width;
           const bottom = box.top + box.height;
           if (touches(box.left, box.top, right, bottom, viewport)) {
