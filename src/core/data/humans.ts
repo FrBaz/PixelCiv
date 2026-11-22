@@ -81,15 +81,53 @@ const AnimationSchema = z
     frameMs: z.number().positive().optional(),
     loop: z.boolean().default(true),
     /**
-     * Montrée en jeu : rangée dans l'atlas du jeu, à tous les niveaux. Les autres sont lues,
-     * vérifiées et habillées par le build et les tests, et attendent 2b.8.
+     * Montrée en jeu : rangée dans l'atlas du jeu, à tous les niveaux, toutes ses images (true)
+     * ou celles dont elle donne les rangs, croissants (la mort, dont les gestes ne prennent que
+     * la figure à genoux, ADR 0022 § 4). Les autres images et animations sont lues, vérifiées et
+     * habillées par le build et les tests.
      */
-    shown: z.boolean().default(false),
+    shown: z
+      .union([z.boolean(), z.array(z.number().int().min(0).max(31)).min(1).max(32)])
+      .default(false),
+    /**
+     * Les corps d'enfants et le nourrisson qui la reçoivent dans l'atlas du jeu, si elle est
+     * montrée : ceux dont les activités, ou celles de la mère qui le porte, la font voir (ADR
+     * 0022 § 4). Un corps qui ne la reçoit pas prend le repos à sa place (src/render/crowd.ts).
+     */
+    young: z
+      .array(z.enum(['child', 'baby']))
+      .max(2)
+      .default(['child', 'baby']),
   })
   .strict()
   .refine((a) => (a.steps === undefined) !== (a.frameMs === undefined), {
     message: 'une cadence : steps ou frameMs',
-  });
+  })
+  .refine((a) => new Set(a.young).size === a.young.length, {
+    message: 'des corps distincts',
+    path: ['young'],
+  })
+  .refine(
+    (a) =>
+      !Array.isArray(a.shown) ||
+      a.shown.every(
+        (rank, index, ranks) => rank < a.frames && (index === 0 || rank > (ranks[index - 1] ?? 0)),
+      ),
+    { message: 'des images de l’animation, aux rangs croissants', path: ['shown'] },
+  );
+
+/**
+ * Rangs des images d'une animation que l'atlas du jeu range, dans l'ordre : toutes, celles que
+ * donne `shown`, ou aucune.
+ */
+export function shownFrames(animation: {
+  readonly frames: number;
+  readonly shown: boolean | readonly number[];
+}): number[] {
+  if (animation.shown === false) return [];
+  if (animation.shown === true) return Array.from({ length: animation.frames }, (_, f) => f);
+  return [...animation.shown];
+}
 
 const LevelSchema = z
   .object({
@@ -200,10 +238,14 @@ export const HumansSchema = z
     if (new Set(animations).size !== animations.length) {
       issue('des animations distinctes', ['animations']);
     }
+    // Le repos et la marche, que prend tout corps à qui manque une animation ou une image, sont
+    // montrés entiers, à tous les corps.
     for (const id of ['idle', 'walk']) {
       const animation = h.animations.find((entry) => entry.id === id);
       if (animation === undefined) issue(`une animation ${id}`, ['animations']);
-      else if (!animation.shown) issue(`l'animation ${id} est montrée`, ['animations']);
+      else if (animation.shown !== true || animation.young.length !== 2) {
+        issue(`l'animation ${id} est montrée entière, à tous les corps`, ['animations']);
+      }
     }
     const first = h.levels.at(0);
     if (first?.factor !== 1 || first.variants.join() !== '0') {

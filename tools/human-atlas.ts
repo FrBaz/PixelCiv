@@ -11,8 +11,10 @@
  * aucune couleur n'y est calculée, chaque rôle prend un ton de la planche ou d'une rampe des
  * données.
  *
- * Le jeu ne range que les animations montrées (data/humans.json, shown) ; les tests demandent
- * aussi les autres (animations: 'all'), que le build lit et vérifie toutes. Le build échoue si
+ * Le jeu ne range que les animations montrées (data/humans.json, shown), de leurs images celles
+ * que les gestes prennent (la mort : la figure à genoux, ADR 0022 § 4), et aux corps d'enfants
+ * et au nourrisson celles que leurs activités montrent (young) ; les tests demandent aussi toutes
+ * les images (animations: 'all'), que le build lit et vérifie toutes. Le build échoue si
  * une grille contredit sa planche, si une tenue de data/appearance.json laisse voir le
  * sous-vêtement des planches, ou si CREDITS.md ne cite pas le pack (ADR 0008).
  */
@@ -24,6 +26,7 @@ import {
   BODY_KINDS,
   HumansSchema,
   OutfitSchema,
+  shownFrames,
   type BodyKind,
   type Humans,
   type Outfit,
@@ -75,9 +78,14 @@ export interface HumanAtlas {
   readonly kinds: readonly BodyKind[];
   /** Niveaux : facteur de réduction, rangées de l'adulte de référence, écarts des variantes. */
   readonly levels: readonly { factor: number; rows: number; variants: readonly number[] }[];
+  /**
+   * Animations rangées, dans l'ordre de data/humans.json : leurs images rangées (`frames`), et le
+   * rang dans la planche de chacune (`ranks`), que les gestes nomment (src/render/humans.ts).
+   */
   readonly animations: readonly {
     id: string;
     frames: number;
+    ranks: readonly number[];
     steps?: number;
     frameMs?: number;
     loop: boolean;
@@ -98,7 +106,10 @@ export interface HumanAtlas {
 }
 
 export interface AtlasOptions {
-  /** Les animations montrées en jeu (par défaut), ou toutes. */
+  /**
+   * Les animations et les images montrées en jeu (par défaut), ou toutes les images de toutes
+   * les animations, aux adultes, et de celles que reçoivent les enfants et le nourrisson.
+   */
   readonly animations?: 'shown' | 'all';
 }
 
@@ -177,10 +188,13 @@ export function buildHumanAtlas(
   const sexes = ['female', 'male'] as const;
   const head = humans.regions.flatMap((region, index) => (region.head === true ? [index] : []));
   const every = options.animations === 'all';
-  const chosen = humans.animations.flatMap((animation, index) =>
-    every || animation.shown ? [index] : [],
+  // Rangs des images rangées de chaque animation : toutes, ou celles que le jeu montre.
+  const ranks = humans.animations.map((animation) =>
+    every ? Array.from({ length: animation.frames }, (_, f) => f) : shownFrames(animation),
   );
-  const shown = humans.animations.flatMap((animation, index) => (animation.shown ? [index] : []));
+  const chosen = humans.animations.flatMap((_, index) =>
+    (ranks[index]?.length ?? 0) > 0 ? [index] : [],
+  );
   // Images de rôles de chaque sexe, par animation et par image.
   const frames = {
     female: sheetFrames(root, humans, 'female'),
@@ -197,6 +211,10 @@ export function buildHumanAtlas(
     ...humans.young.baby.map((): BodyKind => 'baby'),
   ];
   const young = [...humans.young.child, ...humans.young.baby];
+  const youngKinds = [
+    ...humans.young.child.map(() => 'child' as const),
+    ...humans.young.baby.map(() => 'baby' as const),
+  ];
   const A = chosen.length;
   const L = humans.levels.length;
   const images: RoleImage[] = [];
@@ -209,6 +227,9 @@ export function buildHumanAtlas(
     if (idle === undefined) throw new Error(`${sex} : aucune image de repos`);
     return figureRows(idle);
   };
+  // La figure debout de référence des enfants composés : le repos, image 0, de leur corps.
+  const idle = humans.animations.findIndex((animation) => animation.id === 'idle');
+  const standing = frames[humans.young.body].at(idle)?.at(0);
   const levels = humans.levels.map((level) => ({
     factor: level.factor,
     rows: Math.round(reference('male') / level.factor),
@@ -232,7 +253,9 @@ export function buildHumanAtlas(
         const factor = level.factor === 1 && offset === 0 ? 1 : ref / rows;
         chosen.forEach((animation, a) => {
           index[slot(body, l, variant, a)] = images.length;
-          for (const image of frames[sex][animation] ?? []) {
+          for (const rank of ranks[animation] ?? []) {
+            const image = frames[sex][animation]?.at(rank);
+            if (image === undefined) continue;
             images.push(trimRoles(reduceFigure(image, factor, outline, eyes, head, level.head)));
             owners.push(body);
           }
@@ -241,15 +264,18 @@ export function buildHumanAtlas(
     });
     young.forEach((size, offset) => {
       const body = sexes.length + offset;
+      const kind = youngKinds[offset] ?? 'child';
       const rows = Math.max(4, Math.round(size.rows / level.factor));
       const heads = Math.max(2, Math.round(size.head / level.factor));
       const mode: OutlineMode = outline === 'keep' ? 'thick' : outline;
       chosen.forEach((animation, a) => {
-        // Les enfants composés n'ont que les animations montrées en jeu.
-        if (!shown.includes(animation)) return;
+        // Les enfants et le nourrisson composés n'ont que les animations de leurs activités.
+        if (!(humans.animations[animation]?.young ?? []).includes(kind)) return;
         index[slot(body, l, 0, a)] = images.length;
-        for (const image of frames[humans.young.body][animation] ?? []) {
-          images.push(trimRoles(youngRoles(image, rows, heads, mode, eyes, head)));
+        for (const rank of ranks[animation] ?? []) {
+          const image = frames[humans.young.body][animation]?.at(rank);
+          if (image === undefined) continue;
+          images.push(trimRoles(youngRoles(image, rows, heads, mode, eyes, head, standing)));
           owners.push(body);
         }
       });
@@ -319,7 +345,8 @@ export function buildHumanAtlas(
       const a = humans.animations[animation];
       return {
         id: a.id,
-        frames: a.frames,
+        frames: ranks[animation]?.length ?? 0,
+        ranks: ranks[animation] ?? [],
         ...(a.steps === undefined ? {} : { steps: a.steps }),
         ...(a.frameMs === undefined ? {} : { frameMs: a.frameMs }),
         loop: a.loop,

@@ -910,8 +910,41 @@ describe('humains des planches et leurs tenues (ADR 0016)', () => {
       animation.id === 'walk' ? { ...animation, shown: false } : animation,
     );
     expect(issues(HumansSchema, withHumans({ animations }))).toContain(
-      "animations : l'animation walk est montrée",
+      "animations : l'animation walk est montrée entière, à tous les corps",
     );
+  });
+
+  it('refuse des images montrées hors de l’animation ou en désordre, et un repos qui manque à un corps', () => {
+    // Les images montrées d'une animation (shown, ADR 0022 § 4) sont les siennes, aux rangs
+    // croissants ; ses corps d'enfants distincts ; le repos et la marche, que prend tout corps à
+    // qui manque une animation, montrés entiers à tous.
+    const withAnimation = (id: string, change: object) =>
+      withHumans({
+        animations: humans.animations.map((animation) =>
+          animation.id === id ? { ...animation, ...change } : animation,
+        ),
+      });
+    expect(issues(HumansSchema, withAnimation('death', { shown: [2, 3, 4] }))).toEqual([]);
+    expect(issues(HumansSchema, withAnimation('death', { shown: [9] }))).toEqual([]);
+    for (const shown of [[2, 10], [3, 2], [2, 2], [], [-1]]) {
+      expect(
+        issues(HumansSchema, withAnimation('death', { shown })).length,
+        shown.join(','),
+      ).toBeGreaterThan(0);
+    }
+    expect(issues(HumansSchema, withAnimation('death', { shown: [4, 3] }))).toEqual([
+      'animations.6.shown : des images de l’animation, aux rangs croissants',
+    ]);
+    expect(issues(HumansSchema, withAnimation('throw', { young: ['child', 'child'] }))).toEqual([
+      'animations.5.young : des corps distincts',
+    ]);
+    expect(issues(HumansSchema, withAnimation('throw', { young: ['adult'] })).length).toBe(1);
+    expect(issues(HumansSchema, withAnimation('throw', { young: [] }))).toEqual([]);
+    for (const change of [{ shown: [0, 1] }, { young: ['child'] }]) {
+      expect(issues(HumansSchema, withAnimation('idle', change))).toEqual([
+        "animations : l'animation idle est montrée entière, à tous les corps",
+      ]);
+    }
   });
 });
 
@@ -1816,7 +1849,7 @@ describe('activités : data/activities.json (ADR 0021, ADR 0022)', () => {
           g.id === 'water' ? { ...g, segments: [{ repeat: 1, ...segment }] } : g,
         ),
       } as Partial<GameData['activities']>);
-    expect(withSegment({ animation: 'death', frames: [2, 9] })).toEqual([]);
+    expect(withSegment({ animation: 'death', frames: [2, 4] })).toEqual([]);
     expect(withSegment({ animation: 'swim' })).toEqual([
       'data/activities.json : geste water : animation swim inconnue',
     ]);
@@ -1825,6 +1858,33 @@ describe('activités : data/activities.json (ADR 0021, ADR 0022)', () => {
     ]);
     expect(withSegment({ animation: 'idle', frames: [5] })).toEqual([
       "data/activities.json : geste water : image hors de l'animation idle",
+    ]);
+    // Des images que l'atlas du jeu ne range pas (la mort : 2, 3 et 4 seulement) : le motif
+    // serait celui d'une autre animation. Sans liste, toutes les images de l'animation.
+    expect(withSegment({ animation: 'death', frames: [2, 9] })).toEqual([
+      "data/activities.json : geste water : images 9 de l'animation death, que le jeu ne range pas",
+    ]);
+    expect(withSegment({ animation: 'death' })).toEqual([
+      "data/activities.json : geste water : images 0, 1, 5, 6, 7, 8, 9 de l'animation death, que le jeu ne range pas",
+    ]);
+    expect(withSegment({ animation: 'throw' })).toEqual([]);
+    // La cadence d'un geste est en millisecondes : la marche n'en a pas, sauf la sienne.
+    expect(withSegment({ animation: 'walk' })).toEqual([
+      "data/activities.json : geste water : animation walk au pas de la marche, sans durée d'image",
+    ]);
+    expect(withSegment({ animation: 'walk', frameMs: 100 })).toEqual([]);
+    const hidden = {
+      ...data,
+      humans: {
+        ...data.humans,
+        animations: data.humans.animations.map((animation) =>
+          animation.id === 'jump' ? { ...animation, shown: false } : animation,
+        ),
+      },
+    };
+    expect(checkContent(hidden)).toEqual([
+      "data/activities.json : geste play : images 0, 1, 2, 3 de l'animation jump, que le jeu ne range pas",
+      "data/activities.json : geste play : images 0, 1, 2, 3 de l'animation jump, que le jeu ne range pas",
     ]);
   });
 

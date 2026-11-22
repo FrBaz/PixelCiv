@@ -236,38 +236,38 @@ describe('palettes des humains (ADR 0016, § 3)', () => {
       }
     });
     expect(prints).toEqual({
-      'dyed baby': '4a53d36a 7ce614a0 457e3736 90f28274 39866a08',
-      'dyed child': '86a23027 964dfd50 93cb077d 5abdc7bc c08bef7a',
-      'dyed female': '4d02a0ec 39d8c808 05808237 7cbc0474 cac442c0',
-      'dyed male': '8872083d 0ebdef69 69a8ed8f 24a2c0f4 157c1010',
-      'furs baby': '968ce376 89152177 925eaa13 d5a2e2c0 666b6514',
-      'furs child': 'a6092703 d8795fe3 0fcb9b7a f37d4e64 bba0eb69',
-      'furs female': '4c635607 b370eaba 40cf9cda e2ae9e84 3e73408e',
-      'furs male': '70cdba97 ab274e03 807a55a5 596d1288 61613cab',
-      'loincloth baby': 'f26f388d bcea67cf 6a4376ea cfce0f56 0b3345b6',
-      'loincloth child': 'a2442892 146ce419 210dd524 27ceda23 e36a2845',
-      'loincloth female': '78201bf8 11d088a5 5413c828 841ad772 6fe97c2d',
-      'loincloth male': '18ea375f b3d85d51 48ae9ee4 98cab020 aa326b27',
-      'mantle baby': 'f9aea7e3 78ba4417 839eb11a 83e8aa8c a9c784e0',
-      'mantle child': 'b73d419a cff7aa65 1bf62803 5bae49a0 02b7256c',
-      'mantle female': '390ff3f3 8dd6ff5d cb2db1bd 9691d61c 9301b010',
-      'mantle male': '31f0b35c eca7c634 34f183ed e392cf07 9b8cacec',
-      'robe baby': '7fd96744 8a063534 da3ecfba bdd17956 cce28bfa',
-      'robe child': 'b4c64fc8 91e233b0 eed7e180 2d9e7535 4852ae25',
-      'robe female': '0fc44650 ce8b6bec 9a0cf273 31ade79c 9adf0314',
-      'robe male': 'b01e19a3 8903f358 2b55c153 d4f32530 f77d22f2',
-      'sash baby': '76f845dd 5c523489 f0df1bd6 dc96b0a0 784aa814',
-      'sash child': '3bf2a4f0 0a9ec71c 6f4b38d9 5a40c480 717c1b29',
-      'sash female': '2619b1e7 64131267 2a42e531 d25bd3ea 42ab3fba',
-      'sash male': '75abe0c2 664481d3 0d9d3848 3966e890 4c0776d2',
-      'tunic baby': '3a1d3f6f 8d2373e7 fe5bf02b 2f4a24a8 feb43bb0',
-      'tunic child': 'b6bc16d6 39e50bb2 8dc8063a 674e7ead 0857e14b',
-      'tunic female': 'e8650d82 a5c38d11 8523becd d14a011c 79c0d7b9',
-      'tunic male': '4369aa85 359a5e20 8001333c 4a02d253 55f17a8d',
-      'wrap baby': 'b5396886 6674f887 e1d90ee1 cbe8b9fe 5fe7ff52',
-      'wrap child': 'd7b1b9a9 9c64c520 635cc94c 2574477b 5171c696',
-      'wrap female': '60ef4331 aa77847f 7699a641 b329281e c8ab23ba',
-      'wrap male': 'c0d08cba 0a99241f b8de2811 72fe36bb e57fe007',
+      'dyed baby': '7547a84e 7ccfb17d 631fdd2c 96d6c451 6619a821',
+      'dyed child': 'a6dfb813 a52abda0 92ce3336 615e5a5c 5a341efc',
+      'dyed female': 'b84ab164 765c0c86 04385ef0 13b478e2 e723827b',
+      'dyed male': 'b3a9b361 38e190f3 f235f850 e013373c 7317d210',
+      'furs baby': 'e3e9c9cd 47aa69d8 0fa6f9ec c23d1cf5 7f6b0921',
+      'furs child': 'dba02f2a e87f7f21 8a3119e1 fe4a246d 3be7a0c1',
+      'furs female': '09b7d9fe 8818da23 457e4015 b099e24a c74ced43',
+      'furs male': '6850a1a1 10af310b 515e749d bfc968c7 8b768fb4',
+      'loincloth baby': '3c407d7c c53ab689 648e00aa d028d266 8005aa72',
+      'loincloth child': '226ef0c8 8fb7e872 3a8ab190 add20050 04416cfc',
+      'loincloth female': 'a0d968d1 7c7701a0 1e04ce1e 1185fdc9 d1912eef',
+      'loincloth male': '9e51c9e9 af1b1752 d52577a5 0cdf1a67 9ca71188',
+      'mantle baby': 'adea5b55 18551634 f3818afd 00042f49 1af40d85',
+      'mantle child': '9eb9347b 49c01eae f1ef1a4f c6ed3473 6510e61c',
+      'mantle female': '999df6b6 f81fc134 4c7b0567 37abb7dd af2719ca',
+      'mantle male': '53cc7a10 dd6d3758 5e6965bc bc8b5c28 4e07656f',
+      'robe baby': 'b8105cc4 e08cc69f 7b68ad44 f264cb0d 5187e4ad',
+      'robe child': '8caf71bd adff5ae1 77c706ea 1e66a8b4 af794cf5',
+      'robe female': 'f49389c7 3dd3ce1b d91d69d9 8cb84387 14572b8e',
+      'robe male': 'a21a0e0e 51d7c224 68b7c950 ca59d8d7 2dd7c6cd',
+      'sash baby': '40dea247 a972a9f6 67f611cb 1060b3fd ec0aeb61',
+      'sash child': '9bbded75 5f2526c9 85bcd253 675f1565 9307541d',
+      'sash female': '059d061b 150c5f5d e1fca95f 81069e5a a47ca43b',
+      'sash male': 'c9075d2e 586a477f ec567e5c f8b052ee 592f19bf',
+      'tunic baby': '4e720799 845ea041 59e95cdd 1c218881 d2090ead',
+      'tunic child': '934b0a3b eb774b0d 8d96d366 bba7ea6e d7fb0314',
+      'tunic female': '2690b57f 2390f97c 07e7429a 407c7079 66d55dda',
+      'tunic male': '2e23b759 c785aa2c 355eb0e9 dd1b2034 87193063',
+      'wrap baby': 'e6c47f4c 8fb756fe 9275b262 7b9ae642 cf1a9682',
+      'wrap child': 'dfcd3dac ca2fff8f 25bc3aa8 d926b8c7 206022a4',
+      'wrap female': '6120e1dc f9b82813 7c9a4853 f6ab7e58 8f02c58e',
+      'wrap male': '591df8c4 a89b5301 639e3464 53c336d6 7681eedb',
     });
   });
 });
@@ -344,10 +344,16 @@ describe('corps, variantes et animations (ADR 0016, § 5, § 6)', () => {
   });
 
   it('range un motif par image, chaque animation de chaque corps à chaque niveau', () => {
+    // Le nourrisson n'a que les animations des gestes de sa mère (data/humans.json, young).
+    const young = new Map(data.humans.animations.map((a) => [a.id, a.young as readonly string[]]));
     for (let body = 0; body < atlas.bodies.length; body++) {
+      const kind = bodyKind(body);
       LEVEL_ROWS.forEach((_, level) => {
-        atlas.animations.forEach((_animation, a) => {
-          expect(firstMotif(body, level, 0, a)).toBeGreaterThanOrEqual(0);
+        atlas.animations.forEach((animation, a) => {
+          const ranged =
+            kind === 'female' || kind === 'male' || young.get(animation.id)?.includes(kind);
+          if (ranged) expect(firstMotif(body, level, 0, a)).toBeGreaterThanOrEqual(0);
+          else expect(firstMotif(body, level, 0, a)).toBe(-1);
         });
       });
     }

@@ -18,7 +18,7 @@ import { ActivitiesFileSchema } from './activities';
 import { catalogOf, DataError, loadCatalog, loadSettings, type Catalog } from './catalog';
 import { DecorSchema, outlineBelow } from './decor';
 import { FaunaFileSchema } from './fauna';
-import { BODY_KINDS, HumansSchema, LOOK_BITS } from './humans';
+import { BODY_KINDS, HumansSchema, LOOK_BITS, shownFrames } from './humans';
 import {
   AppearanceSchema,
   CulturesSchema,
@@ -137,17 +137,32 @@ export function checkContent(data: GameData): string[] {
       );
     }
   }
-  // Chaque segment d'un geste nomme une animation des planches, et des images qu'elle a.
+  // Chaque segment d'un geste nomme une animation des planches, et des images qu'elle a, que
+  // l'atlas du jeu range (data/humans.json, shown ; toutes, sans liste d'images) : un motif est
+  // le premier de son animation plus le rang de son image rangée (src/render/humans.ts). Sa
+  // cadence est en millisecondes, la sienne ou celle de l'animation : un geste suit l'horloge de
+  // la marche du rendu, et non le pas de la marche, que règle la vitesse de la partie.
   for (const gesture of data.activities.gestures) {
     for (const segment of gesture.segments) {
       const animation = data.humans.animations.find((entry) => entry.id === segment.animation);
+      const at = `data/activities.json : geste ${gesture.id}`;
       if (animation === undefined) {
+        problems.push(`${at} : animation ${segment.animation} inconnue`);
+        continue;
+      }
+      const frames = segment.frames ?? Array.from({ length: animation.frames }, (_, f) => f);
+      const shown = shownFrames(animation);
+      if (frames.some((frame) => frame >= animation.frames)) {
+        problems.push(`${at} : image hors de l'animation ${segment.animation}`);
+      } else if (frames.some((frame) => !shown.includes(frame))) {
+        const hidden = frames.filter((frame) => !shown.includes(frame));
         problems.push(
-          `data/activities.json : geste ${gesture.id} : animation ${segment.animation} inconnue`,
+          `${at} : images ${hidden.join(', ')} de l'animation ${segment.animation}, que le jeu ne range pas`,
         );
-      } else if ((segment.frames ?? []).some((frame) => frame >= animation.frames)) {
+      }
+      if (segment.frameMs === undefined && animation.frameMs === undefined) {
         problems.push(
-          `data/activities.json : geste ${gesture.id} : image hors de l'animation ${segment.animation}`,
+          `${at} : animation ${segment.animation} au pas de la marche, sans durée d'image`,
         );
       }
     }
