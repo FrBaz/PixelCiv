@@ -268,6 +268,17 @@ function PersonSheet({
             })}
           </Row>
         )}
+        {/*
+          Son activité (ADR 0021, § 6) : celle de qui le porte pour un porté, qui n'en a pas
+          lui-même (point 13 de l'ADR 0021).
+        */}
+        {person.activity !== undefined && (
+          <Row label={t('person.activity')}>
+            {person.intention === 'carried'
+              ? t('person.activity.carried', { activity: tKey(person.activity) })
+              : tKey(person.activity)}
+          </Row>
+        )}
         {person.pregnant && <Row label={t('person.pregnant')}>✓</Row>}
         <Row label={t('person.mother')}>
           {person.mother === undefined ? (

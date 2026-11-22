@@ -343,6 +343,8 @@
     "masculine": "porté par sa mère",
     "feminine": "portée par sa mère"
   },
+  "person.activity": "Activité",
+  "person.activity.carried": "avec sa mère, qui {activity}",
   "activity.rest": "se repose au camp",
   "activity.gather": "cueille",
   "activity.hunt": "chasse",
