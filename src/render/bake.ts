@@ -25,6 +25,12 @@
  * mipmaps, garde un ombrage valable ; les bits, eux, ne se lisent qu'au niveau 0.
  *
  * Fonctions pures, sans PixiJS : elles tournent dans le worker de cuisson.
+ *
+ * Carte d'identité des tons (tâche 2b.7, ADR 0019, § 2) : sur demande, la cuisson dit aussi, pour
+ * chaque pixel, le rang de son ton dans la palette de sa tuile (ombre, base, lumière) et laquelle
+ * des quatre cases bilinéaires la lui prête (IDENTITY), sans rien changer aux pixels : le shader
+ * de la carte recolore ainsi un pixel rang pour rang, sous son ombrage, aux couleurs d'un état de
+ * la végétation, sans rien deviner de sa couleur.
  */
 import type { Biome } from '../core/data/schemas';
 import {
@@ -90,6 +96,30 @@ export function pixelData(pixels: Uint8Array, index: number): PixelData {
     shade: (pixels[offset + 3] ?? 0) / 255 + 0.5,
   };
 }
+
+/**
+ * Teinte thermique des terres : plus chaude au chaud, plus bleue au froid. De `warmFrom` °C à
+ * `warmFrom + warmSpan` °C, le rouge gagne jusqu'à `red`, le vert `green`, le bleu perd `blue` ;
+ * de 0 à −`coldSpan` °C, le rouge perd jusqu'à `red`, le bleu gagne `blue`. Le shader de la carte
+ * applique la même à un ton d'état (mapShader.ts, SEASON_GLSL).
+ */
+export const TINT = {
+  warmFrom: 18,
+  warmSpan: 12,
+  coldSpan: 20,
+  red: 0.05,
+  green: 0.01,
+  blue: 0.06,
+};
+
+/**
+ * Codes de la carte d'identité des tons, un octet par pixel : NO_TONE pour un pixel qui ne porte
+ * pas le ton d'une tuile de terre (l'eau, une rivière, la tuile d'une case sans voisine du même
+ * biome), sinon 1 + rang + 3 × case, le rang du ton (0 ombre, 1 base, 2 lumière) et la case
+ * bilinéaire qui le prête : 0 au nord-ouest du pixel, 1 au nord-est, 2 au sud-ouest, 3 au sud-est
+ * (les cases dont les centres l'encadrent ; celle du pixel en est une).
+ */
+export const IDENTITY = { none: 0, ranks: 3, slots: 4 } as const;
 
 /** Ombrage : force de la pente, et bornes. */
 const SHADE_STRENGTH = 0.2;
@@ -215,15 +245,43 @@ function tileColor(
   }
 }
 
-/** Pixels RGBA du bloc (column, row). */
-export function bakeChunk(world: BakeWorld, column: number, row: number): Uint8Array<ArrayBuffer> {
-  return bakeRegion(world, column * CHUNK_PX, row * CHUNK_PX, CHUNK_PX, CHUNK_PX);
+/**
+ * La part de chaque rang (ombre, base, lumière) dans la tuile d'un biome de terre, tirée du motif
+ * même de la cuisson sur 64 × 64 pixels, à mi-densité : de quoi pondérer les tons moyens que la
+ * carte prend de loin, où les mipmaps mêlent les pixels (src/render/seasons.ts, statePalettes).
+ */
+export function toneShares(biome: BakeBiome): [number, number, number] {
+  const counts: [number, number, number] = [0, 0, 0];
+  const side = 64;
+  for (let y = 0; y < side; y++) {
+    for (let x = 0; x < side; x++) {
+      const color = tileColor(biome, 1024 + x, 512 + y, 0.5, 0.5, 0);
+      if (color === biome.shadow) counts[0]++;
+      else if (color === biome.light) counts[2]++;
+      else counts[1]++;
+    }
+  }
+  return [counts[0] / (side * side), counts[1] / (side * side), counts[2] / (side * side)];
+}
+
+/**
+ * Pixels RGBA du bloc (column, row) ; `identity`, s'il est donné, reçoit la carte d'identité de
+ * ses tons (IDENTITY), un octet par pixel.
+ */
+export function bakeChunk(
+  world: BakeWorld,
+  column: number,
+  row: number,
+  identity?: Uint8Array,
+): Uint8Array<ArrayBuffer> {
+  return bakeRegion(world, column * CHUNK_PX, row * CHUNK_PX, CHUNK_PX, CHUNK_PX, identity);
 }
 
 /**
  * Pixels RGBA de la région de `width` × `height` pixels dont le coin nord-ouest est le
  * pixel (left, top) du monde ; `left` boucle d'est en ouest, la région reste entre les
- * pôles.
+ * pôles. `identity`, s'il est donné (`width` × `height` octets), reçoit la carte d'identité des
+ * tons de la région ; les pixels n'en dépendent pas.
  */
 export function bakeRegion(
   world: BakeWorld,
@@ -231,6 +289,7 @@ export function bakeRegion(
   top: number,
   width: number,
   height: number,
+  identity?: Uint8Array,
 ): Uint8Array<ArrayBuffer> {
   const { size, layers, biomes } = world;
   const riverPalette = biomes.at(world.riverBiome);
@@ -258,6 +317,8 @@ export function bakeRegion(
   const winTemperature = new Float32Array(windowCount);
   const winNoise = new Float32Array(windowCount);
   const winDrainage = new Uint8Array(windowCount);
+  // Le biome de chaque case, que la carte d'identité compare à sa tuile (le lit d'un fleuve).
+  const winBiome = identity === undefined ? undefined : new Uint8Array(windowCount);
   for (let wy = 0; wy < rowsCount; wy++) {
     for (let wx = 0; wx < cols; wx++) {
       const cx = cellLeft + wx;
@@ -276,6 +337,7 @@ export function bakeRegion(
         water = tile === biome;
       }
       winTile[slot] = tile;
+      if (winBiome !== undefined) winBiome[slot] = biome;
       winWater[slot] = water ? 1 : 0;
       winDepth[slot] = water ? depth : 0;
       winLift[slot] = water ? WATER_LIFT_HEIGHT : Math.max(0, elevation);
@@ -432,6 +494,23 @@ export function bakeRegion(
         biome === undefined
           ? [0, 0, 0]
           : tileColor(biome, px, py, winNoise[source] ?? 0, winDensity[source] ?? 0, depth);
+      // La carte d'identité : le rang du ton de la tuile, et la case bilinéaire qui la prête, ou,
+      // pour les rives du lit d'un fleuve, une case bilinéaire du biome de ces rives.
+      let tone: number = IDENTITY.none;
+      if (winBiome !== undefined && biome !== undefined && !water && biome.style !== 'water') {
+        const rank =
+          color === biome.shadow ? 0 : color === biome.base ? 1 : color === biome.light ? 2 : -1;
+        const tile = winTile[source] ?? 0;
+        let lender = -1;
+        for (let i = 0; i < 4 && lender < 0; i++) {
+          const slot = slots[i] ?? 0;
+          if (slot === source && winBiome[slot] === tile) lender = i;
+        }
+        for (let i = 0; i < 4 && lender < 0; i++) {
+          if (winBiome[slots[i] ?? 0] === tile) lender = i;
+        }
+        if (rank >= 0 && lender >= 0) tone = 1 + rank + IDENTITY.ranks * lender;
+      }
 
       const river = riverAt(x, y);
       let stream = false;
@@ -440,6 +519,7 @@ export function bakeRegion(
         // Rivières et fleuves : l'eau, avec quelques reflets sur les plus larges.
         color = river >= 3 && hash(px, py, 5) > 0.93 ? riverPalette.light : riverPalette.base;
         water = true;
+        tone = IDENTITY.none;
       } else if (!water && river === 1) {
         stream = true;
       } else if (!water) {
@@ -464,12 +544,13 @@ export function bakeRegion(
       let blue = color[2] * shade;
       if (!water) {
         const temperature = winTemperature[source] ?? 0;
-        const warm = clamp01((temperature - 18) / 12);
-        const cold = clamp01(-temperature / 20);
-        red *= 1 + 0.05 * warm - 0.05 * cold;
-        green *= 1 + 0.01 * warm;
-        blue *= 1 - 0.06 * warm + 0.06 * cold;
+        const warm = clamp01((temperature - TINT.warmFrom) / TINT.warmSpan);
+        const cold = clamp01(-temperature / TINT.coldSpan);
+        red *= 1 + TINT.red * warm - TINT.red * cold;
+        green *= 1 + TINT.green * warm;
+        blue *= 1 - TINT.blue * warm + TINT.blue * cold;
       }
+      if (identity !== undefined) identity[y * width + x] = tone;
       const offset = (y * width + x) * 4;
       const byte = (value: number) => Math.min(255, Math.max(0, Math.round(value)));
       pixels[offset] = (byte(red) & 0xfe) | (water ? 0 : 1);

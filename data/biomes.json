@@ -409,6 +409,9 @@
         "shadow": "#b0becc",
         "base": "#dee7f0",
         "light": "#f6fafd"
+      },
+      "states": {
+        "bare": { "shadow": "#73704a", "base": "#8d8658", "light": "#a49c66" }
       }
     }
   },
@@ -444,6 +447,9 @@
         "shadow": "#b0becc",
         "base": "#dee7f0",
         "light": "#f6fafd"
+      },
+      "states": {
+        "bare": { "shadow": "#666540", "base": "#807a4d", "light": "#97905b" }
       }
     }
   },
@@ -479,6 +485,10 @@
         "shadow": "#b0becc",
         "base": "#d6e2ee",
         "light": "#f6fafd"
+      },
+      "states": {
+        "autumn": { "shadow": "#6e3f2e", "base": "#8c4f37", "light": "#a96442" },
+        "bare": { "shadow": "#61493a", "base": "#7b5c45", "light": "#937153" }
       }
     }
   },
@@ -579,6 +589,10 @@
         "shadow": "#b0becc",
         "base": "#d6e2ee",
         "light": "#f6fafd"
+      },
+      "states": {
+        "autumn": { "shadow": "#7c3f2c", "base": "#a2513a", "light": "#c06a48" },
+        "bare": { "shadow": "#7a5a46", "base": "#9b6f51", "light": "#b5875f" }
       }
     }
   },
@@ -651,6 +665,10 @@
         "shadow": "#74918e",
         "base": "#dee7f0",
         "light": "#f6fafd"
+      },
+      "states": {
+        "autumn": { "shadow": "#5c3c16", "base": "#9a6a20", "light": "#cfa13a" },
+        "bare": { "shadow": "#3b3a31", "base": "#545144", "light": "#6c6855" }
       }
     }
   },
@@ -686,6 +704,9 @@
         "shadow": "#b0becc",
         "base": "#d6e2ee",
         "light": "#f6fafd"
+      },
+      "states": {
+        "bare": { "shadow": "#7a6f58", "base": "#9c8e6e", "light": "#b6a882" }
       }
     }
   },
@@ -721,6 +742,10 @@
         "shadow": "#b0becc",
         "base": "#d6e2ee",
         "light": "#f6fafd"
+      },
+      "states": {
+        "autumn": { "shadow": "#6e4030", "base": "#8e5338", "light": "#aa6a44" },
+        "bare": { "shadow": "#6b5944", "base": "#887152", "light": "#a28a60" }
       }
     }
   },
@@ -826,6 +851,9 @@
         "shadow": "#b0becc",
         "base": "#dee7f0",
         "light": "#f6fafd"
+      },
+      "states": {
+        "bare": { "shadow": "#6f6a35", "base": "#8f8642", "light": "#ab9f50" }
       }
     }
   },
@@ -861,6 +889,9 @@
         "shadow": "#b0becc",
         "base": "#dee7f0",
         "light": "#f6fafd"
+      },
+      "states": {
+        "bare": { "shadow": "#8a744a", "base": "#ad9058", "light": "#c9aa66" }
       }
     }
   },
@@ -897,6 +928,10 @@
         "shadow": "#719484",
         "base": "#dee7f0",
         "light": "#f6fafd"
+      },
+      "states": {
+        "autumn": { "shadow": "#6b3218", "base": "#a9541f", "light": "#d98b2b" },
+        "bare": { "shadow": "#3e3a2e", "base": "#585141", "light": "#6f6650" }
       }
     }
   },
@@ -933,6 +968,10 @@
         "shadow": "#6d8c86",
         "base": "#dee7f0",
         "light": "#f6fafd"
+      },
+      "states": {
+        "autumn": { "shadow": "#5a2a16", "base": "#8f461c", "light": "#bf7426" },
+        "bare": { "shadow": "#38352b", "base": "#504a3c", "light": "#675f4c" }
       }
     }
   },
@@ -1038,6 +1077,9 @@
         "shadow": "#b0becc",
         "base": "#dee7f0",
         "light": "#f6fafd"
+      },
+      "states": {
+        "dry": { "shadow": "#957741", "base": "#bd974d", "light": "#dbb45c" }
       }
     }
   },
@@ -1074,6 +1116,9 @@
         "shadow": "#b0becc",
         "base": "#dee7f0",
         "light": "#f6fafd"
+      },
+      "states": {
+        "dry": { "shadow": "#8e843f", "base": "#ae9f4a", "light": "#c8b957" }
       }
     }
   },

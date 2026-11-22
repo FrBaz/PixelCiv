@@ -14,6 +14,7 @@ import type { Genetics, Species } from '../core/data/people';
 import type { AltitudeLevel, Biome, Resource } from '../core/data/schemas';
 import type { Worldgen } from '../core/data/worldgen';
 import { Rng } from '../core/rng';
+import { worldCalendars } from '../core/snow';
 import { SaveError, type Migrations, type SaveData, type SavedArray } from '../core/save/format';
 import { dayIndex, DAYS_PER_MONTH } from '../core/time';
 import { FIXED, toFixed } from '../core/position';
@@ -603,6 +604,7 @@ export function restoreState(save: SaveData, content: SaveContent): SimState {
     movement: new Movement(size.width, size.height),
     cost,
     land: terrainLands(cost, size),
+    calendars: worldCalendars(size, world, content.biomes.entries, content.seasons),
     commandLog: [...commandLog],
     pending: [...pending],
     rng: new Rng(save.meta.seed, rng),

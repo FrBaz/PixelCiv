@@ -24,7 +24,7 @@ import { BufferImageSource, GlProgram, Matrix, Shader, TextureStyle, UniformGrou
 import { PALETTE_ROLES } from '../core/data/humans';
 import { DECOR_LEGEND, legendRole } from '../gen/legend';
 import type { HumanPalette } from './humans';
-import { BAYER_GLSL, COVER_GLSL } from './mapShader';
+import { BAYER_GLSL, COVER_GLSL, type CoverUniforms } from './mapShader';
 import { OBJECT_FLAG, type ObjectPalette } from './objects';
 
 /** Apparences par rangée de la texture des palettes, et sa largeur en texels. */
@@ -124,15 +124,25 @@ varying vec2 vScreen;
 uniform sampler2D uTexture;
 uniform sampler2D uPalettes;
 uniform float uPaletteRows;
-/** Le sol, pour l'ombre « ground » : la texture des saisons, et les tons d'ombre des biomes. */
+/**
+ * Le sol, pour l'ombre « ground » : la texture des saisons, celle des calendriers de la neige et
+ * de la glace (comme la carte, map.ts), et les tons d'ombre des biomes.
+ */
 uniform sampler2D uGround;
+uniform sampler2D uGroundCalendars;
 uniform sampler2D uGroundTones;
 /** Origine de la carte à l'écran et pixels CSS par pixel de carte ; cases du monde ; biomes. */
 uniform vec4 uGroundView;
 uniform vec2 uGroundCells;
 uniform float uGroundBiomes;
-/** cos(2π (mois − 6,5) / 12), comme pour la carte. */
+/** cos(2π (mois − 6,5) / 12) et jour continu de l'année, comme pour la carte. */
 uniform float uSeason;
+uniform float uDay;
+/** Rampes des couvertures et part de neige des forêts (data/seasons.json), comme la carte. */
+uniform vec3 uSnowRamp;
+uniform vec3 uIceRamp;
+uniform vec3 uSeaIceRamp;
+uniform float uForestSnow;
 
 ${BAYER_GLSL}
 
@@ -152,14 +162,28 @@ vec4 groundShadow(vec2 screen) {
   float forest = ${COVER_GLSL.forest};
   float biome = floor(data.a * 255.0 + 0.5);
   float monthly = ${COVER_GLSL.monthly};
-  float snow = ${COVER_GLSL.snow};
-  float coverage = 0.0;
+  float kind = 0.0;
+  float keep = 1.0;
   if (waterCell < 0.5 && cover == 1.0) {
-    coverage = ${COVER_GLSL.forestSnow};
+    kind = 1.0;
+    if (forest > 0.5) keep = uForestSnow;
   } else if (waterCell > 0.5 && cover == 2.0) {
-    coverage = ${COVER_GLSL.ice};
+    kind = 2.0;
   } else if (waterCell > 0.5 && cover == 3.0) {
-    coverage = ${COVER_GLSL.seaIce};
+    kind = 3.0;
+  }
+  float phase = ${COVER_GLSL.phase};
+  vec3 ramp = kind < 1.5 ? uSnowRamp : (kind < 2.5 ? uIceRamp : uSeaIceRamp);
+  float most = kind > 0.5 ? ${COVER_GLSL.most} : 0.0;
+  float coverage = 0.0;
+  if (most > 0.0) {
+    float row = cell.y + (kind < 1.5 ? 0.5 : uGroundCells.y + 0.5);
+    vec2 at = vec2((cell.x + 0.5) / uGroundCells.x, row / (2.0 * uGroundCells.y));
+    vec4 calendar = floor(texture2D(uGroundCalendars, at) * 255.0 + 0.5);
+    float summer = ${COVER_GLSL.summer};
+    float now = ${COVER_GLSL.now};
+    float level = ${COVER_GLSL.level};
+    coverage = (${COVER_GLSL.share}) * keep;
   }
   vec2 pixel = vec2(mod(mapPixel.x, uGroundCells.x * 4.0), mapPixel.y);
   float tone = coverage > bayer(pixel) ? 1.5 : 0.5;
@@ -322,28 +346,47 @@ export class PaletteTexture {
   }
 }
 
-/** Le sol que lit l'ombre « ground » : la texture des saisons de la carte, et les tons d'ombre. */
+/**
+ * Le sol que lit l'ombre « ground » : la texture des saisons de la carte et celle de ses
+ * calendriers, les tons d'ombre, et les rampes des couvertures (mapShader.ts, coverUniforms).
+ */
 export interface GroundTextures {
   readonly data: BufferImageSource;
+  readonly calendars: BufferImageSource;
   readonly tones: BufferImageSource;
   /** Cases du monde, et nombre de biomes (lignes des tons). */
   readonly columns: number;
   readonly rows: number;
   readonly biomes: number;
+  readonly covers: CoverUniforms;
 }
 
-/** Une texture d'un texel, en attendant le premier monde. */
+/** Une texture d'un texel, en attendant le premier monde : rien n'y couvre le sol. */
 export function emptyGround(): GroundTextures {
   const texel = () => dataSource(new Uint8Array(4), 1, 1);
-  return { data: texel(), tones: texel(), columns: 1, rows: 1, biomes: 1 };
+  const none = () => new Float32Array([0, 1, 0]);
+  return {
+    data: texel(),
+    calendars: dataSource(new Uint8Array(8), 1, 2),
+    tones: texel(),
+    columns: 1,
+    rows: 1,
+    biomes: 1,
+    covers: { snow: none(), ice: none(), seaIce: none(), forest: 1 },
+  };
 }
 
-/** Réglages du sol : origine de la carte, échelle, monde, saison. */
+/** Réglages du sol : origine de la carte, échelle, monde, saison, couvertures. */
 type GroundGroup = UniformGroup<{
   uGroundView: { value: Float32Array; type: 'vec4<f32>' };
   uGroundCells: { value: Float32Array; type: 'vec2<f32>' };
   uGroundBiomes: { value: number; type: 'f32' };
   uSeason: { value: number; type: 'f32' };
+  uDay: { value: number; type: 'f32' };
+  uSnowRamp: { value: Float32Array; type: 'vec3<f32>' };
+  uIceRamp: { value: Float32Array; type: 'vec3<f32>' };
+  uSeaIceRamp: { value: Float32Array; type: 'vec3<f32>' };
+  uForestSnow: { value: number; type: 'f32' };
 }>;
 
 /** Le shader des humains, sur l'atlas des rôles `roles` et les palettes `palettes`. */
@@ -371,36 +414,53 @@ export function humanShader(
       uPalettes: palettes.source,
       humans: new UniformGroup({ uPaletteRows: { value: palettes.rows, type: 'f32' } }),
       uGround: ground.data,
+      uGroundCalendars: ground.calendars,
       uGroundTones: ground.tones,
       ground: new UniformGroup({
         uGroundView: { value: new Float32Array(4), type: 'vec4<f32>' },
         uGroundCells: { value: new Float32Array([ground.columns, ground.rows]), type: 'vec2<f32>' },
         uGroundBiomes: { value: ground.biomes, type: 'f32' },
         uSeason: { value: 0, type: 'f32' },
+        uDay: { value: 0, type: 'f32' },
+        uSnowRamp: { value: new Float32Array(ground.covers.snow), type: 'vec3<f32>' },
+        uIceRamp: { value: new Float32Array(ground.covers.ice), type: 'vec3<f32>' },
+        uSeaIceRamp: { value: new Float32Array(ground.covers.seaIce), type: 'vec3<f32>' },
+        uForestSnow: { value: ground.covers.forest, type: 'f32' },
       }),
     },
   });
 }
 
+/** L'instant que montre le sol : la position de la carte, son échelle, la saison et le jour. */
+export interface GroundView {
+  readonly x: number;
+  readonly y: number;
+  readonly scale: number;
+  readonly season: number;
+  readonly day: number;
+}
+
 /**
- * Le shader suit le sol : la texture des saisons et les tons d'un monde nouveau, puis, à chaque
- * image refaite, l'origine de la carte et l'échelle (en pixels CSS) et la saison.
+ * Le shader suit le sol : les textures et les rampes d'un monde nouveau, puis, à chaque image
+ * refaite, l'origine de la carte et l'échelle (en pixels CSS), la saison et le jour.
  */
-export function followGround(
-  shader: Shader,
-  ground: GroundTextures,
-  view: { readonly x: number; readonly y: number; readonly scale: number; readonly season: number },
-): void {
+export function followGround(shader: Shader, ground: GroundTextures, view: GroundView): void {
   const resources = shader.resources as {
     uGround: BufferImageSource;
+    uGroundCalendars: BufferImageSource;
     uGroundTones: BufferImageSource;
     ground: GroundGroup;
   };
   if (resources.uGround !== ground.data) shader.resources.uGround = ground.data;
+  if (resources.uGroundCalendars !== ground.calendars) {
+    shader.resources.uGroundCalendars = ground.calendars;
+  }
   if (resources.uGroundTones !== ground.tones) shader.resources.uGroundTones = ground.tones;
   const uniforms = resources.ground.uniforms;
   const shown = uniforms.uGroundView;
   const cells = uniforms.uGroundCells;
+  const { covers } = ground;
+  const same = (a: Float32Array, b: Float32Array) => a.every((value, index) => value === b[index]);
   const changed =
     shown[0] !== Math.fround(view.x) ||
     shown[1] !== Math.fround(view.y) ||
@@ -408,12 +468,22 @@ export function followGround(
     cells[0] !== ground.columns ||
     cells[1] !== ground.rows ||
     uniforms.uGroundBiomes !== ground.biomes ||
-    uniforms.uSeason !== Math.fround(view.season);
+    uniforms.uSeason !== Math.fround(view.season) ||
+    uniforms.uDay !== Math.fround(view.day) ||
+    !same(uniforms.uSnowRamp, covers.snow) ||
+    !same(uniforms.uIceRamp, covers.ice) ||
+    !same(uniforms.uSeaIceRamp, covers.seaIce) ||
+    uniforms.uForestSnow !== Math.fround(covers.forest);
   if (!changed) return;
   shown.set([view.x, view.y, view.scale, 0]);
   cells.set([ground.columns, ground.rows]);
   uniforms.uGroundBiomes = ground.biomes;
   uniforms.uSeason = Math.fround(view.season);
+  uniforms.uDay = Math.fround(view.day);
+  uniforms.uSnowRamp.set(covers.snow);
+  uniforms.uIceRamp.set(covers.ice);
+  uniforms.uSeaIceRamp.set(covers.seaIce);
+  uniforms.uForestSnow = Math.fround(covers.forest);
   resources.ground.update();
 }
 

@@ -26,8 +26,8 @@ import {
   type FloraLook,
 } from '../src/core/data/decor.ts';
 import { HumansSchema } from '../src/core/data/humans.ts';
-import { reduceRoles, type RoleImage } from '../src/gen/humans.ts';
-import { DECOR_LEGEND, legendRole } from '../src/gen/legend.ts';
+import { KEPT, reduceRoles, roleParts, type RoleImage } from '../src/gen/humans.ts';
+import { DECOR_LEGEND, legendRole, regionCode } from '../src/gen/legend.ts';
 import {
   drawAtlas,
   packSkyline,
@@ -76,11 +76,173 @@ export function formsOf(
 
 /** Les formes que nomment data/flora.json et data/decor.json (formsOf). */
 export function namedForms(root: string): string[] {
+  const { flora, decor } = formData(root);
+  return formsOf(flora, decor);
+}
+
+/** Les apparences de data/flora.json et le décor de data/decor.json, lus pour les formes. */
+function formData(root: string) {
   const flora = z
     .array(z.object({ look: FloraLookSchema }).loose())
     .parse(JSON.parse(readFileSync(join(root, 'data/flora.json'), 'utf8')));
   const decor = DecorSchema.parse(JSON.parse(readFileSync(join(root, 'data/decor.json'), 'utf8')));
-  return formsOf(flora, decor);
+  return { flora, decor };
+}
+
+/**
+ * La région que la neige de chaque forme recouvre hors neige, celle dont elle prend les tons
+ * (src/render/decor.ts, decorPalette : `under`) : le bois d'une grille nue (`look.bare`), la pierre
+ * d'un rocher ou d'un gisement, le feuillage des autres formes de la flore. Une forme nommée de
+ * deux façons n'en a pas.
+ */
+export function underRegions(
+  flora: readonly { readonly look: FloraLook }[],
+  decor: Pick<Decor, 'rocks' | 'deposits'>,
+): ReadonlyMap<string, string | undefined> {
+  const under = new Map<string, string | undefined>();
+  const name = (form: string, region: string) =>
+    under.set(form, under.has(form) && under.get(form) !== region ? undefined : region);
+  for (const { look } of flora) {
+    name(look.form, 'foliage');
+    if (look.bare !== undefined) name(look.bare, 'wood');
+  }
+  for (const rock of Object.values(decor.rocks)) name(rock.form, 'stone');
+  for (const deposit of Object.values(decor.deposits)) name(deposit.form, 'stone');
+  return under;
+}
+
+/** Régions de la neige et du chaperon, qui blanchissent sous la neige (decorPalette). */
+const SNOW_REGION = regionCode(DECOR_LEGEND, 'snow');
+const CAP_REGION = regionCode(DECOR_LEGEND, 'cap');
+
+/**
+ * Part de la neige et du chaperon de la planche que chaque niveau réduit garde au moins (keepSnow),
+ * avec deux pixels au moins.
+ */
+export const MIN_SNOW_SHARE = 0.5;
+
+/** Le rôle blanchit-il sous la neige : la région de la neige, ou le chaperon ? */
+export function whitens(role: number): boolean {
+  if (role < 16) return false;
+  const { region } = roleParts(role);
+  return region === SNOW_REGION || region === CAP_REGION;
+}
+
+/**
+ * La neige des niveaux réduits (tâche 2b.7 ; ADR 0017, § 4 ; ADR 0019) : le vote de la réduction
+ * (reduceRoles) donne chaque pixel à la région la plus présente de son bloc, si bien qu'une
+ * neige fine, un chaperon d'un pixel, s'y perdent (le saule nain enneigé ne gardait au facteur 2
+ * que 6 pixels blancs sur 78, contre 75 sur 284 à la planche). Cette passe en rend à la
+ * réduction `reduced` de facteur `f` de la planche `base` jusqu'à retrouver la part de pixels
+ * blanchissants de la planche (deux pixels au moins), sans rien changer hors neige :
+ * - un contour dont le bloc porte du chaperon devient le chaperon, au rang moyen de celui-ci :
+ *   hors neige, le chaperon a le ton du contour ;
+ * - un pixel de la région `under` (underRegions) dont le bloc porte de la neige devient la neige,
+ *   à son propre rang : hors neige, la neige prend les tons de cette région, rang pour rang.
+ * Les pixels se prennent dans l'ordre de la part blanchissante de leur bloc, la plus forte
+ * d'abord, puis de haut en bas et de gauche à droite. Aux niveaux où les formes fines (roseaux,
+ * frondes des palmiers) n'ont plus assez de pixels sur la neige de la planche pour en garder la
+ * moitié de la part (MIN_SNOW_SHARE) ou deux pixels, d'autres pixels de la région `under`, puis
+ * du contour si la planche a un chaperon, se prennent du haut vers le bas, jusque-là seulement :
+ * la neige se pose sur le dessus. La neige et le chaperon ont un ton dans toute palette du décor,
+ * même d'une forme dont la planche n'en porte pas (decorPalette). Une forme dont la réduction n'a
+ * ni contour ni pixel de la région `under` (la croûte de sel des petits niveaux, toute de
+ * minerai) reste sans neige : rien n'y blanchirait sans changer hors neige.
+ */
+export function keepSnow(
+  base: RoleImage,
+  reduced: RoleImage,
+  f: number,
+  under: string | undefined,
+): RoleImage {
+  if (f === 1) return reduced;
+  const count = (image: RoleImage) => {
+    let opaque = 0;
+    let white = 0;
+    for (const role of image.roles) {
+      if (role === 0) continue;
+      opaque++;
+      if (whitens(role)) white++;
+    }
+    return { opaque, white };
+  };
+  const planche = count(base);
+  if (planche.white === 0) return reduced;
+  const level = count(reduced);
+  const share = planche.white / planche.opaque;
+  const floor = Math.min(2, planche.white);
+  const goal = (part: number) =>
+    Math.min(level.opaque, Math.max(floor, Math.ceil(part * share * level.opaque)));
+  // La part de la planche par les pixels de sa neige, sa moitié au moins par les autres.
+  const full = goal(1);
+  const least = goal(MIN_SNOW_SHARE);
+  if (level.white >= full) return reduced;
+  const underCode = under === undefined ? -1 : regionCode(DECOR_LEGEND, under);
+  const { width, height } = reduced;
+  // Les pixels sur la neige de la planche ; puis, du haut vers le bas, ceux de la région `under`,
+  // et le contour, d'une planche à chaperon.
+  const candidates: { at: number; weight: number; role: number }[] = [];
+  const fallback: { at: number; weight: number; role: number }[] = [];
+  const outlines: { at: number; weight: number; role: number }[] = [];
+  const capped = base.roles.some((role) => role >= 16 && roleParts(role).region === CAP_REGION);
+  for (let v = 0; v < height; v++) {
+    // Le bloc de la planche sous le pixel (u, v), comme reduceRoles le découpe.
+    const y0 = base.anchorY - (height - v) * f;
+    for (let u = 0; u < width; u++) {
+      const at = v * width + u;
+      const role = reduced.roles[at] ?? 0;
+      if (role === 0 || whitens(role)) continue;
+      const outline = role === KEPT;
+      const own = role >= 16 ? roleParts(role) : undefined;
+      if (!outline && own?.region !== underCode) continue;
+      const x0 = base.anchorX + (u - reduced.anchorX) * f;
+      let snow = 0;
+      let cap = 0;
+      let capRanks = 0;
+      blockCover(base, x0, y0, f, (cell, weight) => {
+        if (cell < 16) return;
+        const { region, rank } = roleParts(cell);
+        if (region === SNOW_REGION) snow += weight;
+        if (region === CAP_REGION) {
+          cap += weight;
+          capRanks += weight * rank;
+        }
+      });
+      if (outline) {
+        const rank = cap > 0 ? Math.min(3, Math.round(capRanks / cap)) : 0;
+        const role = legendRole(DECOR_LEGEND, 'cap', rank);
+        if (cap > 0) candidates.push({ at, weight: cap, role });
+        else if (capped) outlines.push({ at, weight: 0, role });
+      } else if (own !== undefined) {
+        const role = legendRole(DECOR_LEGEND, 'snow', own.rank);
+        (snow > 0 ? candidates : fallback).push({ at, weight: snow, role });
+      }
+    }
+  }
+  candidates.sort((a, b) => b.weight - a.weight || a.at - b.at);
+  const chosen = candidates.slice(0, full - level.white);
+  const missing = least - level.white - chosen.length;
+  if (missing > 0) chosen.push(...[...fallback, ...outlines].slice(0, missing));
+  const roles = Uint8Array.from(reduced.roles);
+  for (const candidate of chosen) roles[candidate.at] = candidate.role;
+  return { ...reduced, roles };
+}
+
+/** Les pixels de `image` qui recouvrent le bloc [x0, x0 + f) × [y0, y0 + f), et la part de chacun. */
+function blockCover(
+  image: RoleImage,
+  x0: number,
+  y0: number,
+  f: number,
+  visit: (role: number, weight: number) => void,
+): void {
+  for (let y = Math.max(0, Math.floor(y0)); y < Math.min(image.height, Math.ceil(y0 + f)); y++) {
+    const wy = Math.min(y + 1, y0 + f) - Math.max(y, y0);
+    for (let x = Math.max(0, Math.floor(x0)); x < Math.min(image.width, Math.ceil(x0 + f)); x++) {
+      const wx = Math.min(x + 1, x0 + f) - Math.max(x, x0);
+      if (wx > 0 && wy > 0) visit(image.roles[y * image.width + x] ?? 0, wx * wy);
+    }
+  }
 }
 
 /** Les grilles du décor : leurs noms et leur texte, dans l'ordre des noms. */
@@ -99,7 +261,8 @@ export function buildDecorAtlas(
   const humans = HumansSchema.parse(
     JSON.parse(readFileSync(join(root, 'data/humans.json'), 'utf8')),
   );
-  const decor = DecorSchema.parse(JSON.parse(readFileSync(join(root, 'data/decor.json'), 'utf8')));
+  const { flora, decor } = formData(root);
+  const unders = underRegions(flora, decor);
   const shadowRoles: [number, number] = [
     legendRole(DECOR_LEGEND, 'shadow', 0),
     legendRole(DECOR_LEGEND, 'shadow', 1),
@@ -122,7 +285,12 @@ export function buildDecorAtlas(
     names.push(name.slice(0, -4));
     const base = parseRoleGrid(name, text, DECOR_LEGEND);
     for (const level of humans.levels) {
-      const reduced = reduceRoles(base, level.factor, level.outline, []);
+      const reduced = keepSnow(
+        base,
+        reduceRoles(base, level.factor, level.outline, []),
+        level.factor,
+        unders.get(form),
+      );
       images.push(withShadow(reduced, decor.shadow.sx, decor.shadow.sy, shadowRoles));
     }
   }

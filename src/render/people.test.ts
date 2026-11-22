@@ -39,12 +39,14 @@ import {
   type ObjectView,
   type PaletteSlots,
 } from './objects';
+import { coverUniforms } from './mapShader';
 import { bannerCloth, PeopleLayer, stepDuration, STEP_MS, type PeopleScene } from './people';
 
 // Le calque des individus, sur une application factice : la scène, et la densité de l'écran
 // du rendu. On y lit ce que PixiJS rendrait, sprite par sprite, dans l'ordre de ses enfants.
 
 const data = loadGameData();
+const testSeasons = data.seasons;
 const human = data.species.entries.at(0);
 if (human === undefined) throw new Error('pas d’humains');
 const { stature: reference, carry } = human.display;
@@ -1007,10 +1009,16 @@ describe('calque commun : décor et humains (ADR 0017, § 7)', () => {
         const objects = new FakeObjects([[100.5, 50.5]]);
         const ground = {
           data: new BufferImageSource({ resource: new Uint8Array(4 * 8), width: 4, height: 2 }),
+          calendars: new BufferImageSource({
+            resource: new Uint8Array(4 * 16),
+            width: 4,
+            height: 4,
+          }),
           tones: new BufferImageSource({ resource: new Uint8Array(4 * 6), width: 2, height: 3 }),
           columns: 4,
           rows: 2,
           biomes: 3,
+          covers: coverUniforms(testSeasons),
         };
         people.setGround(ground);
         const camera = aimedAt(100, 50, 8 * resolution);
@@ -1024,6 +1032,7 @@ describe('calque commun : décor et humains (ADR 0017, § 7)', () => {
         const shader = (insides(people).humans as { shader?: Shader }).shader;
         const resources = shader?.resources as {
           uGround: BufferImageSource;
+          uGroundCalendars: BufferImageSource;
           uGroundTones: BufferImageSource;
           ground: {
             uniforms: {
@@ -1031,10 +1040,16 @@ describe('calque commun : décor et humains (ADR 0017, § 7)', () => {
               uGroundCells: Float32Array;
               uGroundBiomes: number;
               uSeason: number;
+              uDay: number;
+              uSnowRamp: Float32Array;
+              uIceRamp: Float32Array;
+              uSeaIceRamp: Float32Array;
+              uForestSnow: number;
             };
           };
         };
         expect(resources.uGround === ground.data, 'texture des saisons lue').toBe(true);
+        expect(resources.uGroundCalendars === ground.calendars, 'calendriers lus').toBe(true);
         expect(resources.uGroundTones === ground.tones, 'tons d’ombre lus').toBe(true);
         const scale = displayScale(camera.zoom);
         const originX = Math.round(viewport.width / 2 - camera.x * scale);
@@ -1045,6 +1060,15 @@ describe('calque commun : décor et humains (ADR 0017, § 7)', () => {
         expect(Array.from(resources.ground.uniforms.uGroundCells)).toEqual([4, 2]);
         expect(resources.ground.uniforms.uGroundBiomes).toBe(3);
         expect(resources.ground.uniforms.uSeason).toBe(Math.fround(seasonFactor(month)));
+        // Le jour continu de l'année et les rampes de data/seasons.json, comme la carte.
+        expect(resources.ground.uniforms.uDay).toBe(Math.fround(month * 30));
+        expect(Array.from(resources.ground.uniforms.uSnowRamp)).toEqual(
+          Array.from(ground.covers.snow),
+        );
+        expect(Array.from(resources.ground.uniforms.uSeaIceRamp)).toEqual(
+          [-6, 4, 0.85].map(Math.fround),
+        );
+        expect(resources.ground.uniforms.uForestSnow).toBe(Math.fround(testSeasons.snow.forest));
       }
     } finally {
       DOMAdapter.set(adapter);

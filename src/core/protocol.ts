@@ -10,8 +10,11 @@ import type { AgeClass } from './visual';
 import { LAYER_NAMES, type GenerationStage, type WorldLayers, type WorldSize } from './world';
 import type { WorldParams } from './worldParams';
 
-/** Version du protocole, vérifiée à la poignée de main. */
-export const PROTOCOL_VERSION = 7;
+/**
+ * Version du protocole, vérifiée à la poignée de main. Version 8 (tâche 2b.7, ADR 0019) :
+ * l'instantané porte les calendriers de la neige et de la glace.
+ */
+export const PROTOCOL_VERSION = 8;
 
 /**
  * Pinceau de biome : donne à une case de terre un autre biome de terre. C'est un outil
@@ -421,6 +424,12 @@ export type WorkerMessage =
       readonly world: WorldInfo;
       readonly time: TimeInfo;
       readonly layers: WorldLayers;
+      /**
+       * Calendriers de la neige et de la glace de chaque case (protocole 8 ; src/core/snow.ts,
+       * worldCalendars ; ADR 0019) : quatre octets par case pour la neige de toutes les cases,
+       * puis quatre pour leur glace. Aucun pas ne les change, et aucun delta ne les porte.
+       */
+      readonly calendars: Uint8Array<ArrayBuffer>;
       readonly frame: GroupsFrame;
       /** Le gibier, à l'instant de l'état (protocole 7, ADR 0018). */
       readonly fauna: FaunaFrame;
@@ -514,6 +523,7 @@ export function transferablesOf(message: MainMessage | WorkerMessage): ArrayBuff
     case 'snapshot':
       return [
         ...LAYER_NAMES.map((name) => message.layers[name].buffer),
+        message.calendars.buffer,
         ...frameBuffers(message.frame),
         ...faunaBuffers(message.fauna),
       ];

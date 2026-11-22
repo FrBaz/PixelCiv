@@ -230,6 +230,43 @@ button:disabled {
   padding: 0 0.75rem;
 }
 
+/* Réglage des effets (ADR 0020) : un titre, puis trois boutons, comme les modes de carte ; sous
+   eux, ce que montre le cran choisi, en clair (au doigt, rien n'ouvre l'attribut title). */
+.effects-menu {
+  display: flex;
+  flex-direction: column;
+  gap: 0.125rem;
+}
+
+.effects-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.25rem;
+}
+
+/* L'explication du cran choisi : largeur fixe et deux lignes réservées, pour qu'un appui sur un
+   cran ne change ni la largeur du panneau, qui pousserait ses voisins dans la ligne qui défile,
+   ni la hauteur de la barre du bas. */
+.effects-hint {
+  margin: 0;
+  padding: 0 0.5rem;
+  width: 20rem;
+  min-height: 2.4em;
+  font-size: 0.75rem;
+  line-height: 1.2;
+  white-space: normal;
+}
+
+.effects-title {
+  padding: 0 0.25rem 0 0.5rem;
+  white-space: nowrap;
+}
+
+.effects-menu button {
+  padding: 0 0.75rem;
+}
+
 /* Colonne de droite : outil d'apparition, fiche, chronique, inspection d'une case et
    légende, de la barre du haut jusqu'en bas de l'écran (U-3, U-4). Chaque panneau prend la
    hauteur de son contenu, et cède quand la place manque, jusqu'à une hauteur où il reste

@@ -504,7 +504,9 @@ describe('mouvement des individus : vie, mort et changements de groupe (ADR 0014
         changed++;
         expect(after.get(id)).toEqual(before.get(id));
         expect(people.get('move', slot) & JOIN).toBe(JOIN);
-        if (!started.has(id)) started.set(id, t);
+        // Qui change encore de groupe en chemin (un orphelin rendu à un autre groupe) rejoint
+        // le nouveau : sa marche se compte de ce changement.
+        started.set(id, t);
       });
       for (const [id, start] of started) {
         const slot = people.slotOf(id);

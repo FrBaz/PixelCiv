@@ -495,11 +495,13 @@ export class SimulationHost {
   }
 
   /**
-   * Commence la partie `state`. La copie de ses couches pour l'instantané se fait
-   * d'abord : si elle échoue, la partie en cours continue, et rien n'a changé.
+   * Commence la partie `state`. La copie de ses couches et de ses calendriers pour l'instantané
+   * se fait d'abord : si elle échoue, la partie en cours continue, et rien n'a changé. Les
+   * copies partent transférées ; l'état garde les siens, que la pêche lit (ADR 0019, § 1).
    */
   private start(state: SimState): void {
     const layers = copyLayers(state.world);
+    const calendars = state.calendars.slice();
     const frame = groupsFrame(state, this.data, undefined, this.pool);
     // Les étapes qui commencent désormais partent avec les deltas ; l'image dit celles en cours.
     state.movement.journal = new LegJournal();
@@ -518,6 +520,7 @@ export class SimulationHost {
       world: { params: state.params, size: state.size },
       time: this.time(state),
       layers,
+      calendars,
       frame,
       fauna,
       chronicle,

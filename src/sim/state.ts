@@ -6,6 +6,7 @@
  */
 import type { ChunkPatch, GameCommand, LoggedCommand } from '../core/protocol';
 import { Rng } from '../core/rng';
+import { worldCalendars } from '../core/snow';
 import {
   CHUNK_SIZE,
   chunkGrid,
@@ -62,6 +63,16 @@ export interface SimState {
    * ne touche pas à l'altitude, qui fait les sommets. La couche ne se recalcule donc pas.
    */
   readonly land: Int32Array<ArrayBuffer>;
+  /**
+   * Calendriers de la neige et de la glace de chaque case (src/core/snow.ts, worldCalendars ;
+   * ADR 0019, § 1), que lit la pêche et que l'instantané envoie au rendu. Ils découlent du climat
+   * du monde et de ses eaux, et se calculent avec lui, à la création, à la relecture et au rejeu
+   * d'une partie : ni la sauvegarde ni l'empreinte n'en tiennent compte. Aucune commande ne les
+   * change : le climat ne change pas, et le pinceau ne peint ni n'efface l'eau, qui décide de la
+   * sorte de glace d'une case. Une commande qui changerait l'eau en terre, ou l'inverse, devrait
+   * les recalculer.
+   */
+  readonly calendars: Uint8Array<ArrayBuffer>;
   /** Commandes de jeu appliquées, dans l'ordre : rejouées depuis le monde, elles redonnent l'état. */
   readonly commandLog: LoggedCommand[];
   /**
@@ -86,7 +97,7 @@ export interface SimState {
 export function createState(
   params: WorldParams,
   world: WorldLayers,
-  content: Pick<GroupsContent, 'biomes' | 'altitudeLevels'> & Partial<FaunaContent>,
+  content: Pick<GroupsContent, 'biomes' | 'altitudeLevels' | 'seasons'> & Partial<FaunaContent>,
 ): SimState {
   const size = WORLD_SIZES[params.size];
   const grid = chunkGrid(size);
@@ -104,6 +115,7 @@ export function createState(
     movement: new Movement(size.width, size.height),
     cost,
     land: terrainLands(cost, size),
+    calendars: worldCalendars(size, world, content.biomes.entries, content.seasons),
     commandLog: [],
     pending: [],
     rng: new Rng(params.seed),

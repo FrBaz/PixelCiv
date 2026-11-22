@@ -8,8 +8,9 @@
  * - Pluie du mois : la pluie annuelle se répartit sur l'année, avec une saison sèche en
  *   hiver et une saison des pluies en été sous les tropiques (C1, D8).
  *
- * - Couvertures du mois (C1, D9 et D10) : neige des terres, glace de l'eau douce, banquise
- *   de la mer côtière, selon la température du mois.
+ * - Couvertures (C1, D9 et D10) : neige des terres, glace de l'eau douce, banquise de la mer
+ *   côtière, selon la température et leur rampe (data/seasons.json), avec l'inertie de leurs
+ *   calendriers (core/snow.ts).
  *
  * Fonctions de dmath : elles servent aussi aux calculs qui influencent l'état.
  */
@@ -19,34 +20,16 @@ import { cos, exp, TAU } from './dmath';
 export type SeasonCover = (typeof SEASON_COVERS)[number];
 
 /**
- * Rampe d'une couverture saisonnière : la part de la case couverte croît de 0 à `full`
- * quand la température du mois descend de `onset` à `onset − span` (°C).
+ * Rampe d'une couverture saisonnière (data/seasons.json, `ramp`) : la part de la case couverte
+ * croît de 0 à `full` quand la température descend de `onset` à `onset − span` (°C). C'est la
+ * couverture de l'instant ; core/snow.ts la compose avec l'inertie des calendriers, pour la
+ * carte, le décor et la pêche.
  */
 export interface CoverRamp {
   readonly onset: number;
   readonly span: number;
   readonly full: number;
 }
-
-/**
- * Rampes des couvertures saisonnières (data/biomes.json, `seasons.cover`). Le shader de la
- * carte les trame (render/mapShader.ts), et la simulation en tient compte : sous la glace
- * et la neige, la pêche rend moins (sim/forage.ts). L'un et l'autre les lisent ici. Une
- * rivière ou un ruisseau qui traverse une case de terre gèle comme l'eau douce (`ice`).
- */
-export const COVER_RAMPS: Readonly<Record<SeasonCover, CoverRamp>> = {
-  none: { onset: 0, span: 1, full: 0 },
-  snow: { onset: 0.5, span: 3, full: 1 },
-  ice: { onset: -1, span: 3, full: 0.9 },
-  'sea-ice': { onset: -6, span: 4, full: 0.85 },
-};
-
-/**
- * Part de la neige qu'une case de forêt garde : les arbres dépassent. Le shader de la carte et le
- * décor la lisent ici (render/mapShader.ts, render/seasons.ts), pour qu'un arbre enneigé se
- * tienne sur un sol enneigé.
- */
-export const FOREST_SNOW_SHARE = 0.7;
 
 /** Part de la case que couvre une couverture saisonnière au mois de température `celsius`. */
 export function coverShare(ramp: CoverRamp, celsius: number): number {
@@ -63,9 +46,16 @@ export function southern(y: number, height: number): boolean {
   return y >= height / 2;
 }
 
+/**
+ * Mois continu où l'été culmine au nord, à la mi-juillet : la phase du facteur de saison. Le sud vit
+ * le sien six mois plus tard, à la mi-janvier. Les calendriers de la neige et de la glace se
+ * comptent depuis ce jour (core/snow.ts, warmestDay).
+ */
+export const WARMEST_MONTH = 6.5;
+
 /** Facteur de saison du mois continu `month` au nord : 1 à la mi-juillet, −1 à la mi-janvier. */
 export function seasonFactor(month: number): number {
-  return cos((TAU * (month - 6.5)) / 12);
+  return cos((TAU * (month - WARMEST_MONTH)) / 12);
 }
 
 /** Milieu de chacun des douze mois, en mois continus (0,5 pour janvier). */

@@ -14,15 +14,16 @@
  * - Tirages : quatorze par case, toujours les mêmes et dans le même ordre, d'un splitmix32 dont la
  *   graine mêle la clé du décor et l'indice de la case, x ramené dans le monde : la même case
  *   donne les mêmes objets dans chaque copie du monde, de part et d'autre de la couture.
- * - Saisons : l'état du feuillage (feuillé, automne, nu, sec) se tire du climat de la case au
- *   mois de l'instant ; la neige vient de la part de neige de la case, que fournit la même source
- *   que le shader de la carte (src/render/seasons.ts, snowShare).
+ * - Saisons : l'état du feuillage (feuillé, automne, nu, sec, et la lumière d'hiver) se lit du
+ *   calendrier de la végétation de la case (src/core/foliage.ts), celui du sol de la carte, au
+ *   seuil de la majorité des pixels de la case ; la neige vient de la part de neige de la case,
+ *   que fournit la même source que le shader de la carte (src/render/seasons.ts, snowShareOn).
  */
 import type { Biome, Decor, Flora, LandUse, Phenology, Resource } from '../core/data';
 import type { Catalog } from '../core/data/catalog';
 import { floraDensity } from '../core/flora';
 import { splitmix32, streamSeed } from '../core/rng';
-import { seasonFactor } from '../core/seasons';
+import { FOLIAGE_STATE, foliageState, type FoliageShares } from '../core/foliage';
 import { riverClass, type WorldLayers, type WorldSize } from '../core/world';
 
 /** Sortes d'objets du décor. */
@@ -291,122 +292,75 @@ export function variantOf(variant: number, count: number): number {
 export const DECOR_STATE = { summer: 0, autumn: 1, bare: 2, dry: 3 } as const;
 export type DecorState = (typeof DECOR_STATE)[keyof typeof DECOR_STATE];
 
-/** Ce qu'un instant donne à toutes les cases : le facteur de saison au nord, et sa tendance. */
-export interface SeasonMoment {
-  /** Mois continu, de 0 au début de janvier à 12. */
-  readonly month: number;
-  /** seasonFactor(mois) : 1 à la mi-juillet, −1 à la mi-janvier, au nord. */
-  readonly factor: number;
-  /** Le mois refroidit-il au nord, au sud ? */
-  readonly coolingNorth: boolean;
-  readonly coolingSouth: boolean;
-}
-
-/** Le moment de la saison du mois continu `month`, calculé une fois pour toute une collecte. */
-export function seasonMoment(month: number): SeasonMoment {
-  const factor = seasonFactor(month);
-  const later = seasonFactor(month + 0.05);
-  return { month, factor, coolingNorth: later < factor, coolingSouth: later > factor };
-}
-
-/** Ce que le feuillage d'une case connaît de son climat, à un moment de la saison. */
-export interface FoliageClimate {
-  /** Température du mois, et celles du mois le plus froid et du mois le plus chaud, en °C. */
-  readonly monthly: number;
-  readonly coldest: number;
-  readonly warmest: number;
-  /** Le mois refroidit-il dans l'hémisphère de la case ? */
-  readonly cooling: boolean;
-  /** Pluie du mois, en part de la moyenne annuelle. */
-  readonly rain: number;
-}
-
 /**
- * Le climat du feuillage d'une case de température annuelle `annual` et de demi-amplitude
- * `amplitude` (°C), au sud ou non, à `rain` de force de la saison des pluies (rainSeasonality de
- * sa latitude), au moment `moment` : les formules de src/core/seasons.ts (C1, D8).
+ * Les états de végétation que prend une espèce selon sa saison (ADR 0017, § 5) : le caduc vire à
+ * l'automne puis se dénude ; l'espèce de la saison sèche sèche ; le persistant n'en prend aucun.
+ * Les dates viennent du calendrier de la végétation de sa case (src/core/foliage.ts), celui que lit
+ * le sol de la carte.
  */
-export function foliageClimate(
-  annual: number,
-  amplitude: number,
-  south: boolean,
-  rain: number,
-  moment: SeasonMoment,
-): FoliageClimate {
-  const sign = south ? -1 : 1;
-  return {
-    monthly: annual + amplitude * moment.factor * sign,
-    coldest: annual - amplitude,
-    warmest: annual + amplitude,
-    cooling: south ? moment.coolingSouth : moment.coolingNorth,
-    rain: 1 + rain * moment.factor * sign,
-  };
-}
+export const PHENOLOGY_STATES: Readonly<
+  Record<Phenology, { readonly autumn: boolean; readonly bare: boolean; readonly dry: boolean }>
+> = {
+  evergreen: { autumn: false, bare: false, dry: false },
+  deciduous: { autumn: true, bare: true, dry: false },
+  dry: { autumn: false, bare: false, dry: true },
+};
 
-/** L'état de saison d'un objet : son feuillage, et s'il est enneigé. */
+/** L'état de saison d'un objet : son feuillage, s'il est enneigé, s'il prend la lumière d'hiver. */
 export interface DecorSeason {
   readonly state: DecorState;
   readonly snowy: boolean;
+  readonly lit: boolean;
 }
 
 /**
- * Point d'entrée des saisons du décor (ADR 0017, § 5), que 2b.7 enrichira : l'état d'un objet
- * de saisons `phenology`, sur une case de part de neige `snow` (de 0 à 1, celle que montre la
- * carte : src/render/seasons.ts, snowShare) et de climat `climate`, selon les seuils de
- * data/decor.json.
- * - Enneigé quand la part de neige atteint `snow.share`.
- * - Caduc : nu sous `bareBelow` ; en automne quand le mois refroidit, sous `autumnBelow`, et
- *   déjà `autumnDrop` au moins sous le mois le plus chaud (la feuille ne jaunit pas au pic de
- *   l'été, même là où l'été reste frais) ; feuillé sinon. Il garde ses feuilles toute l'année là
- *   où le mois le plus froid reste au-dessus de `bareBelow`.
- * - Sec : ses tons secs quand la pluie du mois tombe sous `dryShare` de la moyenne.
- * - Persistant : toujours feuillé.
+ * Point d'entrée des saisons du décor (ADR 0017, § 5 ; ADR 0019, § 2) : l'état d'un objet de
+ * saisons `phenology`, sur une case de part de neige `snow` (de 0 à 1, celle que montre la carte :
+ * src/render/seasons.ts, snowShareOn) et de parts d'états `shares` (src/core/foliage.ts,
+ * foliageShares, au jour de la vue), au seuil `threshold` : celui de la majorité des pixels de sa
+ * case (cellMedianThreshold), si bien que l'objet prend l'état de la majorité de son sol.
+ * - Enneigé quand la part de neige atteint `snow.share` (data/decor.json).
+ * - Feuillage : l'état de son espèce dont la part dépasse le seuil, le bois nu d'abord, puis
+ *   l'automne, puis la saison sèche (foliageState) ; à défaut, la lumière d'hiver si elle se
+ *   montre (`light`, le réglage des effets) et que sa part dépasse le seuil ; feuillé sinon.
  */
 export function decorSeason(
   snow: number,
   phenology: Phenology,
-  climate: FoliageClimate,
-  rules: Pick<Decor, 'snow' | 'foliage'>,
+  shares: FoliageShares,
+  threshold: number,
+  rules: Pick<Decor, 'snow'>,
+  light: boolean,
 ): DecorSeason {
-  const code = decorSeasonCode(
-    snow,
-    phenology,
-    climate.monthly,
-    climate.coldest,
-    climate.warmest,
-    climate.cooling,
-    climate.rain,
-    rules,
-  );
-  return { state: (code & 3) as DecorState, snowy: code >= 4 };
+  const code = decorSeasonCode(snow, phenology, shares, threshold, rules, light);
+  return { state: (code & 3) as DecorState, snowy: (code & 4) !== 0, lit: (code & 8) !== 0 };
 }
 
 /**
- * decorSeason sans objet : le même état, codé `état + 4 × enneigé`, d'après les seules valeurs du
- * climat de la case au moment voulu (FoliageClimate). Le rendu l'appelle pour chaque objet de la
- * vue, à chaque jour : rien ne s'y alloue.
+ * decorSeason sans objet : le même état, codé `état + 4 × enneigé + 8 × éclairé`. Le rendu
+ * l'appelle pour chaque objet qu'il réévalue : rien ne s'y alloue.
  */
 export function decorSeasonCode(
   snow: number,
   phenology: Phenology,
-  monthly: number,
-  coldest: number,
-  warmest: number,
-  cooling: boolean,
-  rain: number,
-  rules: Pick<Decor, 'snow' | 'foliage'>,
+  shares: FoliageShares,
+  threshold: number,
+  rules: Pick<Decor, 'snow'>,
+  light: boolean,
 ): number {
   const snowy = snow > 0 && snow >= rules.snow.share ? 4 : 0;
-  const { bareBelow, autumnBelow, autumnDrop, dryShare } = rules.foliage;
-  if (phenology === 'deciduous' && coldest < bareBelow) {
-    if (monthly < bareBelow) return DECOR_STATE.bare + snowy;
-    if (cooling && monthly < autumnBelow && monthly <= warmest - autumnDrop) {
+  switch (foliageState(shares, PHENOLOGY_STATES[phenology], threshold, light)) {
+    case FOLIAGE_STATE.bare:
+      return DECOR_STATE.bare + snowy;
+    case FOLIAGE_STATE.autumn:
       return DECOR_STATE.autumn + snowy;
-    }
-  } else if (phenology === 'dry' && rain < dryShare) {
-    return DECOR_STATE.dry + snowy;
+    case FOLIAGE_STATE.dry:
+      return DECOR_STATE.dry + snowy;
+    case FOLIAGE_STATE.light:
+      return DECOR_STATE.summer + snowy + 8;
+    case FOLIAGE_STATE.summer:
+      return DECOR_STATE.summer + snowy;
   }
-  return DECOR_STATE.summer + snowy;
 }
 
 /**

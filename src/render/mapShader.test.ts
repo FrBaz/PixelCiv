@@ -1,15 +1,40 @@
 import { describe, expect, it } from 'vitest';
 import { BiomesSchema, type Biome } from '../core/data/schemas';
 import { Fingerprint } from '../core/hash';
-import { COVER_RAMPS, coverShare, seasonFactor } from '../core/seasons';
+import { cos, TAU } from '../core/dmath';
+import { loadGameData } from '../core/data';
+import { coverShare, seasonFactor } from '../core/seasons';
+import { coverRamps } from '../core/snow';
 import {
   bakedWaterTone,
   MAX_CREST_LENGTH,
   MAX_CREST_THICKNESS,
   MAX_WAVE_BIOMES,
 } from '../core/waves';
-import { glslFloat, MAP_FRAGMENT, MAP_FRAGMENT_WAVES, WAVE_ANCHORS } from './mapShader';
-import { WAVE_GLSL, waveNoise, wavePhase, wavePixel, waveTable } from './waves';
+import { foliageShares, leafThreshold } from '../core/foliage';
+import { TINT } from './bake';
+import {
+  COVER_GLSL,
+  glslFloat,
+  MAP_FRAGMENT,
+  MAP_FRAGMENT_SEASONS,
+  MAP_FRAGMENT_WAVES,
+  MAP_FRAGMENT_WAVES_SEASONS,
+  SEASON_ANCHORS,
+  WAVE_ANCHORS,
+} from './mapShader';
+import { mirrorPhase, mirrorState } from './seasonMirror';
+import { IDENTITY_HEIGHT, IDENTITY_WIDTH, SEASON_EXPR, SEASON_GLSL } from './seasonShader';
+import { evaluateGlsl } from './testing';
+import {
+  CALM_GLSL,
+  WAVE_GLSL,
+  waveNoise,
+  wavePhase,
+  wavePixel,
+  waveTable,
+  type WaveCovers,
+} from './waves';
 
 /** Une eau fictive, de tons et de mer animée choisis : le reste n'importe pas à l'onde. */
 const water = (
@@ -68,25 +93,49 @@ describe('shader de la carte', () => {
     expect(glslFloat(-0.5)).toBe('-0.5');
   });
 
-  it('trame la neige, la glace et la banquise selon les rampes que la simulation lit (F-3)', () => {
-    // Les seuils de C1 (D9), inchangés depuis la tâche 1.8 : ceux qui font geler la pêche.
-    expect(MAP_FRAGMENT).toContain('float snow = clamp((0.5 - monthly) / 3.0, 0.0, 1.0) * 1.0;');
-    expect(MAP_FRAGMENT).toContain('float ice = clamp((-1.0 - monthly) / 3.0, 0.0, 1.0) * 0.9;');
-    expect(MAP_FRAGMENT).toContain('coverage = clamp((-6.0 - monthly) / 4.0, 0.0, 1.0) * 0.85;');
+  it('lit les rampes et les calendriers par ses uniformes, sans données dans son code (F-3)', () => {
+    // Les rampes de data/seasons.json, que la simulation lit aussi (src/sim/cover.ts), arrivent
+    // par des uniformes : le programme ne change pas quand on les règle.
+    for (const uniform of [
+      'uniform vec3 uSnowRamp;',
+      'uniform vec3 uIceRamp;',
+      'uniform vec3 uSeaIceRamp;',
+      'uniform float uForestSnow;',
+      'uniform float uDay;',
+      'uniform sampler2D uCalendars;',
+    ]) {
+      expect(MAP_FRAGMENT).toContain(uniform);
+    }
+    for (const name of ['phase', 'most', 'summer', 'now', 'level', 'share'] as const) {
+      expect(MAP_FRAGMENT).toContain(COVER_GLSL[name]);
+    }
     expect(MAP_FRAGMENT).not.toContain('${');
+    expect(MAP_FRAGMENT).not.toContain('0.85');
+    expect(MAP_FRAGMENT).not.toContain('0.7 ');
     // La même rampe, côté simulation : rien au-dessus du seuil, pleine en dessous.
-    for (const ramp of Object.values(COVER_RAMPS)) {
+    for (const ramp of Object.values(coverRamps(loadGameData().seasons))) {
       expect(coverShare(ramp, ramp.onset + 1)).toBe(0);
       expect(coverShare(ramp, ramp.onset - ramp.span / 2)).toBeCloseTo(ramp.full / 2, 12);
       expect(coverShare(ramp, ramp.onset - ramp.span - 1)).toBe(ramp.full);
     }
-    expect(COVER_RAMPS.none.full).toBe(0);
+    expect(coverRamps(loadGameData().seasons).none.full).toBe(0);
   });
 });
 
 describe('programmes de la carte et de la mer animée (ADR 0015)', () => {
-  it('garde le programme de la carte de la tâche 2b.3, à l’octet près', () => {
-    expect(new Fingerprint().string(MAP_FRAGMENT).hex()).toBe('f465afb9');
+  it('fige le programme de la carte : couvertures à calendrier (tâche 2b.7, ADR 0019)', () => {
+    // Celui de la tâche 2b.3 (f465afb9), ses couvertures désormais lues des calendriers.
+    expect(new Fingerprint().string(MAP_FRAGMENT).hex()).toBe('f1e7960c');
+  });
+
+  it('garde aux couleurs de la saison les ancres de l’onde, une fois chacune', () => {
+    expect(SEASON_ANCHORS).toEqual(WAVE_ANCHORS);
+    for (const anchor of Object.values(SEASON_ANCHORS)) {
+      expect(MAP_FRAGMENT_WAVES.split(anchor)).toHaveLength(2);
+    }
+    // Insérées après l'onde, elles la suivent et précèdent les modes de carte.
+    const main = MAP_FRAGMENT_WAVES.indexOf(SEASON_ANCHORS.main);
+    expect(main).toBeGreaterThan(MAP_FRAGMENT_WAVES.indexOf(WAVE_GLSL.main));
   });
 
   it("n'ajoute au programme de la mer que le code de l'onde, avant main() et après la couverture", () => {
@@ -106,15 +155,13 @@ describe('programmes de la carte et de la mer animée (ADR 0015)', () => {
     expect(MAP_FRAGMENT.split(WAVE_ANCHORS.main)).toHaveLength(2);
   });
 
-  it('écrit le code de l’onde depuis les constantes du miroir et les rampes de core/seasons.ts', () => {
+  it('écrit le code de l’onde depuis les constantes du miroir et les calendriers de la glace', () => {
     expect(MAP_FRAGMENT_WAVES).not.toContain('${');
-    // Le calme : les CALM_SPAN degrés qui précèdent la glace des rivières et la banquise.
-    expect(WAVE_GLSL.main).toContain(
-      `calm = clamp((${glslFloat(COVER_RAMPS.ice.onset + 2)} - monthly) / 2.0, 0.0, 1.0);`,
-    );
-    expect(WAVE_GLSL.main).toContain(
-      `calm = clamp((${glslFloat(COVER_RAMPS['sea-ice'].onset + 2)} - monthly) / 2.0, 0.0, 1.0);`,
-    );
+    // Le calme : les calmDays jours (un uniforme) avant et après la glace de son calendrier.
+    expect(WAVE_GLSL.header).toContain('uniform float uCalmDays;');
+    expect(WAVE_GLSL.main).toContain(`float distance = ${CALM_GLSL.distance};`);
+    expect(WAVE_GLSL.main).toContain(`calm = ${CALM_GLSL.calm};`);
+    expect(WAVE_GLSL.main).toContain('if (kind > 1.5 && most > 0.0) {');
     expect(WAVE_GLSL.header).toContain('float tau = imod(uWavePhase.z + floor(h.g / 16.0), 16.0);');
     expect(WAVE_GLSL.header).toContain('if (tau >= 12.0) return false;');
     expect(WAVE_GLSL.header).toContain('vec4 h = waveNoise(vec2(b.x, b.y + 128.0));');
@@ -129,9 +176,12 @@ describe('programmes de la carte et de la mer animée (ADR 0015)', () => {
   // régler la mer animée dans les données ne change ni l'une ni l'autre. On n'en met une à jour
   // que si la logique du shader ou du miroir change, après avoir relancé le contrôle des
   // pixels dans Chromium (tools/wave-control/LISEZMOI.md ; ADR 0015, § 10), dont on joint le
-  // résultat à la PR.
+  // résultat à la PR. Tâche 2b.7 : le calme suit le calendrier de la glace (ADR 0019, § 1), dont
+  // les cases des eaux fictives portent des formes écrites ici (de 01c90fa3 et 5a74a6e6 à
+  // e03ba2a6 et 85d6651b) ; puis une eau sans calendrier n'a que le calme de sa rampe (e03ba2a6
+  // à 0e9941c9), que le contrôle des pixels a vu : 0 écart sur 44 236 800 pixels, six vues.
   it('fige le code de l’onde et le motif de son miroir, indépendamment des données', () => {
-    expect(new Fingerprint().string(MAP_FRAGMENT_WAVES).hex()).toBe('01c90fa3');
+    expect(new Fingerprint().string(MAP_FRAGMENT_WAVES).hex()).toBe('0e9941c9');
     const biomes = BiomesSchema.parse(FICTIVE_WATERS);
     const table = waveTable(biomes, 1);
     expect(table.biomes).toHaveLength(MAX_WAVE_BIOMES);
@@ -145,12 +195,28 @@ describe('programmes de la carte et de la mer animée (ADR 0015)', () => {
     expect(new Set(tones).size).toBe(tones.length);
     const colors = [...tones, 0x6b8a3b];
     const temperatures = [-12, -7, -6, -5.5, -5, -4.5, -1, -0.5, 0, 0.5, 1, 4, 22];
+    // Des rampes et un calme écrits ici, non ceux de data/seasons.json.
+    const covers: WaveCovers = {
+      ice: [-1, 3, Math.fround(0.9)],
+      seaIce: [-6, 4, Math.fround(0.85)],
+      calmDays: 12,
+    };
     const view = {
       season: Math.fround(seasonFactor(1.37)),
+      day: Math.fround(1.37 * 30),
       fine: true,
       natural: true,
       streams: true,
+      covers,
     };
+    // Des calendriers de glace de toutes formes, une par case : sans inertie, en cours de prise,
+    // en cours de départ, sans glace avant le jour le plus froid.
+    const shapes = [
+      [0, 0, 1, 1],
+      [20, 200, 12, 12],
+      [40, 120, 40, 30],
+      [10, 250, 12, 60],
+    ];
     // Les uniformes de la table, tels que le shader les lit.
     const fingerprint = new Fingerprint()
       .uint32(table.biomes.length)
@@ -171,6 +237,7 @@ describe('programmes de la carte et de la mer animée (ADR 0015)', () => {
             temperature: Math.round(((temperatures[cell % temperatures.length] ?? 0) + 64) * 2),
             amplitude: (cell * 5) % 120,
             flags: (cell & 1) | (((cell >> 1) % 4) << 4) | (((cell >> 3) & 1) << 6),
+            calendar: shapes[cell % shapes.length] ?? [0, 0, 1, 1],
           };
           // À cheval sur la couture.
           const tone = wavePixel(frame, view, worldPx - 64 + x, y, pixel);
@@ -193,6 +260,240 @@ describe('programmes de la carte et de la mer animée (ADR 0015)', () => {
       'mer-longue clapot',
       'mer-longue crête',
     ]);
-    expect(fingerprint.hex()).toBe('5a74a6e6');
+    expect(fingerprint.hex()).toBe('85d6651b');
+  });
+});
+
+describe('programmes des couleurs de la saison (tâche 2b.7, ADR 0019, § 2, 3 et 6)', () => {
+  it('ajoute le code des saisons après l’onde et la couverture, avant les modes, sans rien changer d’autre', () => {
+    for (const [seasons, source] of [
+      [MAP_FRAGMENT_SEASONS, MAP_FRAGMENT],
+      [MAP_FRAGMENT_WAVES_SEASONS, MAP_FRAGMENT_WAVES],
+    ] as const) {
+      expect(seasons.replace(SEASON_GLSL.header, '').replace(SEASON_GLSL.main, '')).toBe(source);
+      const main = seasons.indexOf(SEASON_GLSL.main);
+      expect(seasons.slice(main + SEASON_GLSL.main.length)).toMatch(/^ {2}if \(uMode > 0\.5\) \{/);
+      expect(main).toBeGreaterThan(seasons.indexOf('if (coverage > bayer(dither)) {'));
+      expect(seasons).not.toContain('${');
+    }
+    // Dans le programme de l'onde, les saisons viennent après elle, qui ne voit que des tons cuits.
+    expect(MAP_FRAGMENT_WAVES_SEASONS.indexOf(SEASON_GLSL.main)).toBeGreaterThan(
+      MAP_FRAGMENT_WAVES_SEASONS.indexOf(WAVE_GLSL.main),
+    );
+    // Les dates et les réglages arrivent par des textures et des uniformes.
+    for (const uniform of [
+      'uniform sampler2D uIdentity;',
+      'uniform sampler2D uFoliage;',
+      'uniform sampler2D uStates;',
+      'uniform float uFoliageDays;',
+      'uniform float uLight;',
+      'uniform float uDryShare;',
+      'uniform float uDrySpan;',
+      'uniform float uExact;',
+    ]) {
+      expect(SEASON_GLSL.header).toContain(uniform);
+    }
+    for (const [name, expression] of Object.entries(SEASON_EXPR)) {
+      expect(SEASON_GLSL.main, name).toContain(expression);
+    }
+  });
+
+  // Ces empreintes figent le code des saisons. On ne les met à jour que si sa logique change,
+  // après avoir relancé le contrôle des pixels dans Chromium (tools/season-control/LISEZMOI.md),
+  // dont on joint le résultat à la PR.
+  it('fige les programmes des saisons, et laisse ceux de la carte et de l’onde tels quels', () => {
+    expect(new Fingerprint().string(MAP_FRAGMENT).hex()).toBe('f1e7960c');
+    expect(new Fingerprint().string(MAP_FRAGMENT_WAVES).hex()).toBe('0e9941c9');
+    expect(new Fingerprint().string(MAP_FRAGMENT_SEASONS).hex()).toBe('b5e30ec1');
+    expect(new Fingerprint().string(MAP_FRAGMENT_WAVES_SEASONS).hex()).toBe('851234cf');
+  });
+
+  it('calcule hors du GPU les seuils, les parts et les états du calendrier de la végétation', () => {
+    const transition = 12;
+    for (const [x, y] of [
+      [0, 0],
+      [3, 7],
+      [4095, 2047],
+      [1023, 511],
+      [2048, 77],
+      [17, 1999],
+    ] as const) {
+      const value = evaluateGlsl(SEASON_EXPR.threshold, { leafX: x, leafY: y });
+      expect(value, `${String(x)}, ${String(y)}`).toBe(leafThreshold(x, y));
+    }
+    // Des calendriers de toutes formes, aux jours de toute l'année, aux seuils de tout l'intervalle.
+    const calendars = [
+      [40, 120, 255, 200],
+      [255, 30, 255, 255],
+      [100, 150, 60, 140],
+      [30, 30, 30, 30],
+      [254, 254, 254, 254],
+      [255, 255, 160, 255],
+    ];
+    const dry = loadGameData().decor.foliage;
+    let compared = 0;
+    for (const calendar of calendars) {
+      for (let phase = 0; phase < 360; phase += 2.37) {
+        for (const threshold of [0.01, 0.3, 0.5, 0.77, 0.99]) {
+          for (const [light, south] of [
+            [false, false],
+            [true, false],
+            [false, true],
+          ] as const) {
+            // Le facteur de saison du nord au jour de cette phase : celui de la case, au signe de
+            // son hémisphère près.
+            const factor = Math.fround(cos((TAU * Math.fround(phase)) / 360));
+            const variables: Record<string, number> = {
+              leafPhase: Math.fround(phase),
+              leafSouth: south ? 1 : 0,
+              uSeason: south ? -factor : factor,
+              'cal.x': calendar[0] ?? 255,
+              'cal.y': calendar[1] ?? 255,
+              'cal.z': calendar[2] ?? 255,
+              'cal.w': calendar[3] ?? 255,
+              uFoliageDays: transition,
+              uLight: light ? 1 : 0,
+              uDryShare: dry.dryShare,
+              uDrySpan: dry.drySpan,
+              threshold,
+            };
+            for (const name of [
+              'leafDistance',
+              'leafFactor',
+              'bare',
+              'autumn',
+              'dry',
+              'light',
+              'state',
+            ] as const) {
+              variables[name] = evaluateGlsl(SEASON_EXPR[name], variables);
+            }
+            const uniforms = { day: 0, season: south ? -factor : factor, transition, light, dry };
+            expect(variables.state).toBe(
+              mirrorState(calendar, 0, Math.fround(phase), threshold, uniforms, south),
+            );
+            // Les parts du décor (en flottants de 64 bits), à l'arrondi près.
+            const shares = foliageShares(calendar, 0, Math.fround(phase), transition, dry);
+            expect(variables.bare).toBeCloseTo(shares.bare, 5);
+            expect(variables.autumn).toBeCloseTo(shares.autumn, 5);
+            expect(variables.dry).toBeCloseTo(shares.dry, 5);
+            expect(variables.light).toBeCloseTo(light ? shares.light : 0, 5);
+            compared++;
+          }
+        }
+      }
+    }
+    expect(compared).toBeGreaterThan(9000);
+  });
+
+  it('de loin, ne teinte que les cases dont les seize pixels portent un ton de terre', () => {
+    // La relecture de 2b.7 (problème 2) : de loin, la branche des mipmaps teintait tout texel
+    // d'une case de terre, rivières et côtes comprises. Les quatre rangées lues sont celles de la
+    // case du pixel, dans la carte d'identité (quatre pixels par texel).
+    for (const [x, y] of [
+      [0, 0],
+      [3, 3],
+      [4, 7],
+      [255, 255],
+      [130, 61],
+    ] as const) {
+      for (let k = 0; k < 4; k++) {
+        const variables = { 'pixel.x': x + 0.5, 'pixel.y': y + 0.5, farK: k };
+        const column = evaluateGlsl(SEASON_EXPR.farColumn, variables) * IDENTITY_WIDTH - 0.5;
+        const row = evaluateGlsl(SEASON_EXPR.farRow, variables) * IDENTITY_HEIGHT - 0.5;
+        expect(column).toBeCloseTo(Math.floor(x / 4), 3);
+        expect(row).toBeCloseTo(Math.floor(y / 4) * 4 + k, 3);
+      }
+    }
+    // Le plus petit code de la case, en 255es : un seul pixel sans ton de terre la garde.
+    expect(evaluateGlsl(SEASON_EXPR.farLand, { landTones: 0 })).toBe(0);
+    expect(evaluateGlsl(SEASON_EXPR.farLand, { landTones: Math.fround(1 / 255) })).toBe(1);
+    // Un canal sous le rapport des tons moyens, comme le miroir (seasonFarPixel).
+    for (const [channel, mean, summer] of [
+      [0.2, 0.6, 0.3],
+      [0.5, 0.1, 0.4],
+      [0.9, 0.9, 0],
+    ] as const) {
+      const tone = evaluateGlsl(SEASON_EXPR.farTone, {
+        channel: Math.fround(channel),
+        meanTone: Math.fround(mean),
+        summerTone: Math.fround(summer),
+      });
+      const want = (channel * mean) / Math.max(summer, 1 / 255);
+      expect(Math.abs(tone - want)).toBeLessThanOrEqual(1e-6 * Math.max(1, want));
+    }
+    // Dans le code, la teinte de loin ne vient qu'après ce contrôle.
+    const far = SEASON_GLSL.main.slice(SEASON_GLSL.main.indexOf('} else {'));
+    expect(far).toContain(`if (state > -0.5 && ${SEASON_EXPR.farLand}) {`);
+    expect(far.indexOf('landTones = min(')).toBeLessThan(far.indexOf(SEASON_EXPR.farTone));
+  });
+
+  it('retrouve hors du GPU la case qui prête le ton, sa phase et sa teinte', () => {
+    for (const [ox, oy, px, py, code] of [
+      [0, 0, 0, 0, 1],
+      [0, 0, 1, 3, 12],
+      [448, 192, 255, 255, 7],
+      [448, 0, 254, 2, 5],
+      [64, 192, 2, 253, 10],
+    ] as const) {
+      const variables: Record<string, number> = {
+        'uOrigin.x': ox,
+        'uOrigin.y': oy,
+        'pixel.x': px,
+        'pixel.y': py,
+        code,
+        'uWorldCells.x': 512,
+        'uWorldCells.y': 256,
+      };
+      for (const name of [
+        'wx',
+        'wy',
+        'lane',
+        'rank',
+        'lender',
+        'cornerX',
+        'cornerY',
+        'sourceX',
+        'sourceY',
+      ] as const) {
+        variables[name] = evaluateGlsl(SEASON_EXPR[name], variables);
+      }
+      const wx = ox * 4 + px;
+      const wy = oy * 4 + py;
+      expect([variables.wx, variables.wy, variables.lane]).toEqual([wx, wy, px % 4]);
+      expect([variables.rank, variables.lender]).toEqual([
+        (code - 1) % 3,
+        Math.floor((code - 1) / 3),
+      ]);
+      const lender = Math.floor((code - 1) / 3);
+      const sx = (((Math.floor((wx + 0.5) / 4 - 0.5) + (lender % 2)) % 512) + 512) % 512;
+      const sy = Math.min(
+        255,
+        Math.max(0, Math.floor((wy + 0.5) / 4 - 0.5) + Math.floor(lender / 2)),
+      );
+      expect([variables.sourceX, variables.sourceY]).toEqual([sx, sy]);
+    }
+    for (const day of [0, 14.9, 15, 15.1, 194.9, 195, 359.99]) {
+      for (const south of [0, 1]) {
+        const phase = evaluateGlsl(SEASON_EXPR.leafPhase, {
+          uDay: Math.fround(day),
+          sourceSouth: south,
+        });
+        expect(phase).toBe(mirrorPhase(day, south === 1));
+        expect(phase).toBeGreaterThanOrEqual(0);
+        expect(phase).toBeLessThan(360);
+      }
+    }
+    for (const temperature of [-30, -10, 0, 12, 18, 24, 30, 40]) {
+      const variables: Record<string, number> = { sourceT: temperature };
+      for (const name of ['warm', 'cold', 'tintRed', 'tintGreen', 'tintBlue'] as const) {
+        variables[name] = evaluateGlsl(SEASON_EXPR[name], variables);
+      }
+      const warm = Math.min(1, Math.max(0, (temperature - TINT.warmFrom) / TINT.warmSpan));
+      const cold = Math.min(1, Math.max(0, -temperature / TINT.coldSpan));
+      expect(variables.tintRed).toBeCloseTo(1 + TINT.red * warm - TINT.red * cold, 6);
+      expect(variables.tintGreen).toBeCloseTo(1 + TINT.green * warm, 6);
+      expect(variables.tintBlue).toBeCloseTo(1 - TINT.blue * warm + TINT.blue * cold, 6);
+    }
   });
 });

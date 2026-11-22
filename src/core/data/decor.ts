@@ -165,7 +165,8 @@ export const DecorSchema = z
      * Feuillage : nu sous `bareBelow` °C (là où le mois le plus froid y descend) ; en automne
      * quand le mois refroidit, sous `autumnBelow` °C et à `autumnDrop` °C au moins sous le mois le
      * plus chaud (pas au pic de l'été) ; sec quand la pluie du mois tombe sous `dryShare` de la
-     * moyenne.
+     * moyenne, entièrement à `dryShare − drySpan` : une rampe, qui ne trace aucun bord droit au
+     * bout de la zone sèche (src/core/foliage.ts).
      */
     foliage: z
       .object({
@@ -173,6 +174,7 @@ export const DecorSchema = z
         autumnBelow: z.number().min(-30).max(40),
         autumnDrop: z.number().min(0).max(20),
         dryShare: ShareSchema,
+        drySpan: z.number().min(0.01).max(1),
       })
       .strict()
       .refine((foliage) => foliage.bareBelow <= foliage.autumnBelow, {

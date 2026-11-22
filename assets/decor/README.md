@@ -29,6 +29,8 @@ Au build, et au lancement du serveur de développement, `tools/decor-atlas.ts` l
 
 La neige est une région peinte dans la silhouette, là où elle tiendrait : le dessus des touffes et des étages, le haut des branches. Hors neige, elle prend les tons de ce qu'elle recouvre, si bien qu'une grille n'a pas à changer pour l'hiver. Le chaperon est la part du contour qui borde le haut d'une forme : sombre comme le contour toute l'année, il blanchit sous la neige.
 
+Aux niveaux réduits, le vote donnerait chaque pixel à la région la plus présente de son bloc, et une neige fine s'y perdrait. Le build en rend donc à chaque niveau jusqu'à la part de neige et de chaperon de la planche, et au moins la moitié de cette part et deux pixels (tâche 2b.7, `keepSnow`) : un contour dont le bloc porte du chaperon devient le chaperon, un pixel de ce que la neige recouvre, dont le bloc porte de la neige, devient la neige au même rang, puis, pour les formes fines, d'autres pixels du dessus. Rien n'y change hors neige. Seule la croûte de sel des deux plus petits niveaux, toute de minerai, reste sans neige.
+
 ## Contenu
 
 Les grilles ont été tracées par des scripts (formes simples, éclairage du nord-est, touffes ombrées) à la conception et à la réalisation de 2b.6, puis restent retouchables à la main. Formes : `broadleaf`, `birch`, `conifer` (aussi le mélèze en été), `palm`, `tropical-hardwood`, `acacia`, `mangrove` ; nues : `broadleaf-bare`, `birch-bare`, `larch-bare` ; buissons : `berry-bush`, `scrub`, `dwarf-willow`, `heather`, `reed`, `cactus` ; rochers : `rock`, `ore-rock`, `salt-crust`.
