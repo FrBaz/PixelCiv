@@ -43,6 +43,41 @@ export function withoutFauna<T extends SimContent>(content: T): T {
   return { ...content, fauna: catalogOf([]) };
 }
 
+/**
+ * Le contenu `content` sans activités (ADR 0021) : personne n'en choisit, ni ne tire sur le flux
+ * des activités ; chacun se repose à sa place ou suit son groupe, comme en 2b.7. Sans les colonnes
+ * des activités, l'empreinte d'une partie est celle d'avant elles (state.test.ts).
+ */
+export function withoutActivities<T extends SimContent>(content: T): T {
+  return { ...content, activities: { ...content.activities, activities: [] } };
+}
+
+/**
+ * Le contenu `content` sans chasse : son poids nul, personne ne chasse, et les humains ne lisent
+ * plus rien du gibier (state.test.ts : le gibier ne change rien aux humains).
+ */
+export function withoutHunting<T extends SimContent>(content: T): T {
+  return {
+    ...content,
+    activities: {
+      ...content.activities,
+      activities: content.activities.activities.map((activity) =>
+        activity.place === 'prey' ? { ...activity, weight: 0 } : activity,
+      ),
+    },
+  };
+}
+
+/** Le contenu `content` où chaque coup porte avec la chance `chance`, pour toute espèce du gibier. */
+export function withHuntChance<T extends SimContent>(content: T, chance: number): T {
+  return {
+    ...content,
+    fauna: catalogOf(
+      content.fauna.entries.map((entry) => ({ ...entry, hunt: { ...entry.hunt, chance } })),
+    ),
+  };
+}
+
 /** Température d'un monde plat, en dixièmes de degré : 15 °C, une belle saison sans fin. */
 export const FLAT_TEMPERATURE = 150;
 

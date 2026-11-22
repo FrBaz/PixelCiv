@@ -7,14 +7,20 @@
  * paupières) reste celui de la planche. Aucune couleur n'est calculée : chaque couleur vient
  * d'une planche ou d'une rampe des données (src/render/looks.ts). Le calque des individus range
  * ces palettes dans une texture que lit son shader (src/render/people.ts).
+ *
+ * La pose de chacun (tâche 2b.8, ADR 0022) : la marche ou la course quand il avance sur une étape,
+ * sinon le geste de son activité, un cycle d'images des planches (data/activities.json, gestures),
+ * fonction pure de l'octet d'activité, de l'horloge de la marche du rendu et de sa phase.
  */
 import atlas from 'virtual:human-atlas';
 import type { Appearance } from '../core/data';
+import type { ActivitiesFile } from '../core/data/activities';
 import { BODY_KINDS, LOOK_BITS, PALETTE_ROLES, type BodyKind } from '../core/data/humans';
+import { ACT_NONE, ACT_RANK, ACT_RUN, ACT_STRIKE } from '../core/protocol';
 import { AGE_CODE, decodeVisual } from '../core/visual';
 import { KEPT, RECOLOR, recolorRole } from '../gen/humans';
 import { parseColor, type Rgb } from './bake';
-import type { HumanTable } from './crowd';
+import { POSE_FRAMES, type HumanTable } from './crowd';
 import {
   cultureOutfit,
   fabricTones,
@@ -167,15 +173,28 @@ export const MOTIF_ANCHOR = Uint8Array.from(
   { length: MOTIF_COUNT },
   (_, m) => atlas.motifs[m * 6 + 4] ?? 0,
 );
+/**
+ * Pixels entre le bas de chaque motif et ses pieds : nul pour qui se tient au sol, de 1 à 4 au
+ * saut, à la chute ou à une foulée de la course, que l'auteur dessine en l'air (ADR 0022, § 4).
+ */
+export const MOTIF_LIFT = Uint8Array.from({ length: MOTIF_COUNT }, (_, m) =>
+  Math.max(0, (atlas.motifs[m * 6 + 5] ?? 1) - (atlas.motifs[m * 6 + 3] ?? 1)),
+);
 
-/** Corps de chaque motif. */
+/**
+ * Corps de chaque motif, et son animation (rang dans l'atlas), que le contrôle des pixels relit
+ * pour compter les gestes qu'il compare (tools/human-control).
+ */
 export const MOTIF_BODY = new Uint8Array(MOTIF_COUNT);
+export const MOTIF_ANIMATION = new Uint8Array(MOTIF_COUNT);
 for (let body = 0; body < atlas.bodies.length; body++) {
   for (let level = 0; level < atlas.levels.length; level++) {
     for (let variant = 0; variant < VARIANTS; variant++) {
       atlas.animations.forEach((animation, a) => {
         const first = firstMotif(body, level, variant, a);
-        if (first >= 0) MOTIF_BODY.fill(body, first, first + animation.frames);
+        if (first < 0) return;
+        MOTIF_BODY.fill(body, first, first + animation.frames);
+        MOTIF_ANIMATION.fill(a, first, first + animation.frames);
       });
     }
   }
@@ -195,12 +214,21 @@ function extent(level: number, sizes: Uint8Array): number {
   return most;
 }
 
-/** Le plus large et le plus haut des motifs de chaque niveau, en pixels de motif. */
+/** Hauteur de chaque motif au-dessus de ses pieds : la sienne, et ce qui le sépare du sol. */
+const MOTIF_REACH = Uint8Array.from(
+  { length: MOTIF_COUNT },
+  (_, m) => (MOTIF_HEIGHT[m] ?? 1) + (MOTIF_LIFT[m] ?? 0),
+);
+
+/**
+ * Le plus large des motifs de chaque niveau, et le plus haut au-dessus de ses pieds, en pixels
+ * de motif.
+ */
 export const LEVEL_WIDEST: readonly number[] = atlas.levels.map((_, level) =>
   extent(level, MOTIF_WIDTH),
 );
 export const LEVEL_TALLEST: readonly number[] = atlas.levels.map((_, level) =>
-  extent(level, MOTIF_HEIGHT),
+  extent(level, MOTIF_REACH),
 );
 
 /** Ce qu'une animation dit de sa cadence (data/humans.json). */
@@ -232,8 +260,8 @@ export function cadenceFrame(
 }
 
 /**
- * Image de l'animation de rang `animation` de l'atlas (cadenceFrame) : le point d'entrée par
- * lequel 2b.8 animera chaque activité.
+ * Image rangée de l'animation de rang `animation` de l'atlas (cadenceFrame), sur ses images
+ * rangées : la marche, la course, et le repos de qui n'a pas d'autre geste.
  */
 export function animationFrame(
   animation: number,
@@ -245,12 +273,137 @@ export function animationFrame(
   return cadence === undefined ? 0 : cadenceFrame(cadence, clockMs, stepMs, phase);
 }
 
+/** Les animations du repos, de la marche et de la course dans l'atlas (−1 sans course). */
+export const IDLE = ANIMATION.idle ?? 0;
+export const WALK = ANIMATION.walk ?? 0;
+export const RUN = ANIMATION.run ?? -1;
+
+export { POSE_FRAMES };
+
 /**
- * Animation d'un individu : la marche quand il avance sur une étape, le repos sinon. 2b.8 y
- * passera l'activité de chacun, et data/humans.json dira laquelle montre quoi.
+ * Les gestes des activités, résolus sur l'atlas (ADR 0022, § 2) : le cycle de chaque geste,
+ * précalculé en pas d'une image (son début dans le cycle, son animation, son image rangée), et
+ * sa période. Le geste de chaque activité, par rang (ACT_RANK), et celui de son coup
+ * (ACT_STRIKE), −1 sans geste. Rien ne s'y alloue à l'image.
  */
-export function animationOf(moving: boolean): number {
-  return (moving ? ANIMATION.walk : ANIMATION.idle) ?? 0;
+export interface PoseTable {
+  readonly gesture: Int16Array<ArrayBuffer>;
+  readonly strike: Int16Array<ArrayBuffer>;
+  /** Par geste : sa période (ms), le rang de son premier pas, et le nombre de ses pas. */
+  readonly period: Float64Array<ArrayBuffer>;
+  readonly first: Uint16Array<ArrayBuffer>;
+  readonly count: Uint16Array<ArrayBuffer>;
+  /** Par pas : son début dans le cycle (ms), son animation et son image rangée. */
+  readonly start: Float64Array<ArrayBuffer>;
+  readonly animation: Uint8Array<ArrayBuffer>;
+  readonly frame: Uint8Array<ArrayBuffer>;
+}
+
+/**
+ * Les gestes de `file` sur l'atlas `of` (celui du jeu, par défaut) : chaque segment fait ses
+ * images, dans l'ordre, chacune à sa durée (celle du segment, ou de l'animation), `repeat` fois ;
+ * une image nommée par son rang dans la planche devient son rang parmi les images rangées
+ * (checkContent vérifie que l'atlas du jeu les range, et que chaque durée est en
+ * millisecondes). Un segment d'une animation que l'atlas ne range pas n'en garde rien.
+ */
+export function poseTable(
+  file: Pick<ActivitiesFile, 'activities' | 'gestures'>,
+  of: Pick<typeof atlas, 'animations'> = atlas,
+): PoseTable {
+  const byId = new Map(file.gestures.map((gesture, index) => [gesture.id, index]));
+  const starts: number[] = [];
+  const animations: number[] = [];
+  const frames: number[] = [];
+  const period = new Float64Array(file.gestures.length);
+  const first = new Uint16Array(file.gestures.length);
+  const count = new Uint16Array(file.gestures.length);
+  file.gestures.forEach((gesture, g) => {
+    first[g] = starts.length;
+    let at = 0;
+    for (const segment of gesture.segments) {
+      const animation = of.animations.findIndex((entry) => entry.id === segment.animation);
+      const cadence = animation < 0 ? undefined : of.animations[animation];
+      if (cadence === undefined) continue;
+      const ms = segment.frameMs ?? cadence.frameMs ?? 0;
+      if (!(ms > 0)) continue;
+      const ranks = segment.frames ?? Array.from({ length: cadence.frames }, (_, f) => f);
+      for (let repeat = 0; repeat < segment.repeat; repeat++) {
+        for (const rank of ranks) {
+          // Sans liste de rangs, `ranks` compte les images rangées ; avec, ce sont ceux de la
+          // planche, que l'atlas traduit.
+          const frame = segment.frames === undefined ? rank : cadence.ranks.indexOf(rank);
+          if (frame < 0) continue;
+          starts.push(at);
+          animations.push(animation);
+          frames.push(frame);
+          at += ms;
+        }
+      }
+    }
+    period[g] = at;
+    count[g] = starts.length - first[g];
+  });
+  const rankOf = (id: string | undefined) => (id === undefined ? -1 : (byId.get(id) ?? -1));
+  const gesture = new Int16Array(ACT_RANK + 1).fill(-1);
+  const strike = new Int16Array(ACT_RANK + 1).fill(-1);
+  file.activities.forEach((activity, rank) => {
+    if (rank >= ACT_NONE) return;
+    const g = rankOf(activity.gesture);
+    gesture[rank] = g >= 0 && (count[g] ?? 0) > 0 ? g : -1;
+    const s = rankOf(activity.strike);
+    strike[rank] = s >= 0 && (count[s] ?? 0) > 0 ? s : -1;
+  });
+  return {
+    gesture,
+    strike,
+    period,
+    first,
+    count,
+    start: Float64Array.from(starts),
+    animation: Uint8Array.from(animations),
+    frame: Uint8Array.from(frames),
+  };
+}
+
+/**
+ * Pose d'un individu (ADR 0022, § 1), animation × POSE_FRAMES + image rangée. Sur une étape
+ * (`moving`), la marche, ou la course si son octet d'activité le dit (ACT_RUN), jamais d'après
+ * sa vitesse apparente. À l'arrêt, le geste de son activité (ACT_RANK), ou celui du coup le jour
+ * où le chasseur frappe (ACT_STRIKE, que porte la seule étape d'arrêt du coup, avec la course quand
+ * il charge le lendemain) ; sans activité ni geste, le repos. L'image du geste est celle de son
+ * cycle à l'instant (horloge + phase × période) modulo la période : fonction pure de l'octet, de
+ * l'horloge de la marche du rendu, figée en pause, et de la phase tirée de l'identifiant.
+ */
+export function poseOf(
+  table: PoseTable,
+  act: number,
+  moving: boolean,
+  clockMs: number,
+  stepMs: number,
+  phase: number,
+): number {
+  if (moving) {
+    const animation = (act & ACT_RUN) !== 0 && RUN >= 0 ? RUN : WALK;
+    return animation * POSE_FRAMES + animationFrame(animation, clockMs, stepMs, phase);
+  }
+  const rank = act & ACT_RANK;
+  let gesture = rank === ACT_NONE ? -1 : (table.gesture[rank] ?? -1);
+  if ((act & ACT_STRIKE) !== 0) {
+    gesture = (table.strike[rank] ?? -1) >= 0 ? (table.strike[rank] ?? -1) : gesture;
+  }
+  const period = gesture < 0 ? 0 : (table.period[gesture] ?? 0);
+  if (!(period > 0)) return IDLE * POSE_FRAMES + animationFrame(IDLE, clockMs, stepMs, phase);
+  let at = (clockMs + phase * period) % period;
+  if (at < 0) at += period;
+  // Le dernier pas dont le début ne dépasse pas l'instant du cycle.
+  let low = table.first[gesture] ?? 0;
+  let high = low + (table.count[gesture] ?? 1) - 1;
+  while (low < high) {
+    const middle = (low + high + 1) >> 1;
+    if ((table.start[middle] ?? 0) <= at) low = middle;
+    else high = middle - 1;
+  }
+  return (table.animation[low] ?? IDLE) * POSE_FRAMES + (table.frame[low] ?? 0);
 }
 
 /** Une apparence recolorée : palette de peau, allèle des cheveux, grisonnement, tenue, corps. */
@@ -390,10 +543,15 @@ export const ROLE_COUNT = RECOLOR + atlas.regions.length * 8;
 
 /**
  * Les humains des planches vus de la disposition (crowd.ts) : niveaux, motifs et leur taille,
- * corps, variante, animation et image de chacun, et l'apparence de sa palette, de son code
- * d'apparence (core/visual.ts), de son corps et de sa culture.
+ * corps, variante, pose (animation et image) de chacun d'après son activité et les gestes de
+ * `activities`, et l'apparence de sa palette, de son code d'apparence (core/visual.ts), de son
+ * corps et de sa culture.
  */
-export function humanTable(appearance: Appearance): HumanTable {
+export function humanTable(
+  appearance: Appearance,
+  activities: Pick<ActivitiesFile, 'activities' | 'gestures'>,
+): HumanTable {
+  const poses = poseTable(activities);
   return {
     levels: LEVEL_ROWS,
     widest: LEVEL_WIDEST,
@@ -401,10 +559,13 @@ export function humanTable(appearance: Appearance): HumanTable {
     width: MOTIF_WIDTH,
     height: MOTIF_HEIGHT,
     anchor: MOTIF_ANCHOR,
+    lift: MOTIF_LIFT,
+    idle: IDLE,
     bodyOf,
     variantOf,
     firstMotif,
-    animationOf,
+    poseOf: (act, moving, clockMs, stepMs, phase) =>
+      poseOf(poses, act, moving, clockMs, stepMs, phase),
     frame: animationFrame,
     look: (code, body, culture) => {
       const visual = decodeVisual(code);

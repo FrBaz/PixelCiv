@@ -1196,10 +1196,14 @@ function startLeg(state: SimState, content: FaunaContent, slot: number, today: n
   return true;
 }
 
+/** Hardes visées par un coup manqué du jour → premier coup dans la liste des coups manqués. */
+const missedHerds = new Map<number, number>();
+
 /**
- * Un jour du gibier, après le mouvement des humains : les hardes s'alarment ou choisissent leur
- * but, dans l'ordre de leurs emplacements ; puis chaque animal part, avance ou arrive, dans l'ordre
- * des siens. Le worker ne connaît pas la caméra : tous les animaux bougent, qu'on les voie ou non.
+ * Un jour du gibier, après le mouvement des humains : les hardes visées par un coup manqué fuient
+ * le chasseur (ADR 0021, § 5), les autres s'alarment ou choisissent leur but, dans l'ordre de leurs
+ * emplacements ; puis chaque animal part, avance ou arrive, dans l'ordre des siens. Le worker ne
+ * connaît pas la caméra : tous les animaux bougent, qu'on les voie ou non.
  */
 export function faunaDay(state: SimState, content: FaunaContent): void {
   const fauna = state.fauna;
@@ -1211,8 +1215,33 @@ export function faunaDay(state: SimState, content: FaunaContent): void {
     fauna.humans.build(state);
     alarms(state, content);
   }
+  // Les coups manqués du jour (activities.ts, huntDay) : la harde visée fuit le chasseur, au calme
+  // ou non ; le premier coup, par emplacements croissants des chasseurs, compte.
+  const missed = state.movement.acts.misses;
+  const struck = missedHerds;
+  struck.clear();
+  for (let at = 0; at + 2 < missed.length; at += 3) {
+    const herd = fauna.herd[missed[at] ?? 0] ?? NO;
+    if (herd >= 0 && !struck.has(herd)) struck.set(herd, at);
+  }
   for (let herd = 0; herd < fauna.herdEnd; herd++) {
     if (fauna.herdAlive[herd] !== 1 || (fauna.size[herd] ?? 0) === 0) continue;
+    const miss = struck.get(herd);
+    if (
+      miss !== undefined &&
+      flee(
+        state,
+        content,
+        herd,
+        missed[miss] ?? 0,
+        missed[miss + 1] ?? 0,
+        missed[miss + 2] ?? 0,
+        today,
+        random,
+      )
+    ) {
+      continue;
+    }
     if (people && today >= (fauna.calm[herd] ?? 0)) {
       const witness = fauna.witness[herd] ?? NO;
       if (

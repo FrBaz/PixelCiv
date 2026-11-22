@@ -72,7 +72,8 @@ describe('grégarité, caractère acquis (IND-07, ADR 0014)', () => {
 
   it('se tire sur son propre flux, sans décaler ceux des apparitions ni des naissances', () => {
     // Deux répartitions de la grégarité : les mêmes individus, aux mêmes tirages ; seules la
-    // grégarité et les places, qui en dépendent (ADR 0014), changent.
+    // grégarité et les places, qui en dépendent (ADR 0014), changent, la place au camp comprise
+    // (ADR 0021).
     const spawned = (means: readonly number[]) => {
       const content = withHuman(() => tempered(means));
       const state = flatState();
@@ -85,7 +86,7 @@ describe('grégarité, caractère acquis (IND-07, ADR 0014)', () => {
     };
     const low = spawned([0.1, 0.1, 0.1]).state;
     const high = spawned([0.9, 0.9, 0.9]).state;
-    const placed = new Set(['gregariousness', 'x', 'y', 'goalX', 'goalY']);
+    const placed = new Set(['gregariousness', 'x', 'y', 'goalX', 'goalY', 'homeX', 'homeY']);
     for (const name of LIVING_COLUMN_NAMES) {
       const width = LIVING_COLUMNS[name].width;
       const a = low.people.columns[name].subarray(0, low.people.end * width);

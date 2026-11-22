@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { PositionMirror } from '../app/frames';
 import { loadGameData } from '../core/data';
-import { GROUP_STRIDE, NO_CARRIER, type GroupsFrame } from '../core/protocol';
+import { ACT_NONE, ACT_RUN, GROUP_STRIDE, NO_CARRIER, type GroupsFrame } from '../core/protocol';
 import { cellOf, FIXED } from '../core/position';
 import { splitmix32 } from '../core/rng';
 import { AGE_CODE, visualCode } from '../core/visual';
@@ -16,12 +16,14 @@ import {
   BANNERS,
   chooseBanner,
   CLOSE_CSS_PX,
+  carriedOffset,
   CrowdLayout,
   depth,
   FINGER_SLOP,
   groupArea,
   layoutCrowd,
   LEVEL_SPAN,
+  lookGroup,
   LEVEL_STEP,
   mapPixel,
   memberLooks,
@@ -29,6 +31,7 @@ import {
   personBox,
   pickEntity,
   POINTER_SLOP,
+  POSE_FRAMES,
   textureKey,
   textureParts,
   viewDensity,
@@ -40,10 +43,12 @@ import {
   ANIMATION,
   bodyOf,
   firstMotif,
+  humanAtlas,
   humanTable,
   LEVEL_ROWS,
   MOTIF_ANCHOR,
   MOTIF_HEIGHT,
+  MOTIF_LIFT,
   MOTIF_WIDTH,
   variantOf,
 } from './humans';
@@ -53,7 +58,7 @@ const human = data.species.entries.at(0);
 if (human === undefined) throw new Error('pas d’humains');
 const { stature: reference, carry } = human.display;
 const motifs = motifTable(frameOf);
-const humans = humanTable(data.appearance);
+const humans = humanTable(data.appearance, data.activities);
 /** Un monde Petit : 512 × 256 cases. */
 const world = { width: 512 * TILE_PX, height: 256 * TILE_PX };
 const desktop = { width: 1280, height: 720 };
@@ -67,6 +72,8 @@ interface Member {
   readonly stature?: number;
   readonly code?: number;
   readonly carrier?: number;
+  /** Octet d'activité (protocole 9) : le repos, sans lui. */
+  readonly act?: number;
 }
 
 /** Une image de groupes [identifiant, culture, membres] ; les membres sont numérotés de 1. */
@@ -91,12 +98,14 @@ function crowdFrame(...groups: [number, number, Member[]][]): GroupsFrame {
       members.flatMap((member) => [Math.round(member.x * FIXED), Math.round(member.y * FIXED)]),
     ),
     carriers: Uint32Array.from(members, (member) => member.carrier ?? NO_CARRIER),
+    activities: Uint8Array.from(members, (member) => member.act ?? 0),
     legs: {
       slots: new Uint32Array(0),
       days: new Uint32Array(0),
       start: new Int32Array(0),
       step: new Int32Array(0),
       count: new Uint16Array(0),
+      acts: new Uint8Array(0),
     },
   };
 }
@@ -694,6 +703,13 @@ describe('textures des bannières et pieds des individus (A-13, ADR 0016)', () =
       width: 4,
       height: 6,
     });
+    // En l'air de 2 pixels de motif (le saut) : le même motif, 2 × 3 pixels plus haut.
+    expect(personBox(100.4, 50.6, 6, 9, 2, 3, false, 2)).toEqual({
+      left: 94,
+      top: 18,
+      width: 18,
+      height: 27,
+    });
   });
 
   it('dessine à des positions entières, d’une seule densité, le marcheur vers l’est retourné', () => {
@@ -755,8 +771,8 @@ describe('textures des bannières et pieds des individus (A-13, ADR 0016)', () =
     const source = new Walking({ carry, passable: () => true });
     source.reset({ at: 0, tick: 0, frame }, world.width / TILE_PX);
     const view = { camera: aimedAt(100.5, 50.5, 16), viewport: desktop, world, resolution: 1 };
-    const walkRow = humans.animationOf(true);
-    const restRow = humans.animationOf(false);
+    const walkRow = ANIMATION.walk ?? -1;
+    const restRow = humans.idle;
     const frameOfMotif = (body: number, animation: number, motif: number) => {
       for (let variant = 0; variant < 3; variant++) {
         const first = humans.firstMotif(body, 0, variant, animation);
@@ -784,6 +800,274 @@ describe('textures des bannières et pieds des individus (A-13, ADR 0016)', () =
     layout.sort();
     const child = drawnOf(layout).find((entry) => entry.member === 1);
     expect(frameOfMotif(looks.body[1], restRow, child?.motif ?? -1)).toBeGreaterThanOrEqual(0);
+  });
+
+  it('pose chacun d’après son activité : la marche, la course, le geste à l’arrêt, et le porté dans la pose de sa mère', () => {
+    // Rangs de data/activities.json : la cueillette 1, le jeu 5.
+    const rank = (id: string) => data.activities.activities.findIndex((a) => a.id === id);
+    const gather = rank('gather');
+    const play = rank('play');
+    const baby = visualCode(0, AGE_CODE.baby, 3, 2, 0);
+    const child = visualCode(1, AGE_CODE.child, 3, 2, 0);
+    const frame = crowdFrame([
+      1,
+      1,
+      [
+        { x: 100.5, y: 50.5, code: visualCode(0, AGE_CODE.adult, 3, 2, 0), act: gather },
+        { x: 100.5, y: 50.5, code: baby, stature: 30, carrier: 0, act: 0x0f },
+        { x: 101.5, y: 50.5, code: child, stature: 70, act: play | ACT_RUN },
+      ],
+    ]);
+    // L'enfant court sur une étape ; la mère et son nourrisson se tiennent à leur lieu.
+    class Running extends PositionMirror {
+      override positions(
+        group: number,
+        t: number,
+        xs: Float64Array,
+        ys: Float64Array,
+        moving: Uint8Array,
+        facing?: Int8Array,
+        acts?: Uint8Array,
+      ): void {
+        super.positions(group, t, xs, ys, moving, facing, acts);
+        moving[2] = this.running ? 1 : 0;
+      }
+      running = true;
+    }
+    const source = new Running({ carry, passable: () => true });
+    source.reset({ at: 0, tick: 0, frame }, world.width / TILE_PX);
+    const view = { camera: aimedAt(100.5, 50.5, 16), viewport: desktop, world, resolution: 1 };
+    const level = viewDensity(physicalZoom(16, 1), 1, reference, LEVEL_ROWS).level;
+    /** L'animation et l'image rangée du motif `motif` d'un corps, ou −1. */
+    const poseOfMotif = (body: number, motif: number) => {
+      for (let animation = 0; animation < humanAtlas.animations.length; animation++) {
+        for (let variant = 0; variant < 3; variant++) {
+          const first = humans.firstMotif(body, level, variant, animation);
+          const frames = humanAtlas.animations[animation]?.frames ?? 0;
+          if (first >= 0 && motif >= first && motif < first + frames) {
+            return animation * POSE_FRAMES + motif - first;
+          }
+        }
+      }
+      return -1;
+    };
+    const seen = { mother: new Set<string>(), child: new Set<string>() };
+    for (const running of [true, false]) {
+      source.running = running;
+      for (let walkMs = 0; walkMs < 4000; walkMs += 97) {
+        const looks = memberLooks(frame, humans, reference);
+        const layout = new CrowdLayout();
+        layoutCrowd(layout, source, looks, view, 0, { ...options(), walkMs });
+        layout.sort();
+        const drawn = drawnOf(layout);
+        const pose = (member: number) =>
+          poseOfMotif(looks.body[member] ?? 0, drawn.find((e) => e.member === member)?.motif ?? -1);
+        // La mère cueille : son geste, à l'horloge et à sa phase ; son nourrisson, la même pose.
+        const mother = humans.poseOf(gather, false, walkMs, 420, phaseOf(1));
+        expect(pose(0), `${String(walkMs)} ms`).toBe(mother);
+        expect(pose(1), `${String(walkMs)} ms`).toBe(mother);
+        seen.mother.add(humanAtlas.animations[Math.floor(mother / POSE_FRAMES)]?.id ?? '');
+        // L'enfant court sur son étape, et joue à l'arrêt.
+        const expected = humans.poseOf(play | ACT_RUN, running, walkMs, 420, phaseOf(3));
+        expect(pose(2), `${String(walkMs)} ms`).toBe(expected);
+        const id = humanAtlas.animations[Math.floor(expected / POSE_FRAMES)]?.id ?? '';
+        seen.child.add(`${running ? 'en chemin' : 'sur place'} ${id}`);
+      }
+    }
+    // À genoux puis debout ; la course en chemin, les sauts et le repos sur place.
+    expect([...seen.mother].sort()).toEqual(['death', 'idle']);
+    expect([...seen.child].sort()).toEqual([
+      'en chemin run',
+      'sur place fall',
+      'sur place idle',
+      'sur place jump',
+    ]);
+  });
+
+  it('pose le sauteur en l’air au-dessus de ses pieds, que gardent la profondeur et le tri', () => {
+    // Une femme qui joue, à l'arrêt, à l'instant où son geste montre le saut : à la taille de la
+    // planche (zoom 16, k = 1), l'auteur la dessine 4 pixels au-dessus du sol.
+    const play = data.activities.activities.findIndex((a) => a.id === 'play');
+    const woman = visualCode(0, AGE_CODE.adult, 3, 2, 0);
+    const frame = crowdFrame([1, 1, [{ x: 100.5, y: 50.5, code: woman, act: play }]]);
+    const view = { camera: aimedAt(100.5, 50.5, 16), viewport: desktop, world, resolution: 1 };
+    const source = new PositionMirror({ carry, passable: () => true });
+    source.reset({ at: 0, tick: 0, frame }, world.width / TILE_PX);
+    let lifted = 0;
+    for (let walkMs = 0; walkMs < 3200; walkMs += 50) {
+      const layout = new CrowdLayout();
+      layoutCrowd(layout, source, memberLooks(frame, humans, reference), view, 0, {
+        ...options(),
+        walkMs,
+      });
+      expect(layout.count).toBe(1);
+      const box = layout.box(0);
+      const motif = layout.texture[0];
+      const lift = MOTIF_LIFT[motif] ?? 0;
+      const feet = Math.round(desktop.height / 2);
+      // Les pieds à la position, arrondie au pixel ; le bas du motif `lift` pixels plus haut.
+      expect(layout.feet[0]).toBe(feet);
+      expect(box.top + box.height + lift).toBe(feet);
+      expect(Math.floor(layout.key[0] / 2 ** 20)).toBe(feet);
+      if (lift > 0) lifted++;
+    }
+    expect(lifted).toBeGreaterThan(0);
+  });
+
+  it('pose le porté qu’on voit dans la pose de sa mère, même quand elle est hors de l’écran', () => {
+    // Relecture de 2b.8, problème 4 : au bord de l'écran, la pose se calcule au premier membre
+    // visible d'un porteur, mais d'après le porteur, son octet et sa marche ; le porté n'en a pas
+    // à lui (ACT_NONE), et ce que les tableaux de la disposition gardent pour lui est périmé.
+    const gather = data.activities.activities.findIndex((a) => a.id === 'gather');
+    const play = data.activities.activities.findIndex((a) => a.id === 'play');
+    const mother = visualCode(0, AGE_CODE.adult, 3, 2, 0);
+    const baby = visualCode(0, AGE_CODE.baby, 3, 2, 0);
+    // Avec les données, l'écart du porté à sa mère (display.carry, 0,2 case) tient dans la marge
+    // du plus large motif : elle hors de l'écran, il l'est aussi. Au plus grand écart que permet
+    // le schéma, une demi-case, non. Le nourrisson (identifiant 2) se tient du côté que dit son
+    // identifiant : on longe le bord de l'écran dont il est plus près que sa mère.
+    const wide = 0.5;
+    const side = Math.sign(carriedOffset(2, wide));
+    let beyond = 0;
+    let kneeling = 0;
+    for (const zoom of [16, 24]) {
+      const scale = physicalZoom(zoom, 1);
+      const cell = TILE_PX * scale;
+      const { k, level } = viewDensity(scale, 1, reference, LEVEL_ROWS);
+      const reach = (humans.widest[level] ?? 1) * k + 1;
+      const edge = 100.5 - (side * desktop.width) / 2 / cell;
+      const view = { camera: aimedAt(100.5, 50.5, zoom), viewport: desktop, world, resolution: 1 };
+      for (let step = -40; step <= 40; step++) {
+        const x = edge + (step / 40) * wide;
+        // Les pieds de la mère hors de la portée du plus large motif : elle n'a pas de pose à elle.
+        const screen = (x - 100.5) * cell + desktop.width / 2;
+        if (side > 0 ? screen + reach >= -1 : screen - reach <= desktop.width + 1) continue;
+        const frame = crowdFrame([
+          1,
+          1,
+          [
+            { x, y: 50.5, code: mother, act: gather },
+            { x, y: 50.5, code: baby, stature: 30, carrier: 0, act: ACT_NONE },
+          ],
+        ]);
+        const source = new PositionMirror({ carry: wide, passable: () => true });
+        source.reset({ at: 0, tick: 0, frame }, world.width / TILE_PX);
+        const looks = memberLooks(frame, humans, reference);
+        for (let walkMs = 0; walkMs < 3900; walkMs += 130) {
+          const layout = new CrowdLayout();
+          // Des octets et des marches périmés dans les tableaux de la disposition, comme ceux
+          // qu'y laisse une image précédente : un enfant qui court.
+          layout.reset(frame);
+          layout.acts.fill(play | ACT_RUN);
+          layout.moving.fill(1);
+          layoutCrowd(layout, source, looks, view, 0, { ...options(), walkMs });
+          layout.sort();
+          const drawn = drawnOf(layout);
+          expect(drawn.some((entry) => entry.member === 0)).toBe(false);
+          const shown = drawn.find((entry) => entry.member === 1);
+          if (shown === undefined) continue;
+          beyond++;
+          // La pose de sa mère, qui cueille à l'arrêt, dans le corps du nourrisson.
+          const pose = humans.poseOf(gather, false, walkMs, 420, phaseOf(1));
+          const animation = Math.floor(pose / POSE_FRAMES);
+          const body = looks.body[1];
+          const variant = humans.variantOf(body, level, looks.ratio[1]);
+          const first = humans.firstMotif(body, level, variant, animation);
+          expect(first, `zoom ${String(zoom)}, ${String(walkMs)} ms`).toBeGreaterThanOrEqual(0);
+          expect(shown.motif, `zoom ${String(zoom)}, ${String(walkMs)} ms`).toBe(
+            first + (pose % POSE_FRAMES),
+          );
+          if (animation !== humans.idle) kneeling++;
+        }
+      }
+    }
+    // Des nourrissons vus, leur mère hors de l'écran, à genoux avec elle.
+    expect(beyond).toBeGreaterThan(0);
+    expect(kneeling).toBeGreaterThan(0);
+  });
+
+  it('replie sur le repos, à l’horloge du repos, le porté dont le corps n’a pas l’animation de la pose de sa mère', () => {
+    // Le nourrisson ne court ni ne saute : l'atlas ne range pour lui ni la course ni le saut
+    // (`young`, ADR 0022, § 9). Une mère qui courrait avec lui (les données ne le font pas : qui
+    // porte ne joue ni ne chasse) le laisserait au repos, à l'image que donne l'horloge.
+    const play = data.activities.activities.findIndex((a) => a.id === 'play');
+    const baby = visualCode(0, AGE_CODE.baby, 3, 2, 0);
+    const frame = crowdFrame([
+      1,
+      1,
+      [
+        { x: 100.5, y: 50.5, code: visualCode(0, AGE_CODE.adult, 3, 2, 0), act: play | ACT_RUN },
+        { x: 100.5, y: 50.5, code: baby, stature: 30, carrier: 0, act: ACT_NONE },
+      ],
+    ]);
+    class Running extends PositionMirror {
+      override positions(
+        group: number,
+        t: number,
+        xs: Float64Array,
+        ys: Float64Array,
+        moving: Uint8Array,
+        facing?: Int8Array,
+        acts?: Uint8Array,
+      ): void {
+        super.positions(group, t, xs, ys, moving, facing, acts);
+        moving[0] = 1;
+      }
+    }
+    const source = new Running({ carry, passable: () => true });
+    source.reset({ at: 0, tick: 0, frame }, world.width / TILE_PX);
+    const view = { camera: aimedAt(100.5, 50.5, 16), viewport: desktop, world, resolution: 1 };
+    const { level } = viewDensity(physicalZoom(16, 1), 1, reference, LEVEL_ROWS);
+    const looks = memberLooks(frame, humans, reference);
+    lookGroup(looks, 0, 0, 2);
+    const body = looks.body[1];
+    expect(humanAtlas.bodies[body]).toBe('baby-0');
+    const variant = humans.variantOf(body, level, looks.ratio[1]);
+    const run = Math.floor(humans.poseOf(play | ACT_RUN, true, 0, 420, 0) / POSE_FRAMES);
+    expect(humans.firstMotif(body, level, variant, run)).toBe(-1);
+    const idle = humans.firstMotif(body, level, variant, humans.idle);
+    expect(idle).toBeGreaterThanOrEqual(0);
+    const images = new Set<number>();
+    for (let walkMs = 0; walkMs < 2000; walkMs += 61) {
+      const layout = new CrowdLayout();
+      layoutCrowd(layout, source, looks, view, 0, { ...options(), walkMs });
+      layout.sort();
+      const shown = drawnOf(layout).find((entry) => entry.member === 1);
+      const image = humans.frame(humans.idle, walkMs, 420, phaseOf(1));
+      expect(shown?.motif, `${String(walkMs)} ms`).toBe(idle + image);
+      images.add(image);
+    }
+    // L'horloge fait passer les images du repos.
+    expect(images.size).toBeGreaterThan(1);
+  });
+
+  it('ne calcule la pose que des individus qui peuvent se voir', () => {
+    // Un groupe étalé sur 60 cases : l'écran en montre une partie. Les positions se demandent
+    // pour tout le groupe (il touche l'écran), les poses pour ceux qu'on peut voir seulement.
+    const members: Member[] = Array.from({ length: 60 }, (_, index) => ({
+      x: 70.5 + index,
+      y: 50.5,
+      act: index % 7,
+    }));
+    for (const zoom of [8, 16]) {
+      const frame = crowdFrame([1, 1, members]);
+      const view = { camera: aimedAt(100.5, 50.5, zoom), viewport: desktop, world, resolution: 1 };
+      const layout = laid(frame, view);
+      const k = viewDensity(physicalZoom(zoom, 1), 1, reference, LEVEL_ROWS).k;
+      const level = viewDensity(physicalZoom(zoom, 1), 1, reference, LEVEL_ROWS).level;
+      const half = (humans.widest[level] ?? 1) * k + 1;
+      const scale = physicalZoom(zoom, 1);
+      // Ceux dont les pieds tombent à l'écran, à la largeur du plus large motif près.
+      const near = members.filter((member) => {
+        const x = (member.x - 100.5) * TILE_PX * scale + desktop.width / 2;
+        return x + half > -1 && x - half < desktop.width + 1;
+      }).length;
+      expect(layout.placed).toBe(60);
+      expect(layout.posed, `zoom ${String(zoom)}`).toBe(near);
+      expect(layout.posed).toBeLessThan(60);
+      expect(layout.count).toBeLessThanOrEqual(layout.posed);
+      expect(layout.count).toBeGreaterThan(0);
+    }
   });
 
   it('tourne le nourrisson porté comme sa mère, même sans étape connue, d’après le déphasage de la mère', () => {

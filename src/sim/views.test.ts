@@ -1,9 +1,18 @@
 import { describe, expect, it } from 'vitest';
 import type { Species } from '../core/data';
-import { CHRONICLE_PAGE, GROUP_STRIDE, INTENTIONS, NO_CARRIER } from '../core/protocol';
+import {
+  ACT_NONE,
+  ACT_RANK,
+  ACT_STRIKE,
+  CHRONICLE_PAGE,
+  GROUP_STRIDE,
+  INTENTIONS,
+  NO_CARRIER,
+} from '../core/protocol';
 import { FIXED } from '../core/position';
 import { dayIndex } from '../core/time';
 import { AGE_CLASSES, decodeVisual } from '../core/visual';
+import { actByte } from './activities';
 import { groupMembers } from './groups';
 import { GENERATOR_VERSION } from '../worldgen/generate';
 import { centralMember } from './movement';
@@ -485,6 +494,41 @@ describe('individus hors de la grille (ADR 0014)', () => {
     });
     // Rangées par emplacements : l'image ne dépend pas de l'ordre des marcheurs.
     expect([...legs.slots]).toEqual([...legs.slots].sort((a, b) => a - b));
+  });
+
+  it('donne l’octet d’activité de chaque membre et de chaque marcheur, et l’activité à la fiche (protocole 9)', () => {
+    const state = testState();
+    step(state, scatteredGroups(state, 30, 30), testData);
+    for (let day = 0; day < 12; day++) advanceDay(state, [], testData);
+    const frame = groupsFrame(state, testData);
+    expect(frame.activities.length).toBe(frame.slots.length);
+    expect(frame.legs.acts.length).toBe(frame.legs.slots.length);
+    frame.slots.forEach((slot, member) => {
+      expect(frame.activities[member]).toBe(actByte(state, testData, slot));
+    });
+    frame.legs.slots.forEach((slot, index) => {
+      expect(frame.legs.acts[index]).toBe(actByte(state, testData, slot));
+    });
+    // Ni coup dans l'image ; des activités variées ; aucune pour les portés.
+    const ranks = new Set([...frame.activities].map((act) => act & ACT_RANK));
+    expect([...frame.activities].every((act) => (act & ACT_STRIKE) === 0)).toBe(true);
+    expect(ranks.size).toBeGreaterThan(3);
+    // La fiche nomme l'activité ; celle d'un porté est celle de qui le porte (ADR 0021, § 6).
+    const names = testData.activities.activities.map((activity) => activity.name);
+    const { move, activity, id } = state.people.columns;
+    let carried = 0;
+    frame.slots.forEach((slot, member) => {
+      const view = personView(state, testData, id[slot] ?? 0);
+      const carrier = frame.carriers[member] ?? NO_CARRIER;
+      if ((move[slot] ?? 0) % 8 === CARRIED) {
+        carried++;
+        expect((activity[slot] ?? 0) & ACT_RANK).toBe(ACT_NONE);
+        expect(view?.activity).toBe(names[(activity[carrier] ?? 0) & ACT_RANK]);
+      } else {
+        expect(view?.activity).toBe(names[(activity[slot] ?? 0) & ACT_RANK]);
+      }
+    });
+    expect(carried).toBeGreaterThan(0);
   });
 
   it('donne à la fiche du groupe la case de son membre le plus proche du barycentre, et l’intention de chacun', () => {

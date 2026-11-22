@@ -80,6 +80,9 @@ export interface DebugSample {
    * des textures du calque des individus (ADR 0016).
    */
   readonly drawn: number | undefined;
+  /** Positions et poses calculées à la dernière image (FrameCost). */
+  readonly placed: number | undefined;
+  readonly posed: number | undefined;
   readonly textures: number | undefined;
   readonly cachedTextures: number | undefined;
   readonly pages: number | undefined;
@@ -108,6 +111,12 @@ export interface FrameCost {
   readonly sortMs: number;
   readonly spritesMs: number;
   readonly drawn: number;
+  /**
+   * Membres dont la position a été calculée, et poses calculées, des seuls individus qui peuvent
+   * se voir (ADR 0022, § 1).
+   */
+  readonly placed?: number;
+  readonly posed?: number;
   readonly textures: number;
   readonly cached: number;
   /** Pages de l'atlas dynamique des textures des bannières (render/pages.ts). */
@@ -137,8 +146,13 @@ export interface FrameCost {
 
 /** Octets d'une étape dans un message (ADR 0014) : emplacement, jour, départ, pas, jours. */
 export const LEG_BYTES = 4 + 4 + 8 + 8 + 2;
-/** Octets d'un membre dans l'image des groupes : emplacement, identifiant, apparence, stature, position, porteur. */
-export const MEMBER_BYTES = 4 + 4 + 2 + 1 + 8 + 4;
+/** Octets d'une étape des humains (protocole 9) : celles du mouvement, et l'octet d'activité. */
+export const HUMAN_LEG_BYTES = LEG_BYTES + 1;
+/**
+ * Octets d'un membre dans l'image des groupes : emplacement, identifiant, apparence, stature,
+ * position, porteur, octet d'activité.
+ */
+export const MEMBER_BYTES = 4 + 4 + 2 + 1 + 8 + 4 + 1;
 
 /** Octets d'une étape du gibier : celles des individus, et son allure (FaunaLegArrays). */
 export const FAUNA_LEG_BYTES = LEG_BYTES + 1;
@@ -164,7 +178,9 @@ export function faunaBytes(
 export function positionBytes(legs: LegArrays | undefined, frame: GroupsFrame | undefined): number {
   const legCount = (legs?.slots.length ?? 0) + (frame?.legs.slots.length ?? 0);
   const groups = frame === undefined ? 0 : frame.groups.length / GROUP_STRIDE;
-  return legCount * LEG_BYTES + (frame?.ids.length ?? 0) * MEMBER_BYTES + groups * GROUP_STRIDE * 4;
+  return (
+    legCount * HUMAN_LEG_BYTES + (frame?.ids.length ?? 0) * MEMBER_BYTES + groups * GROUP_STRIDE * 4
+  );
 }
 
 /**
@@ -291,6 +307,8 @@ export class DebugSampler {
         sprites: average((cost) => cost.spritesMs),
       },
       drawn: last?.drawn,
+      placed: last?.placed,
+      posed: last?.posed,
       textures: last?.textures,
       cachedTextures: last?.cached,
       pages: last?.pages,

@@ -1,7 +1,8 @@
 import { describe, expect, it, vi } from 'vitest';
 import { step } from './day';
+import { ACTIVITY_COLUMNS } from './population';
 import { fingerprint } from './step';
-import { scatteredGroups, testData, testState } from './testing';
+import { scatteredGroups, testData, testState, withoutActivities } from './testing';
 
 // La couverture de la pêche rendue à la rampe de l'instant, comme en 7c893a7 : la température du
 // mois tirée des couches, sans calendrier ni arrondi (tâche 2.4).
@@ -26,10 +27,13 @@ vi.mock('./cover', async () => {
 describe('cause de la troisième empreinte de référence (ADR 0019, § 1)', () => {
   it("redonne les empreintes d'avant 2b.7, la pêche rendue à la rampe de l'instant", () => {
     // La partie de la troisième empreinte (state.test.ts) : cent groupes de trente, trente mois.
-    const state = testState();
-    step(state, scatteredGroups(state, 100), testData);
-    for (let tick = 1; tick < 30; tick++) step(state, [], testData);
-    expect(fingerprint(state, { fauna: false })).toBe('cd841d8f');
-    expect(fingerprint(state)).toBe('76a3c458');
+    // Tâche 2b.8 : sans activités, comme la référence (state.test.ts).
+    const content = withoutActivities(testData);
+    const state = testState('graine', content);
+    step(state, scatteredGroups(state, 100), content);
+    for (let tick = 1; tick < 30; tick++) step(state, [], content);
+    const omit = ACTIVITY_COLUMNS;
+    expect(fingerprint(state, { fauna: false, omit })).toBe('cd841d8f');
+    expect(fingerprint(state, { omit })).toBe('76a3c458');
   });
 });

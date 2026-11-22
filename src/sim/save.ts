@@ -10,6 +10,7 @@
  */
 import { z } from 'zod';
 import type { Catalog } from '../core/data/catalog';
+import type { ActivitiesFile } from '../core/data/activities';
 import type { Genetics, Species } from '../core/data/people';
 import type { AltitudeLevel, Biome, Resource } from '../core/data/schemas';
 import type { Worldgen } from '../core/data/worldgen';
@@ -39,7 +40,8 @@ import {
 import { terrainCosts, terrainLands } from './terrain';
 import { Fauna, FAUNA_STREAM, seedFauna, type FaunaContent } from './fauna';
 import { FaunaSaveError, restoreFauna, saveFauna } from './faunaSave';
-import { PLACE, Population } from './population';
+import { INTENTION, NO_ACTIVITY, PLACE, Population, WALK } from './population';
+import { deduceActivities } from './activities';
 import { Movement, placeMigrated, rebuildMovement } from './movement';
 import { migrateChronicle, restorePeople, savePeople } from './populationSave';
 import { emptySociety } from './society';
@@ -89,6 +91,8 @@ export interface SaveContent extends ForageContent, FaunaContent {
   readonly species: Catalog<Species>;
   readonly genetics: Genetics;
   readonly worldgen: Pick<Worldgen, 'parameters'>;
+  /** Les activités (ADR 0021), que la sauvegarde nomme dans l'ordre de leurs rangs. */
+  readonly activities: ActivitiesFile;
 }
 
 const uint32 = z.number().int().min(0).max(0xffffffff);
@@ -165,6 +169,7 @@ function emptyPeople(): { json: unknown; arrays: SaveData['arrays'] } {
   const empty = savePeople(new Population(), emptySociety(), {
     species: { entries: [], indexOf: () => undefined },
     genetics: { loci: [], traits: [], mutation: { allele: 0, trait: 0, jump: 0 } },
+    activities: { activities: [] },
   });
   return empty;
 }
@@ -424,7 +429,65 @@ export const MIGRATIONS: Migrations = {
   5: migrateDays,
   6: migratePositions,
   7: migrateFauna,
+  8: migrateActivities,
 };
+
+/**
+ * Version 9 (tâche 2b.8, ADR 0021) : les activités. Une partie de la version 8 n'en a pas : chaque
+ * vivant reçoit sa place au camp, la place visée de qui marche vers son camp, sa position sinon
+ * (l'invariant de 2b.3 : au repos, on se tient à sa place), et aucune activité. La population ne
+ * nomme pas encore d'activités (`activities: null`) : la relecture les déduit de l'état, avec le
+ * contenu (restoreState).
+ */
+function migrateActivities(save: SaveData): SaveData {
+  const json = (typeof save.json === 'object' && save.json !== null ? save.json : {}) as Record<
+    string,
+    unknown
+  >;
+  const people = (
+    typeof json.people === 'object' && json.people !== null ? json.people : {}
+  ) as Record<string, unknown>;
+  const {
+    peopleMove: move,
+    peopleX: x,
+    peopleY: y,
+    peopleGoalX: goalX,
+    peopleGoalY: goalY,
+  } = save.arrays;
+  // Une sauvegarde abîmée garde ses tableaux tels quels : la relecture la refusera.
+  if (
+    !(move instanceof Uint8Array) ||
+    !(x instanceof Int32Array) ||
+    !(y instanceof Int32Array) ||
+    !(goalX instanceof Int32Array) ||
+    !(goalY instanceof Int32Array)
+  ) {
+    return {
+      meta: save.meta,
+      json: { ...json, people: { ...people, activities: null } },
+      arrays: save.arrays,
+    };
+  }
+  const count = move.length;
+  const homeX = new Int32Array(count);
+  const homeY = new Int32Array(count);
+  for (let slot = 0; slot < count; slot++) {
+    const walking = ((move[slot] ?? 0) & INTENTION) === WALK;
+    homeX[slot] = walking ? (goalX[slot] ?? 0) : (x[slot] ?? 0);
+    homeY[slot] = walking ? (goalY[slot] ?? 0) : (y[slot] ?? 0);
+  }
+  return {
+    meta: save.meta,
+    json: { ...json, people: { ...people, activities: null } },
+    arrays: {
+      ...save.arrays,
+      peopleActivity: new Uint8Array(count).fill(NO_ACTIVITY),
+      peopleUntil: new Int32Array(count),
+      peopleHomeX: homeX,
+      peopleHomeY: homeY,
+    },
+  };
+}
 
 /**
  * Version 8 (tâche 2b.6, ADR 0018) : le gibier. Une partie de la version 7 n'en a pas
@@ -585,7 +648,11 @@ export function restoreState(save: SaveData, content: SaveContent): SimState {
     world.biome[cell] = biomes[biome] ?? 0;
     if (deposit > 0) world.deposit[cell] = (resources[deposit - 1] ?? 0) + 1;
   }
-  const { people, society } = restorePeople(save, parsed.data.people, content, size, tick);
+  const {
+    people,
+    society,
+    derive: deriveActivities,
+  } = restorePeople(save, parsed.data.people, content, size, tick, day);
   const food = restoreFood(save, count);
   const grid = chunkGrid(size);
   // Couches dérivées du monde et du contenu, comme à la création de la partie.
@@ -617,6 +684,9 @@ export function restoreState(save: SaveData, content: SaveContent): SimState {
   // Une partie de la version 7 n'a pas de gibier : il se sème d'après son état, de façon
   // déterministe (migrateFauna).
   if (parsed.data.fauna === null) seedFauna(state, content);
+  // Une partie de la version 8 n'a pas d'activités : elles se déduisent de son état, sans tirage
+  // (migrateActivities).
+  if (deriveActivities) deduceActivities(state, content);
   return state;
 }
 

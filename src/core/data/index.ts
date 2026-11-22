@@ -1,4 +1,5 @@
 /** Contenu du jeu, chargé et validé une fois pour toutes. */
+import activities from '../../../data/activities.json';
 import altitudeLevels from '../../../data/altitude-levels.json';
 import appearance from '../../../data/appearance.json';
 import biomes from '../../../data/biomes.json';
@@ -13,10 +14,11 @@ import resources from '../../../data/resources.json';
 import seasons from '../../../data/seasons.json';
 import species from '../../../data/species.json';
 import worldgen from '../../../data/worldgen.json';
+import { ActivitiesFileSchema, MAX_REACH } from './activities';
 import { catalogOf, DataError, loadCatalog, loadSettings, type Catalog } from './catalog';
 import { DecorSchema, outlineBelow } from './decor';
 import { FaunaFileSchema } from './fauna';
-import { BODY_KINDS, HumansSchema, LOOK_BITS } from './humans';
+import { BODY_KINDS, HumansSchema, LOOK_BITS, shownFrames } from './humans';
 import {
   AppearanceSchema,
   CulturesSchema,
@@ -68,6 +70,14 @@ export type { Decor, DecorRamp, FloraLook, LandUse, Phenology, ShadowMethod } fr
 export type { FaunaRules, FaunaSpecies } from './fauna';
 export type { Parameter, ParameterName, Worldgen } from './worldgen';
 export type { BodyKind, Humans, Outfit, Piece, Ramp3, Ramp4, Region } from './humans';
+export type {
+  ActivitiesFile,
+  Activity,
+  ActivityPlace,
+  ActivityRules,
+  ActivitySeason,
+  Gesture,
+} from './activities';
 
 /** Charge tout le contenu ; lève une DataError s'il est invalide. */
 export function loadGameData() {
@@ -90,6 +100,8 @@ export function loadGameData() {
     nomads: loadSettings('data/nomads.json', NomadsSchema, nomads),
     appearance: loadSettings('data/appearance.json', AppearanceSchema, appearance),
     humans: loadSettings('data/humans.json', HumansSchema, humans),
+    /** Les activités des individus, leurs gestes et leurs règles (ADR 0021, ADR 0022). */
+    activities: loadSettings('data/activities.json', ActivitiesFileSchema, activities),
   };
   const problems = checkContent(data);
   if (problems.length > 0) throw new DataError(`contenu incohérent\n${problems.join('\n')}`);
@@ -110,6 +122,64 @@ export function checkContent(data: GameData): string[] {
     if (unknown.length > 0) problems.push(`${file} : inconnus : ${unknown.join(', ')}`);
   };
   check('data/worldgen.json (biomes)', classifiedBiomes(data.worldgen.classification), data.biomes);
+  // Les eaux d'une activité au bord de l'eau sont des biomes de l'eau : la rive d'une case de terre
+  // ne vient que de sa rivière (`water.river`).
+  for (const activity of data.activities.activities) {
+    const waters = activity.water?.biomes ?? [];
+    check(`data/activities.json (eaux de ${activity.id})`, waters, data.biomes);
+    const dry = waters.filter((id) => {
+      const index = data.biomes.indexOf(id);
+      return index !== undefined && data.biomes.entries[index]?.family !== 'water';
+    });
+    if (dry.length > 0) {
+      problems.push(
+        `data/activities.json : eaux de ${activity.id} hors de la famille de l'eau : ${dry.join(', ')}`,
+      );
+    }
+  }
+  // La portée d'une activité, multipliée par le facteur de la grégarité au plus grand (la
+  // grégarité effective au plus bas, la cohésion du camp), tient sous MAX_REACH : anneaux, rives
+  // et gibier ne se cherchent pas au-delà (src/sim/activities.ts, reachFactor).
+  const { reach: gregarious } = data.activities.rules.gregarious;
+  const widest = gregarious[0] + gregarious[1] * (1 - data.nomads.camp.cohesion);
+  for (const activity of data.activities.activities) {
+    const farthest = activity.reach[1] * widest;
+    if (farthest > MAX_REACH) {
+      problems.push(
+        `data/activities.json : portée de ${activity.id} jusqu'à ${String(farthest)} cases avec la grégarité, au-delà de ${String(MAX_REACH)}`,
+      );
+    }
+  }
+  // Chaque segment d'un geste nomme une animation des planches, et des images qu'elle a, que
+  // l'atlas du jeu range (data/humans.json, shown ; toutes, sans liste d'images) : un motif est
+  // le premier de son animation plus le rang de son image rangée (src/render/humans.ts). Sa
+  // cadence est en millisecondes, la sienne ou celle de l'animation : un geste suit l'horloge de
+  // la marche du rendu, et non le pas de la marche, que règle la vitesse de la partie.
+  for (const gesture of data.activities.gestures) {
+    for (const segment of gesture.segments) {
+      const animation = data.humans.animations.find((entry) => entry.id === segment.animation);
+      const at = `data/activities.json : geste ${gesture.id}`;
+      if (animation === undefined) {
+        problems.push(`${at} : animation ${segment.animation} inconnue`);
+        continue;
+      }
+      const frames = segment.frames ?? Array.from({ length: animation.frames }, (_, f) => f);
+      const shown = shownFrames(animation);
+      if (frames.some((frame) => frame >= animation.frames)) {
+        problems.push(`${at} : image hors de l'animation ${segment.animation}`);
+      } else if (frames.some((frame) => !shown.includes(frame))) {
+        const hidden = frames.filter((frame) => !shown.includes(frame));
+        problems.push(
+          `${at} : images ${hidden.join(', ')} de l'animation ${segment.animation}, que le jeu ne range pas`,
+        );
+      }
+      if (segment.frameMs === undefined && animation.frameMs === undefined) {
+        problems.push(
+          `${at} : animation ${segment.animation} au pas de la marche, sans durée d'image`,
+        );
+      }
+    }
+  }
   check(
     'data/biomes.json (ressources)',
     data.biomes.entries.flatMap((biome) => biome.resources),

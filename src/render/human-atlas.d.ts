@@ -16,9 +16,11 @@ declare module 'virtual:human-atlas' {
       readonly rows: number;
       readonly variants: readonly number[];
     }[];
+    /** Images rangées de chaque animation, et le rang dans la planche de chacune. */
     readonly animations: readonly {
       readonly id: string;
       readonly frames: number;
+      readonly ranks: readonly number[];
       readonly steps?: number;
       readonly frameMs?: number;
       readonly loop: boolean;

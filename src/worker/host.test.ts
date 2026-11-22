@@ -1,6 +1,8 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { GameData } from '../core/data';
 import {
+  ACT_NONE,
+  ACT_RANK,
   CHRONICLE_PAGE,
   CHRONICLE_RECENT,
   FAUNA_GAIT,
@@ -9,7 +11,7 @@ import {
   faunaLegBuffers,
   frameBuffers,
   GROUP_STRIDE,
-  legBuffers,
+  humanLegBuffers,
   PROTOCOL_VERSION,
   type ChronicleView,
   type GameCommand,
@@ -183,10 +185,10 @@ describe('partie', () => {
       worldCalendars(size, testWorld(), testData.biomes.entries, testData.seasons),
     );
     const entry = env.sent.find((sent) => sent.message.type === 'snapshot');
-    // Les couches du monde et les calendriers, plus les sept tableaux de l'image des groupes et
-    // les cinq des étapes en cours (ADR 0014), puis les quatre de l'image du gibier et les cinq
-    // de ses étapes en cours (protocole 7, ADR 0018).
-    expect(entry?.transfer).toHaveLength(LAYER_NAMES.length + 1 + 21);
+    // Les couches du monde et les calendriers, plus les huit tableaux de l'image des groupes et
+    // les six des étapes en cours (ADR 0014, octets d'activité du protocole 9 compris), puis les
+    // quatre de l'image du gibier et les cinq de ses étapes en cours (protocole 7, ADR 0018).
+    expect(entry?.transfer).toHaveLength(LAYER_NAMES.length + 1 + 23);
     if (entry?.original.type === 'snapshot') {
       expect(entry.transfer).toContain(entry.original.calendars.buffer);
     }
@@ -1231,14 +1233,22 @@ describe('deux horloges (ADR 0013)', () => {
     // Le premier jour, qui fait apparaître les groupes, puis les deux pas mensuels ; ni les
     // coups de pinceau ni les jours ordinaires.
     expect(framed).toEqual([0, DAYS_PER_MONTH - 1, 2 * DAYS_PER_MONTH - 1]);
-    // Les étapes de chaque lot sont datées de ses jours.
+    // Les étapes de chaque lot sont datées de ses jours ; celles qui tournent vers l'eau qui vient
+    // d'y arriver, de l'instant qui suit, où il s'arrête : zéro jour, un pas horizontal d'une
+    // unité (activities.ts, shoreLegs ; relecture de 2b.8).
     const legs = deltas.flatMap((delta) => (delta.legs === undefined ? [] : [delta]));
     expect(legs.length).toBeGreaterThan(DAYS_PER_MONTH / 2);
     for (const delta of legs) {
       const end = dayIndex(delta.time);
-      for (const day of delta.legs?.days ?? []) {
-        expect(day).toBeLessThan(end);
+      const started = delta.legs;
+      for (let at = 0; at < (started?.days.length ?? 0); at++) {
+        const day = started?.days[at] ?? 0;
         expect(day).toBeGreaterThanOrEqual(end - delta.days);
+        if (day < end) continue;
+        expect(day).toBe(end);
+        expect(started?.count[at]).toBe(0);
+        expect(Math.abs(started?.step[2 * at] ?? 0)).toBe(1);
+        expect(started?.step[2 * at + 1]).toBe(0);
       }
     }
     // L'image porte chaque membre, et l'étape en cours de chaque marcheur.
@@ -1249,9 +1259,21 @@ describe('deux horloges (ADR 0013)', () => {
       members += frame.groups[at + 3] ?? 0;
     expect(frame.positions.length).toBe(2 * members);
     expect(frame.legs.slots.length).toBe(frame.legs.count.length);
-    // Les tampons de l'image et des étapes voyagent sans copie.
+    // Protocole 9 : l'octet d'activité de chaque membre, de chaque étape en cours et de chaque
+    // étape des lots, d'une activité des données ou d'aucune (ADR 0021, § 6).
+    const known = (act: number) =>
+      (act & ACT_RANK) < testData.activities.activities.length || (act & ACT_RANK) === ACT_NONE;
+    expect(frame.activities.length).toBe(members);
+    expect(frame.legs.acts.length).toBe(frame.legs.slots.length);
+    expect([...frame.activities].every(known)).toBe(true);
+    for (const delta of legs) {
+      expect(delta.legs?.acts.length).toBe(delta.legs?.slots.length);
+      expect([...(delta.legs?.acts ?? [])].every(known)).toBe(true);
+    }
+    // Les tampons de l'image et des étapes voyagent sans copie, octets d'activité compris.
     const entry = env.sent.findLast((sent) => sent.message.type === 'delta');
-    expect(entry?.transfer.length).toBeGreaterThanOrEqual(12);
+    expect(entry?.transfer.length).toBeGreaterThanOrEqual(14);
+    expect(entry?.transfer).toEqual(expect.arrayContaining(frameBuffers(frame)));
     // Les statistiques comptent les marcheurs et les étapes du lot.
     const stats = env.messages('stats');
     expect(stats.some((message) => message.stats.walkers > 0)).toBe(true);
@@ -1264,9 +1286,20 @@ describe('deux horloges (ADR 0013)', () => {
     env.advance(NORMAL_MONTH_MS * 2 + WAKE_SLACK_MS);
     const deltas = env.messages('delta');
     expect(deltas).toHaveLength(2 * DAYS_PER_MONTH);
-    // L'image du gibier : aux seuls pas mensuels, ni à l'apparition des groupes ni les autres jours.
+    // L'image du gibier : aux pas mensuels, et le jour de chaque prise (ADR 0021, § 4), qui ôte des
+    // animaux sans en ajouter ; ni à l'apparition des groupes, ni les autres jours.
     const framed = deltas.flatMap((delta, index) => (delta.fauna === undefined ? [] : [index]));
-    expect(framed).toEqual([DAYS_PER_MONTH - 1, 2 * DAYS_PER_MONTH - 1]);
+    expect(framed).toEqual(expect.arrayContaining([DAYS_PER_MONTH - 1, 2 * DAYS_PER_MONTH - 1]));
+    let known = new Set(env.messages('snapshot').at(-1)?.fauna.ids);
+    expect(known.size).toBeGreaterThan(400);
+    for (const index of framed) {
+      const ids = [...(deltas[index]?.fauna?.ids ?? [])];
+      if ((index + 1) % DAYS_PER_MONTH !== 0) {
+        expect(ids.length, `jour ${String(index)}`).toBeLessThan(known.size);
+        expect(ids.every((id) => known.has(id))).toBe(true);
+      }
+      known = new Set(ids);
+    }
     // Ses étapes, chaque lot, datées de ses jours, chacune avec son allure.
     const legged = deltas.filter((delta) => delta.faunaLegs !== undefined);
     expect(legged.length).toBeGreaterThan(DAYS_PER_MONTH);
@@ -1331,7 +1364,7 @@ describe('deux horloges (ADR 0013)', () => {
       .messages('delta')
       .flatMap((delta) => [
         ...(delta.frame === undefined ? [] : frameBuffers(delta.frame)),
-        ...(delta.legs === undefined ? [] : legBuffers(delta.legs)),
+        ...(delta.legs === undefined ? [] : humanLegBuffers(delta.legs)),
         ...(delta.fauna === undefined ? [] : faunaBuffers(delta.fauna)),
         ...(delta.faunaLegs === undefined ? [] : faunaLegBuffers(delta.faunaLegs)),
       ])

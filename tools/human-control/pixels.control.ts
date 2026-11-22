@@ -25,6 +25,11 @@
  * aucun ne doit être plus clair que le sol qu'il couvre (relecture 2b.6, problème 2).
  * Le gibier (ADR 0018) se range sous le décor, dans la même texture : ses pixels se comparent
  * tous, au rôle lu dans son atlas (src/render/fauna.ts), puisqu'il n'a pas d'ombre portée.
+ *
+ * Les gestes des activités (tâche 2b.8, ADR 0022) : chaque particule des humains est reconnue à
+ * son cadre, motif par motif, et comptée par animation (`animations`) ; sur l'ensemble des vues,
+ * le contrôle veut des pixels comparés des gestes à l'arrêt (la figure à genoux, tirée de la mort,
+ * et le lancer, le saut ou la chute), et pas seulement du repos et de la marche.
  */
 import { existsSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
@@ -36,7 +41,7 @@ import {
   PALETTES_PER_ROW,
   paletteTexel,
 } from '../../src/render/humanShader';
-import { ATLAS_ROLES, humanAtlas } from '../../src/render/humans';
+import { ATLAS_ROLES, humanAtlas, MOTIF_ANIMATION, MOTIF_COUNT } from '../../src/render/humans';
 import { DECOR_ATLAS, SHADOW_ROLES } from '../../src/render/decor';
 import { FAUNA_ATLAS } from '../../src/render/fauna';
 
@@ -49,6 +54,15 @@ function roleAt(x: number, y: number): number {
   if (y < FAUNA_TOP) return DECOR_ATLAS.roles[(y - humanAtlas.height) * DECOR_ATLAS.width + x] ?? 0;
   return FAUNA_ATLAS.roles[(y - FAUNA_TOP) * FAUNA_ATLAS.width + x] ?? 0;
 }
+/** Le motif des humains de chaque cadre de l'atlas des rôles, par son coin haut gauche. */
+const MOTIF_AT = new Map<number, number>();
+for (let motif = 0; motif < MOTIF_COUNT; motif++) {
+  const x = humanAtlas.motifs[motif * 6] ?? 0;
+  const y = humanAtlas.motifs[motif * 6 + 1] ?? 0;
+  MOTIF_AT.set(y * humanAtlas.width + x, motif);
+}
+/** Les animations des gestes à l'arrêt que le contrôle veut voir, au moins l'une de chaque liste. */
+const GESTURES: readonly (readonly string[])[] = [['death'], ['throw', 'jump', 'fall']];
 /** Les rôles de l'ombre portée du décor ; le gibier n'en a pas : tous ses pixels se comparent. */
 const SHADOWS: ReadonlySet<number> = new Set(SHADOW_ROLES);
 /** Un pixel qu'une ombre portée recouvre : rien ne s'y compare à une palette. */
@@ -100,6 +114,9 @@ interface Result {
   readonly flipped: number;
   readonly maxSlot: number;
   readonly densities: readonly number[];
+  /** Particules des humains par animation, et pixels comparés de chacune. */
+  readonly animations: Readonly<Record<string, number>>;
+  readonly animationPixels: Readonly<Record<string, number>>;
   readonly samples: readonly string[];
 }
 
@@ -120,8 +137,11 @@ function compare(
   const expected = new Int32Array(width * height).fill(-1);
   /** Ombres portées posées sur chaque pixel ; 255 : une particule y est passée avant l'ombre. */
   const shadows = new Uint8Array(width * height);
-  /** Le pixel attendu vient-il d'un objet du décor ? */
+  /** Le pixel attendu vient-il d'un objet du décor ? De quelle animation des humains ? */
   const fromObject = new Uint8Array(width * height);
+  const fromAnimation = new Int16Array(width * height).fill(-1);
+  const animations: Record<string, number> = {};
+  const animationPixels: Record<string, number> = {};
   let objects = 0;
   let undeclared = 0;
   let flipped = 0;
@@ -132,6 +152,14 @@ function compare(
     const slot = colorSlot(color);
     const object = fy >= humanAtlas.height;
     if (object) objects++;
+    // Le motif des humains de son cadre, et son animation.
+    const motif = object ? undefined : MOTIF_AT.get(fy * humanAtlas.width + fx);
+    const animation = motif === undefined ? -1 : (MOTIF_ANIMATION[motif] ?? -1);
+    const animationId = humanAtlas.animations.at(animation)?.id;
+    if (!object) {
+      const id = animationId ?? '?';
+      animations[id] = (animations[id] ?? 0) + 1;
+    }
     maxSlot = Math.max(maxSlot, slot);
     const k = Math.round(Math.abs(scaleX) * resolution);
     densities.add(k);
@@ -171,6 +199,7 @@ function compare(
               }
               expected[pixel] = rgb;
               fromObject[pixel] = object ? 1 : 0;
+              fromAnimation[pixel] = object ? -1 : animation;
             }
           }
         }
@@ -215,6 +244,10 @@ function compare(
     if (want < 0) continue;
     compared++;
     if (fromObject[index] === 1) comparedObjects++;
+    const id = humanAtlas.animations.at(fromAnimation[index] ?? -1)?.id;
+    if ((fromAnimation[index] ?? -1) >= 0 && id !== undefined) {
+      animationPixels[id] = (animationPixels[id] ?? 0) + 1;
+    }
     const got =
       ((frame[index * 4] ?? 0) << 16) |
       ((frame[index * 4 + 1] ?? 0) << 8) |
@@ -241,6 +274,8 @@ function compare(
     flipped,
     maxSlot,
     densities: [...densities].sort((a, b) => a - b),
+    animations,
+    animationPixels,
     samples,
   };
 }
@@ -282,6 +317,8 @@ describe('pixels des humains dans Chromium (ADR 0016, § 9)', () => {
       expect(result.comparedObjects).toBeGreaterThan(5000);
       expect(result.flipped).toBeGreaterThan(0);
       expect(result.maxSlot).toBeLessThan(meta.rows * PALETTES_PER_ROW);
+      // Chaque particule des humains est un motif de l'atlas, d'une animation qu'il range.
+      expect(result.animations['?'] ?? 0).toBe(0);
       // L'ombre portée assombrit le sol : aucun de ses pixels n'est plus clair que la carte
       // seule (relecture 2b.6, problème 2), et presque tous sont plus sombres.
       expect(result.shadowPixels).toBeGreaterThan(1000);
@@ -300,5 +337,16 @@ describe('pixels des humains dans Chromium (ADR 0016, § 9)', () => {
     const densities = new Set(all.flatMap(({ result }) => result.densities));
     expect(densities.has(1) && densities.has(2)).toBe(true);
     expect(new Set(all.map(({ meta }) => meta.resolution)).size).toBeGreaterThan(1);
+  });
+
+  it('compare les pixels des gestes des activités, et pas seulement du repos et de la marche (ADR 0022)', () => {
+    const pixels = (id: string) =>
+      all.reduce((sum, { result }) => sum + (result.animationPixels[id] ?? 0), 0);
+    for (const ids of GESTURES) {
+      expect(
+        ids.reduce((sum, id) => sum + pixels(id), 0),
+        `aucun pixel comparé de ${ids.join(', ')}`,
+      ).toBeGreaterThan(200);
+    }
   });
 });

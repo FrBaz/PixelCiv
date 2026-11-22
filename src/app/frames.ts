@@ -17,11 +17,21 @@
  *   l'instant s'arrête, et tout aussi ; changer de vitesse ne change rien aux étapes.
  * - Le nourrisson porté se tient contre sa mère, du côté que dit son identifiant, là où il se
  *   posera à son sevrage, comme le calcule le worker : rien ne saute quand il quitte ses bras.
+ * - L'activité de chacun (protocole 9, ADR 0021 § 6) : l'octet de l'image des groupes, puis celui
+ *   de la dernière étape qu'il a commencée ; une étape de zéro jour change son activité sur place.
+ *   Le rendu en tire sa pose (src/render/humans.ts, poseOf).
  *
  * Les tampons lus retournent au worker (message `recycle`) : ceux d'une image quand la carte
  * ne la montre plus, ceux des étapes dès qu'elles sont toutes appliquées ou dépassées.
  */
-import { GROUP_STRIDE, NO_CARRIER, type GroupsFrame, type LegArrays } from '../core/protocol';
+import {
+  ACT_NONE,
+  GROUP_STRIDE,
+  NO_CARRIER,
+  type GroupsFrame,
+  type HumanLegArrays,
+  type LegArrays,
+} from '../core/protocol';
 import { cellOf, deltaFixedX, FIXED, wrapFixedX } from '../core/position';
 import { dayIndex, type GameTime } from '../core/time';
 import type { WorldSize } from '../core/world';
@@ -256,7 +266,7 @@ const placed = new Float64Array(2);
  * position de chacun à tout instant de l'image, et, pour chaque groupe, ce que ses membres
  * peuvent atteindre : la carte n'interpole que les groupes que l'écran peut montrer.
  */
-export class PositionMirror implements CrowdSource {
+export class PositionMirror implements CrowdSource, LegTarget<HumanLegArrays> {
   frame: GroupsFrame | undefined;
   /** Instant de l'image, en jours (dayIndex). */
   at = 0;
@@ -278,6 +288,11 @@ export class PositionMirror implements CrowdSource {
   private stepX = new Float64Array(0);
   private stepY = new Float64Array(0);
   private legCount = new Uint16Array(0);
+  /**
+   * Octet d'activité de chaque membre (protocole 9) : celui de l'image, puis de sa dernière
+   * étape appliquée, ACT_STRIKE compris le jour du coup.
+   */
+  private actOf = new Uint8Array(0);
   /**
    * Sens de chaque membre, −1 vers l'ouest, 1 vers l'est, 0 inconnu : celui du dernier pas
    * horizontal de ses étapes, gardé d'une image des groupes à l'autre pour qui reste le même
@@ -320,6 +335,7 @@ export class PositionMirror implements CrowdSource {
       this.stepX = new Float64Array(size);
       this.stepY = new Float64Array(size);
       this.legCount = new Uint16Array(size);
+      this.actOf = new Uint8Array(size);
     }
     this.memberOf.fill(-1);
     if (frame === undefined) {
@@ -376,7 +392,10 @@ export class PositionMirror implements CrowdSource {
       this.nextCarried[member] = this.firstCarried[mother] ?? -1;
       this.firstCarried[mother] = member;
     }
-    // Les étapes en cours, reparties de l'instant de l'image.
+    // L'activité de chacun à l'instant de l'image, puis les étapes en cours, reparties de lui,
+    // avec la leur.
+    this.actOf.set(frame.activities.subarray(0, count));
+    this.actOf.fill(ACT_NONE, frame.activities.length, count);
     this.legDay.fill(Number.NaN, 0, count);
     const { legs } = frame;
     for (let index = 0; index < legs.slots.length; index++) {
@@ -388,6 +407,8 @@ export class PositionMirror implements CrowdSource {
         legs.step[2 * index] ?? 0,
         legs.step[2 * index + 1] ?? 0,
         legs.count[index] ?? 0,
+        legs,
+        index,
       );
     }
   }
@@ -429,8 +450,9 @@ export class PositionMirror implements CrowdSource {
 
   /**
    * Une étape de l'emplacement `slot`, partie au jour `day` du point (x, y), qui avance de
-   * (stepX, stepY) par jour pendant `count` jours : elle remplace l'étape en cours. Un
-   * emplacement hors de l'image est ignoré.
+   * (stepX, stepY) par jour pendant `count` jours : elle remplace l'étape en cours, et son octet
+   * d'activité (`legs.acts`, au rang `index`), celui du membre. Un emplacement hors de l'image
+   * est ignoré.
    */
   apply(
     slot: number,
@@ -440,10 +462,13 @@ export class PositionMirror implements CrowdSource {
     stepX: number,
     stepY: number,
     count: number,
+    legs: HumanLegArrays,
+    index: number,
   ): void {
     const member = this.memberOf[slot] ?? -1;
     if (member < 0) return;
     this.applied++;
+    this.actOf[member] = legs.acts[index] ?? ACT_NONE;
     this.legDay[member] = day;
     this.legX[member] = x;
     this.legY[member] = y;
@@ -468,6 +493,7 @@ export class PositionMirror implements CrowdSource {
     this.stepX.set(other.stepX.subarray(0, count));
     this.stepY.set(other.stepY.subarray(0, count));
     this.legCount.set(other.legCount.subarray(0, count));
+    this.actOf.set(other.actOf.subarray(0, count));
     if (this.facingOf.length < count) this.facingOf = new Int8Array(count);
     this.facingOf.set(other.facingOf.subarray(0, count));
     this.box.set(other.box.subarray(0, this.groupCount * BOX_STRIDE));
@@ -525,6 +551,7 @@ export class PositionMirror implements CrowdSource {
     ys: Float64Array,
     moving: Uint8Array,
     facing?: Int8Array,
+    acts?: Uint8Array,
   ) {
     if (this.frame === undefined) return;
     const first = this.firsts[group] ?? 0;
@@ -532,6 +559,7 @@ export class PositionMirror implements CrowdSource {
     for (let member = first; member < end; member++) {
       if ((this.carrierOf[member] ?? -1) >= 0) continue;
       moving[member] = this.place(member, t) ? 1 : 0;
+      if (acts !== undefined) acts[member] = this.actOf[member] ?? ACT_NONE;
       xs[member] = placed[0];
       ys[member] = placed[1];
       // Son sens : celui du pas horizontal de son étape, en cours ou finie ; sans étape, ou
@@ -598,8 +626,8 @@ export class PositionMirror implements CrowdSource {
 export interface TimelineOptions extends MirrorOptions {
   /** Une image que la carte ne montre plus : ses tampons retournent au worker. */
   readonly recycleFrame?: (frame: GroupsFrame) => void;
-  /** Des étapes lues ou dépassées : leurs tampons retournent au worker. */
-  readonly recycleLegs?: (legs: LegArrays) => void;
+  /** Des étapes lues ou dépassées : leurs tampons retournent au worker, octets d'activité compris. */
+  readonly recycleLegs?: (legs: HumanLegArrays) => void;
 }
 
 /**
@@ -610,7 +638,7 @@ export interface TimelineOptions extends MirrorOptions {
  */
 export class CrowdTimeline {
   readonly frames: FrameQueue;
-  readonly legs: LegQueue;
+  readonly legs: LegQueue<HumanLegArrays>;
   /** Positions à l'instant affiché. */
   readonly shown: PositionMirror;
   /**
@@ -631,7 +659,7 @@ export class CrowdTimeline {
       if (frame === this.shown.frame) this.held.push(frame);
       else this.recycleFrame(frame);
     });
-    this.legs = new LegQueue(options.recycleLegs);
+    this.legs = new LegQueue<HumanLegArrays>(options.recycleLegs);
     this.shown = new PositionMirror(options);
     this.latest = new PositionMirror(options);
   }
@@ -649,7 +677,7 @@ export class CrowdTimeline {
    * Un delta de l'instant `time` : les étapes commencées pendant ses jours, et son image s'il
    * en porte une, qui vaut à partir de cet instant.
    */
-  receive(time: GameTime, legs: LegArrays | undefined, frame: GroupsFrame | undefined): void {
+  receive(time: GameTime, legs: HumanLegArrays | undefined, frame: GroupsFrame | undefined): void {
     if (legs !== undefined) this.legs.push(legs);
     if (frame !== undefined && this.frames.push(frame, time)) {
       // La file, pleine, a oublié des images que la carte n'a pas montrées : elle ne se

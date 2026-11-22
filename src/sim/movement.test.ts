@@ -28,6 +28,7 @@ import {
   testHuman,
   testState,
   withHuman,
+  withoutActivities,
 } from './testing';
 import { GENERATOR_VERSION } from '../worldgen/generate';
 
@@ -140,34 +141,40 @@ describe('mouvement des individus : déterminisme (ADR 0014)', () => {
   });
 
   it('tient ses caches comme l’état les redonne, et se relit en cours de mois, pinceau et détours compris', () => {
-    const state = flatState('caches', lakeWorld);
-    for (const [x, y] of [
-      [100, 124],
-      [100, 138],
-      [86, 128],
-      [70, 110],
-      [120, 150],
-    ] as const) {
-      spawnAt(state, x, y, 24);
-    }
-    let copy: SimState | undefined;
-    for (let day = 0; day < 8 * DAYS_PER_MONTH; day++) {
-      const commands =
-        day === 100 ? [{ type: 'paintBiome' as const, x: 97, y: 125, biome: 'marsh' }] : [];
-      advanceDay(state, commands, testData);
-      if (copy !== undefined) advanceDay(copy, commands, testData);
-      if (day % 3 === 0) expectCachesFromState(state, `jour ${String(day)}`);
-      // Une sauvegarde au jour 7 du troisième mois, relue : la suite est la même.
-      if (day === 2 * DAYS_PER_MONTH + 7) {
-        copy = restoreState(saveState(state, GENERATOR_VERSION, testData), testData);
-        expect(describeMovement(copy).text).toBe(describeMovement(state).text);
+    // Avec les activités (ADR 0021), et sans elles, comme en 2b.7, où le lac demande des détours.
+    const run = (content: typeof testData) => {
+      const state = flatState('caches', lakeWorld);
+      for (const [x, y] of [
+        [100, 124],
+        [100, 138],
+        [86, 128],
+        [70, 110],
+        [120, 150],
+      ] as const) {
+        spawnAt(state, x, y, 24, content);
       }
-    }
-    if (copy === undefined) throw new Error('pas de relecture');
-    expect(fingerprint(copy)).toBe(fingerprint(state));
+      let copy: SimState | undefined;
+      for (let day = 0; day < 8 * DAYS_PER_MONTH; day++) {
+        const commands =
+          day === 100 ? [{ type: 'paintBiome' as const, x: 97, y: 125, biome: 'marsh' }] : [];
+        advanceDay(state, commands, content);
+        if (copy !== undefined) advanceDay(copy, commands, content);
+        if (day % 3 === 0) expectCachesFromState(state, `jour ${String(day)}`);
+        // Une sauvegarde au jour 7 du troisième mois, relue : la suite est la même.
+        if (day === 2 * DAYS_PER_MONTH + 7) {
+          copy = restoreState(saveState(state, GENERATOR_VERSION, content), content);
+          expect(describeMovement(copy).text).toBe(describeMovement(state).text);
+        }
+      }
+      if (copy === undefined) throw new Error('pas de relecture');
+      expect(fingerprint(copy)).toBe(fingerprint(state));
+      return state;
+    };
+    run(testData);
     // Le lac a demandé des détours, par le champ de distances d'un camp.
-    expect(state.movement.counts.detours).toBeGreaterThan(0);
-    expect(state.movement.counts.fields).toBeGreaterThan(0);
+    const plain = run(withoutActivities(testData));
+    expect(plain.movement.counts.detours).toBeGreaterThan(0);
+    expect(plain.movement.counts.fields).toBeGreaterThan(0);
   });
 
   it('compte ses marcheurs sans les arrivés du jour, que sa liste garde jusqu’au lendemain', () => {
@@ -270,43 +277,50 @@ describe('mouvement des individus : terrain (ADR 0014)', () => {
   });
 
   it('ne pose personne sur l’eau, et aucun segment du jour ne la traverse ni n’en coupe un coin', () => {
-    const state = flatState('lac', lakeWorld);
-    for (const [x, y] of [
-      [100, 124],
-      [100, 136],
-      [92, 116],
-      [84, 128],
-      [112, 132],
-    ] as const) {
-      spawnAt(state, x, y, 26);
-    }
-    const { width } = state.size;
-    let segments = 0;
-    let previous = positions(state);
-    for (let day = 0; day < 24 * DAYS_PER_MONTH; day++) {
-      advanceDay(state, [], testData);
-      const now = positions(state);
-      const { people } = state;
-      people.forEach((slot) => {
-        const id = people.get('id', slot);
-        const [x, y] = now.get(id) ?? [0, 0];
-        expect(
-          state.cost[cellOf(x, y, width)],
-          `${String(id)} au jour ${String(day)}`,
-        ).toBeLessThan(Infinity);
-        const before = previous.get(id);
-        if (before === undefined || intention(state, slot) === CARRIED) return;
-        if (before[0] === x && before[1] === y) return;
-        segments++;
-        expect(segmentClear(state, before[0], before[1], x, y), `segment de ${String(id)}`).toBe(
-          true,
-        );
-      });
-      previous = now;
-    }
-    expect(segments).toBeGreaterThan(2000);
-    expect(state.movement.counts.detours).toBeGreaterThan(0);
-    expect(state.movement.counts.fields).toBeGreaterThan(0);
+    // Avec les activités (ADR 0021), et sans elles, comme en 2b.7 : leurs allées et venues ne
+    // changent pas le tour du lac, que la partie sans activités fait par détours.
+    const run = (content: SimContent) => {
+      const state = flatState('lac', lakeWorld);
+      for (const [x, y] of [
+        [100, 124],
+        [100, 136],
+        [92, 116],
+        [84, 128],
+        [112, 132],
+      ] as const) {
+        spawnAt(state, x, y, 26, content);
+      }
+      const { width } = state.size;
+      let segments = 0;
+      let previous = positions(state);
+      for (let day = 0; day < 24 * DAYS_PER_MONTH; day++) {
+        advanceDay(state, [], content);
+        const now = positions(state);
+        const { people } = state;
+        people.forEach((slot) => {
+          const id = people.get('id', slot);
+          const [x, y] = now.get(id) ?? [0, 0];
+          expect(
+            state.cost[cellOf(x, y, width)],
+            `${String(id)} au jour ${String(day)}`,
+          ).toBeLessThan(Infinity);
+          const before = previous.get(id);
+          if (before === undefined || intention(state, slot) === CARRIED) return;
+          if (before[0] === x && before[1] === y) return;
+          segments++;
+          expect(segmentClear(state, before[0], before[1], x, y), `segment de ${String(id)}`).toBe(
+            true,
+          );
+        });
+        previous = now;
+      }
+      expect(segments).toBeGreaterThan(2000);
+      return state;
+    };
+    run(testData);
+    const plain = run(withoutActivities(testData));
+    expect(plain.movement.counts.detours).toBeGreaterThan(0);
+    expect(plain.movement.counts.fields).toBeGreaterThan(0);
   });
 });
 
@@ -520,8 +534,14 @@ describe('mouvement des individus : vie, mort et changements de groupe (ADR 0014
     }
     expect(changed).toBeGreaterThan(50);
     expect(durations.length).toBeGreaterThan(50);
-    // Le groupe attend qui le rejoint : chacun arrive en moins de quatre mois.
-    expect(Math.max(...durations)).toBeLessThan(120);
+    // Le groupe attend qui le rejoint, tant qu'il se tient à plus de `camp.wait` cases du camp :
+    // presque tous arrivent en moins de trois mois. Un jeune enfant, lent, qui n'a pas atteint sa
+    // place au pas mensuel mais se tient déjà près du centre du camp, suit le groupe jusqu'au
+    // suivant : un ou deux mois de plus (relecture de 2b.8 : deux arrivées sur 445 en cinq mois sur
+    // cette graine, une sur 565 en quatre sur `graine`, aucune au-delà de trois mois avant elle).
+    const quick = durations.filter((duration) => duration <= 90).length;
+    expect(quick / durations.length).toBeGreaterThan(0.99);
+    expect(Math.max(...durations)).toBeLessThan(180);
   });
 
   it('porte le nouveau-né à la position de sa mère, puis le sèvre à 0,3 case d’elle au plus', () => {

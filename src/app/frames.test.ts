@@ -1,13 +1,17 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
+  ACT_NONE,
+  ACT_RUN,
+  ACT_STRIKE,
   GROUP_STRIDE,
   NO_CARRIER,
   type GroupsFrame,
-  type LegArrays,
+  type HumanLegArrays,
   type MainMessage,
   type SpawnGroupCommand,
 } from '../core/protocol';
 import { carriedSide, cellOf, FIXED, wrapFixedX } from '../core/position';
+import { riverClass } from '../core/world';
 import {
   dayDuration,
   dayIndex,
@@ -16,9 +20,16 @@ import {
   type GameTime,
   type SpeedId,
 } from '../core/time';
+import { actByte } from '../sim/activities';
+import { advanceDay } from '../sim/day';
+import { HumanJournal } from '../sim/movement';
+import { applyCommands } from '../sim/step';
+import { groupsFrame } from '../sim/views';
+import { humanAtlas, poseOf, poseTable } from '../render/humans';
+import { POSE_FRAMES } from '../render/crowd';
 import type { SimState } from '../sim/state';
 import { carriedOffset } from '../render/crowd';
-import { scatteredGroups, testHuman, testState } from '../sim/testing';
+import { scatteredGroups, testData, testHuman, testState } from '../sim/testing';
 import type { SimulationHost } from '../worker/host';
 import {
   CrowdTimeline,
@@ -33,23 +44,33 @@ import { PAUSE_CATCH_UP_MS } from './gameClock';
 import { FRAME_MS, HostedGame } from './testing';
 
 /** Aucune étape. */
-const noLegs = (): LegArrays => ({
+const noLegs = (): HumanLegArrays => ({
   slots: new Uint32Array(0),
   days: new Uint32Array(0),
   start: new Int32Array(0),
   step: new Int32Array(0),
   count: new Uint16Array(0),
+  acts: new Uint8Array(0),
 });
 
-/** Des étapes : [emplacement, jour, x, y, pas x, pas y, jours], en unités. */
-function legs(...list: [number, number, number, number, number, number, number][]): LegArrays {
+/** Une étape : [emplacement, jour, x, y, pas x, pas y, jours], en unités, et son octet d'activité. */
+type Leg = [number, number, number, number, number, number, number, number?];
+
+/** Des étapes ; l'octet d'activité de chacune, le repos (0) s'il manque. */
+function legs(...list: Leg[]): HumanLegArrays {
   return {
     slots: Uint32Array.from(list, (leg) => leg[0]),
     days: Uint32Array.from(list, (leg) => leg[1]),
     start: Int32Array.from(list.flatMap((leg) => [leg[2], leg[3]])),
     step: Int32Array.from(list.flatMap((leg) => [leg[4], leg[5]])),
     count: Uint16Array.from(list, (leg) => leg[6]),
+    acts: Uint8Array.from(list, (leg) => leg[7] ?? 0),
   };
+}
+
+/** Applique au miroir une seule étape. */
+function applyLeg(mirror: PositionMirror, leg: Leg): void {
+  mirror.apply(leg[0], leg[1], leg[2], leg[3], leg[4], leg[5], leg[6], legs(leg), 0);
 }
 
 /** Une image de groupes d'un membre chacun, d'identifiants `ids`, sur la ligne 10. */
@@ -65,6 +86,7 @@ function frame(...ids: number[]): GroupsFrame {
       ids.flatMap((id) => [id * FIXED + FIXED / 2, 10 * FIXED + FIXED / 2]),
     ),
     carriers: new Uint32Array(count).fill(NO_CARRIER),
+    activities: new Uint8Array(count),
     legs: noLegs(),
   };
 }
@@ -83,6 +105,7 @@ function group(members: [number, number, number, number][], current = noLegs()):
     statures: new Uint8Array(count).fill(96),
     positions: Int32Array.from(members.flatMap((member) => [member[1], member[2]])),
     carriers: Uint32Array.from(members, (member) => member[3]),
+    activities: new Uint8Array(count),
     legs: current,
   };
 }
@@ -99,14 +122,21 @@ const ids = (dated: DatedFrame | undefined) => (dated === undefined ? [] : group
 /** Toute case se franchit. */
 const anywhere = () => true;
 
-/** Positions de tous les membres d'un miroir à l'instant `t`, en unités, par rang. */
+/**
+ * Positions de tous les membres d'un miroir à l'instant `t`, en unités, par rang, qui marche, et
+ * l'octet d'activité de chacun (ACT_NONE pour un porté, que positions() n'écrit pas).
+ */
 function positionsOf(mirror: PositionMirror, t: number) {
   const count = mirror.frame?.ids.length ?? 0;
   const xs = new Float64Array(count);
   const ys = new Float64Array(count);
   const moving = new Uint8Array(count);
-  for (let rank = 0; rank < mirror.groupCount; rank++) mirror.positions(rank, t, xs, ys, moving);
-  return { xs, ys, moving };
+  const acts = new Uint8Array(count).fill(ACT_NONE);
+  const facing = new Int8Array(count);
+  for (let rank = 0; rank < mirror.groupCount; rank++) {
+    mirror.positions(rank, t, xs, ys, moving, facing, acts);
+  }
+  return { xs, ys, moving, acts };
 }
 
 describe('images des groupes datées (ADR 0013, ADR 0014)', () => {
@@ -172,6 +202,250 @@ function facingOf(mirror: PositionMirror, t: number): number[] {
   return Array.from(facing);
 }
 
+describe('activité de chacun au fil principal (protocole 9, ADR 0021 § 6, ADR 0022 § 6)', () => {
+  /** Rang d'une activité des données de test. */
+  const rank = (id: string) => {
+    const found = testData.activities.activities.findIndex((activity) => activity.id === id);
+    if (found < 0) throw new Error(`activité ${id} absente`);
+    return found;
+  };
+
+  it('tient l’octet de l’image, puis celui de chaque étape à son jour ; une étape de zéro jour le change sur place ; le porté n’en a pas', () => {
+    const [rest, gather, hunt, fish, play] = ['rest', 'gather', 'hunt', 'fish', 'play'].map(rank);
+    const x = 10 * FIXED;
+    // Une cueilleuse à l'arrêt, un enfant qui court jouer, et le nourrisson que porte la première.
+    const members: [number, number, number, number][] = [
+      [1, x, FIXED, NO_CARRIER],
+      [2, x, 2 * FIXED, NO_CARRIER],
+      [3, x, FIXED, 1],
+    ];
+    const image = group(members, legs([2, 0, x, 2 * FIXED, FIXED / 4, 0, 4, play | ACT_RUN]));
+    image.activities.set([gather, play | ACT_RUN, ACT_NONE]);
+    const timeline = new CrowdTimeline({ carry: 0.2, passable: anywhere });
+    timeline.reset(image, time(0, 0), 64);
+    const at = (t: number) => {
+      timeline.show(t);
+      return positionsOf(timeline.shown, t);
+    };
+    let seen = at(1);
+    expect(Array.from(seen.acts)).toEqual([gather, play | ACT_RUN, ACT_NONE]);
+    expect(Array.from(seen.moving)).toEqual([0, 1, 0]);
+    // Au jour 3, la cueilleuse se repose là où elle est (une étape de zéro jour) ; au jour 5,
+    // elle part pêcher.
+    timeline.receive(
+      time(0, 6),
+      legs([1, 3, x, FIXED, 0, 0, 0, rest], [1, 5, x, FIXED, FIXED / 4, 0, 4, fish]),
+      undefined,
+    );
+    // Avant son jour, une étape ne change rien.
+    expect(at(2.5).acts[0]).toBe(gather);
+    seen = at(3);
+    expect(seen.acts[0]).toBe(rest);
+    expect(seen.moving[0]).toBe(0);
+    expect([seen.xs[0], seen.ys[0]]).toEqual([x, FIXED]);
+    seen = at(5.5);
+    expect(seen.acts[0]).toBe(fish);
+    expect(seen.moving[0]).toBe(1);
+    // Le joueur arrivé garde son octet à l'arrêt : la pose en tire le geste du jeu.
+    expect(seen.acts[1]).toBe(play | ACT_RUN);
+    expect(seen.moving[1]).toBe(0);
+    // Le jour du coup : son étape d'arrêt porte ACT_STRIKE, que rien ne change tant que
+    // l'instant affiché ne change pas (pause).
+    timeline.receive(
+      time(0, 12),
+      legs([2, 10, x + FIXED, 2 * FIXED, 0, 0, 0, hunt | ACT_STRIKE]),
+      undefined,
+    );
+    seen = at(10);
+    expect(seen.acts[1]).toBe(hunt | ACT_STRIKE);
+    expect(Array.from(at(10).acts)).toEqual(Array.from(seen.acts));
+    // L'image du pas mensuel refait l'octet de chacun, sans étape en cours.
+    const month = group(members);
+    month.activities.set([rest, gather, ACT_NONE]);
+    timeline.receive(time(1, 0), undefined, month);
+    seen = at(30);
+    expect(Array.from(seen.acts)).toEqual([rest, gather, ACT_NONE]);
+    expect(Array.from(seen.moving)).toEqual([0, 0, 0]);
+  });
+});
+
+describe('le coup, de la simulation à la pose (ADR 0021 § 11, ADR 0022 § 6 ; relecture de 2b.8)', () => {
+  it('montre le lancer de chaque coup, réussi ou manqué, tout le jour du coup ; la charge court le lendemain', () => {
+    // De bout en bout : les étapes du journal de la simulation, le miroir du fil principal qui les
+    // applique (la dernière d'un jour l'emporte), puis la pose (poseOf) à chaque instant du jour.
+    // Le lancer se reconnaît à ses images 4 et 5, que l'affût ne montre jamais.
+    const content = testData;
+    const state = testState('graine');
+    const journal = new HumanJournal();
+    state.movement.journal = journal;
+    applyCommands(state, scatteredGroups(state, 60, 25), content);
+    journal.take();
+    const timeline = new CrowdTimeline({ carry: testHuman.display.carry, passable: anywhere });
+    timeline.reset(groupsFrame(state, content), time(state.tick, state.day), state.size.width);
+    const table = poseTable(content.activities);
+    const throwing = humanAtlas.animations.findIndex((animation) => animation.id === 'throw');
+    const running = humanAtlas.animations.findIndex((animation) => animation.id === 'run');
+    const kinds = { charge: { n: 0, shown: 0 }, stay: { n: 0, shown: 0 } };
+    let charges = 0;
+    let pending = new Set<number>();
+    const memberOf = (slot: number) => {
+      const frame = timeline.shown.frame;
+      return frame === undefined ? -1 : frame.slots.indexOf(slot);
+    };
+    for (let day = 0; day < 240; day++) {
+      const today = dayIndex(state);
+      const members = advanceDay(state, [], content);
+      const legs = journal.count > 0 ? journal.take() : undefined;
+      timeline.receive(
+        time(state.tick, state.day),
+        legs,
+        members === undefined ? undefined : groupsFrame(state, content, members),
+      );
+      // Les chasseurs qui frappent ce jour, et ceux dont la charge, décidée la veille, part.
+      const struck = new Map<number, boolean>();
+      const started = new Set<number>();
+      for (let at = 0; at < (legs?.slots.length ?? 0); at++) {
+        const act = legs?.acts[at] ?? 0;
+        const slot = legs?.slots[at] ?? 0;
+        if ((act & ACT_STRIKE) !== 0) struck.set(slot, (act & ACT_RUN) !== 0);
+        if (pending.has(slot) && (act & ACT_RUN) !== 0 && (legs?.count[at] ?? 0) > 0) {
+          started.add(slot);
+        }
+      }
+      for (const slot of started) {
+        // La veille, le lancer ; ce jour, la course, au milieu du jour.
+        timeline.show(today + 0.5);
+        const member = memberOf(slot);
+        if (member < 0) continue;
+        const seen = positionsOf(timeline.shown, today + 0.5);
+        const pose = poseOf(
+          table,
+          seen.acts[member] ?? ACT_NONE,
+          seen.moving[member] === 1,
+          0,
+          420,
+          0.3,
+        );
+        expect(Math.floor(pose / POSE_FRAMES), `jour ${String(today)}, ${String(slot)}`).toBe(
+          running,
+        );
+        charges++;
+      }
+      for (const [slot, charging] of struck) {
+        const kind = charging ? kinds.charge : kinds.stay;
+        kind.n++;
+        let shown = 0;
+        for (let k = 0; k < 20; k++) {
+          const t = today + k / 20;
+          timeline.show(t);
+          const member = memberOf(slot);
+          if (member < 0) break;
+          const seen = positionsOf(timeline.shown, t);
+          expect(seen.moving[member], `jour ${String(today)}, ${String(slot)}`).toBe(0);
+          const act = seen.acts[member] ?? ACT_NONE;
+          for (let clock = 0; clock < 900; clock += 50) {
+            const pose = poseOf(table, act, false, clock, 420, 0.3);
+            if (Math.floor(pose / POSE_FRAMES) === throwing && pose % POSE_FRAMES >= 4) shown++;
+          }
+        }
+        // À chaque instant du jour du coup, le lancer passe : 20 instants, une image sur six.
+        expect(shown, `jour ${String(today)}, ${String(slot)}`).toBeGreaterThan(20);
+        kind.shown++;
+      }
+      pending = new Set([...struck].filter(([, charging]) => charging).map(([slot]) => slot));
+    }
+    // Des coups suivis d'une charge, d'autres non : tous montrent le lancer.
+    expect(kinds.charge.n).toBeGreaterThan(10);
+    expect(kinds.stay.n).toBeGreaterThan(10);
+    expect(kinds.charge.shown).toBe(kinds.charge.n);
+    expect(kinds.stay.shown).toBe(kinds.stay.n);
+    expect(charges).toBeGreaterThan(5);
+  });
+});
+
+describe('le sens des gestes au bord de l’eau, de la simulation au miroir (ADR 0022 § 6 ; relecture de 2b.8)', () => {
+  it('tourne vers l’eau qui pêche ou puise à une rive d’un bord vertical', () => {
+    // De bout en bout : les étapes de la simulation, puis le sens que le miroir en tire (celui du
+    // dernier pas horizontal). Une rive d'un bord vertical est rentrée de `shore.inset` de la case
+    // d'eau voisine, à l'ouest ou à l'est : à l'arrêt, le pêcheur et le porteur d'eau la regardent.
+    const content = testData;
+    const fishing = new Set(
+      content.activities.activities.flatMap((activity, rank) =>
+        activity.place === 'water' ? [rank] : [],
+      ),
+    );
+    const inset = Math.round(content.activities.rules.shore.inset * FIXED);
+    let checked = 0;
+    for (const seed of ['pixelciv', 'graine']) {
+      const state = testState(seed);
+      const { width } = state.size;
+      const journal = new HumanJournal();
+      state.movement.journal = journal;
+      applyCommands(state, scatteredGroups(state, 60, 25), content);
+      journal.take();
+      const timeline = new CrowdTimeline({ carry: testHuman.display.carry, passable: anywhere });
+      timeline.reset(groupsFrame(state, content), time(state.tick, state.day), width);
+      // L'eau de chaque case, pour chaque activité au bord de l'eau (comme les masques de la
+      // simulation : les biomes de ses eaux, et la rivière d'une case de terre).
+      const waterOf = (rank: number, cell: number) => {
+        const water = content.activities.activities[rank]?.water;
+        const biome = content.biomes.entries.at(state.world.biome[cell] ?? 0);
+        if (water === undefined || biome === undefined) return false;
+        if (water.biomes.includes(biome.id)) return true;
+        const land = Number.isFinite(state.cost[cell] ?? Number.NaN);
+        return water.river && land && riverClass(state.world.drainage[cell] ?? 0) > 0;
+      };
+      for (let day = 0; day < 150; day++) {
+        const members = advanceDay(state, [], content);
+        const legs = journal.count > 0 ? journal.take() : undefined;
+        timeline.receive(
+          time(state.tick, state.day),
+          legs,
+          members === undefined ? undefined : groupsFrame(state, content, members),
+        );
+        const now = dayIndex(state);
+        timeline.show(now);
+        const mirror = timeline.shown;
+        const frame = mirror.frame;
+        if (frame === undefined) continue;
+        const count = frame.ids.length;
+        const xs = new Float64Array(count);
+        const ys = new Float64Array(count);
+        const moving = new Uint8Array(count);
+        const facing = new Int8Array(count);
+        const acts = new Uint8Array(count).fill(ACT_NONE);
+        for (let rank = 0; rank < mirror.groupCount; rank++) {
+          mirror.positions(rank, now, xs, ys, moving, facing, acts);
+        }
+        for (let member = 0; member < count; member++) {
+          const rank = (acts[member] ?? ACT_NONE) & 0x0f;
+          if (moving[member] === 1 || !fishing.has(rank)) continue;
+          const x = xs[member] ?? 0;
+          const column = Math.floor(x / FIXED);
+          const row = Math.floor((ys[member] ?? 0) / FIXED);
+          const fx = x - column * FIXED;
+          // Une rive d'un bord vertical : à `inset` du bord ouest, l'eau à l'ouest ; du bord est,
+          // à l'est. Les rives d'un bord horizontal, nord ou sud, n'ont pas de sens à donner.
+          const west = row * width + ((column + width - 1) % width);
+          const east = row * width + ((column + 1) % width);
+          const side =
+            Math.abs(fx - inset) <= 2 && waterOf(rank, west)
+              ? -1
+              : Math.abs(fx - (FIXED - inset)) <= 2 && waterOf(rank, east)
+                ? 1
+                : 0;
+          if (side === 0) continue;
+          expect(facing[member], `${seed}, jour ${String(now)}, membre ${String(member)}`).toBe(
+            side,
+          );
+          checked++;
+        }
+      }
+    }
+    expect(checked).toBeGreaterThan(500);
+  });
+});
+
 describe('sens de chacun, d’une image des groupes à l’autre (ADR 0016, § 6)', () => {
   it('donne à chacun le sens de son pas, et le lui garde à l’arrêt, au pas mensuel comme d’une étape à l’autre', () => {
     const mirror = new PositionMirror({ carry: 0.2, passable: anywhere });
@@ -188,7 +462,7 @@ describe('sens de chacun, d’une image des groupes à l’autre (ADR 0016, § 6
     // Arrivés, ils gardent leur sens.
     expect(facingOf(mirror, 10)).toEqual([1, -1, 0]);
     // Une étape verticale ne retourne personne.
-    mirror.apply(1, 10, x + FIXED, FIXED, 0, FIXED / 4, 2);
+    applyLeg(mirror, [1, 10, x + FIXED, FIXED, 0, FIXED / 4, 2]);
     expect(facingOf(mirror, 11)).toEqual([1, -1, 0]);
     // Le pas mensuel : une nouvelle image, sans étape en cours ; chacun, reconnu à son
     // emplacement et à son identifiant, garde son sens.
@@ -207,6 +481,30 @@ describe('sens de chacun, d’une image des groupes à l’autre (ADR 0016, § 6
     // La même image remise ne perd rien.
     mirror.reset({ at: 60, tick: 2, frame: reborn }, 64);
     expect(facingOf(mirror, 60)).toEqual([0, 0, -1]);
+  });
+
+  it('tourne sur place qui reçoit une étape de zéro jour au pas d’une unité, sans le déplacer (relecture de 2b.8)', () => {
+    // L'étape du soir qui tourne un pêcheur vers l'eau (activities.ts, shoreLegs) : zéro jour,
+    // un pas horizontal d'une unité ; elle change le sens, et rien d'autre.
+    const mirror = new PositionMirror({ carry: 0.2, passable: anywhere });
+    const x = 10 * FIXED + Math.round(0.3 * FIXED);
+    const members: [number, number, number, number][] = [
+      [1, x, FIXED, NO_CARRIER],
+      [2, x, 2 * FIXED, NO_CARRIER],
+    ];
+    // Arrivés en marchant vers l'est, au jour 4 ; l'eau est à l'ouest du premier.
+    const walking = legs(
+      [1, 0, x - FIXED, FIXED, FIXED / 4, 0, 4],
+      [2, 0, x - FIXED, 2 * FIXED, FIXED / 4, 0, 4],
+    );
+    mirror.reset({ at: 0, tick: 0, frame: group(members, walking) }, 64);
+    expect(facingOf(mirror, 4)).toEqual([1, 1]);
+    applyLeg(mirror, [1, 4, x, FIXED, -1, 0, 0]);
+    for (const t of [4, 4.5, 9]) {
+      expect(facingOf(mirror, t), String(t)).toEqual([-1, 1]);
+      const seen = positionsOf(mirror, t);
+      expect([seen.xs[0], seen.ys[0], seen.moving[0]]).toEqual([x, FIXED, 0]);
+    }
   });
 
   it('ne retourne aucun immobile au fil des pas mensuels', () => {
@@ -399,15 +697,17 @@ describe('positions du fil principal avec le vrai hôte (ADR 0013, ADR 0014)', (
       }
       if (message.type !== 'delta') return;
       const started = message.legs;
-      for (let index = 0; index < (started?.slots.length ?? 0); index++) {
+      for (let index = 0; started !== undefined && index < started.slots.length; index++) {
         eager.apply(
-          started?.slots[index] ?? 0,
-          started?.days[index] ?? 0,
-          started?.start[2 * index] ?? 0,
-          started?.start[2 * index + 1] ?? 0,
-          started?.step[2 * index] ?? 0,
-          started?.step[2 * index + 1] ?? 0,
-          started?.count[index] ?? 0,
+          started.slots[index] ?? 0,
+          started.days[index] ?? 0,
+          started.start[2 * index] ?? 0,
+          started.start[2 * index + 1] ?? 0,
+          started.step[2 * index] ?? 0,
+          started.step[2 * index + 1] ?? 0,
+          started.count[index] ?? 0,
+          started,
+          index,
         );
       }
       if (message.frame !== undefined) {
@@ -504,13 +804,21 @@ describe('positions du fil principal avec le vrai hôte (ADR 0013, ADR 0014)', (
     for (const command of commands) host.receive({ type: 'game', command });
     // Les positions du worker à l'instant de chaque delta et de chaque instantané, relevées
     // à leur envoi, par emplacement.
-    const recorded = new Map<number, { x: ArrayLike<number>; y: ArrayLike<number> }>();
+    // Avec l'octet d'activité de chacun (protocole 9, ADR 0021 § 6), que le miroir tient de
+    // l'image puis des étapes : le même aux jours entiers, au coup près.
+    const recorded = new Map<
+      number,
+      { x: ArrayLike<number>; y: ArrayLike<number>; act: ArrayLike<number> }
+    >();
     const post = env.post.bind(env);
     env.post = (message, transfer) => {
       const current = hostState(host);
       if ((message.type === 'delta' || message.type === 'snapshot') && current !== undefined) {
         const { x, y } = current.people.columns;
-        recorded.set(dayIndex(message.time), { x: x.slice(), y: y.slice() });
+        const act = Uint8Array.from({ length: x.length }, (_, slot) =>
+          actByte(current, testData, slot),
+        );
+        recorded.set(dayIndex(message.time), { x: x.slice(), y: y.slice(), act });
       }
       post(message, transfer);
     };
@@ -522,6 +830,9 @@ describe('positions du fil principal avec le vrai hôte (ADR 0013, ADR 0014)', (
     exact.reset(copy(snapshot.frame), snapshot.time, width);
     let checked = dayIndex(snapshot.time);
     let compared = 0;
+    let struck = 0;
+    let running = 0;
+    const kinds = new Set<number>();
     let fastest = 0;
     const compare = (latest: number) => {
       for (let day = checked + 1; day <= latest; day++) {
@@ -531,13 +842,22 @@ describe('positions du fil principal avec le vrai hôte (ADR 0013, ADR 0014)', (
         const shown = exact.shown;
         const frame = shown.frame;
         if (frame === undefined) continue;
-        const { xs, ys } = positionsOf(shown, day);
+        const { xs, ys, acts } = positionsOf(shown, day);
         for (let member = 0; member < frame.ids.length; member++) {
           if ((shown.carrierOf[member] ?? -1) >= 0) continue;
           const slot = frame.slots[member] ?? 0;
           if (xs[member] !== worker.x[slot] || ys[member] !== worker.y[slot]) {
             throw new Error(`jour ${String(day)}, emplacement ${String(slot)} : écart au worker`);
           }
+          const act = (acts[member] ?? ACT_NONE) & ~ACT_STRIKE;
+          if (act !== worker.act[slot]) {
+            throw new Error(
+              `jour ${String(day)}, emplacement ${String(slot)} : activité ${String(act)} au lieu de ${String(worker.act[slot])}`,
+            );
+          }
+          if ((acts[member] ?? 0) & ACT_STRIKE) struck++;
+          if (act & ACT_RUN) running++;
+          kinds.add(act & 0x0f);
           compared++;
         }
       }
@@ -714,6 +1034,10 @@ describe('positions du fil principal avec le vrai hôte (ADR 0013, ADR 0014)', (
     expect(moves).toBeGreaterThan(1000);
     expect(between).toBeGreaterThan(100);
     expect(compared).toBeGreaterThan(100_000);
+    // Des activités de chaque sorte, leurs courses, et des coups, à l'activité du worker.
+    expect(kinds.size).toBeGreaterThanOrEqual(5);
+    expect(running).toBeGreaterThan(0);
+    expect(struck).toBeGreaterThan(0);
     expect(fastest).toBeGreaterThan(0.5);
     expect(fastest).toBeLessThan(4);
     // Les tampons lus sont rendus à l'hôte.

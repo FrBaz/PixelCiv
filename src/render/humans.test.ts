@@ -2,12 +2,12 @@ import { describe, expect, it } from 'vitest';
 import { loadGameData } from '../core/data';
 import { BODY_KINDS, LOOK_BITS } from '../core/data/humans';
 import { geneRoles } from '../core/data/people';
+import { ACT_NONE, ACT_RUN, ACT_STRIKE } from '../core/protocol';
 import { AGE_CODE, GREY_LEVELS } from '../core/visual';
 import { KEPT, RECOLOR, roleParts } from '../gen/humans';
 import {
   ANIMATION,
   animationFrame,
-  animationOf,
   ATLAS_ROLES,
   BODY_FEMALE,
   BODY_MALE,
@@ -21,6 +21,9 @@ import {
   lookCode,
   lookParts,
   MOTIF_COUNT,
+  POSE_FRAMES,
+  poseOf,
+  poseTable,
   recolorHuman,
   variantOf,
   type HumanLook,
@@ -236,38 +239,38 @@ describe('palettes des humains (ADR 0016, § 3)', () => {
       }
     });
     expect(prints).toEqual({
-      'dyed baby': '4a53d36a 7ce614a0 457e3736 90f28274 39866a08',
-      'dyed child': '86a23027 964dfd50 93cb077d 5abdc7bc c08bef7a',
-      'dyed female': '4d02a0ec 39d8c808 05808237 7cbc0474 cac442c0',
-      'dyed male': '8872083d 0ebdef69 69a8ed8f 24a2c0f4 157c1010',
-      'furs baby': '968ce376 89152177 925eaa13 d5a2e2c0 666b6514',
-      'furs child': 'a6092703 d8795fe3 0fcb9b7a f37d4e64 bba0eb69',
-      'furs female': '4c635607 b370eaba 40cf9cda e2ae9e84 3e73408e',
-      'furs male': '70cdba97 ab274e03 807a55a5 596d1288 61613cab',
-      'loincloth baby': 'f26f388d bcea67cf 6a4376ea cfce0f56 0b3345b6',
-      'loincloth child': 'a2442892 146ce419 210dd524 27ceda23 e36a2845',
-      'loincloth female': '78201bf8 11d088a5 5413c828 841ad772 6fe97c2d',
-      'loincloth male': '18ea375f b3d85d51 48ae9ee4 98cab020 aa326b27',
-      'mantle baby': 'f9aea7e3 78ba4417 839eb11a 83e8aa8c a9c784e0',
-      'mantle child': 'b73d419a cff7aa65 1bf62803 5bae49a0 02b7256c',
-      'mantle female': '390ff3f3 8dd6ff5d cb2db1bd 9691d61c 9301b010',
-      'mantle male': '31f0b35c eca7c634 34f183ed e392cf07 9b8cacec',
-      'robe baby': '7fd96744 8a063534 da3ecfba bdd17956 cce28bfa',
-      'robe child': 'b4c64fc8 91e233b0 eed7e180 2d9e7535 4852ae25',
-      'robe female': '0fc44650 ce8b6bec 9a0cf273 31ade79c 9adf0314',
-      'robe male': 'b01e19a3 8903f358 2b55c153 d4f32530 f77d22f2',
-      'sash baby': '76f845dd 5c523489 f0df1bd6 dc96b0a0 784aa814',
-      'sash child': '3bf2a4f0 0a9ec71c 6f4b38d9 5a40c480 717c1b29',
-      'sash female': '2619b1e7 64131267 2a42e531 d25bd3ea 42ab3fba',
-      'sash male': '75abe0c2 664481d3 0d9d3848 3966e890 4c0776d2',
-      'tunic baby': '3a1d3f6f 8d2373e7 fe5bf02b 2f4a24a8 feb43bb0',
-      'tunic child': 'b6bc16d6 39e50bb2 8dc8063a 674e7ead 0857e14b',
-      'tunic female': 'e8650d82 a5c38d11 8523becd d14a011c 79c0d7b9',
-      'tunic male': '4369aa85 359a5e20 8001333c 4a02d253 55f17a8d',
-      'wrap baby': 'b5396886 6674f887 e1d90ee1 cbe8b9fe 5fe7ff52',
-      'wrap child': 'd7b1b9a9 9c64c520 635cc94c 2574477b 5171c696',
-      'wrap female': '60ef4331 aa77847f 7699a641 b329281e c8ab23ba',
-      'wrap male': 'c0d08cba 0a99241f b8de2811 72fe36bb e57fe007',
+      'dyed baby': '7547a84e 7ccfb17d 631fdd2c 96d6c451 6619a821',
+      'dyed child': 'a6dfb813 a52abda0 92ce3336 615e5a5c 5a341efc',
+      'dyed female': 'b84ab164 765c0c86 04385ef0 13b478e2 e723827b',
+      'dyed male': 'b3a9b361 38e190f3 f235f850 e013373c 7317d210',
+      'furs baby': 'e3e9c9cd 47aa69d8 0fa6f9ec c23d1cf5 7f6b0921',
+      'furs child': 'dba02f2a e87f7f21 8a3119e1 fe4a246d 3be7a0c1',
+      'furs female': '09b7d9fe 8818da23 457e4015 b099e24a c74ced43',
+      'furs male': '6850a1a1 10af310b 515e749d bfc968c7 8b768fb4',
+      'loincloth baby': '3c407d7c c53ab689 648e00aa d028d266 8005aa72',
+      'loincloth child': '226ef0c8 8fb7e872 3a8ab190 add20050 04416cfc',
+      'loincloth female': 'a0d968d1 7c7701a0 1e04ce1e 1185fdc9 d1912eef',
+      'loincloth male': '9e51c9e9 af1b1752 d52577a5 0cdf1a67 9ca71188',
+      'mantle baby': 'adea5b55 18551634 f3818afd 00042f49 1af40d85',
+      'mantle child': '9eb9347b 49c01eae f1ef1a4f c6ed3473 6510e61c',
+      'mantle female': '999df6b6 f81fc134 4c7b0567 37abb7dd af2719ca',
+      'mantle male': '53cc7a10 dd6d3758 5e6965bc bc8b5c28 4e07656f',
+      'robe baby': 'b8105cc4 e08cc69f 7b68ad44 f264cb0d 5187e4ad',
+      'robe child': '8caf71bd adff5ae1 77c706ea 1e66a8b4 af794cf5',
+      'robe female': 'f49389c7 3dd3ce1b d91d69d9 8cb84387 14572b8e',
+      'robe male': 'a21a0e0e 51d7c224 68b7c950 ca59d8d7 2dd7c6cd',
+      'sash baby': '40dea247 a972a9f6 67f611cb 1060b3fd ec0aeb61',
+      'sash child': '9bbded75 5f2526c9 85bcd253 675f1565 9307541d',
+      'sash female': '059d061b 150c5f5d e1fca95f 81069e5a a47ca43b',
+      'sash male': 'c9075d2e 586a477f ec567e5c f8b052ee 592f19bf',
+      'tunic baby': '4e720799 845ea041 59e95cdd 1c218881 d2090ead',
+      'tunic child': '934b0a3b eb774b0d 8d96d366 bba7ea6e d7fb0314',
+      'tunic female': '2690b57f 2390f97c 07e7429a 407c7079 66d55dda',
+      'tunic male': '2e23b759 c785aa2c 355eb0e9 dd1b2034 87193063',
+      'wrap baby': 'e6c47f4c 8fb756fe 9275b262 7b9ae642 cf1a9682',
+      'wrap child': 'dfcd3dac ca2fff8f 25bc3aa8 d926b8c7 206022a4',
+      'wrap female': '6120e1dc f9b82813 7c9a4853 f6ab7e58 8f02c58e',
+      'wrap male': '591df8c4 a89b5301 639e3464 53c336d6 7681eedb',
     });
   });
 });
@@ -326,8 +329,6 @@ describe('corps, variantes et animations (ADR 0016, § 5, § 6)', () => {
   it('tire l’image d’une animation de l’horloge de la marche : pure, déphasée, figée quand l’horloge l’est', () => {
     const walk = ANIMATION.walk ?? -1;
     const idle = ANIMATION.idle ?? -1;
-    expect(animationOf(true)).toBe(walk);
-    expect(animationOf(false)).toBe(idle);
     // La marche : huit images en deux pas.
     const frames = Array.from({ length: 8 }, (_, i) => animationFrame(walk, i * 105, 420, 0));
     expect(frames).toEqual([0, 1, 2, 3, 4, 5, 6, 7]);
@@ -344,10 +345,16 @@ describe('corps, variantes et animations (ADR 0016, § 5, § 6)', () => {
   });
 
   it('range un motif par image, chaque animation de chaque corps à chaque niveau', () => {
+    // Le nourrisson n'a que les animations des gestes de sa mère (data/humans.json, young).
+    const young = new Map(data.humans.animations.map((a) => [a.id, a.young as readonly string[]]));
     for (let body = 0; body < atlas.bodies.length; body++) {
+      const kind = bodyKind(body);
       LEVEL_ROWS.forEach((_, level) => {
-        atlas.animations.forEach((_animation, a) => {
-          expect(firstMotif(body, level, 0, a)).toBeGreaterThanOrEqual(0);
+        atlas.animations.forEach((animation, a) => {
+          const ranged =
+            kind === 'female' || kind === 'male' || young.get(animation.id)?.includes(kind);
+          if (ranged) expect(firstMotif(body, level, 0, a)).toBeGreaterThanOrEqual(0);
+          else expect(firstMotif(body, level, 0, a)).toBe(-1);
         });
       });
     }
@@ -355,5 +362,165 @@ describe('corps, variantes et animations (ADR 0016, § 5, § 6)', () => {
     expect(cultureOutfit(appearance, 1)).toBe(0);
     expect(cultureOutfit(appearance, appearance.cultureOutfits.length + 1)).toBe(0);
     expect(skinPaletteOf(appearance, 15)).toBe(appearance.skinPalettes.length - 1);
+  });
+});
+
+describe('poses des activités (ADR 0022, § 1, § 2)', () => {
+  const file = data.activities;
+  const table = poseTable(file);
+  const rank = (id: string) => file.activities.findIndex((activity) => activity.id === id);
+  const at = (act: number, moving: boolean, clockMs: number, phase = 0) =>
+    poseOf(table, act, moving, clockMs, 420, phase);
+  /** Une pose lue : son animation et le rang de son image dans la planche. */
+  const named = (pose: number) => {
+    const animation = atlas.animations.at(Math.floor(pose / POSE_FRAMES));
+    return `${animation?.id ?? '?'} ${String(animation?.ranks[pose % POSE_FRAMES] ?? -1)}`;
+  };
+  const periodOf = (id: string) => table.period[table.gesture[rank(id)] ?? -1] ?? 0;
+  const walk = ANIMATION.walk ?? -1;
+  const run = ANIMATION.run ?? -1;
+  const idle = ANIMATION.idle ?? -1;
+
+  it('marche sur une étape, et court si l’octet le dit, quelle que soit l’activité', () => {
+    for (let act = 0; act < file.activities.length; act++) {
+      for (const clock of [0, 105, 777, 4321]) {
+        const walking = walk * POSE_FRAMES + animationFrame(walk, clock, 420, 0.4);
+        const running = run * POSE_FRAMES + animationFrame(run, clock, 420, 0.4);
+        expect(at(act, true, clock, 0.4)).toBe(walking);
+        expect(at(act | ACT_RUN, true, clock, 0.4)).toBe(running);
+        expect(at(act | ACT_RUN | ACT_STRIKE, true, clock, 0.4)).toBe(running);
+      }
+    }
+    expect(at(ACT_NONE, true, 210)).toBe(walk * POSE_FRAMES + animationFrame(walk, 210, 420, 0));
+  });
+
+  it('montre à l’arrêt chaque geste aux instants voulus de son cycle, sur les images de la planche', () => {
+    // Les périodes du tableau de l'ADR 0022 (§ 2), en millisecondes.
+    expect(
+      ['rest', 'gather', 'hunt', 'fish', 'water', 'play', 'follow'].map((id) => periodOf(id)),
+    ).toEqual([1300, 3860, 3500, 2700, 1040, 3060, 1300]);
+    const cycle = (id: string, times: number[]) =>
+      times.map((clock) => named(at(rank(id), false, clock)));
+    // La cueillette : à genoux (la mort, 2-3-4-3, à 320 ms), deux fois, puis debout.
+    expect(cycle('gather', [0, 320, 640, 960, 1280, 2559, 2560, 2820, 3859, 3860])).toEqual([
+      'death 2',
+      'death 3',
+      'death 4',
+      'death 3',
+      'death 2',
+      'death 3',
+      'idle 0',
+      'idle 1',
+      'idle 4',
+      'death 2',
+    ]);
+    // La chasse, à l'affût : debout, puis le bras levé (le lancer, 1-2-3), tenu, et rabaissé.
+    expect(cycle('hunt', [0, 1299, 1300, 1560, 1820, 2979, 2980, 3240, 3500])).toEqual([
+      'idle 0',
+      'idle 4',
+      'throw 1',
+      'throw 2',
+      'throw 3',
+      'throw 3',
+      'throw 2',
+      'throw 1',
+      'idle 0',
+    ]);
+    // La pêche : à genoux 1,8 s, puis le lancer entier ; l'eau : à genoux, 2 et 3.
+    expect(cycle('fish', [0, 1799, 1800, 2550, 2699])).toEqual([
+      'death 3',
+      'death 3',
+      'throw 0',
+      'throw 5',
+      'throw 5',
+    ]);
+    expect(cycle('water', [0, 519, 520, 1039, 1040])).toEqual([
+      'death 2',
+      'death 2',
+      'death 3',
+      'death 3',
+      'death 2',
+    ]);
+    // Le jeu : saut, chute, saut, chute, à 110 ms, puis le repos.
+    expect(cycle('play', [0, 330, 440, 880, 1320, 1759, 1760, 3059])).toEqual([
+      'jump 0',
+      'jump 3',
+      'fall 0',
+      'jump 0',
+      'fall 0',
+      'fall 3',
+      'idle 0',
+      'idle 4',
+    ]);
+  });
+
+  it('montre au repos et au suivi du groupe l’image du repos de 2b.5, à toute horloge et toute phase', () => {
+    for (const id of ['rest', 'follow']) {
+      for (const phase of [0, 0.13, 0.5, 0.99]) {
+        for (let clock = -1000; clock < 6000; clock += 37) {
+          expect(at(rank(id), false, clock, phase)).toBe(
+            idle * POSE_FRAMES + animationFrame(idle, clock, 420, phase),
+          );
+        }
+      }
+    }
+  });
+
+  it('frappe le jour du coup, avec ou sans la charge du lendemain, puis revient à l’affût', () => {
+    const hunt = rank('hunt');
+    // L'étape d'arrêt du coup : le lancer entier, à 150 ms, une fois par cycle ; de même quand
+    // elle porte la course de la charge qui partira le lendemain (relecture de 2b.8, problème 2).
+    for (const act of [hunt | ACT_STRIKE, hunt | ACT_STRIKE | ACT_RUN]) {
+      expect(
+        [0, 150, 300, 450, 600, 750, 900].map((clock) => named(at(act, false, clock))),
+      ).toEqual(['throw 0', 'throw 1', 'throw 2', 'throw 3', 'throw 4', 'throw 5', 'throw 0']);
+    }
+    // En chemin, la charge court ; au bout de la charge (la course, sans le coup), l'affût.
+    expect(Math.floor(at(hunt | ACT_STRIKE | ACT_RUN, true, 0) / POSE_FRAMES)).toBe(
+      Math.floor(at(hunt | ACT_RUN, true, 0) / POSE_FRAMES),
+    );
+    for (const clock of [0, 1500, 2100, 3300]) {
+      expect(at(hunt | ACT_RUN, false, clock)).toBe(at(hunt, false, clock));
+    }
+    // Une activité sans geste du coup garde le sien.
+    expect(at(rank('gather') | ACT_STRIKE, false, 700)).toBe(at(rank('gather'), false, 700));
+  });
+
+  it('décale le cycle par la phase, et donne la même image à la même horloge, figée en pause', () => {
+    for (let act = 0; act < file.activities.length; act++) {
+      const period = table.period[table.gesture[act] ?? -1] ?? 0;
+      for (const clock of [0, 333, 2500, 99_999]) {
+        expect(at(act, false, clock, 0.3)).toBe(at(act, false, clock + 0.3 * period, 0));
+        // En pause, l'horloge ne bouge pas : mille fois la même image.
+        const pose = at(act, false, clock, 0.7);
+        for (let again = 0; again < 1000; again++) expect(at(act, false, clock, 0.7)).toBe(pose);
+      }
+    }
+    // Deux individus de phases différentes ne font pas le même geste au même instant.
+    const phases = Array.from({ length: 20 }, (_, i) => i / 20);
+    expect(new Set(phases.map((phase) => at(rank('gather'), false, 1000, phase))).size).toBe(8);
+  });
+
+  it('prend le repos sans activité, pour une activité inconnue ou dont le geste manque à l’atlas', () => {
+    for (const act of [ACT_NONE, ACT_NONE | ACT_STRIKE, 14]) {
+      for (const clock of [0, 400, 1234]) {
+        expect(at(act, false, clock, 0.2)).toBe(
+          idle * POSE_FRAMES + animationFrame(idle, clock, 420, 0.2),
+        );
+      }
+    }
+    // Un geste fait d'une animation que l'atlas ne range pas : le repos.
+    const absent = poseTable({
+      ...file,
+      gestures: file.gestures.map((gesture) =>
+        gesture.id === 'gather'
+          ? { ...gesture, segments: [{ animation: 'swim', repeat: 1 }] }
+          : gesture,
+      ),
+    });
+    expect(poseOf(absent, rank('gather'), false, 500, 420, 0)).toBe(
+      idle * POSE_FRAMES + animationFrame(idle, 500, 420, 0),
+    );
+    expect(poseOf(absent, rank('fish'), false, 500, 420, 0)).toBe(at(rank('fish'), false, 500));
   });
 });

@@ -11,18 +11,19 @@
  * - C'est un humain des planches (2b.5, src/render/humans.ts) : son corps (sexe, ou taille
  *   d'enfant, ou nourrisson), à la variante de hauteur la plus proche de sa stature au niveau de
  *   la vue (quel que soit k, mais d'un niveau à l'autre, l'arrondi peut changer d'une rangée), et
- *   à l'image de son animation (la marche quand il avance, le repos sinon) ; la vue choisit
+ *   dans sa pose (2b.8, ADR 0022) : la marche ou la course quand il avance, le geste de son
+ *   activité sinon, que seuls calculent les individus qui peuvent se voir ; la vue choisit
  *   un niveau de motifs et une densité entière k, les mêmes pour tous ses individus
  *   (viewDensity). Une vue ne mêle donc jamais deux densités d'individus, et un pixel de motif
  *   y fait k × k pixels physiques. Tourné vers l'ouest dans la planche, il se retourne pour
  *   aller vers l'est.
- * - Le nourrisson porté se dessine contre sa mère, juste devant elle, tourné comme elle, et marche
- *   avec elle, du même pas, quand elle marche.
+ * - Le nourrisson porté se dessine contre sa mère, juste devant elle, tourné comme elle, dans sa
+ *   pose : il marche avec elle, du même pas, quand elle marche, et fait son geste avec elle.
  * - De loin, la bannière de chaque groupe, à la densité de la carte, au barycentre de ses
  *   membres, ou au membre le plus proche si ce point tombe sur l'eau (bannerAt).
  * - Le plus bas à l'écran passe devant, d'après les pieds, puis le dernier disposé (depth).
  */
-import { GROUP_STRIDE, type GroupsFrame } from '../core/protocol';
+import { ACT_NONE, GROUP_STRIDE, type GroupsFrame } from '../core/protocol';
 import { carriedSide, cellOf, deltaFixedX, FIXED, wrapFixedX } from '../core/position';
 import { splitmix32 } from '../core/rng';
 import { decodeVisual } from '../core/visual';
@@ -53,6 +54,9 @@ export { LEVEL_STEP } from '../core/data/humans';
 
 /** Unités de stature par case : le worker l'envoie en 1/128 de case (ADR 0014). */
 export const STATURE_UNITS = 128;
+
+/** Une pose (HumanTable.poseOf) : animation × POSE_FRAMES + image rangée. */
+export const POSE_FRAMES = 256;
 
 /** Densité et niveau de détail d'une vue (ADR 0014, § 6). */
 export interface ViewDensity {
@@ -200,10 +204,19 @@ export interface HumanTable {
   readonly width: ArrayLike<number>;
   readonly height: ArrayLike<number>;
   readonly anchor: ArrayLike<number>;
+  /** Pixels entre le bas de chaque motif et ses pieds : le saut, la chute (ADR 0022, § 4). */
+  readonly lift: ArrayLike<number>;
+  /** Le repos, que prend un corps à qui l'atlas ne range pas l'animation de sa pose. */
+  readonly idle: number;
   bodyOf(sex: number, age: number, ratio: number): number;
   variantOf(body: number, level: number, ratio: number): number;
   firstMotif(body: number, level: number, variant: number, animation: number): number;
-  animationOf(moving: boolean): number;
+  /**
+   * Pose d'un individu (src/render/humans.ts, poseOf), animation × POSE_FRAMES + image rangée :
+   * d'après l'octet de son activité (protocole 9), qu'il avance ou non sur une étape, l'horloge
+   * de la marche du rendu et sa phase.
+   */
+  poseOf(act: number, moving: boolean, clockMs: number, stepMs: number, phase: number): number;
   frame(animation: number, clockMs: number, stepMs: number, phase: number): number;
   /** Apparence de la palette d'un membre (lookCode), de son code d'apparence, de son corps et de sa culture. */
   look(code: number, body: number, culture: number): number;
@@ -354,13 +367,41 @@ export function bannerBox(x: number, y: number, banner: Size, pixel: number): Bo
   };
 }
 
+/** Un rectangle que l'on récrit, sans en allouer : celui de chaque individu que dispose layoutCrowd. */
+interface MutableBox {
+  left: number;
+  top: number;
+  width: number;
+  height: number;
+}
+
 /**
- * Rectangle d'un individu dont les pieds se tiennent au point (x, y) de l'écran : un motif de
- * `width` × `rows` pixels, dont les pieds sont à `foot` pixels de son bord gauche, à `k` pixels
- * physiques par pixel de motif, posé sur ce point arrondi au pixel physique. Retourné vers
- * l'est (`east`), le motif se lit en miroir : ses pieds sont à `foot` pixels de son bord droit.
- * Sa taille ne dépend que de son motif et de la densité de la vue, jamais de la case.
+ * Rectangle d'un individu dont les pieds se tiennent au point (x, y) de l'écran, écrit dans `out` :
+ * un motif de `width` × `rows` pixels, dont les pieds sont à `foot` pixels de son bord gauche et
+ * `lift` pixels sous son bord bas (en l'air, au saut), à `k` pixels physiques par pixel de motif,
+ * posé sur ce point arrondi au pixel physique. Retourné vers l'est (`east`), le motif se lit en
+ * miroir : ses pieds sont à `foot` pixels de son bord droit. Sa taille ne dépend que de son motif
+ * et de la densité de la vue, jamais de la case. Sans allocation ni paramètre par défaut : le
+ * chemin de chaque membre dessiné (relecture de 2b.8, problème 15).
  */
+function placeBox(
+  out: MutableBox,
+  x: number,
+  y: number,
+  width: number,
+  rows: number,
+  foot: number,
+  k: number,
+  east: boolean,
+  lift: number,
+): void {
+  out.left = Math.round(x) - (east ? width - foot : foot) * k;
+  out.top = Math.round(y) - (rows + lift) * k;
+  out.width = width * k;
+  out.height = rows * k;
+}
+
+/** Le rectangle d'un individu (placeBox), dans un objet neuf : pour les tests et les outils. */
 export function personBox(
   x: number,
   y: number,
@@ -369,13 +410,42 @@ export function personBox(
   foot: number,
   k: number,
   east: boolean,
+  lift = 0,
 ): Box {
-  return {
-    left: Math.round(x) - (east ? width - foot : foot) * k,
-    top: Math.round(y) - rows * k,
-    width: width * k,
-    height: rows * k,
-  };
+  const box = { left: 0, top: 0, width: 0, height: 0 };
+  placeBox(box, x, y, width, rows, foot, k, east, lift);
+  return box;
+}
+
+/** Le rectangle de chaque membre que dispose layoutCrowd, récrit d'un membre à l'autre. */
+const memberBox: MutableBox = { left: 0, top: 0, width: 0, height: 0 };
+
+/**
+ * Motif d'un membre de corps `body` et de stature `ratio` au niveau `level`, dans la pose `pose`
+ * (animation × POSE_FRAMES + image rangée) : le premier motif de son animation plus son image ; le
+ * repos, à l'image que donne l'horloge, si l'atlas ne range pas pour son corps l'animation de la
+ * pose (le nourrisson ne court ni ne saute). Une petite fonction aux arguments toujours de mêmes
+ * types, sortie de la boucle des membres (relecture de 2b.8, problème 15).
+ */
+function motifOf(
+  humans: HumanTable,
+  body: number,
+  ratio: number,
+  level: number,
+  pose: number,
+  walkMs: number,
+  stepMs: number,
+  pace: number,
+): number {
+  const variant = humans.variantOf(body, level, ratio);
+  const animation = Math.floor(pose / POSE_FRAMES);
+  const start = humans.firstMotif(body, level, variant, animation);
+  if (start >= 0) return start + (pose % POSE_FRAMES);
+  const idle = humans.idle;
+  return (
+    Math.max(0, humans.firstMotif(body, level, variant, idle)) +
+    humans.frame(idle, walkMs, stepMs, pace)
+  );
 }
 
 /** Ce que voit la carte : la caméra, l'écran (pixels physiques), le monde (pixels de carte). */
@@ -419,7 +489,9 @@ export interface CrowdSource {
    * qui est en marche sur une étape à cet instant. Le porté se tient contre sa mère. `facing`
    * reçoit le sens de chacun qui marche : celui du pas horizontal de son étape en cours ou de
    * la dernière qu'on lui connaît, gardé d'une image des groupes à l'autre, −1 vers l'ouest,
-   * 1 vers l'est, 0 sans étape connue.
+   * 1 vers l'est, 0 sans étape connue. `acts` reçoit l'octet d'activité de chacun qui marche
+   * (protocole 9) : celui de l'image des groupes, puis de la dernière étape qu'il a commencée ;
+   * le porté n'en a pas (ACT_NONE), il prend la pose de qui le porte.
    */
   positions(
     group: number,
@@ -428,6 +500,7 @@ export interface CrowdSource {
     ys: Float64Array,
     moving: Uint8Array,
     facing?: Int8Array,
+    acts?: Uint8Array,
   ): void;
 }
 
@@ -552,9 +625,13 @@ export class CrowdLayout {
   top = new Int32Array(0);
   width = new Int32Array(0);
   height = new Int32Array(0);
-  /** Profondeur de chaque dessin (depth), et les profondeurs rangées, du fond vers l'avant. */
+  /**
+   * Profondeur de chaque dessin (depth), et les profondeurs rangées, du fond vers l'avant ; la
+   * ligne de ses pieds à l'écran, qui la fait : le bas de son rectangle, sauf en l'air (le saut).
+   */
   key = new Float64Array(0);
   sorted = new Float64Array(0);
+  feet = new Int32Array(0);
   /** Rang dans l'image du membre dessiné, −1 pour une bannière ; rang de son groupe. */
   member = new Int32Array(0);
   group = new Int32Array(0);
@@ -579,9 +656,15 @@ export class CrowdLayout {
   moving = new Uint8Array(0);
   /** Sens de chacun : −1 vers l'ouest, 1 vers l'est, 0 sans étape connue (CrowdSource). */
   facing = new Int8Array(0);
-  /** Membres dont les positions ont été demandées, et groupes visibles. */
+  /** Octet d'activité de chacun (protocole 9, CrowdSource), dont sa pose se tire. */
+  acts = new Uint8Array(0);
+  /**
+   * Membres dont les positions ont été demandées, groupes visibles, et poses calculées : une
+   * par individu qui marche et peut se voir, que ses portés prennent (ADR 0022, § 1).
+   */
   placed = 0;
   visibleGroups = 0;
+  posed = 0;
 
   /** Une nouvelle disposition, de l'image `frame`. */
   reset(frame: GroupsFrame | undefined): void {
@@ -590,12 +673,14 @@ export class CrowdLayout {
     this.areaCount = 0;
     this.placed = 0;
     this.visibleGroups = 0;
+    this.posed = 0;
     const members = frame?.ids.length ?? 0;
     if (this.xs.length < members) {
       this.xs = new Float64Array(members);
       this.ys = new Float64Array(members);
       this.moving = new Uint8Array(members);
       this.facing = new Int8Array(members);
+      this.acts = new Uint8Array(members);
     }
   }
 
@@ -610,6 +695,7 @@ export class CrowdLayout {
     texture: number,
     look: number,
     unit: number,
+    feet = top + height,
   ): number {
     const at = this.count++;
     if (at >= this.left.length) {
@@ -621,6 +707,7 @@ export class CrowdLayout {
       this.member = grownInt32(this.member, size);
       this.group = grownInt32(this.group, size);
       this.key = grownFloat64(this.key, size);
+      this.feet = grownInt32(this.feet, size);
       this.texture = grownFloat64(this.texture, size);
       this.look = grownInt32(this.look, size);
       this.unit = grownFloat64(this.unit, size);
@@ -634,7 +721,8 @@ export class CrowdLayout {
     this.texture[at] = texture;
     this.look[at] = look;
     this.unit[at] = unit;
-    this.key[at] = (top + height) * RANKS + at;
+    this.feet[at] = feet;
+    this.key[at] = feet * RANKS + at;
     return at;
   }
 
@@ -751,10 +839,9 @@ export function layoutCrowd(
   const reachRight = close ? widest * k + 1 : banner.width * pixel + 1;
   const reachUp = close ? (humans.tallest[level] ?? 1) * k + 1 : banner.height * pixel + 1;
   const unitToScreen = (TILE_PX * scale) / FIXED;
-  const { xs, ys, moving, facing } = layout;
+  const { xs, ys, moving, facing, acts } = layout;
   const { carrierOf, firstCarried, nextCarried } = source;
   const groups = frame.groups;
-  const resting = humans.animationOf(false);
   for (let group = 0; group < source.groupCount; group++) {
     const first = source.firsts[group] ?? 0;
     const size = source.sizes[group] ?? 0;
@@ -797,7 +884,7 @@ export function layoutCrowd(
         seen = true;
         layout.visibleGroups++;
         if (size > 0) {
-          source.positions(group, t, xs, ys, moving, facing);
+          source.positions(group, t, xs, ys, moving, facing, acts);
           layout.placed += size;
           if (close) lookGroup(looks, group, first, size);
         }
@@ -847,28 +934,51 @@ export function layoutCrowd(
         const sense = facing[index] ?? 0;
         const east = sense > 0 || (sense === 0 && (looks.phase[index] ?? 0) >= 0.5);
         let member = index;
-        // L'animation du porteur, et son déphasage, que prennent ses portés : un nourrisson
-        // contre sa mère qui marche marche avec elle, du même pas, au lieu de glisser au repos.
+        // La pose du porteur, et son déphasage, que prennent ses portés : un nourrisson contre
+        // sa mère qui marche marche avec elle, du même pas, et s'agenouille quand elle cueille.
+        // Elle ne se calcule que si l'un d'eux peut se voir (ADR 0022, § 1).
         const walking = (moving[index] ?? 0) === 1;
         const pace = looks.phase[index] ?? 0;
+        let pose = -1;
         while (member >= 0) {
-          // Son corps, sa variante au niveau de la vue, et l'image de son animation à
-          // l'horloge de la marche du rendu, figée en pause.
-          const body = looks.body[member] ?? 0;
-          const ratio = looks.ratio[member] ?? 1;
-          const variant = humans.variantOf(body, level, ratio);
-          let animation = humans.animationOf(walking);
-          let start = humans.firstMotif(body, level, variant, animation);
-          if (start < 0) {
-            animation = resting;
-            start = Math.max(0, humans.firstMotif(body, level, variant, animation));
-          }
-          const motif = start + humans.frame(animation, walkMs, stepMs, pace);
-          const motifWidth = humans.width[motif] ?? 1;
-          const rows = humans.height[motif] ?? 1;
           const x = base + deltaFixedX(originX, xs[member] ?? 0, width) * unitToScreen;
           const y = (ys[member] ?? 0) * unitToScreen - camera.y * scale + halfHeight;
-          const box = personBox(x, y, motifWidth, rows, humans.anchor[motif] ?? 0, k, east);
+          // Hors de l'écran, même dans le plus large et le plus haut des motifs du niveau,
+          // retourné ou non : ni pose, ni motif.
+          if (!touches(x - reachLeft, y - reachUp, x + reachLeft, y + 1, viewport)) {
+            member = member === index ? (firstCarried[index] ?? -1) : (nextCarried[member] ?? -1);
+            continue;
+          }
+          if (pose < 0) {
+            pose = humans.poseOf(acts[index] ?? ACT_NONE, walking, walkMs, stepMs, pace);
+            layout.posed++;
+          }
+          // Son corps, sa variante au niveau de la vue, et l'image de sa pose à l'horloge de la
+          // marche du rendu, figée en pause ; le repos, si l'atlas ne range pas pour son corps
+          // l'animation de la pose (motifOf).
+          const motif = motifOf(
+            humans,
+            looks.body[member] ?? 0,
+            looks.ratio[member] ?? 1,
+            level,
+            pose,
+            walkMs,
+            stepMs,
+            pace,
+          );
+          const lift = humans.lift[motif] ?? 0;
+          const box = memberBox;
+          placeBox(
+            box,
+            x,
+            y,
+            humans.width[motif] ?? 1,
+            humans.height[motif] ?? 1,
+            humans.anchor[motif] ?? 0,
+            k,
+            east,
+            lift,
+          );
           const right = box.left + box.width;
           const bottom = box.top + box.height;
           if (touches(box.left, box.top, right, bottom, viewport)) {
@@ -882,6 +992,7 @@ export function layoutCrowd(
               motif,
               looks.look[member] ?? 0,
               east ? -k : k,
+              bottom + lift * k,
             );
             if (box.left < areaLeft) areaLeft = box.left;
             if (box.top < areaTop) areaTop = box.top;

@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { gzipSync } from 'node:zlib';
 import { describe, expect, it } from 'vitest';
+import { shownFrames } from '../src/core/data/humans';
 import { RECOLOR, roleParts } from '../src/gen/humans';
 import {
   atlasModule,
@@ -43,15 +44,49 @@ function motifRoles(atlas: typeof game, motif: number): Uint8Array {
 }
 
 describe('atlas des humains (ADR 0016, § 1, § 7)', () => {
-  it('lit les 90 images des deux planches, et ne range pour le jeu que les animations montrées', () => {
+  it('lit les 90 images des deux planches, et ne range pour le jeu que les images montrées', () => {
     const frames = humans.animations.reduce((sum, animation) => sum + animation.frames, 0);
     expect(frames * 2).toBe(90);
     expect(every.animations.map((animation) => animation.id)).toEqual(
       humans.animations.map((animation) => animation.id),
     );
-    expect(game.animations.map((animation) => animation.id)).toEqual(['idle', 'walk']);
-    // Chaque (corps adulte, niveau, variante, animation) a ses motifs, autant que d'images.
+    // Le jeu range les sept animations, et de la mort la seule figure à genoux (ADR 0022, § 4),
+    // chaque image à son rang de la planche, que les gestes nomment ; toutes, pour les tests.
+    expect(
+      game.animations.map((animation) => `${animation.id} ${animation.ranks.join(',')}`),
+    ).toEqual([
+      'idle 0,1,2,3,4',
+      'walk 0,1,2,3,4,5,6,7',
+      'run 0,1,2,3,4,5,6,7',
+      'jump 0,1,2,3',
+      'fall 0,1,2,3',
+      'throw 0,1,2,3,4,5',
+      'death 2,3,4',
+    ]);
+    game.animations.forEach((animation, a) => {
+      expect(animation.ranks).toEqual(shownFrames(humans.animations[a] ?? humans.animations[0]));
+      expect(animation.frames).toBe(animation.ranks.length);
+    });
+    every.animations.forEach((animation, a) => {
+      expect(animation.ranks).toHaveLength(humans.animations[a]?.frames ?? 0);
+    });
+    // Les enfants reçoivent toutes les animations ; le nourrisson, celles des gestes de la mère
+    // qui le porte, sans la course, le saut ni la chute (data/humans.json, young).
     const L = humans.levels.length;
+    const has = (body: number, a: number) =>
+      (game.index[(body * L * 3 + 0) * game.animations.length + a] ?? -1) >= 0;
+    game.bodies.forEach((name, body) => {
+      const kind = game.kinds[body] ?? 'male';
+      const received = game.animations.flatMap((animation, a) =>
+        has(body, a) ? [animation.id] : [],
+      );
+      const expected =
+        kind === 'baby'
+          ? ['idle', 'walk', 'throw', 'death']
+          : game.animations.map((animation) => animation.id);
+      expect(received, name).toEqual(expected);
+    });
+    // Chaque (corps adulte, niveau, variante, animation) a ses motifs, autant que d'images.
     for (const atlas of [game, every]) {
       for (let body = 0; body < 2; body++) {
         humans.levels.forEach((level, l) => {
@@ -71,10 +106,13 @@ describe('atlas des humains (ADR 0016, § 1, § 7)', () => {
     expect(game.height).toBeLessThanOrEqual(MAX_ATLAS_SIDE);
   });
 
-  it('tient dans son budget : moins de 200 Ko de module, moins de 60 Ko compressés', () => {
+  it('tient dans son budget : moins de 560 Ko de module, moins de 111 Ko compressés', () => {
+    // Mesuré en 2b.8 (ADR 0022, § 4) : 1 668 motifs, 1 024 × 374 rôles, 544 Ko de module et
+    // 108 Ko compressés, contre 598 motifs, 188 et 34 Ko avec le seul repos et la marche.
     const json = JSON.stringify(game);
-    expect(json.length).toBeLessThan(200_000);
-    expect(gzipSync(json).length).toBeLessThan(60_000);
+    expect(game.motifs.length / 6).toBeLessThanOrEqual(1_700);
+    expect(json.length).toBeLessThan(560_000);
+    expect(gzipSync(json).length).toBeLessThan(111_000);
   });
 
   it('ne range, réduit ou composé, que des rôles des planches, ou le contour', () => {
@@ -102,21 +140,51 @@ describe('atlas des humains (ADR 0016, § 1, § 7)', () => {
     expect(original.size).toBeGreaterThan(50);
   });
 
-  it('pose chaque motif sur ses pieds : la ligne du bas porte des pixels, sous le point des pieds', () => {
-    for (let motif = 0; motif < game.motifs.length / 6; motif++) {
-      const [, , width = 1, height = 1, anchorX = 0, anchorY = 0] = game.motifs.slice(
-        motif * 6,
-        motif * 6 + 6,
-      );
-      expect(anchorY, `motif ${String(motif)}`).toBe(height);
-      expect(anchorX).toBeGreaterThanOrEqual(0);
-      expect(anchorX).toBeLessThanOrEqual(width);
-      const roles = motifRoles(game, motif);
-      expect(
-        roles.subarray((height - 1) * width).some((role) => role !== 0),
-        `motif ${String(motif)}`,
-      ).toBe(true);
-    }
+  it('pose chaque motif sur ses pieds, sauf au saut, à la chute et à une foulée de la course', () => {
+    // La ligne du bas porte des pixels ; elle est celle des pieds, sauf au saut, à la chute et à
+    // la dernière foulée de la course de l'homme, que l'auteur a dessinés au-dessus d'elle (de 1
+    // à 4 pixels de la planche) : le rendu les pose à leur point des pieds (src/render/crowd.ts,
+    // personBox), et la figure quitte le sol.
+    const L = humans.levels.length;
+    const airborne = new Set(['jump', 'fall', 'run']);
+    const lifts = new Set<number>();
+    let seen = 0;
+    game.bodies.forEach((_, body) => {
+      for (let level = 0; level < L; level++) {
+        for (let variant = 0; variant < 3; variant++) {
+          game.animations.forEach((animation, a) => {
+            const first =
+              game.index[((body * L + level) * 3 + variant) * game.animations.length + a] ?? -1;
+            for (let frame = 0; first >= 0 && frame < animation.frames; frame++) {
+              const motif = first + frame;
+              seen++;
+              const [, , width = 1, height = 1, anchorX = 0, anchorY = 0] = game.motifs.slice(
+                motif * 6,
+                motif * 6 + 6,
+              );
+              const name = `${String(body)} ${String(level)} ${animation.id} ${String(frame)}`;
+              if (airborne.has(animation.id)) {
+                expect(anchorY, name).toBeGreaterThanOrEqual(height);
+                expect(anchorY - height, name).toBeLessThanOrEqual(4);
+                lifts.add(anchorY - height);
+              } else {
+                expect(anchorY, name).toBe(height);
+              }
+              expect(anchorX).toBeGreaterThanOrEqual(0);
+              expect(anchorX).toBeLessThanOrEqual(width);
+              const roles = motifRoles(game, motif);
+              expect(
+                roles.subarray((height - 1) * width).some((role) => role !== 0),
+                name,
+              ).toBe(true);
+            }
+          });
+        }
+      }
+    });
+    expect(seen).toBe(game.motifs.length / 6);
+    // Le saut quitte bien le sol, au moins à la taille de la planche.
+    expect(Math.max(...lifts)).toBeGreaterThan(0);
   });
 
   it('range les niveaux de l’adulte de référence, et des variantes d’une rangée de plus ou de moins', () => {
@@ -211,6 +279,28 @@ describe('atlas des humains (ADR 0016, § 1, § 7)', () => {
     expect(humans.young.child.map((size) => size.head)).toEqual([10, 10, 10]);
   });
 
+  it('compose l’enfant à genoux plus petit que debout, dans la proportion de l’adulte', () => {
+    // Un enfant se compose image par image, sa tête et son corps réduits à ses rangées ; à
+    // genoux, le corps de l'adulte est plus court : réduit comme debout (youngRoles, standing),
+    // l'enfant s'agenouille au lieu d'être étiré à sa hauteur debout (ADR 0022, § 4).
+    const L = humans.levels.length;
+    const death = game.animations.findIndex((animation) => animation.id === 'death');
+    const idle = game.animations.findIndex((animation) => animation.id === 'idle');
+    const tall = (body: number, level: number, a: number, frame: number) => {
+      const first = game.index[(body * L + level) * 3 * game.animations.length + a] ?? -1;
+      return game.motifs[(first + frame) * 6 + 5] ?? 0;
+    };
+    for (let level = 0; level < 3; level++) {
+      const adult = tall(1, level, death, 1) / tall(1, level, idle, 0);
+      game.kinds.forEach((kind, body) => {
+        if (kind !== 'child') return;
+        const ratio = tall(body, level, death, 1) / tall(body, level, idle, 0);
+        expect(ratio, `${String(body)} ${String(level)}`).toBeLessThan(0.92);
+        expect(Math.abs(ratio - adult), `${String(body)} ${String(level)}`).toBeLessThan(0.12);
+      });
+    }
+  });
+
   it('garde son empreinte : toute retouche d’une grille, d’une planche ou d’une réduction se voit en revue', () => {
     // L'atlas du jeu, et celui de toutes les animations : une retouche d'une grille que le jeu
     // ne montre pas encore (lancer, chute, mort) se voit aussi.
@@ -219,7 +309,7 @@ describe('atlas des humains (ADR 0016, § 1, § 7)', () => {
         ...Buffer.from(atlas.roles, 'base64'),
         ...atlas.motifs.flatMap((v) => [v & 255, v >> 8]),
       ]);
-    expect([fingerprint(game), fingerprint(every)]).toEqual(['113186cc', '17fdb51f']);
+    expect([fingerprint(game), fingerprint(every)]).toEqual(['2c87123d', '97b920ac']);
   });
 });
 
@@ -316,17 +406,24 @@ describe('têtes des motifs (ADR 0016, § 7)', () => {
     // Aux niveaux réduits, la tête se réduit à part, sur une grille calée sous les yeux : le
     // balancement la déplace sans la changer, si bien que ni le visage ni les yeux ne clignotent.
     // Seul le menton, posé sur le cou, peut gagner ou perdre un pixel là où le contour se
-    // retrace (facteurs 1,5 et 2).
-    const varying = sequences(game)
-      .filter((sequence) => sequence.body < 2 && sequence.level > 0)
-      .flatMap((sequence) => {
-        const heads = new Set(
-          sequence.motifs.map((roles, frame) => headTop(roles, sequence.widths[frame] ?? 1)),
-        );
-        const eyes = new Set(sequence.motifs.map((roles) => count(roles, isEye)));
-        return heads.size === 1 && !heads.has('') && eyes.size === 1 ? [] : [sequence.name];
-      });
+    // retrace (facteurs 1,5 et 2). La tête se compare sur les boucles où rien ne passe devant
+    // elle : au lancer et à la chute, une main se lève à sa hauteur ; à genoux, l'auteur la
+    // dessine un peu autrement d'une image à l'autre. Partout, les yeux ne clignotent pas.
+    const clear = new Set(['idle', 'walk', 'run', 'jump']);
+    const adults = sequences(game).filter((sequence) => sequence.body < 2 && sequence.level > 0);
+    const varying = adults.flatMap((sequence) => {
+      const heads = new Set(
+        sequence.motifs.map((roles, frame) => headTop(roles, sequence.widths[frame] ?? 1)),
+      );
+      const eyes = new Set(sequence.motifs.map((roles) => count(roles, isEye)));
+      const id = sequence.name.split(' ').at(-1) ?? '';
+      const head = !clear.has(id) || (heads.size === 1 && !heads.has(''));
+      return head && eyes.size === 1 ? [] : [sequence.name];
+    });
     expect(varying).toEqual([]);
+    expect(new Set(adults.map((sequence) => sequence.name.split(' ').at(-1)))).toEqual(
+      new Set(game.animations.map((animation) => animation.id)),
+    );
     expect(humans.levels.map((level) => level.head)).toEqual([
       'feet',
       'eyes',

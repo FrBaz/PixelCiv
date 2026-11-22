@@ -11,10 +11,11 @@ import { LAYER_NAMES, type GenerationStage, type WorldLayers, type WorldSize } f
 import type { WorldParams } from './worldParams';
 
 /**
- * Version du protocole, vérifiée à la poignée de main. Version 8 (tâche 2b.7, ADR 0019) :
- * l'instantané porte les calendriers de la neige et de la glace.
+ * Version du protocole, vérifiée à la poignée de main. Version 9 (tâche 2b.8, ADR 0021 et ADR
+ * 0022) : chaque étape des humains porte l'octet d'activité de l'humain (HumanLegArrays), l'image
+ * des groupes celui de chaque membre, et la fiche d'un vivant son activité.
  */
-export const PROTOCOL_VERSION = 8;
+export const PROTOCOL_VERSION = 9;
 
 /**
  * Pinceau de biome : donne à une case de terre un autre biome de terre. C'est un outil
@@ -131,6 +132,11 @@ export interface PersonView extends PersonSummary {
    * place, ou porté par sa mère.
    */
   readonly intention?: Intention;
+  /**
+   * Clé du nom de l'activité d'un vivant (ADR 0021, § 6 ; `name` de data/activities.json) : pour
+   * un porté, celle de qui le porte, dont il partage l'activité. Aucune sans activité.
+   */
+  readonly activity?: string;
   readonly mother?: PersonSummary;
   readonly father?: PersonSummary;
   readonly partner?: PersonSummary;
@@ -186,6 +192,18 @@ export const CHRONICLE_PAGE = 100;
  */
 export const GROUP_STRIDE = 5;
 
+/**
+ * Octet d'activité d'un humain (ADR 0021, ADR 0022) : le rang de son activité dans
+ * data/activities.json sur ses quatre bits de poids faible (ACT_RANK), ACT_NONE pour qui n'en a
+ * pas (un porté, qui prend l'image de sa mère) ; ACT_RUN, il court (le jeu, la charge du
+ * chasseur, décidée au coup manqué et partie le lendemain) ; ACT_STRIKE, sur une étape seulement,
+ * l'étape d'arrêt du jour du coup : le chasseur frappe ce jour-là, à l'arrêt.
+ */
+export const ACT_RANK = 0x0f;
+export const ACT_NONE = 0x0f;
+export const ACT_RUN = 0x10;
+export const ACT_STRIKE = 0x20;
+
 /** Aucun porteur, dans GroupsFrame.carriers. */
 export const NO_CARRIER = 0xffffffff;
 
@@ -207,12 +225,25 @@ export interface LegArrays {
 }
 
 /**
+ * Étapes des humains (protocole 9, ADR 0021 § 6) : celles de LegArrays, et l'octet d'activité de
+ * chacune (ACT_RANK, ACT_RUN, ACT_STRIKE), celui de l'humain au départ de l'étape. Une étape de
+ * zéro jour l'arrête à son départ, ou y change son activité sur place. Une étape de zéro jour au
+ * pas horizontal d'une unité le tourne sur place, sans le déplacer : le pêcheur ou le porteur
+ * d'eau vers son eau, datée de l'instant où il s'arrête, celui qui suit le jour de son arrivée,
+ * et donc, au bout d'un lot, de l'instant du delta (ADR 0022, § 6).
+ */
+export interface HumanLegArrays extends LegArrays {
+  readonly acts: Uint8Array<ArrayBuffer>;
+}
+
+/**
  * Groupes du monde, pour la carte (ADR 0014) : GROUP_STRIDE entiers par groupe, puis, membre
  * par membre, groupe après groupe, son emplacement, son identifiant, son code d'apparence
  * (core/visual.ts), sa stature en 1/128 de case, sa position (x, y, en unités de
- * core/position.ts) et l'emplacement de qui le porte (NO_CARRIER s'il marche). `legs` donne
- * l'étape en cours de chaque marcheur, repartie de l'instant de l'image : jusqu'à l'image
- * suivante, les deltas apportent les étapes qui commencent.
+ * core/position.ts), l'emplacement de qui le porte (NO_CARRIER s'il marche) et son octet
+ * d'activité (protocole 9 : ACT_RANK et ACT_RUN, jamais ACT_STRIKE). `legs` donne l'étape en cours
+ * de chaque marcheur, repartie de l'instant de l'image, avec son octet : jusqu'à l'image suivante,
+ * les deltas apportent les étapes qui commencent.
  */
 export interface GroupsFrame {
   readonly groups: Uint32Array<ArrayBuffer>;
@@ -222,7 +253,8 @@ export interface GroupsFrame {
   readonly statures: Uint8Array<ArrayBuffer>;
   readonly positions: Int32Array<ArrayBuffer>;
   readonly carriers: Uint32Array<ArrayBuffer>;
-  readonly legs: LegArrays;
+  readonly activities: Uint8Array<ArrayBuffer>;
+  readonly legs: HumanLegArrays;
 }
 
 /**
@@ -276,6 +308,11 @@ export function legBuffers(legs: LegArrays): ArrayBuffer[] {
   ];
 }
 
+/** Tampons d'étapes des humains, octets d'activité compris, à transférer. */
+export function humanLegBuffers(legs: HumanLegArrays): ArrayBuffer[] {
+  return [...legBuffers(legs), legs.acts.buffer];
+}
+
 /** Tampons d'étapes du gibier, à transférer. */
 export function faunaLegBuffers(legs: FaunaLegArrays): ArrayBuffer[] {
   return [...legBuffers(legs), legs.gaits.buffer];
@@ -302,7 +339,8 @@ export function frameBuffers(frame: GroupsFrame): ArrayBuffer[] {
     frame.statures.buffer,
     frame.positions.buffer,
     frame.carriers.buffer,
-    ...legBuffers(frame.legs),
+    frame.activities.buffer,
+    ...humanLegBuffers(frame.legs),
   ];
 }
 
@@ -448,7 +486,7 @@ export type WorkerMessage =
       readonly days: number;
       readonly chunks: readonly ChunkPatch[];
       readonly chronicle: readonly ChronicleView[];
-      readonly legs?: LegArrays;
+      readonly legs?: HumanLegArrays;
       readonly frame?: GroupsFrame;
       /**
        * Étapes du gibier commencées pendant le lot, avec leur allure, et l'image du gibier quand
@@ -530,7 +568,7 @@ export function transferablesOf(message: MainMessage | WorkerMessage): ArrayBuff
     case 'delta':
       return [
         ...message.chunks.map((chunk) => chunk.biome.buffer),
-        ...(message.legs === undefined ? [] : legBuffers(message.legs)),
+        ...(message.legs === undefined ? [] : humanLegBuffers(message.legs)),
         ...(message.frame === undefined ? [] : frameBuffers(message.frame)),
         ...(message.faunaLegs === undefined ? [] : faunaLegBuffers(message.faunaLegs)),
         ...(message.fauna === undefined ? [] : faunaBuffers(message.fauna)),

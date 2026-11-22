@@ -206,6 +206,27 @@ export function cellFood(
   return cellFoodWith(table, climate, content.nomads, world, size.width, calendars, cell);
 }
 
+/**
+ * Part de la case `cell` que couvre `cover` (neige, glace de l'eau douce ou banquise) au mois du
+ * pas `tick`, comme la pêche la lit (cellFood) : la même composition, le même jour du mois. Les
+ * activités y lisent la neige du camp et la glace d'une rive (activities.ts, ADR 0021).
+ */
+export function cellCover(
+  world: WorldLayers,
+  size: WorldSize,
+  calendars: Uint8Array,
+  cell: number,
+  tick: number,
+  cover: CalendarCover,
+  content: ForageContent,
+): number {
+  const climate = monthClimate(size.height, tick);
+  const y = Math.floor(cell / size.width);
+  const phase = y >= climate.height / 2 ? climate.phase.south : climate.phase.north;
+  const ramp = coverRamps(content.seasons)[cover];
+  return fishingCover(world, calendars, cell, cover, ramp, climate.season[y] ?? 0, phase);
+}
+
 /** Température d'une case ce mois-ci, en degrés. */
 function monthTemperature(
   climate: MonthClimate,

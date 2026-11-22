@@ -21,6 +21,7 @@ import { loadGameData } from '../src/core/data';
 import { DAYS_PER_MONTH } from '../src/core/time';
 import { WORLD_SIZES } from '../src/core/world';
 import { defaultWorldParams } from '../src/core/worldParams';
+import { rebuildMovement } from '../src/sim/movement';
 import { spawnGroup } from '../src/sim/spawn';
 import { createState, type SimState } from '../src/sim/state';
 import { advanceDay, step } from '../src/sim/day';
@@ -79,6 +80,9 @@ function seeded(people: number): SimState {
       data,
     );
   }
+  // Comme applyCommands après ses commandes : les caches du mouvement et des activités (places
+  // tenues, agenda, lieux) se refont d'après l'état, une fois pour tous les groupes semés.
+  rebuildMovement(state);
   return state;
 }
 

@@ -551,6 +551,12 @@ export function reduceFigure(
  * est faite des régions `headRegions` (data/humans.json, head). Tête et corps se votent sans
  * contour, et le contour retracé (« thick ») se pose sur la figure entière : une seule ligne au
  * cou. Une tête gardée à la taille de la planche garde son contour d'origine.
+ *
+ * `standing`, la figure debout de référence (le repos, image 0, ADR 0022 § 4), règle les images
+ * où l'adulte n'est pas debout : la tête y garde la réduction de la sienne, que des mains levées
+ * au-dessus d'elle ne changent pas, et le corps jamais moins réduit que le sien. L'enfant à
+ * genoux est donc plus petit que debout, au lieu d'être étiré à sa hauteur ; une image où le
+ * corps est au moins aussi haut que celui de la référence (repos, marche) n'en change pas.
  */
 export function youngRoles(
   image: RoleImage,
@@ -559,14 +565,23 @@ export function youngRoles(
   outline: OutlineMode,
   eyes: readonly number[],
   headRegions: readonly number[],
+  standing?: RoleImage,
 ): RoleImage {
   const { mask, chinX, chinY } = headPart(image, headRegions);
-  let top = image.height;
-  for (let index = 0; index < image.roles.length; index++) {
-    if ((image.roles[index] ?? 0) !== 0) top = Math.min(top, Math.floor(index / image.width));
+  const figureTop = (of: RoleImage) => {
+    let top = of.height;
+    for (let index = 0; index < of.roles.length; index++) {
+      if ((of.roles[index] ?? 0) !== 0) top = Math.min(top, Math.floor(index / of.width));
+    }
+    return top;
+  };
+  let fh = Math.max(1, (chinY - figureTop(image)) / head);
+  let fb = Math.max(1, (image.anchorY - chinY) / (rows - head));
+  if (standing !== undefined) {
+    const reference = headPart(standing, headRegions);
+    fh = Math.max(1, (reference.chinY - figureTop(standing)) / head);
+    fb = Math.max(fb, (standing.anchorY - reference.chinY) / (rows - head));
   }
-  const fh = Math.max(1, (chinY - top) / head);
-  const fb = Math.max(1, (image.anchorY - chinY) / (rows - head));
   const body = reduceRoles(masked(image, mask, 0, image.anchorX, image.anchorY), fb, 'none', eyes);
   const face = reduceRoles(masked(image, mask, 1, chinX, chinY), fh, 'none', eyes);
   // Le menton de la tête réduite sur le haut du cou du corps réduit.

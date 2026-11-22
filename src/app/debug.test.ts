@@ -5,7 +5,7 @@ import {
   type FaunaFrame,
   type FaunaLegArrays,
   type GroupsFrame,
-  type LegArrays,
+  type HumanLegArrays,
 } from '../core/protocol';
 import {
   ANIMAL_BYTES,
@@ -15,6 +15,7 @@ import {
   DrawCallCounter,
   FAUNA_LEG_BYTES,
   faunaBytes,
+  HUMAN_LEG_BYTES,
   LEG_BYTES,
   MEMBER_BYTES,
   positionBytes,
@@ -191,14 +192,16 @@ describe('DebugSampler', () => {
     const sampler = new DebugSampler();
     expect(sampler.sample(0)).toMatchObject({ legsPerSecond: 0, positionBytesPerSecond: 0 });
     expect(sampler.sample().legsPerSecond).toBeUndefined();
-    // Une étape pèse 26 octets, un membre de l'image 23 (ADR 0014).
-    expect([LEG_BYTES, MEMBER_BYTES]).toEqual([26, 23]);
-    const legs = (count: number): LegArrays => ({
+    // Une étape pèse 26 octets (ADR 0014) ; celle d'un humain 27, son octet d'activité compris,
+    // et un membre de l'image 24 (protocole 9, ADR 0021).
+    expect([LEG_BYTES, HUMAN_LEG_BYTES, MEMBER_BYTES]).toEqual([26, 27, 24]);
+    const legs = (count: number): HumanLegArrays => ({
       slots: new Uint32Array(count),
       days: new Uint32Array(count),
       start: new Int32Array(2 * count),
       step: new Int32Array(2 * count),
       count: new Uint16Array(count),
+      acts: new Uint8Array(count),
     });
     const frame: GroupsFrame = {
       groups: new Uint32Array(2 * 5),
@@ -208,10 +211,11 @@ describe('DebugSampler', () => {
       statures: new Uint8Array(30),
       positions: new Int32Array(60),
       carriers: new Uint32Array(30).fill(NO_CARRIER),
+      activities: new Uint8Array(30),
       legs: legs(4),
     };
-    expect(positionBytes(legs(10), undefined)).toBe(260);
-    expect(positionBytes(undefined, frame)).toBe(4 * 26 + 30 * 23 + 2 * 5 * 4);
+    expect(positionBytes(legs(10), undefined)).toBe(270);
+    expect(positionBytes(undefined, frame)).toBe(4 * 27 + 30 * 24 + 2 * 5 * 4);
     // Le gibier (relecture 2b.6, problème 20) : une étape pèse 27 octets, allure comprise, un
     // animal de l'image 17, et ses étapes en cours 26.
     expect([FAUNA_LEG_BYTES, ANIMAL_BYTES]).toEqual([27, 17]);
@@ -242,6 +246,8 @@ describe('DebugSampler', () => {
         sortMs: 0.5,
         spritesMs: 2,
         drawn: 1200 + frameIndex,
+        placed: 1500,
+        posed: 1100 + frameIndex,
         textures: 300,
         cached: 400,
         pages: 2,
@@ -264,6 +270,8 @@ describe('DebugSampler', () => {
     expect(sample.timeline).toEqual({ show: 0, receive: 0 });
     expect(sample).toMatchObject({
       drawn: 1289,
+      placed: 1500,
+      posed: 1189,
       textures: 300,
       cachedTextures: 400,
       pages: 2,

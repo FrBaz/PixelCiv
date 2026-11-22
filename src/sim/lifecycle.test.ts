@@ -319,12 +319,17 @@ describe('cycle de vie (tâche 2.3)', () => {
 
   it('maintient trois siècles durant une population nourrie, qui croît sans exploser (D-8)', () => {
     // La mesure de docs/BACKLOG.md : seize groupes de trente répartis sur le monde des
-    // tests (scatteredGroups), trois cents ans de nomadisme, d'hivers et de famines.
+    // tests (scatteredGroups), trois cents ans de nomadisme, d'hivers et de famines, avec le
+    // contenu du jeu, activités comprises (ADR 0021) : elles déplacent les places au camp, donc
+    // la trajectoire, et la viande des prises va aux réserves. Relecture de 2b.8 : de 479 à 929
+    // vivants en trois siècles (0,22 % par an), sous l'effectif de départ à la première décennie
+    // seulement (445) ; sans les activités, de 479 à 1 068 (0,27 % par an).
+    const content = testData;
     const state = testState();
-    step(state, scatteredGroups(state, 16), testData);
+    step(state, scatteredGroups(state, 16), content);
     const start = state.people.count;
     for (let century = 1; century <= 3; century++) {
-      run(state, 100 * MONTHS_PER_YEAR - (century === 1 ? 1 : 0));
+      run(state, 100 * MONTHS_PER_YEAR - (century === 1 ? 1 : 0), content);
       expect(state.people.count).toBeGreaterThan(start);
     }
     // Croissance annuelle moyenne : de l'ordre de 0,5 % par an (0,1 à 1,5 %).
@@ -385,8 +390,8 @@ describe('cycle de vie (tâche 2.3)', () => {
     expect(mixed / births).toBeGreaterThan(0.05);
     expect(mixed / births).toBeLessThan(0.25);
     // Sa durée suit la population, que trois siècles portent de 480 à un ou deux milliers :
-    // de 20 à 30 s sur quatre cœurs.
-  }, 90_000);
+    // environ une minute sur quatre cœurs, avec les activités (de 20 à 30 s sans elles).
+  }, 180_000);
 
   it("tue davantage de froid les fragiles d'une sous-espèce des sables que les nordiques", () => {
     // Des cases dont le mois le plus froid descend sous −10 °C.

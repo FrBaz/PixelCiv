@@ -10,6 +10,7 @@
  * trentième jour.
  */
 import type {
+  ActivitiesFile,
   Cultures,
   FaunaRules,
   FaunaSpecies,
@@ -37,7 +38,7 @@ import {
   recordGroups,
   waiting,
 } from './movement';
-import { NONE } from './population';
+import { NONE, type LivingColumn } from './population';
 import { fingerprintPeople } from './populationSave';
 import { spawnGroup } from './spawn';
 import { markDirty, type SimState } from './state';
@@ -56,6 +57,8 @@ export interface SimContent {
   readonly faunaRules: FaunaRules;
   /** La neige, la glace et la banquise (data/seasons.json ; ADR 0019). */
   readonly seasons: Seasons;
+  /** Les activités des individus et leurs règles (data/activities.json ; ADR 0021). */
+  readonly activities: ActivitiesFile;
 }
 
 /**
@@ -244,10 +247,14 @@ function mergeSlots(a: readonly number[], b: readonly number[]): number[] {
 
 /**
  * Empreinte de l'état du monde, pour les tests de déterminisme. Sans le gibier (`fauna: false`),
- * ni ses colonnes ni son flux n'y entrent : c'est l'empreinte d'avant la tâche 2b.6, qui montre
- * que la suite des humains ne change pas avec lui (ADR 0018, § 6).
+ * ni ses colonnes ni son flux n'y entrent : c'est l'empreinte d'avant la tâche 2b.6. `omit` ôte des
+ * colonnes des vivants (fingerprintPeople) : sans celles des activités, une partie qui n'en a pas
+ * redonne l'empreinte d'avant la tâche 2b.8.
  */
-export function fingerprint(state: SimState, options: { readonly fauna?: boolean } = {}): string {
+export function fingerprint(
+  state: SimState,
+  options: { readonly fauna?: boolean; readonly omit?: readonly LivingColumn[] } = {},
+): string {
   const withFauna = options.fauna ?? true;
   const fingerprint = new Fingerprint()
     .string(state.params.seed)
@@ -255,7 +262,7 @@ export function fingerprint(state: SimState, options: { readonly fauna?: boolean
     .uint32(state.tick);
   for (const name of PARAMETER_NAMES) fingerprint.string(name).float64(state.params[name]);
   for (const name of LAYER_NAMES) fingerprint.string(name).typedArray(state.world[name]);
-  fingerprintPeople(fingerprint, state.people, state.society);
+  fingerprintPeople(fingerprint, state.people, state.society, options.omit);
   if (withFauna) fingerprintFauna(fingerprint, state.fauna);
   for (const cell of depletedCells(state.food)) {
     fingerprint

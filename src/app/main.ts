@@ -6,7 +6,7 @@ import {
   faunaBuffers,
   faunaLegBuffers,
   frameBuffers,
-  legBuffers,
+  humanLegBuffers,
   PROTOCOL_VERSION,
   type InspectTarget,
 } from '../core/protocol';
@@ -157,6 +157,7 @@ async function main(): Promise<void> {
   const people = new PeopleLayer(app, {
     genetics: data.genetics,
     appearance: data.appearance,
+    activities: data.activities,
     reference: species.display.stature,
     objects: [DECOR_ATLAS, FAUNA_ATLAS],
   });
@@ -198,7 +199,7 @@ async function main(): Promise<void> {
       simulation.send({ type: 'recycle', buffers: frameBuffers(frame) });
     },
     recycleLegs: (legs) => {
-      simulation.send({ type: 'recycle', buffers: legBuffers(legs) });
+      simulation.send({ type: 'recycle', buffers: humanLegBuffers(legs) });
     },
   });
   // Le gibier (ADR 0018), à l'instant affiché comme les individus : ses images et ses étapes

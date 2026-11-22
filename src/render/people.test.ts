@@ -13,10 +13,10 @@ import {
 import { describe, expect, it, vi } from 'vitest';
 import { PositionMirror } from '../app/frames';
 import { loadGameData, type Appearance } from '../core/data';
-import { FAUNA_GAIT, NO_CARRIER, type GroupsFrame, type LegArrays } from '../core/protocol';
+import { FAUNA_GAIT, NO_CARRIER, type GroupsFrame, type HumanLegArrays } from '../core/protocol';
 import { FIXED } from '../core/position';
 import { RandomStream, streamSeed } from '../core/rng';
-import { visualCode } from '../core/visual';
+import { AGE_CODE, visualCode } from '../core/visual';
 import { CHUNK_PX } from './bake';
 import { displayScale, physicalZoom, TILE_PX, visibleChunks, type Camera } from './camera';
 import { viewDensity, type Box } from './crowd';
@@ -64,7 +64,12 @@ function setup(resolution: number, appearance: Appearance = data.appearance, gl 
   const renderer: { resolution: number; gl?: object } = { resolution };
   if (gl) renderer.gl = {};
   const app = { renderer, stage } as unknown as Application;
-  const people = new PeopleLayer(app, { genetics: data.genetics, appearance, reference });
+  const people = new PeopleLayer(app, {
+    genetics: data.genetics,
+    appearance,
+    activities: data.activities,
+    reference,
+  });
   const layer = stage.children.at(0);
   if (!(layer instanceof Container)) throw new Error('calque introuvable');
   return { people, layer, renderer };
@@ -75,12 +80,13 @@ const insides = (people: PeopleLayer) =>
   people as unknown as { humans: ParticleContainer; palettes: PaletteTexture };
 
 /** Aucune étape. */
-const noLegs = (): LegArrays => ({
+const noLegs = (): HumanLegArrays => ({
   slots: new Uint32Array(0),
   days: new Uint32Array(0),
   start: new Int32Array(0),
   step: new Int32Array(0),
   count: new Uint16Array(0),
+  acts: new Uint8Array(0),
 });
 
 /**
@@ -105,6 +111,7 @@ function frame(size: number, ...groups: [number, number, number, number][]): Gro
     statures: new Uint8Array(total).fill(Math.round(reference * 128)),
     positions,
     carriers: new Uint32Array(total).fill(NO_CARRIER),
+    activities: new Uint8Array(total),
     legs: noLegs(),
   };
 }
@@ -445,6 +452,7 @@ describe('individus à leur position (ADR 0014, ADR 0016)', () => {
         start: Int32Array.of(groups.positions[0], groups.positions[1]),
         step: Int32Array.of(FIXED / 8, 0),
         count: Uint16Array.of(10),
+        acts: Uint8Array.of(0),
       },
     };
     const look = (walkMs: number, t: number) => {
@@ -654,9 +662,12 @@ describe('individus à leur position (ADR 0014, ADR 0016)', () => {
     people.draw(scene(crowd), aimedAt(110, 50, 8), viewport, world);
     expect(people.stats.drawn).toBe(200);
     expect(people.shown.particles).toHaveLength(200);
-    // Loin de la foule : plus aucune particule à dessiner.
+    // Une position et une pose par individu à l'écran, pour le panneau (ADR 0022, § 1).
+    expect([people.stats.placed, people.stats.posed]).toEqual([200, 200]);
+    // Loin de la foule : plus aucune particule à dessiner, ni pose à calculer.
     people.draw(scene(crowd), aimedAt(400, 200, 8), viewport, world);
     expect(people.stats.drawn).toBe(0);
+    expect(people.stats.posed).toBe(0);
     expect(people.shown.particles).toHaveLength(0);
     // La réserve se défait de la foule passée en quelques secondes d'images.
     for (let image = 0; image < 400; image++) {
@@ -799,6 +810,7 @@ function setupWithObjects(resolution: number, gl = false, ...atlases: ObjectAtla
   const people = new PeopleLayer(app, {
     genetics: data.genetics,
     appearance: data.appearance,
+    activities: data.activities,
     reference,
     objects: atlases.length === 0 ? [FAKE_ATLAS] : atlases,
   });
@@ -838,6 +850,37 @@ describe('calque commun : décor et humains (ADR 0017, § 7)', () => {
     const slots = new Set(people.shown.particles.map((particle) => particle.color & 0xffff));
     expect(slots.size).toBe(2);
     expect(people.paletteTexture.count).toBe(2);
+  });
+
+  it('trie avec le décor le sauteur en l’air par ses pieds, et non par le bas de son motif levé', () => {
+    // Relecture de 2b.8, problème 4 : un objet dont les pieds tombent entre le bas du motif levé
+    // d'un humain qui saute et ses pieds est derrière lui, comme s'il se tenait au sol (ADR 0022,
+    // § 9 : la profondeur et le tri avec le décor se font aux pieds).
+    const play = data.activities.activities.findIndex((activity) => activity.id === 'play');
+    const groups = frame(1, [1, 100, 50, 1]);
+    groups.activities[0] = play;
+    groups.sprites[0] = visualCode(0, AGE_CODE.adult, 3, 2, 0);
+    const { people, layer } = setupWithObjects(1);
+    // Zoom 16, à la taille de la planche (k = 1) : une case fait 64 pixels, les pieds de l'humain
+    // tombent au milieu de l'écran ; ceux de l'objet, deux pixels plus haut.
+    const feet = viewport.height / 2;
+    const objects = new FakeObjects([[100.5, 50.5 - 2 / 64]]);
+    let lifted = 0;
+    for (let walkMs = 0; walkMs < 3200; walkMs += 10) {
+      const shown = { ...scene(groups, walkMs), objects: [objects], month: 6.5 };
+      people.draw(shown, aimedAt(100, 50, 16), viewport, world);
+      const drawn = rendered(people, layer, 1);
+      const person = drawn.findIndex((entry) => entry.entity === 1);
+      const object = drawn.findIndex((entry) => entry.entity === 0);
+      expect(person).toBeGreaterThanOrEqual(0);
+      expect(object).toBeGreaterThanOrEqual(0);
+      const { box } = drawn[person];
+      // Le motif levé de trois pixels au moins : son bas au-dessus des pieds de l'objet.
+      if (box.top + box.height > feet - 3) continue;
+      lifted++;
+      expect(object, `${String(walkMs)} ms`).toBeLessThan(person);
+    }
+    expect(lifted).toBeGreaterThan(0);
   });
 
   it('touche ce qu’on voit : un pixel peint d’un objet cache l’humain à l’appui, ni son ombre ni son trou', () => {
@@ -986,6 +1029,7 @@ describe('calque commun : décor et humains (ADR 0017, § 7)', () => {
         new PeopleLayer(app, {
           genetics: data.genetics,
           appearance: data.appearance,
+          activities: data.activities,
           reference,
           objects: [narrow],
         }),

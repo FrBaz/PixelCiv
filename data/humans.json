@@ -42,13 +42,35 @@
     }
   },
   "animations": [
-    { "id": "idle", "row": 0, "frames": 5, "frameMs": 260, "shown": true },
-    { "id": "walk", "row": 1, "frames": 8, "steps": 2, "shown": true },
-    { "id": "run", "row": 2, "frames": 8, "steps": 2 },
-    { "id": "jump", "row": 3, "frames": 4, "frameMs": 130 },
-    { "id": "fall", "row": 4, "frames": 4, "frameMs": 130 },
-    { "id": "throw", "row": 5, "frames": 6, "frameMs": 150 },
-    { "id": "death", "row": 6, "frames": 10, "frameMs": 120, "loop": false }
+    {
+      "id": "idle",
+      "row": 0,
+      "frames": 5,
+      "frameMs": 260,
+      "shown": true,
+      "young": ["child", "baby"]
+    },
+    { "id": "walk", "row": 1, "frames": 8, "steps": 2, "shown": true, "young": ["child", "baby"] },
+    { "id": "run", "row": 2, "frames": 8, "steps": 2, "shown": true, "young": ["child"] },
+    { "id": "jump", "row": 3, "frames": 4, "frameMs": 130, "shown": true, "young": ["child"] },
+    { "id": "fall", "row": 4, "frames": 4, "frameMs": 130, "shown": true, "young": ["child"] },
+    {
+      "id": "throw",
+      "row": 5,
+      "frames": 6,
+      "frameMs": 150,
+      "shown": true,
+      "young": ["child", "baby"]
+    },
+    {
+      "id": "death",
+      "row": 6,
+      "frames": 10,
+      "frameMs": 120,
+      "loop": false,
+      "shown": [2, 3, 4],
+      "young": ["child", "baby"]
+    }
   ],
   "levels": [
     { "factor": 1, "outline": "keep", "variants": [0] },

@@ -296,6 +296,7 @@ describe('fiches (IHM-02)', () => {
     sheet.value = { kind: 'person', view: person({ alive: false, death: 12 }) };
     const labels = findAll(shown(), (element) => element.type === 'dt').map(textOf);
     expect(labels).not.toContain(t('person.intention'));
+    expect(labels).not.toContain(t('person.activity'));
     // Le lien vers le groupe ouvre sa fiche.
     sheet.value = { kind: 'person', view: person({ intention: 'rest', group: summary }) };
     const tree = shown(actions);
@@ -307,5 +308,38 @@ describe('fiches (IHM-02)', () => {
     if (typeof onClick !== 'function') throw new Error('pas de lien vers le groupe');
     (onClick as () => void)();
     expect(actions.inspectGroup).toHaveBeenCalledWith(3);
+  });
+
+  it('disent l’activité de chacun par son nom traduit, celle de sa mère pour un porté (ADR 0021, § 6)', () => {
+    const value = (label: string) => {
+      const row = findAll(shown(), (element) => element.props.class === 'debug-row').find(
+        (element) => textOf(findAll(element, (inner) => inner.type === 'dt')[0]) === label,
+      );
+      return row === undefined
+        ? undefined
+        : textOf(findAll(row, (element) => element.type === 'dd')[0]);
+    };
+    // Chaque activité des données, par la clé de son nom, traduite.
+    const names = data.activities.activities.map((activity) => activity.name);
+    expect(names.length).toBeGreaterThanOrEqual(7);
+    for (const name of names) {
+      sheet.value = { kind: 'person', view: person({ intention: 'rest', activity: name }) };
+      expect(value(t('person.activity'))).toBe(tKey(name));
+      expect(tKey(name)).not.toBe(name);
+    }
+    sheet.value = {
+      kind: 'person',
+      view: person({ intention: 'walk', activity: 'activity.gather' }),
+    };
+    expect(value(t('person.activity'))).toBe('cueille');
+    // Le porté n'a pas d'activité à lui : sa fiche dit celle de sa mère.
+    sheet.value = {
+      kind: 'person',
+      view: person({ intention: 'carried', sex: 0, stage: 'baby', activity: 'activity.fish' }),
+    };
+    expect(value(t('person.activity'))).toBe('avec sa mère, qui pêche');
+    // Sans activité (un mort, un contenu sans activités) : pas de ligne.
+    sheet.value = { kind: 'person', view: person({ intention: 'rest' }) };
+    expect(value(t('person.activity'))).toBeUndefined();
   });
 });

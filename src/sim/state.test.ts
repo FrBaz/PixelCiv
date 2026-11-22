@@ -4,6 +4,7 @@ import { altitudeLevelIndex } from '../core/altitude';
 import { cellIndex, createState, takeDirtyChunks } from './state';
 import { step } from './day';
 import { applyCommand, fingerprint, type SimContent } from './step';
+import { ACTIVITY_COLUMNS } from './population';
 import { terrainLands } from './terrain';
 import {
   firstCellOf,
@@ -12,7 +13,9 @@ import {
   testHuman,
   testParams,
   testState,
+  withoutActivities,
   withoutFauna,
+  withoutHunting,
 } from './testing';
 
 const land = (family: string) => family !== 'water';
@@ -200,8 +203,14 @@ describe('pas', () => {
     // un an (de f363d517 à 710d1a9b). Relecture de 2b.6 : le levraut prend pour domaine la case
     // où il naît, et un territoire vide se repeuple dès que sa cible admet un animal ; 44
     // naissances au lieu de 43 (de 710d1a9b à 30a730e1).
-    expect(fingerprint(state, { fauna: false })).toBe('f363d517');
-    expect(fingerprint(state)).toBe('30a730e1');
+    // Tâche 2b.8 : quatre colonnes des activités (ADR 0021), que l'empreinte hache, même vides ;
+    // personne ici, ni tirage ni trajet : sans elles, l'empreinte reste celle d'avant (de f363d517
+    // à 7d151b7c sans le gibier, de 30a730e1 à 9305ebc4 avec lui).
+    const omit = ACTIVITY_COLUMNS;
+    expect(fingerprint(state, { fauna: false, omit })).toBe('f363d517');
+    expect(fingerprint(state, { omit })).toBe('30a730e1');
+    expect(fingerprint(state, { fauna: false })).toBe('7d151b7c');
+    expect(fingerprint(state)).toBe('9305ebc4');
   });
 
   it("redonnent l'empreinte de référence de vingt ans d'une population (ADR 0003)", () => {
@@ -210,15 +219,19 @@ describe('pas', () => {
     const world = emptyLayers(WORLD_SIZES.small);
     world.biome.fill(testData.biomes.indexOf('steppe') ?? 0);
     world.elevation.fill(120);
-    const state = createState(testParams('référence'), world, testData);
-    const spawn = (x: number, y: number, subspecies: string) =>
-      ({ type: 'spawnGroup', x, y, species: 'human', subspecies, count: 30 }) as const;
-    step(
-      state,
-      [spawn(10, 60, 'plains'), spawn(30, 64, 'nordic'), spawn(505, 70, 'sands')],
-      testData,
-    );
-    for (let tick = 1; tick < 240; tick++) step(state, [], testData);
+    const run = (content: SimContent) => {
+      const state = createState(testParams('référence'), world, content);
+      const spawn = (x: number, y: number, subspecies: string) =>
+        ({ type: 'spawnGroup', x, y, species: 'human', subspecies, count: 30 }) as const;
+      step(
+        state,
+        [spawn(10, 60, 'plains'), spawn(30, 64, 'nordic'), spawn(505, 70, 'sands')],
+        content,
+      );
+      for (let tick = 1; tick < 240; tick++) step(state, [], content);
+      return state;
+    };
+    const state = run(testData);
     expect(state.people.count).toBeGreaterThan(40);
     // Relecture de la phase 2 : familles des groupes apparus, culture et nom à la
     // naissance (C2, D2), premier mois de vie, proches parents, mariages entre cultures ;
@@ -243,8 +256,21 @@ describe('pas', () => {
     // encore un but, sans approcher l'humain le plus proche, au lieu d'y rester figée ; les
     // humains ne changent pas (de 54a97017 à 814e6718). Relecture de 2b.6 : levrauts et
     // territoires minces, comme ci-dessus ; 875 animaux au lieu de 872 (de 814e6718 à e064350c).
-    expect(fingerprint(state, { fauna: false })).toBe('567d06a4');
-    expect(fingerprint(state)).toBe('e064350c');
+    // Tâche 2b.8 : les activités (ADR 0021). Le flux `sim.activities`, les trajets et les places
+    // au camp, les prises, et le gibier qui fuit les marcheurs changent le déroulement ; les
+    // humains lisent le gibier, et l'empreinte sans lui le suit donc aussi (46 vivants,
+    // 102 prises en vingt ans ; de 567d06a4 à 39e32af6 sans le gibier, de e064350c à
+    // 7d74f1b1 avec lui). Sans activités, la partie est celle de 2b.7 : les quatre colonnes
+    // ôtées, elle redonne les empreintes d'avant. Relecture de 2b.8 : la charge part le lendemain
+    // du coup, le poids d'une activité suit le test de son lieu et un choix sans lieu tire de
+    // nouveau, l'affût se tient à l'écart des autres ; 47 vivants, 90 prises (de 39e32af6 à
+    // 4ddeeba3 sans le gibier, de 7d74f1b1 à 4f07557a avec lui).
+    expect(fingerprint(state, { fauna: false })).toBe('4ddeeba3');
+    expect(fingerprint(state)).toBe('4f07557a');
+    const plain = run(withoutActivities(testData));
+    const omit = ACTIVITY_COLUMNS;
+    expect(fingerprint(plain, { fauna: false, omit })).toBe('567d06a4');
+    expect(fingerprint(plain, { omit })).toBe('e064350c');
   });
 
   it("redonnent l'empreinte de référence de trente mois de trois mille individus (ADR 0011)", () => {
@@ -266,7 +292,7 @@ describe('pas', () => {
     // l'orphelin porté se pose là où on le dessinait (de b4e23dbf à 7ae8f749). Relecture de
     // 2b.3 : le nourrisson sevré part avec sa mère (de 7ae8f749 à cd841d8f) ; à 120 mois, les
     // vivants varient alors de −0,1 à +4,6 % par rapport à 2b.2, les groupes de −6,5 à +6,9 %.
-    const state = testState();
+    const state = testState('graine');
     step(state, scatteredGroups(state, 100), testData);
     for (let tick = 1; tick < 30; tick++) step(state, [], testData);
     expect(state.society.groups.size).toBeGreaterThan(100);
@@ -288,25 +314,34 @@ describe('pas', () => {
     // lentement (ADR 0019, § 1) ; la pêche change aux mois du dégel : 2 291 vivants au lieu de
     // 2 310, 173 groupes au lieu de 177 (de 2f85a3da à 199961c5 sans le gibier, de 8384496a à
     // f7fb307c avec lui).
-    expect(fingerprint(state, { fauna: false })).toBe('199961c5');
-    expect(fingerprint(state)).toBe('f7fb307c');
+    // Tâche 2b.8 : les activités (ADR 0021) changent le déroulement, comme ci-dessus ; 2 290
+    // vivants, 172 groupes et 96 prises au bout de trente mois (de 199961c5 à
+    // 65e68e71 sans le gibier, de f7fb307c à 6caf37be avec lui). Sans activités, la partie
+    // redonne les empreintes d'avant, comme les vingt ans de trois groupes le vérifient.
+    // Relecture de 2b.8 : la charge du lendemain, les poids qui suivent les lieux et l'affût à
+    // l'écart, comme ci-dessus ; 2 327 vivants, 168 groupes et 134 prises (de 65e68e71 à b5045e06
+    // sans le gibier, de 6caf37be à 0d9cf24b avec lui).
+    expect(fingerprint(state, { fauna: false })).toBe('b5045e06');
+    expect(fingerprint(state)).toBe('0d9cf24b');
   });
 });
 
-describe('le gibier ne change rien aux humains (ADR 0018, § 6)', () => {
+describe('le gibier ne change rien aux humains qui ne chassent pas (ADR 0018, § 6 ; ADR 0021)', () => {
   it('laisse les colonnes des humains identiques, avec ou sans gibier, sur cent groupes', () => {
+    // Tâche 2b.8 : les chasseurs lisent le gibier ; sans chasse, les humains n'en lisent rien.
+    const hunting = withoutHunting(testData);
     const run = (content: SimContent) => {
       const state = testState('graine', content);
       step(state, scatteredGroups(state, 100), content);
       return state;
     };
-    const wild = run(testData);
-    const tame = run(withoutFauna(testData));
+    const wild = run(hunting);
+    const tame = run(withoutFauna(hunting));
     expect(wild.fauna.count).toBeGreaterThan(400);
     expect(tame.fauna.count).toBe(0);
     for (let month = 0; month < 6; month++) {
-      step(wild, [], testData);
-      step(tame, [], withoutFauna(testData));
+      step(wild, [], hunting);
+      step(tame, [], withoutFauna(hunting));
       expect(fingerprint(wild, { fauna: false }), `mois ${String(month)}`).toBe(
         fingerprint(tame, { fauna: false }),
       );

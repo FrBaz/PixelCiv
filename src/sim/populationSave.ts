@@ -18,7 +18,9 @@
  */
 import { z } from 'zod';
 import type { Catalog } from '../core/data/catalog';
-import type { Genetics, Species } from '../core/data';
+import type { ActivitiesFile, Genetics, Species } from '../core/data';
+import { MAX_ACTIVITIES, MAX_ACTIVITY_DAYS } from '../core/data/activities';
+import { ACT_NONE, ACT_RANK, ACT_RUN } from '../core/protocol';
 import { Fingerprint } from '../core/hash';
 import { SaveError, type SaveData, type SavedArray } from '../core/save/format';
 import { FIXED } from '../core/position';
@@ -30,7 +32,9 @@ import {
   CARRIED,
   INTENTION,
   MOVE_BITS,
+  NO_ACTIVITY,
   PLACE,
+  WALK,
   ARCHIVE_COLUMN_NAMES,
   ARCHIVE_COLUMNS,
   DEATH_CAUSES,
@@ -164,15 +168,21 @@ export const PeopleJsonSchema = z
     /** Nombre de faits de la chronique, rangés dans ses colonnes. */
     chronicle: z.number().int().min(0).max(MAX_CHRONICLE),
     nextGroupId: z.number().int().min(1).max(MAX_IDS),
+    /**
+     * Activités, dans l'ordre de leurs rangs dans la colonne `activity` (version 9, ADR 0021) ;
+     * null pour une partie de la version 8, dont la relecture les déduit de l'état.
+     */
+    activities: z.array(z.string()).max(MAX_ACTIVITIES).nullable(),
   })
   .strict();
 
 export type PeopleJson = z.infer<typeof PeopleJsonSchema>;
 
-/** Contenu dont la population se sert : espèces et génétique. */
+/** Contenu dont la population se sert : espèces, génétique, et la liste des activités. */
 export interface PeopleContent {
   readonly species: Catalog<Species>;
   readonly genetics: Genetics;
+  readonly activities: Pick<ActivitiesFile, 'activities'>;
 }
 
 /** Nom d'un tableau de la sauvegarde : « people », « archive » ou « chronicle », puis la colonne. */
@@ -261,6 +271,7 @@ export function savePeople(
       languages: society.languages.map((language) => ({ ...language })),
       chronicle: society.chronicle.length,
       nextGroupId: society.nextGroupId,
+      activities: content.activities.activities.map((activity) => activity.id),
     },
     arrays,
   };
@@ -344,6 +355,91 @@ function checkMovement(
   ) {
     throw new SaveError('corrupt', 'étape illisible');
   }
+}
+
+/**
+ * Rangs des activités d'une sauvegarde de la version 9 ramenés à ceux du contenu d'aujourd'hui,
+ * par leurs identifiants ; une activité disparue du contenu rend la partie trop ancienne. Sans
+ * liste (une partie de la version 8), undefined : la relecture déduit les activités de l'état.
+ */
+function activityRemap(
+  saved: readonly string[] | null,
+  content: PeopleContent,
+): Int32Array | undefined {
+  if (saved === null) return undefined;
+  const current = content.activities.activities;
+  return Int32Array.from(saved, (id) => {
+    const index = current.findIndex((activity) => activity.id === id);
+    if (index < 0) throw new SaveError('obsolete', `activité inconnue : ${id}`);
+    return index;
+  });
+}
+
+/** Jours au plus entre l'instant d'une partie et le prochain choix d'activité de l'un des siens. */
+export const MAX_UNTIL_AHEAD = 1000;
+
+/**
+ * Activité d'un vivant (version 9, ADR 0021), vérifiée, puis ramenée au rang du contenu
+ * d'aujourd'hui (`ranks`) : un rang connu, ou aucun ; pour seul autre bit, la charge, et pour la
+ * seule chasse ; un porté sans activité, et tout autre vivant avec une, si la partie en a ; un jour
+ * du prochain choix qui suit l'activité : nul sans
+ * activité ou pour qui suit son groupe, de l'instant `now` à MAX_UNTIL_AHEAD jours après lui pour
+ * les autres, ou, pour qui marche vers le lieu de son activité, les jours qu'il y passera
+ * (−MAX_ACTIVITY_DAYS à −1) ; une place au camp dans le monde. Une partie de la version 8 n'en a
+ * pas encore (`ranks` undefined) : rien, jusqu'à ce que la relecture les déduise.
+ */
+function checkActivity(
+  people: Population,
+  slot: number,
+  ranks: Int32Array | undefined,
+  content: PeopleContent,
+  size: { readonly width: number; readonly height: number },
+  now: number,
+): void {
+  const { activity, until, homeX, homeY, move } = people.columns;
+  const homeXValue = homeX[slot] ?? -1;
+  const homeYValue = homeY[slot] ?? -1;
+  if (
+    homeXValue < 0 ||
+    homeXValue >= size.width * FIXED ||
+    homeYValue < 0 ||
+    homeYValue >= size.height * FIXED
+  ) {
+    throw new SaveError('corrupt', 'place au camp hors du monde');
+  }
+  const byte = activity[slot] ?? NO_ACTIVITY;
+  const day = until[slot] ?? 0;
+  if (ranks === undefined) {
+    if (byte !== NO_ACTIVITY || day !== 0) throw new SaveError('corrupt', 'activité illisible');
+    return;
+  }
+  const saved = byte & ACT_RANK;
+  const flags = byte & ~ACT_RANK;
+  const rank = saved === ACT_NONE ? ACT_NONE : (ranks[saved] ?? -1);
+  if (rank < 0) throw new SaveError('corrupt', 'activité inconnue');
+  const entry = rank === ACT_NONE ? undefined : content.activities.activities[rank];
+  if ((flags & ~ACT_RUN) !== 0 || (flags !== 0 && entry?.place !== 'prey')) {
+    throw new SaveError('corrupt', 'activité illisible');
+  }
+  const intention = (move[slot] ?? 0) & INTENTION;
+  if (intention === CARRIED && byte !== NO_ACTIVITY) {
+    throw new SaveError('corrupt', 'un porté a une activité');
+  }
+  const idle = entry === undefined || entry.place === 'camp';
+  const valid =
+    day === 0
+      ? idle
+      : day > 0
+        ? !idle && day >= now && day <= now + MAX_UNTIL_AHEAD
+        : !idle && day >= -MAX_ACTIVITY_DAYS && intention === WALK;
+  if (!valid) throw new SaveError('corrupt', 'jour de la prochaine activité incohérent');
+  // Dans une partie qui a des activités, chaque vivant libre de ses mouvements en a une, dès son
+  // apparition ou son sevrage ; seul le porté n'en a pas (ADR 0021, § 11). Sans elle, il ne
+  // choisirait plus rien avant que son groupe change de camp.
+  if (rank === ACT_NONE && intention !== CARRIED && ranks.length > 0) {
+    throw new SaveError('corrupt', 'un vivant sans activité');
+  }
+  activity[slot] = rank | flags;
 }
 
 /**
@@ -580,7 +676,8 @@ export function restorePeople(
   content: PeopleContent,
   size: { readonly width: number; readonly height: number },
   tick: number,
-): { people: Population; society: Society } {
+  day = 0,
+): { people: Population; society: Society; derive: boolean } {
   const parsed = PeopleJsonSchema.safeParse(rawJson);
   if (!parsed.success) throw new SaveError('corrupt', 'population illisible');
   const json = parsed.data;
@@ -667,6 +764,8 @@ export function restorePeople(
   });
   const lineages = lineageRemap(json.subspecies, species, content.species);
   const shares = new Uint8Array(ANCESTRY_SLOTS);
+  const ranks = activityRemap(json.activities, content);
+  const now = tick * DAYS_PER_MONTH + day;
 
   // Index : chaque vivant et chaque mort y figure une fois, à sa place.
   const seen = new Uint8Array(nextId);
@@ -701,6 +800,7 @@ export function restorePeople(
       throw new SaveError('corrupt', 'individu incohérent');
     }
     checkMovement(people, slot, size);
+    checkActivity(people, slot, ranks, content, size, now);
   }
   // Un porté a sa mère dans son groupe : on le vérifie une fois l'index vérifié.
   for (let slot = 0; slot < end; slot++) {
@@ -775,17 +875,24 @@ export function restorePeople(
       chronicle,
       nextGroupId: json.nextGroupId,
     },
+    derive: ranks === undefined,
   };
 }
 
-/** Empreinte de la population et de la société (tests de déterminisme, ADR 0003). */
+/**
+ * Empreinte de la population et de la société (tests de déterminisme, ADR 0003). `omit` en ôte
+ * des colonnes des vivants : celles des activités, pour comparer une partie sans activités à
+ * l'empreinte d'avant elles (state.test.ts).
+ */
 export function fingerprintPeople(
   fingerprint: Fingerprint,
   people: Population,
   society: Society,
+  omit: readonly LivingColumn[] = [],
 ): void {
   fingerprint.uint32(people.end).uint32(people.count).uint32(people.nextId);
   for (const name of LIVING_COLUMN_NAMES) {
+    if (omit.includes(name)) continue;
     fingerprint
       .string(name)
       .typedArray(people.columns[name].subarray(0, people.end * LIVING_COLUMNS[name].width));
