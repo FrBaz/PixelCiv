@@ -16,7 +16,7 @@ import { loadGameData, type Appearance } from '../core/data';
 import { FAUNA_GAIT, NO_CARRIER, type GroupsFrame, type HumanLegArrays } from '../core/protocol';
 import { FIXED } from '../core/position';
 import { RandomStream, streamSeed } from '../core/rng';
-import { visualCode } from '../core/visual';
+import { AGE_CODE, visualCode } from '../core/visual';
 import { CHUNK_PX } from './bake';
 import { displayScale, physicalZoom, TILE_PX, visibleChunks, type Camera } from './camera';
 import { viewDensity, type Box } from './crowd';
@@ -850,6 +850,37 @@ describe('calque commun : décor et humains (ADR 0017, § 7)', () => {
     const slots = new Set(people.shown.particles.map((particle) => particle.color & 0xffff));
     expect(slots.size).toBe(2);
     expect(people.paletteTexture.count).toBe(2);
+  });
+
+  it('trie avec le décor le sauteur en l’air par ses pieds, et non par le bas de son motif levé', () => {
+    // Relecture de 2b.8, problème 4 : un objet dont les pieds tombent entre le bas du motif levé
+    // d'un humain qui saute et ses pieds est derrière lui, comme s'il se tenait au sol (ADR 0022,
+    // § 9 : la profondeur et le tri avec le décor se font aux pieds).
+    const play = data.activities.activities.findIndex((activity) => activity.id === 'play');
+    const groups = frame(1, [1, 100, 50, 1]);
+    groups.activities[0] = play;
+    groups.sprites[0] = visualCode(0, AGE_CODE.adult, 3, 2, 0);
+    const { people, layer } = setupWithObjects(1);
+    // Zoom 16, à la taille de la planche (k = 1) : une case fait 64 pixels, les pieds de l'humain
+    // tombent au milieu de l'écran ; ceux de l'objet, deux pixels plus haut.
+    const feet = viewport.height / 2;
+    const objects = new FakeObjects([[100.5, 50.5 - 2 / 64]]);
+    let lifted = 0;
+    for (let walkMs = 0; walkMs < 3200; walkMs += 10) {
+      const shown = { ...scene(groups, walkMs), objects: [objects], month: 6.5 };
+      people.draw(shown, aimedAt(100, 50, 16), viewport, world);
+      const drawn = rendered(people, layer, 1);
+      const person = drawn.findIndex((entry) => entry.entity === 1);
+      const object = drawn.findIndex((entry) => entry.entity === 0);
+      expect(person).toBeGreaterThanOrEqual(0);
+      expect(object).toBeGreaterThanOrEqual(0);
+      const { box } = drawn[person];
+      // Le motif levé de trois pixels au moins : son bas au-dessus des pieds de l'objet.
+      if (box.top + box.height > feet - 3) continue;
+      lifted++;
+      expect(object, `${String(walkMs)} ms`).toBeLessThan(person);
+    }
+    expect(lifted).toBeGreaterThan(0);
   });
 
   it('touche ce qu’on voit : un pixel peint d’un objet cache l’humain à l’appui, ni son ombre ni son trou', () => {
